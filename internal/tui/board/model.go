@@ -170,7 +170,16 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.activeCol = 0
 		}
 
-	case key.Matches(msg, common.Keys.MoveBack):
+	case key.Matches(msg, common.Keys.ShiftTab):
+		m.activeProject = (m.activeProject - 1 + len(m.projects)) % len(m.projects)
+		m.loadStatuses()
+		m.loadTasks()
+		m.cursors = make([]int, len(m.statuses))
+		if m.activeCol >= len(m.statuses) {
+			m.activeCol = 0
+		}
+
+	case msg.String() == "M":
 		t := m.selectedTask()
 		if t != nil {
 			idx := m.statusIndex(t.Meta.Status)
@@ -353,7 +362,7 @@ func (m Model) viewBoard() string {
 	sb.WriteString("\n")
 
 	// help bar
-	help := "←/→ column  ↑/↓ navigate  enter detail  m/M move  e edit  tab project  q quit"
+	help := "←/→ column  ↑/↓ navigate  enter detail  m/M move  e edit  tab/S-tab project  q quit"
 	sb.WriteString(helpStyle.Render(help))
 
 	return sb.String()

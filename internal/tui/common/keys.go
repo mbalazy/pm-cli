@@ -13,6 +13,7 @@ type KeyMap struct {
 	Add      key.Binding
 	Edit     key.Binding
 	Tab      key.Binding
+	ShiftTab key.Binding
 	Search   key.Binding
 	Quit     key.Binding
 	Escape   key.Binding
@@ -29,7 +30,8 @@ var Keys = KeyMap{
 	MoveBack: key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "move back")),
 	Add:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add task")),
 	Edit:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit in $EDITOR")),
-	Tab:    key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "filter project")),
+	Tab:      key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next project")),
+	ShiftTab: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("S-tab", "prev project")),
 	Search: key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
 	Quit:   key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 	Escape: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
