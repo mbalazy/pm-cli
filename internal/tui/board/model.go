@@ -197,7 +197,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.activeCol = 0
 		}
 
-	case msg.String() == "M":
+	case key.Matches(msg, common.Keys.MoveBack):
 		t := m.selectedTask()
 		if t != nil {
 			idx := m.statusIndex(t.Meta.Status)
