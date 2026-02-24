@@ -109,8 +109,18 @@ func (m Model) selectedTask() *storage.Task {
 	return tasks[idx]
 }
 
+type tickMsg time.Time
+
+const refreshInterval = 2 * time.Second
+
+func doTick() tea.Cmd {
+	return tea.Tick(refreshInterval, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
 func (m Model) Init() tea.Cmd {
-	return nil
+	return doTick()
 }
 
 type reloadMsg struct{}
@@ -122,9 +132,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case tickMsg:
+		prevCount := len(m.tasks)
+		m.loadTasks()
+		if len(m.tasks) != prevCount {
+			m.fixCursors()
+		}
+		return m, doTick()
+
 	case reloadMsg:
 		m.loadTasks()
-		return m, nil
+		return m, doTick()
 
 	case tea.KeyMsg:
 		if m.currentView == viewDetail {
