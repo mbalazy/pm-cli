@@ -35,10 +35,7 @@ func newListCmd(store *storage.Store) *cobra.Command {
 
 			// filter by status
 			if status != "" {
-				s, err := storage.ParseStatus(status)
-				if err != nil {
-					return err
-				}
+				s := storage.ParseStatus(status)
 				var filtered []*storage.Task
 				for _, t := range tasks {
 					if t.Meta.Status == s {
@@ -82,6 +79,7 @@ func statusIcon(s storage.TaskStatus) string {
 		return "[~] doing"
 	case storage.StatusDone:
 		return "[x] done"
+	default:
+		return fmt.Sprintf("[?] %s", s)
 	}
-	return string(s)
 }

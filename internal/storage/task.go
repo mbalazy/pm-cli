@@ -11,6 +11,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ValidateStatus checks if a status is in the allowed list.
+func ValidateStatus(s TaskStatus, allowed []TaskStatus) error {
+	for _, a := range allowed {
+		if a == s {
+			return nil
+		}
+	}
+	names := make([]string, len(allowed))
+	for i, a := range allowed {
+		names[i] = string(a)
+	}
+	return fmt.Errorf("invalid status %q (valid: %s)", s, strings.Join(names, ", "))
+}
+
 type TaskStatus string
 
 const (
@@ -19,18 +33,8 @@ const (
 	StatusDone  TaskStatus = "done"
 )
 
-var ValidStatuses = []TaskStatus{StatusTodo, StatusDoing, StatusDone}
-
-func ParseStatus(s string) (TaskStatus, error) {
-	switch strings.ToLower(s) {
-	case "todo":
-		return StatusTodo, nil
-	case "doing":
-		return StatusDoing, nil
-	case "done":
-		return StatusDone, nil
-	}
-	return "", fmt.Errorf("invalid status: %q (valid: todo, doing, done)", s)
+func ParseStatus(s string) TaskStatus {
+	return TaskStatus(strings.ToLower(s))
 }
 
 type Links struct {

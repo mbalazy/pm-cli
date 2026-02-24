@@ -26,9 +26,10 @@ type Model struct {
 	store         *storage.Store
 	tasks         []*storage.Task
 	projects      []string
+	statuses      []storage.TaskStatus
 	activeProject int // 0 = all, 1+ = specific project
-	activeCol     int // 0=todo, 1=doing, 2=done
-	cursors       [3]int
+	activeCol     int
+	cursors       []int
 	width         int
 	height        int
 	currentView   view
@@ -38,8 +39,8 @@ type Model struct {
 
 func New(store *storage.Store, filterProject string) Model {
 	m := Model{
-		store: store,
-		width: 80,
+		store:  store,
+		width:  80,
 		height: 24,
 	}
 
@@ -55,8 +56,19 @@ func New(store *storage.Store, filterProject string) Model {
 		}
 	}
 
+	m.loadStatuses()
+	m.cursors = make([]int, len(m.statuses))
 	m.loadTasks()
 	return m
+}
+
+func (m *Model) loadStatuses() {
+	if m.activeProject == 0 {
+		m.statuses = m.store.GetAllStatuses()
+	} else {
+		slug := m.projects[m.activeProject]
+		m.statuses = m.store.GetProjectStatuses(slug)
+	}
 }
 
 func (m *Model) loadTasks() {
@@ -79,8 +91,10 @@ func (m Model) filteredTasks(status storage.TaskStatus) []*storage.Task {
 }
 
 func (m Model) columnTasks(col int) []*storage.Task {
-	statuses := []storage.TaskStatus{storage.StatusTodo, storage.StatusDoing, storage.StatusDone}
-	return m.filteredTasks(statuses[col])
+	if col < 0 || col >= len(m.statuses) {
+		return nil
+	}
+	return m.filteredTasks(m.statuses[col])
 }
 
 func (m Model) selectedTask() *storage.Task {
@@ -132,7 +146,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, common.Keys.Right):
-		if m.activeCol < 2 {
+		if m.activeCol < len(m.statuses)-1 {
 			m.activeCol++
 		}
 
@@ -149,28 +163,37 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, common.Keys.Tab):
 		m.activeProject = (m.activeProject + 1) % len(m.projects)
+		m.loadStatuses()
 		m.loadTasks()
-		m.cursors = [3]int{}
+		m.cursors = make([]int, len(m.statuses))
+		if m.activeCol >= len(m.statuses) {
+			m.activeCol = 0
+		}
+
+	case key.Matches(msg, common.Keys.MoveBack):
+		t := m.selectedTask()
+		if t != nil {
+			idx := m.statusIndex(t.Meta.Status)
+			if idx > 0 {
+				t.Meta.Status = m.statuses[idx-1]
+			} else {
+				t.Meta.Status = m.statuses[len(m.statuses)-1]
+			}
+			t.Meta.Updated = time.Now().Format("2006-01-02")
+			storage.WriteTask(t)
+			m.loadTasks()
+			m.fixCursors()
+		}
 
 	case key.Matches(msg, common.Keys.Move):
 		t := m.selectedTask()
 		if t != nil {
-			nextStatus := map[storage.TaskStatus]storage.TaskStatus{
-				storage.StatusTodo:  storage.StatusDoing,
-				storage.StatusDoing: storage.StatusDone,
-				storage.StatusDone:  storage.StatusTodo,
-			}
-			t.Meta.Status = nextStatus[t.Meta.Status]
+			idx := m.statusIndex(t.Meta.Status)
+			t.Meta.Status = m.statuses[(idx+1)%len(m.statuses)]
 			t.Meta.Updated = time.Now().Format("2006-01-02")
 			storage.WriteTask(t)
 			m.loadTasks()
-			// fix cursor if needed
-			for i := range m.cursors {
-				tasks := m.columnTasks(i)
-				if m.cursors[i] >= len(tasks) && len(tasks) > 0 {
-					m.cursors[i] = len(tasks) - 1
-				}
-			}
+			m.fixCursors()
 		}
 
 	case key.Matches(msg, common.Keys.Enter):
@@ -196,6 +219,24 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.loadTasks() // reload in case file was edited
 	}
 	return m, nil
+}
+
+func (m Model) statusIndex(s storage.TaskStatus) int {
+	for i, st := range m.statuses {
+		if st == s {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m *Model) fixCursors() {
+	for i := range m.statuses {
+		tasks := m.columnTasks(i)
+		if m.cursors[i] >= len(tasks) && len(tasks) > 0 {
+			m.cursors[i] = len(tasks) - 1
+		}
+	}
 }
 
 func openEditor(path string) tea.Cmd {
@@ -270,7 +311,11 @@ func (m Model) viewBoard() string {
 	sb.WriteString("\n\n")
 
 	// columns
-	colWidth := (m.width - 8) / 3
+	numCols := len(m.statuses)
+	if numCols == 0 {
+		numCols = 1
+	}
+	colWidth := (m.width - 8) / numCols
 	if colWidth < 20 {
 		colWidth = 20
 	}
@@ -279,16 +324,14 @@ func (m Model) viewBoard() string {
 		maxCardHeight = 5
 	}
 
-	statuses := []storage.TaskStatus{storage.StatusTodo, storage.StatusDoing, storage.StatusDone}
-	headers := []string{"TODO", "DOING", "DONE"}
-
 	var cols []string
-	for i, status := range statuses {
+	for i, status := range m.statuses {
 		tasks := m.filteredTasks(status)
 		isActive := i == m.activeCol
 
+		header := strings.ToUpper(string(status))
 		var content strings.Builder
-		content.WriteString(columnHeaderStyle.Render(fmt.Sprintf("%s (%d)", headers[i], len(tasks))))
+		content.WriteString(columnHeaderStyle.Render(fmt.Sprintf("%s (%d)", header, len(tasks))))
 		content.WriteString("\n")
 
 		for j, t := range tasks {
@@ -310,7 +353,7 @@ func (m Model) viewBoard() string {
 	sb.WriteString("\n")
 
 	// help bar
-	help := "←/→ column  ↑/↓ navigate  enter detail  m move  e edit  tab project  q quit"
+	help := "←/→ column  ↑/↓ navigate  enter detail  m/M move  e edit  tab project  q quit"
 	sb.WriteString(helpStyle.Render(help))
 
 	return sb.String()

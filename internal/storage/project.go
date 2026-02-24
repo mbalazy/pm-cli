@@ -6,12 +6,26 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var DefaultStatuses = []TaskStatus{StatusTodo, StatusDoing, StatusDone}
+
 type Project struct {
-	Name string            `yaml:"name"`
-	Path string            `yaml:"path,omitempty"`
-	Repo string            `yaml:"repo,omitempty"`
-	Links map[string]string `yaml:"links,omitempty"`
-	Tags  []string          `yaml:"tags,omitempty"`
+	Name     string            `yaml:"name"`
+	Path     string            `yaml:"path,omitempty"`
+	Repo     string            `yaml:"repo,omitempty"`
+	Links    map[string]string `yaml:"links,omitempty"`
+	Tags     []string          `yaml:"tags,omitempty"`
+	Statuses []string          `yaml:"statuses,omitempty"`
+}
+
+func (p *Project) GetStatuses() []TaskStatus {
+	if len(p.Statuses) == 0 {
+		return DefaultStatuses
+	}
+	out := make([]TaskStatus, len(p.Statuses))
+	for i, s := range p.Statuses {
+		out[i] = ParseStatus(s)
+	}
+	return out
 }
 
 func ReadProject(path string) (*Project, error) {

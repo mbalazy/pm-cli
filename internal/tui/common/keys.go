@@ -3,19 +3,20 @@ package common
 import "github.com/charmbracelet/bubbles/key"
 
 type KeyMap struct {
-	Up      key.Binding
-	Down    key.Binding
-	Left    key.Binding
-	Right   key.Binding
-	Enter   key.Binding
-	Move    key.Binding
-	Add     key.Binding
-	Edit    key.Binding
-	Tab     key.Binding
-	Search  key.Binding
-	Quit    key.Binding
-	Escape  key.Binding
-	Help    key.Binding
+	Up       key.Binding
+	Down     key.Binding
+	Left     key.Binding
+	Right    key.Binding
+	Enter    key.Binding
+	Move     key.Binding
+	MoveBack key.Binding
+	Add      key.Binding
+	Edit     key.Binding
+	Tab      key.Binding
+	Search   key.Binding
+	Quit     key.Binding
+	Escape   key.Binding
+	Help     key.Binding
 }
 
 var Keys = KeyMap{
@@ -24,7 +25,8 @@ var Keys = KeyMap{
 	Left:   key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←/h", "prev column")),
 	Right:  key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→/l", "next column")),
 	Enter:  key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "detail")),
-	Move:   key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "move task")),
+	Move:     key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "move forward")),
+	MoveBack: key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "move back")),
 	Add:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add task")),
 	Edit:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit in $EDITOR")),
 	Tab:    key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "filter project")),

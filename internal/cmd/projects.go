@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/spf13/cobra"
@@ -28,18 +29,16 @@ func newProjectsCmd(store *storage.Store) *cobra.Command {
 					continue
 				}
 				tasks, _ := store.GetTasks(slug)
-				var counts [3]int
+				counts := map[storage.TaskStatus]int{}
 				for _, t := range tasks {
-					switch t.Meta.Status {
-					case storage.StatusTodo:
-						counts[0]++
-					case storage.StatusDoing:
-						counts[1]++
-					case storage.StatusDone:
-						counts[2]++
-					}
+					counts[t.Meta.Status]++
 				}
-				fmt.Printf("  %-20s %s  [todo:%d doing:%d done:%d]\n", slug, p.Name, counts[0], counts[1], counts[2])
+				statuses := p.GetStatuses()
+				var parts []string
+				for _, s := range statuses {
+					parts = append(parts, fmt.Sprintf("%s:%d", s, counts[s]))
+				}
+				fmt.Printf("  %-20s %s  [%s]\n", slug, p.Name, strings.Join(parts, " "))
 			}
 			return nil
 		},

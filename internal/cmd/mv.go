@@ -22,10 +22,7 @@ func newMvCmd(store *storage.Store) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			newStatus, err := storage.ParseStatus(args[2])
-			if err != nil {
-				return err
-			}
+			newStatus := storage.ParseStatus(args[2])
 
 			old := task.Meta.Status
 			task.Meta.Status = newStatus

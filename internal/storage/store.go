@@ -56,6 +56,41 @@ func (s *Store) GetProject(slug string) (*Project, error) {
 	return ReadProject(s.ProjectYAML(slug))
 }
 
+// GetProjectStatuses returns the configured statuses for a project, or defaults.
+func (s *Store) GetProjectStatuses(slug string) []TaskStatus {
+	p, err := s.GetProject(slug)
+	if err != nil {
+		return DefaultStatuses
+	}
+	return p.GetStatuses()
+}
+
+// GetAllStatuses returns the union of statuses across all projects, preserving order.
+// Default statuses come first, then any unique custom statuses.
+func (s *Store) GetAllStatuses() []TaskStatus {
+	projects, err := s.ListProjects()
+	if err != nil {
+		return DefaultStatuses
+	}
+
+	seen := make(map[TaskStatus]bool)
+	var result []TaskStatus
+	// seed with defaults
+	for _, s := range DefaultStatuses {
+		seen[s] = true
+		result = append(result, s)
+	}
+	for _, slug := range projects {
+		for _, st := range s.GetProjectStatuses(slug) {
+			if !seen[st] {
+				seen[st] = true
+				result = append(result, st)
+			}
+		}
+	}
+	return result
+}
+
 func (s *Store) CreateProject(slug string, p *Project) error {
 	dir := s.ProjectDir(slug)
 	if err := os.MkdirAll(dir, 0755); err != nil {

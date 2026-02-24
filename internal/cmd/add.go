@@ -26,11 +26,7 @@ func newAddCmd(store *storage.Store) *cobra.Command {
 			t := storage.NewTask("", title, projectSlug)
 
 			if status != "" {
-				s, err := storage.ParseStatus(status)
-				if err != nil {
-					return err
-				}
-				t.Meta.Status = s
+				t.Meta.Status = storage.ParseStatus(status)
 			}
 
 			if id, _ := cmd.Flags().GetString("id"); id != "" {
