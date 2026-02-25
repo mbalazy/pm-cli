@@ -12,9 +12,11 @@ type Project struct {
 	Name     string            `yaml:"name"`
 	Path     string            `yaml:"path,omitempty"`
 	Repo     string            `yaml:"repo,omitempty"`
+	Stack    string            `yaml:"stack,omitempty"`
 	Links    map[string]string `yaml:"links,omitempty"`
 	Tags     []string          `yaml:"tags,omitempty"`
 	Statuses []string          `yaml:"statuses,omitempty"`
+	Notes    string            `yaml:"notes,omitempty"`
 }
 
 func (p *Project) GetStatuses() []TaskStatus {

@@ -38,7 +38,11 @@ func newProjectsCmd(store *storage.Store) *cobra.Command {
 				for _, s := range statuses {
 					parts = append(parts, fmt.Sprintf("%s:%d", s, counts[s]))
 				}
-				fmt.Printf("  %-20s %s  [%s]\n", slug, p.Name, strings.Join(parts, " "))
+				line := fmt.Sprintf("  %-20s %s  [%s]", slug, p.Name, strings.Join(parts, " "))
+				if p.Stack != "" {
+					line += fmt.Sprintf("  (%s)", p.Stack)
+				}
+				fmt.Println(line)
 			}
 			return nil
 		},
@@ -49,7 +53,7 @@ func newProjectsCmd(store *storage.Store) *cobra.Command {
 }
 
 func newProjectsAddCmd(store *storage.Store) *cobra.Command {
-	var repoPath, repoURL, displayName string
+	var repoPath, repoURL, displayName, stack, notes string
 	var tags []string
 
 	cmd := &cobra.Command{
@@ -64,10 +68,12 @@ func newProjectsAddCmd(store *storage.Store) *cobra.Command {
 			}
 
 			p := &storage.Project{
-				Name: name,
-				Path: repoPath,
-				Repo: repoURL,
-				Tags: tags,
+				Name:  name,
+				Path:  repoPath,
+				Repo:  repoURL,
+				Stack: stack,
+				Tags:  tags,
+				Notes: notes,
 			}
 
 			if err := store.CreateProject(slug, p); err != nil {
@@ -81,6 +87,8 @@ func newProjectsAddCmd(store *storage.Store) *cobra.Command {
 	cmd.Flags().StringVar(&repoPath, "path", "", "Local repo path")
 	cmd.Flags().StringVar(&repoURL, "repo", "", "Remote repo URL")
 	cmd.Flags().StringVar(&displayName, "name", "", "Display name (defaults to slug)")
+	cmd.Flags().StringVar(&stack, "stack", "", "Tech stack summary")
+	cmd.Flags().StringVar(&notes, "notes", "", "Project notes (client, schedule, etc.)")
 	cmd.Flags().StringSliceVar(&tags, "tag", nil, "Tags")
 
 	return cmd
