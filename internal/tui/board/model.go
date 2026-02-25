@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
@@ -35,6 +36,9 @@ type Model struct {
 	height        int
 	currentView   view
 	detailContent string
+	searchInput   textinput.Model
+	searchQuery   string
+	searching     bool
 	err           error
 }
 
@@ -60,6 +64,12 @@ func New(store *storage.Store, filterProject string) Model {
 	m.loadStatuses()
 	m.cursors = make([]int, len(m.statuses))
 	m.loadTasks()
+
+	ti := textinput.New()
+	ti.Prompt = "/ "
+	ti.CharLimit = 50
+	m.searchInput = ti
+
 	return m
 }
 
@@ -83,10 +93,19 @@ func (m *Model) loadTasks() {
 
 func (m Model) filteredTasks(status storage.TaskStatus) []*storage.Task {
 	var result []*storage.Task
+	q := strings.ToLower(m.searchQuery)
 	for _, t := range m.tasks {
-		if t.Meta.Status == status {
-			result = append(result, t)
+		if t.Meta.Status != status {
+			continue
 		}
+		if q != "" {
+			title := strings.ToLower(t.Meta.Title)
+			id := strings.ToLower(t.Meta.ID)
+			if !strings.Contains(title, q) && !strings.Contains(id, q) {
+				continue
+			}
+		}
+		result = append(result, t)
 	}
 	return result
 }
@@ -148,6 +167,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.currentView == viewDetail {
 			return m.updateDetail(msg)
+		}
+		if m.searching {
+			return m.updateSearch(msg)
 		}
 		return m.updateBoard(msg)
 	}
@@ -236,6 +258,35 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			return m, openEditor(t.FilePath)
 		}
+
+	case key.Matches(msg, common.Keys.Search):
+		m.searching = true
+		m.searchInput.SetValue(m.searchQuery)
+		m.searchInput.Focus()
+		return m, m.searchInput.Cursor.BlinkCmd()
+	}
+	return m, nil
+}
+
+func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, common.Keys.Enter):
+		m.searching = false
+		m.searchQuery = m.searchInput.Value()
+		m.searchInput.Blur()
+		m.fixCursors()
+	case key.Matches(msg, common.Keys.Escape):
+		m.searching = false
+		m.searchQuery = ""
+		m.searchInput.SetValue("")
+		m.searchInput.Blur()
+		m.fixCursors()
+	default:
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		m.searchQuery = m.searchInput.Value()
+		m.fixCursors()
+		return m, cmd
 	}
 	return m, nil
 }
@@ -288,6 +339,16 @@ func renderTaskDetail(t *storage.Task) string {
 	fmt.Fprintf(&sb, "\n**Status:** %s | **Project:** %s | **Updated:** %s\n", t.Meta.Status, t.Project, t.Meta.Updated)
 	if t.Meta.Branch != "" {
 		fmt.Fprintf(&sb, "\n**Branch:** `%s`\n", t.Meta.Branch)
+	}
+	if len(t.Meta.Links) > 0 {
+		var parts []string
+		for name, url := range t.Meta.Links {
+			parts = append(parts, fmt.Sprintf("[%s](%s)", name, url))
+		}
+		fmt.Fprintf(&sb, "\n**Links:** %s\n", strings.Join(parts, " | "))
+	}
+	if len(t.Meta.Tags) > 0 {
+		fmt.Fprintf(&sb, "\n**Tags:** %s\n", strings.Join(t.Meta.Tags, ", "))
 	}
 	if t.Body != "" {
 		fmt.Fprintf(&sb, "\n---\n\n%s\n", t.Body)
@@ -380,9 +441,18 @@ func (m Model) viewBoard() string {
 	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, cols...))
 	sb.WriteString("\n")
 
+	// search bar
+	if m.searching {
+		sb.WriteString(m.searchInput.View())
+		sb.WriteString("\n")
+	} else if m.searchQuery != "" {
+		sb.WriteString(helpStyle.Render(fmt.Sprintf("filter: %q (/ to edit, esc to clear)", m.searchQuery)))
+		sb.WriteString("\n")
+	}
+
 	// status bar
 	ver := helpStyle.Render("pm " + version.Version)
-	help := helpStyle.Render("←/→ column  ↑/↓ navigate  enter detail  m/M move  e edit  tab/S-tab project  q quit")
+	help := helpStyle.Render("←/→ column  ↑/↓ navigate  m/M move  e edit  / search  tab project  q quit")
 	gap := m.width - lipgloss.Width(ver) - lipgloss.Width(help)
 	if gap < 1 {
 		gap = 1

@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -49,7 +51,31 @@ func newProjectsCmd(store *storage.Store) *cobra.Command {
 	}
 
 	cmd.AddCommand(newProjectsAddCmd(store))
+	cmd.AddCommand(newProjectsEditCmd(store))
 	return cmd
+}
+
+func newProjectsEditCmd(store *storage.Store) *cobra.Command {
+	return &cobra.Command{
+		Use:   "edit <slug>",
+		Short: "Open project.yaml in $EDITOR",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			slug, err := store.ResolveProject(args[0])
+			if err != nil {
+				return err
+			}
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				editor = "nvim"
+			}
+			c := exec.Command(editor, store.ProjectYAML(slug))
+			c.Stdin = os.Stdin
+			c.Stdout = os.Stdout
+			c.Stderr = os.Stderr
+			return c.Run()
+		},
+	}
 }
 
 func newProjectsAddCmd(store *storage.Store) *cobra.Command {
