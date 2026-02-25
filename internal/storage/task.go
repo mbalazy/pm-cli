@@ -28,9 +28,10 @@ func ValidateStatus(s TaskStatus, allowed []TaskStatus) error {
 type TaskStatus string
 
 const (
-	StatusTodo  TaskStatus = "todo"
-	StatusDoing TaskStatus = "doing"
-	StatusDone  TaskStatus = "done"
+	StatusTodo     TaskStatus = "todo"
+	StatusDoing    TaskStatus = "doing"
+	StatusDone     TaskStatus = "done"
+	StatusArchived TaskStatus = "archived"
 )
 
 func ParseStatus(s string) TaskStatus {

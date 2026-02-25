@@ -129,6 +129,13 @@ func (s *Store) GetAllTasks() ([]*Task, error) {
 	return all, nil
 }
 
+func (s *Store) DeleteTask(t *Task) error {
+	if t.FilePath == "" {
+		return fmt.Errorf("task has no file path")
+	}
+	return os.Remove(t.FilePath)
+}
+
 func (s *Store) AddTask(projectSlug string, t *Task) error {
 	t.Project = projectSlug
 	t.FilePath = filepath.Join(s.ProjectDir(projectSlug), t.Filename())

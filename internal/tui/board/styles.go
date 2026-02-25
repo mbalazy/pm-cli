@@ -62,4 +62,9 @@ var (
 
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#555555"})
+
+	toastStyle = lipgloss.NewStyle().
+			Background(lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}).
+			Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
+			Padding(0, 1)
 )
