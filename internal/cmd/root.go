@@ -2,14 +2,16 @@ package cmd
 
 import (
 	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm/internal/version"
 	"github.com/spf13/cobra"
 )
 
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "pm",
-		Short: "Local project manager for freelancers",
-		Long:  "A local, file-based project manager with interactive TUI board. Integrates with Claude Code.",
+		Use:     "pm",
+		Short:   "Local project manager for freelancers",
+		Long:    "A local, file-based project manager with interactive TUI board. Integrates with Claude Code.",
+		Version: version.Version,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// default: open board
 			return runBoard(storage.NewStore(), "")

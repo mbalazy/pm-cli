@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/mbalazy/pm/internal/tui/common"
+	"github.com/mbalazy/pm/internal/version"
 )
 
 type view int
@@ -379,9 +380,14 @@ func (m Model) viewBoard() string {
 	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, cols...))
 	sb.WriteString("\n")
 
-	// help bar
-	help := "←/→ column  ↑/↓ navigate  enter detail  m/M move  e edit  tab/S-tab project  q quit"
-	sb.WriteString(helpStyle.Render(help))
+	// status bar
+	ver := helpStyle.Render("pm " + version.Version)
+	help := helpStyle.Render("←/→ column  ↑/↓ navigate  enter detail  m/M move  e edit  tab/S-tab project  q quit")
+	gap := m.width - lipgloss.Width(ver) - lipgloss.Width(help)
+	if gap < 1 {
+		gap = 1
+	}
+	sb.WriteString(ver + strings.Repeat(" ", gap) + help)
 
 	return sb.String()
 }
