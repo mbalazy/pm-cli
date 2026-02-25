@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
@@ -34,11 +36,16 @@ type Model struct {
 	cursors       []int
 	width         int
 	height        int
-	currentView   view
-	detailContent string
+	currentView     view
+	detailViewport  viewport.Model
 	searchInput   textinput.Model
 	searchQuery   string
 	searching     bool
+	showHelp      bool
+	adding        bool
+	addStep       int // 0=title, 1=ID
+	addInput      textinput.Model
+	addTitle      string
 	err           error
 }
 
@@ -69,6 +76,11 @@ func New(store *storage.Store, filterProject string) Model {
 	ti.Prompt = "/ "
 	ti.CharLimit = 50
 	m.searchInput = ti
+
+	ai := textinput.New()
+	ai.Prompt = "Title: "
+	ai.CharLimit = 100
+	m.addInput = ai
 
 	return m
 }
@@ -107,6 +119,9 @@ func (m Model) filteredTasks(status storage.TaskStatus) []*storage.Task {
 		}
 		result = append(result, t)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Meta.Updated > result[j].Meta.Updated
+	})
 	return result
 }
 
@@ -150,6 +165,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.detailViewport.Width = msg.Width
+		m.detailViewport.Height = msg.Height - 2
 		return m, nil
 
 	case tickMsg:
@@ -167,6 +184,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.currentView == viewDetail {
 			return m.updateDetail(msg)
+		}
+		if m.showHelp {
+			m.showHelp = false
+			return m, nil
+		}
+		if m.adding {
+			return m.updateAdd(msg)
 		}
 		if m.searching {
 			return m.updateSearch(msg)
@@ -246,11 +270,12 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.fixCursors()
 		}
 
-	case key.Matches(msg, common.Keys.Enter):
+	case key.Matches(msg, common.Keys.Enter), key.Matches(msg, common.Keys.Open):
 		t := m.selectedTask()
 		if t != nil {
 			m.currentView = viewDetail
-			m.detailContent = renderTaskDetail(t)
+			m.detailViewport = viewport.New(m.width, m.height-2)
+			m.detailViewport.SetContent(renderTaskDetail(t, m.width))
 		}
 
 	case key.Matches(msg, common.Keys.Edit):
@@ -258,6 +283,46 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			return m, openEditor(t.FilePath)
 		}
+
+	case key.Matches(msg, common.Keys.Done):
+		t := m.selectedTask()
+		if t != nil {
+			t.Meta.Status = m.statuses[len(m.statuses)-1]
+			t.Meta.Updated = time.Now().Format("2006-01-02")
+			storage.WriteTask(t)
+			m.loadTasks()
+			m.fixCursors()
+		}
+
+	case key.Matches(msg, common.Keys.Links):
+		t := m.selectedTask()
+		if t != nil && len(t.Meta.Links) > 0 {
+			for _, url := range t.Meta.Links {
+				exec.Command("open", url).Start()
+			}
+		}
+
+	case key.Matches(msg, common.Keys.Help):
+		m.showHelp = true
+
+	case key.Matches(msg, common.Keys.Add):
+		if m.activeProject == 0 {
+			if len(m.projects) > 1 {
+				m.activeProject = 1
+				m.loadStatuses()
+				m.loadTasks()
+				m.cursors = make([]int, len(m.statuses))
+				m.activeCol = 0
+			} else {
+				return m, nil
+			}
+		}
+		m.adding = true
+		m.addStep = 0
+		m.addInput.Prompt = "Title: "
+		m.addInput.SetValue("")
+		m.addInput.Focus()
+		return m, m.addInput.Cursor.BlinkCmd()
 
 	case key.Matches(msg, common.Keys.Search):
 		m.searching = true
@@ -291,13 +356,62 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit):
-		m.currentView = viewBoard
-		m.loadTasks() // reload in case file was edited
+	case key.Matches(msg, common.Keys.Escape):
+		m.adding = false
+		m.addInput.Blur()
+	case key.Matches(msg, common.Keys.Enter):
+		val := strings.TrimSpace(m.addInput.Value())
+		if m.addStep == 0 {
+			if val == "" {
+				return m, nil
+			}
+			m.addTitle = val
+			m.addStep = 1
+			m.addInput.Prompt = "ID (enter for auto): "
+			m.addInput.SetValue("")
+			return m, nil
+		}
+		// step 1: create task
+		id := val
+		if id == "" {
+			id = fmt.Sprintf("%d", time.Now().Unix()%100000)
+		}
+		now := time.Now().Format("2006-01-02")
+		t := &storage.Task{
+			Meta: storage.TaskMeta{
+				ID:      id,
+				Title:   m.addTitle,
+				Status:  m.statuses[0],
+				Created: now,
+				Updated: now,
+			},
+		}
+		slug := m.projects[m.activeProject]
+		m.store.AddTask(slug, t)
+		m.adding = false
+		m.addInput.Blur()
+		m.loadTasks()
+		m.fixCursors()
+	default:
+		var cmd tea.Cmd
+		m.addInput, cmd = m.addInput.Update(msg)
+		return m, cmd
 	}
 	return m, nil
+}
+
+func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit), key.Matches(msg, common.Keys.Open):
+		m.currentView = viewBoard
+		m.loadTasks() // reload in case file was edited
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.detailViewport, cmd = m.detailViewport.Update(msg)
+	return m, cmd
 }
 
 func (m Model) statusIndex(s storage.TaskStatus) int {
@@ -329,7 +443,7 @@ func openEditor(path string) tea.Cmd {
 	})
 }
 
-func renderTaskDetail(t *storage.Task) string {
+func renderTaskDetail(t *storage.Task, termWidth int) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# %s", t.Meta.Title)
 	if t.Meta.ID != "" {
@@ -354,26 +468,87 @@ func renderTaskDetail(t *storage.Task) string {
 		fmt.Fprintf(&sb, "\n---\n\n%s\n", t.Body)
 	}
 
-	rendered, err := glamour.Render(sb.String(), "dark")
+	contentWidth := termWidth - 4
+	if contentWidth > 100 {
+		contentWidth = 100
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStylePath("dark"),
+		glamour.WithWordWrap(contentWidth),
+	)
 	if err != nil {
 		return sb.String()
 	}
-	return rendered
+	rendered, err := r.Render(sb.String())
+	if err != nil {
+		return sb.String()
+	}
+
+	pad := (termWidth - contentWidth) / 2
+	if pad < 0 {
+		pad = 0
+	}
+	style := lipgloss.NewStyle().PaddingLeft(pad)
+	return style.Render(rendered)
 }
 
 func (m Model) View() string {
 	if m.currentView == viewDetail {
 		return m.viewDetail()
 	}
+	if m.showHelp {
+		return m.viewHelp()
+	}
 	return m.viewBoard()
 }
 
 func (m Model) viewDetail() string {
 	var sb strings.Builder
-	sb.WriteString(m.detailContent)
+	sb.WriteString(m.detailViewport.View())
 	sb.WriteString("\n")
-	sb.WriteString(helpStyle.Render("esc/q: back to board"))
+	pct := fmt.Sprintf("%3.f%%", m.detailViewport.ScrollPercent()*100)
+	sb.WriteString(helpStyle.Render("o/esc/q: back  ↑/↓/j/k scroll  " + pct))
 	return sb.String()
+}
+
+func (m Model) viewHelp() string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render("Keyboard Shortcuts")
+	keys := []struct{ key, desc string }{
+		{"↑ / k", "Move up"},
+		{"↓ / j", "Move down"},
+		{"← / h", "Previous column"},
+		{"→", "Next column"},
+		{"m", "Move task forward"},
+		{"M", "Move task back"},
+		{"d", "Mark done (last status)"},
+		{"a", "Add new task"},
+		{"e", "Edit in $EDITOR"},
+		{"l", "Open links in browser"},
+		{"o / Enter", "Task detail"},
+		{"/ ", "Search tasks"},
+		{"Tab", "Next project"},
+		{"S-Tab", "Previous project"},
+		{"?", "This help"},
+		{"q", "Quit"},
+	}
+
+	var lines []string
+	lines = append(lines, title)
+	lines = append(lines, "")
+	for _, k := range keys {
+		keyStyle := lipgloss.NewStyle().Bold(true).Foreground(special).Width(12)
+		lines = append(lines, keyStyle.Render(k.key)+"  "+k.desc)
+	}
+	lines = append(lines, "")
+	lines = append(lines, helpStyle.Render("Press any key to close"))
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(highlight).
+		Padding(1, 3).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 func (m Model) viewBoard() string {
@@ -441,8 +616,11 @@ func (m Model) viewBoard() string {
 	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, cols...))
 	sb.WriteString("\n")
 
-	// search bar
-	if m.searching {
+	// search bar / add input
+	if m.adding {
+		sb.WriteString(m.addInput.View())
+		sb.WriteString("\n")
+	} else if m.searching {
 		sb.WriteString(m.searchInput.View())
 		sb.WriteString("\n")
 	} else if m.searchQuery != "" {
@@ -452,7 +630,7 @@ func (m Model) viewBoard() string {
 
 	// status bar
 	ver := helpStyle.Render("pm " + version.Version)
-	help := helpStyle.Render("←/→ column  ↑/↓ navigate  m/M move  e edit  / search  tab project  q quit")
+	help := helpStyle.Render("←/→ column  ↑/↓ navigate  m/M move  d done  a add  l links  e edit  / search  ? help  q quit")
 	gap := m.width - lipgloss.Width(ver) - lipgloss.Width(help)
 	if gap < 1 {
 		gap = 1
