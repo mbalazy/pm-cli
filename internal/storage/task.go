@@ -37,21 +37,15 @@ func ParseStatus(s string) TaskStatus {
 	return TaskStatus(strings.ToLower(s))
 }
 
-type Links struct {
-	Azure string `yaml:"azure,omitempty"`
-	Jira  string `yaml:"jira,omitempty"`
-	Figma string `yaml:"figma,omitempty"`
-}
-
 type TaskMeta struct {
-	ID      string     `yaml:"id"`
-	Title   string     `yaml:"title"`
-	Status  TaskStatus `yaml:"status"`
-	Created string     `yaml:"created"`
-	Updated string     `yaml:"updated"`
-	Links   Links      `yaml:"links,omitempty"`
-	Branch  string     `yaml:"branch,omitempty"`
-	Tags    []string   `yaml:"tags,omitempty"`
+	ID      string            `yaml:"id"`
+	Title   string            `yaml:"title"`
+	Status  TaskStatus        `yaml:"status"`
+	Created string            `yaml:"created"`
+	Updated string            `yaml:"updated"`
+	Links   map[string]string `yaml:"links,omitempty"`
+	Branch  string            `yaml:"branch,omitempty"`
+	Tags    []string          `yaml:"tags,omitempty"`
 }
 
 type Task struct {

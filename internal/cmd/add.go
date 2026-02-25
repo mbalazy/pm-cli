@@ -9,7 +9,8 @@ import (
 )
 
 func newAddCmd(store *storage.Store) *cobra.Command {
-	var status, linkAzure, linkJira, linkFigma, branch string
+	var status, branch string
+	var links map[string]string
 	var tags []string
 
 	cmd := &cobra.Command{
@@ -36,10 +37,8 @@ func newAddCmd(store *storage.Store) *cobra.Command {
 				t.Meta.ID = fmt.Sprintf("%d", time.Now().Unix()%100000)
 			}
 
-			t.Meta.Links = storage.Links{
-				Azure: linkAzure,
-				Jira:  linkJira,
-				Figma: linkFigma,
+			if len(links) > 0 {
+				t.Meta.Links = links
 			}
 			t.Meta.Branch = branch
 			t.Meta.Tags = tags
@@ -55,9 +54,7 @@ func newAddCmd(store *storage.Store) *cobra.Command {
 
 	cmd.Flags().StringVar(&status, "status", "todo", "Task status (todo, doing, done)")
 	cmd.Flags().String("id", "", "Task ID (auto-generated if not set)")
-	cmd.Flags().StringVar(&linkAzure, "link-azure", "", "Azure DevOps link")
-	cmd.Flags().StringVar(&linkJira, "link-jira", "", "Jira link")
-	cmd.Flags().StringVar(&linkFigma, "link-figma", "", "Figma link")
+	cmd.Flags().StringToStringVarP(&links, "link", "l", nil, "Links (key=url, repeatable: -l azure=https://...)")
 	cmd.Flags().StringVar(&branch, "branch", "", "Git branch name")
 	cmd.Flags().StringSliceVar(&tags, "tag", nil, "Tags")
 

@@ -39,18 +39,12 @@ func newShowCmd(store *storage.Store) *cobra.Command {
 			}
 
 			// links
-			links := []string{}
-			if task.Meta.Links.Azure != "" {
-				links = append(links, fmt.Sprintf("[Azure DevOps](%s)", task.Meta.Links.Azure))
-			}
-			if task.Meta.Links.Jira != "" {
-				links = append(links, fmt.Sprintf("[Jira](%s)", task.Meta.Links.Jira))
-			}
-			if task.Meta.Links.Figma != "" {
-				links = append(links, fmt.Sprintf("[Figma](%s)", task.Meta.Links.Figma))
-			}
-			if len(links) > 0 {
-				fmt.Fprintf(&header, "\n**Links:** %s\n", strings.Join(links, " | "))
+			if len(task.Meta.Links) > 0 {
+				var linkParts []string
+				for name, url := range task.Meta.Links {
+					linkParts = append(linkParts, fmt.Sprintf("[%s](%s)", name, url))
+				}
+				fmt.Fprintf(&header, "\n**Links:** %s\n", strings.Join(linkParts, " | "))
 			}
 
 			if len(task.Meta.Tags) > 0 {
