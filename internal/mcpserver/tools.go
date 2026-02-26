@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -154,6 +155,10 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 			}
 			filtered = append(filtered, toSummary(t))
 		}
+
+		sort.Slice(filtered, func(i, j int) bool {
+			return filtered[i].Updated > filtered[j].Updated
+		})
 
 		r, err := jsonText(filtered)
 		return r, nil, err
@@ -433,6 +438,10 @@ func projectContext(store *storage.Store, slug string) (*mcp.CallToolResult, any
 		}
 	}
 
+	sort.Slice(doing, func(i, j int) bool {
+		return doing[i].Updated > doing[j].Updated
+	})
+
 	result := map[string]any{
 		"project":     pm,
 		"doing_tasks": doing,
@@ -470,6 +479,9 @@ func crossProjectContext(store *storage.Store) (*mcp.CallToolResult, any, error)
 				ps.DoingTasks = append(ps.DoingTasks, toSummary(t))
 			}
 		}
+		sort.Slice(ps.DoingTasks, func(i, j int) bool {
+			return ps.DoingTasks[i].Updated > ps.DoingTasks[j].Updated
+		})
 		result = append(result, ps)
 	}
 
