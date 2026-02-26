@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/spf13/cobra"
@@ -33,8 +32,7 @@ func newAddCmd(store *storage.Store) *cobra.Command {
 			if id, _ := cmd.Flags().GetString("id"); id != "" {
 				t.Meta.ID = id
 			} else {
-				// auto-generate ID from timestamp
-				t.Meta.ID = fmt.Sprintf("%d", time.Now().Unix()%100000)
+				t.Meta.ID = store.NextTaskID(projectSlug)
 			}
 
 			if len(links) > 0 {

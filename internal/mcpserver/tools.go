@@ -261,7 +261,7 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 
 		id := in.ID
 		if id == "" {
-			id = fmt.Sprintf("%d", time.Now().Unix()%100000)
+			id = store.NextTaskID(slug)
 		}
 
 		t := storage.NewTask(id, in.Title, slug)

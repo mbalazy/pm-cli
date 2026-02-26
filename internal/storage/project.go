@@ -10,6 +10,7 @@ var DefaultStatuses = []TaskStatus{StatusTodo, StatusDoing, StatusDone}
 
 type Project struct {
 	Name     string            `yaml:"name"`
+	Prefix   string            `yaml:"prefix,omitempty"`
 	Path     string            `yaml:"path,omitempty"`
 	Repo     string            `yaml:"repo,omitempty"`
 	Stack    string            `yaml:"stack,omitempty"`

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -146,6 +147,36 @@ func (s *Store) AddTask(projectSlug string, t *Task) error {
 	}
 
 	return WriteTask(t)
+}
+
+// ProjectPrefix returns the task ID prefix for a project.
+// Uses project.yaml prefix field if set, otherwise falls back to slug.
+func (s *Store) ProjectPrefix(slug string) string {
+	proj, err := s.GetProject(slug)
+	if err == nil && proj.Prefix != "" {
+		return proj.Prefix
+	}
+	return slug
+}
+
+// NextTaskID returns the next sequential ID for a project (e.g. "orbit2-3").
+func (s *Store) NextTaskID(slug string) string {
+	prefix := s.ProjectPrefix(slug)
+	tasks, err := s.GetTasks(slug)
+	if err != nil {
+		return prefix + "-1"
+	}
+
+	maxN := 0
+	for _, t := range tasks {
+		if strings.HasPrefix(t.Meta.ID, prefix+"-") {
+			numStr := strings.TrimPrefix(t.Meta.ID, prefix+"-")
+			if n, err := strconv.Atoi(numStr); err == nil && n > maxN {
+				maxN = n
+			}
+		}
+	}
+	return fmt.Sprintf("%s-%d", prefix, maxN+1)
 }
 
 // ResolveProject finds a project slug by prefix match.
