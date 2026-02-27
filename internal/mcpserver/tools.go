@@ -38,6 +38,7 @@ type addTaskInput struct {
 	Links   map[string]string `json:"links,omitempty" jsonschema:"Links as key=url pairs (e.g. azure, pr, slack)"`
 	Body    string            `json:"body,omitempty" jsonschema:"Markdown body content"`
 	ID      string            `json:"id,omitempty" jsonschema:"Task ID (auto-generated if omitted)"`
+	Brief   string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
 }
 
 type updateTaskInput struct {
@@ -49,6 +50,7 @@ type updateTaskInput struct {
 	Tags       []string          `json:"tags,omitempty" jsonschema:"Replace tags (omit to keep current)"`
 	Links      map[string]string `json:"links,omitempty" jsonschema:"Links to merge (existing links are preserved)"`
 	BodyAppend string            `json:"body_append,omitempty" jsonschema:"Text to append to body (never replaces existing content)"`
+	Brief      string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
 }
 
 type moveTaskInput struct {
@@ -68,6 +70,7 @@ type taskSummary struct {
 	Branch  string            `json:"branch,omitempty"`
 	Tags    []string          `json:"tags,omitempty"`
 	Links   map[string]string `json:"links,omitempty"`
+	Brief   string            `json:"brief,omitempty"`
 }
 
 type taskDetail struct {
@@ -86,6 +89,7 @@ func toSummary(t *storage.Task) taskSummary {
 		Branch:  t.Meta.Branch,
 		Tags:    t.Meta.Tags,
 		Links:   t.Meta.Links,
+		Brief:   t.Meta.Brief,
 	}
 }
 
@@ -281,6 +285,7 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 			t.Meta.Links = in.Links
 		}
 		t.Body = in.Body
+		t.Meta.Brief = in.Brief
 
 		if err := store.AddTask(slug, t); err != nil {
 			r, _ := toolError(err.Error())
@@ -339,6 +344,11 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 			}
 		}
 
+		// Brief: overwrite (current state, not history)
+		if in.Brief != "" {
+			task.Meta.Brief = in.Brief
+		}
+
 		task.Meta.Updated = today()
 		if err := storage.WriteTask(task); err != nil {
 			r, _ := toolError(err.Error())
@@ -368,6 +378,11 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 		oldStatus := string(task.Meta.Status)
 		task.Meta.Status = storage.ParseStatus(in.NewStatus)
 		task.Meta.Updated = today()
+
+		// Clear brief when task is done or archived
+		if task.Meta.Status == storage.StatusDone || task.Meta.Status == storage.StatusArchived {
+			task.Meta.Brief = ""
+		}
 
 		if err := storage.WriteTask(task); err != nil {
 			r, _ := toolError(err.Error())

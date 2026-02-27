@@ -8,13 +8,14 @@ Local task tracker. Data: `~/.claude/pm/<project-slug>/`, binary: `pm`.
 go install -ldflags "-X github.com/mbalazy/pm/internal/version.Version=X.Y.Z" ./cmd/pm/
 ```
 
-IMPORTANT: Always set version via ldflags. Bump version on each release. Current: **0.6.0**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN). Always use `go install`, not `go build`.
+IMPORTANT: Always set version via ldflags. Bump version on each release. Current: **0.6.1**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN). Always use `go install`, not `go build`.
 
 No tests yet. Always verify with `go vet ./...` after changes.
 
 ## Key patterns
 
-- **Frontmatter tasks**: `.md` file with YAML frontmatter (id, title, status, created, updated, links, branch, tags) + markdown body
+- **Frontmatter tasks**: `.md` file with YAML frontmatter (id, title, status, created, updated, links, branch, tags, brief) + markdown body
+- **Brief field**: `brief` in frontmatter stores short session context ("where we left off"). Overwrites on each update (not append). Cleared when task moves to done/archived. Returned by `pm_context` for doing tasks.
 - **Project config**: `~/.claude/pm/<slug>/project.yaml` — name, path, repo, stack, notes, links, tags, statuses
 - **Statuses are per-project** — read via `Store.GetProjectStatuses(slug)`. Default: `[todo, doing, done]`. Override in `project.yaml`. "ALL" view merges all projects' statuses.
 - **Archive is system-level** — `StatusArchived` is NOT a project status. Never add to `DefaultStatuses` or `project.yaml`. `filteredTasks()` excludes archived. `Ctrl+a` toggles archive view.
@@ -53,4 +54,4 @@ Stdio MCP server for Claude Code. Registered as user-scope MCP: `claude mcp add 
 - **Tools**: `pm_context`, `pm_list_tasks`, `pm_get_task`, `pm_list_projects`, `pm_add_task`, `pm_update_task`, `pm_move_task`
 - **Resources**: `pm://projects`, `pm://tasks/{project}/{status}`, `pm://project/{slug}`
 - **CWD auto-detection**: `pm_context` with `cwd` param matches against project.yaml `path` fields
-- **Invariants**: links merge (never remove), body appends (never replace), tags replace if provided
+- **Invariants**: links merge (never remove), body appends (never replace), brief overwrites, tags replace if provided
