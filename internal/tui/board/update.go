@@ -26,10 +26,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m.reload()
 		if m.currentView == viewArchive {
-			tasks := m.archivedTasks()
-			if m.archiveCursor >= len(tasks) && len(tasks) > 0 {
-				m.archiveCursor = len(tasks) - 1
-			}
+			m.fixArchiveCursor()
 		}
 		return m, doTick()
 
@@ -170,27 +167,13 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.reload()
 
 	case key.Matches(msg, common.Keys.MoveBack):
-		t := m.selectedTask()
-		if t != nil {
-			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
-			idx := m.statusIndex(t.Meta.Status)
-			var newStatus storage.TaskStatus
-			if idx > 0 {
-				newStatus = m.statuses[idx-1]
-			} else {
-				newStatus = m.statuses[len(m.statuses)-1]
-			}
-			m.store.MoveTask(t, newStatus)
-			m.reload()
+		if t := m.selectedTask(); t != nil {
+			m.doMoveBack(t)
 		}
 
 	case key.Matches(msg, common.Keys.Move):
-		t := m.selectedTask()
-		if t != nil {
-			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
-			idx := m.statusIndex(t.Meta.Status)
-			m.store.MoveTask(t, m.statuses[(idx+1)%len(m.statuses)])
-			m.reload()
+		if t := m.selectedTask(); t != nil {
+			m.doMoveForward(t)
 		}
 
 	case key.Matches(msg, common.Keys.Enter), key.Matches(msg, common.Keys.Open), key.Matches(msg, common.Keys.Space):
@@ -215,12 +198,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		if m.confirmAction == "done" && m.confirmTaskID == t.Meta.ID {
-			// confirmed
-			m.lastUndo = &undoAction{kind: "done", task: snapshotTask(t)}
-			m.store.MoveTask(t, m.statuses[len(m.statuses)-1])
+			m.doDone(t)
 			m.confirmAction = ""
 			m.confirmTaskID = ""
-			m.reload()
 		} else {
 			m.confirmAction = "done"
 			m.confirmTaskID = t.Meta.ID
@@ -232,11 +212,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		if m.confirmAction == "waiting" && m.confirmTaskID == t.Meta.ID {
-			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
-			m.store.MoveTask(t, storage.StatusWaiting)
+			m.doWaiting(t)
 			m.confirmAction = ""
 			m.confirmTaskID = ""
-			m.reload()
 		} else {
 			m.confirmAction = "waiting"
 			m.confirmTaskID = t.Meta.ID
@@ -304,11 +282,8 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.linksMenu = true
 
 	case key.Matches(msg, common.Keys.Archive):
-		t := m.selectedTask()
-		if t != nil {
-			m.lastUndo = &undoAction{kind: "archive", task: snapshotTask(t)}
-			m.store.MoveTask(t, storage.StatusArchived)
-			m.reload()
+		if t := m.selectedTask(); t != nil {
+			m.doArchive(t)
 		}
 
 	case key.Matches(msg, common.Keys.ToggleArchive):
@@ -339,17 +314,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, common.Keys.Undo):
-		if m.lastUndo == nil {
-			m.toastMsg = "nothing to undo"
-			m.toastExpiry = time.Now().Add(2 * time.Second)
-			break
-		}
-		u := m.lastUndo
-		storage.WriteTask(u.task)
-		m.lastUndo = nil
-		m.toastMsg = "undone: " + u.kind
-		m.toastExpiry = time.Now().Add(2 * time.Second)
-		m.reload()
+		m.doUndo()
 
 	case key.Matches(msg, common.Keys.ColumnVis):
 		var allStatuses []storage.TaskStatus
@@ -599,39 +564,25 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, common.Keys.Move):
 		if t != nil {
-			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
-			idx := m.statusIndex(t.Meta.Status)
-			m.store.MoveTask(t, m.statuses[(idx+1)%len(m.statuses)])
+			m.doMoveForward(t)
 			m.currentView = m.previousView
-			m.reload()
 			return m, nil
 		}
 
 	case key.Matches(msg, common.Keys.MoveBack):
 		if t != nil {
-			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
-			idx := m.statusIndex(t.Meta.Status)
-			var newStatus storage.TaskStatus
-			if idx > 0 {
-				newStatus = m.statuses[idx-1]
-			} else {
-				newStatus = m.statuses[len(m.statuses)-1]
-			}
-			m.store.MoveTask(t, newStatus)
+			m.doMoveBack(t)
 			m.currentView = m.previousView
-			m.reload()
 			return m, nil
 		}
 
 	case key.Matches(msg, common.Keys.Done):
 		if t != nil {
 			if m.confirmAction == "done" && m.confirmTaskID == t.Meta.ID {
-				m.lastUndo = &undoAction{kind: "done", task: snapshotTask(t)}
-				m.store.MoveTask(t, m.statuses[len(m.statuses)-1])
+				m.doDone(t)
 				m.confirmAction = ""
 				m.confirmTaskID = ""
 				m.currentView = m.previousView
-				m.reload()
 				return m, nil
 			}
 			m.confirmAction = "done"
@@ -641,12 +592,10 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, common.Keys.Waiting):
 		if t != nil {
 			if m.confirmAction == "waiting" && m.confirmTaskID == t.Meta.ID {
-				m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
-				m.store.MoveTask(t, storage.StatusWaiting)
+				m.doWaiting(t)
 				m.confirmAction = ""
 				m.confirmTaskID = ""
 				m.currentView = m.previousView
-				m.reload()
 				return m, nil
 			}
 			m.confirmAction = "waiting"
@@ -655,10 +604,8 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, common.Keys.Archive):
 		if t != nil {
-			m.lastUndo = &undoAction{kind: "archive", task: snapshotTask(t)}
-			m.store.MoveTask(t, storage.StatusArchived)
+			m.doArchive(t)
 			m.currentView = m.previousView
-			m.reload()
 			return m, nil
 		}
 
@@ -722,10 +669,7 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			statuses := m.store.GetProjectStatuses(t.Project)
 			m.store.MoveTask(t, statuses[0])
 			m.reload()
-			tasks := m.archivedTasks()
-			if m.archiveCursor >= len(tasks) && len(tasks) > 0 {
-				m.archiveCursor = len(tasks) - 1
-			}
+			m.fixArchiveCursor()
 		}
 
 	case key.Matches(msg, common.Keys.Delete):
@@ -739,10 +683,7 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirmAction = ""
 			m.confirmTaskID = ""
 			m.reload()
-			tasks := m.archivedTasks()
-			if m.archiveCursor >= len(tasks) && len(tasks) > 0 {
-				m.archiveCursor = len(tasks) - 1
-			}
+			m.fixArchiveCursor()
 		} else {
 			m.confirmAction = "delete"
 			m.confirmTaskID = t.Meta.ID
@@ -769,21 +710,8 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.archiveCursor = 0
 
 	case key.Matches(msg, common.Keys.Undo):
-		if m.lastUndo == nil {
-			m.toastMsg = "nothing to undo"
-			m.toastExpiry = time.Now().Add(2 * time.Second)
-			break
-		}
-		u := m.lastUndo
-		storage.WriteTask(u.task)
-		m.lastUndo = nil
-		m.toastMsg = "undone: " + u.kind
-		m.toastExpiry = time.Now().Add(2 * time.Second)
-		m.reload()
-		tasks := m.archivedTasks()
-		if m.archiveCursor >= len(tasks) && len(tasks) > 0 {
-			m.archiveCursor = len(tasks) - 1
-		}
+		m.doUndo()
+		m.fixArchiveCursor()
 
 	case key.Matches(msg, common.Keys.Search):
 		m.searching = true
@@ -953,6 +881,74 @@ func (m *Model) fixScrollOffsets() {
 			m.scrollOffsets[i] = start
 		}
 	}
+}
+
+// --- Task action helpers (shared between board/detail/archive views) ---
+
+// fixArchiveCursor clamps archive cursor to valid range after archive list changes.
+func (m *Model) fixArchiveCursor() {
+	tasks := m.archivedTasks()
+	if m.archiveCursor >= len(tasks) && len(tasks) > 0 {
+		m.archiveCursor = len(tasks) - 1
+	}
+}
+
+// doMoveForward cycles task to next status column.
+func (m *Model) doMoveForward(t *storage.Task) {
+	m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
+	idx := m.statusIndex(t.Meta.Status)
+	m.store.MoveTask(t, m.statuses[(idx+1)%len(m.statuses)])
+	m.reload()
+}
+
+// doMoveBack cycles task to previous status column.
+func (m *Model) doMoveBack(t *storage.Task) {
+	m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
+	idx := m.statusIndex(t.Meta.Status)
+	var newStatus storage.TaskStatus
+	if idx > 0 {
+		newStatus = m.statuses[idx-1]
+	} else {
+		newStatus = m.statuses[len(m.statuses)-1]
+	}
+	m.store.MoveTask(t, newStatus)
+	m.reload()
+}
+
+// doDone marks task with the last status (typically "done").
+func (m *Model) doDone(t *storage.Task) {
+	m.lastUndo = &undoAction{kind: "done", task: snapshotTask(t)}
+	m.store.MoveTask(t, m.statuses[len(m.statuses)-1])
+	m.reload()
+}
+
+// doWaiting marks task as waiting.
+func (m *Model) doWaiting(t *storage.Task) {
+	m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
+	m.store.MoveTask(t, storage.StatusWaiting)
+	m.reload()
+}
+
+// doArchive archives the task.
+func (m *Model) doArchive(t *storage.Task) {
+	m.lastUndo = &undoAction{kind: "archive", task: snapshotTask(t)}
+	m.store.MoveTask(t, storage.StatusArchived)
+	m.reload()
+}
+
+// doUndo restores the last undone action.
+func (m *Model) doUndo() {
+	if m.lastUndo == nil {
+		m.toastMsg = "nothing to undo"
+		m.toastExpiry = time.Now().Add(2 * time.Second)
+		return
+	}
+	u := m.lastUndo
+	storage.WriteTask(u.task)
+	m.lastUndo = nil
+	m.toastMsg = "undone: " + u.kind
+	m.toastExpiry = time.Now().Add(2 * time.Second)
+	m.reload()
 }
 
 func openEditor(path string) tea.Cmd {
