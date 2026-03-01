@@ -194,16 +194,11 @@ func TestUpdateTaskBriefOverwrites(t *testing.T) {
 }
 
 func TestMoveTaskClearsBriefOnDoneArchived(t *testing.T) {
-	t.Run("done clears brief", func(t *testing.T) {
+	t.Run("done clears brief via MoveTask", func(t *testing.T) {
 		store, _ := setupMCPTestStore(t)
 		task, _ := store.FindTask("test", "t-1")
 
-		// Simulate pm_move_task handler logic
-		task.Meta.Status = storage.StatusDone
-		if task.Meta.Status == storage.StatusDone || task.Meta.Status == storage.StatusArchived {
-			task.Meta.Brief = ""
-		}
-		storage.WriteTask(task)
+		store.MoveTask(task, storage.StatusDone)
 
 		reloaded, _ := store.FindTask("test", "t-1")
 		if reloaded.Meta.Brief != "" {
@@ -211,15 +206,11 @@ func TestMoveTaskClearsBriefOnDoneArchived(t *testing.T) {
 		}
 	})
 
-	t.Run("archived clears brief", func(t *testing.T) {
+	t.Run("archived clears brief via MoveTask", func(t *testing.T) {
 		store, _ := setupMCPTestStore(t)
 		task, _ := store.FindTask("test", "t-1")
 
-		task.Meta.Status = storage.StatusArchived
-		if task.Meta.Status == storage.StatusDone || task.Meta.Status == storage.StatusArchived {
-			task.Meta.Brief = ""
-		}
-		storage.WriteTask(task)
+		store.MoveTask(task, storage.StatusArchived)
 
 		reloaded, _ := store.FindTask("test", "t-1")
 		if reloaded.Meta.Brief != "" {
@@ -231,11 +222,7 @@ func TestMoveTaskClearsBriefOnDoneArchived(t *testing.T) {
 		store, _ := setupMCPTestStore(t)
 		task, _ := store.FindTask("test", "t-1")
 
-		task.Meta.Status = storage.StatusWaiting
-		if task.Meta.Status == storage.StatusDone || task.Meta.Status == storage.StatusArchived {
-			task.Meta.Brief = ""
-		}
-		storage.WriteTask(task)
+		store.MoveTask(task, storage.StatusWaiting)
 
 		reloaded, _ := store.FindTask("test", "t-1")
 		if reloaded.Meta.Brief != "initial brief" {

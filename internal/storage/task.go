@@ -30,6 +30,7 @@ type TaskStatus string
 const (
 	StatusTodo     TaskStatus = "todo"
 	StatusDoing    TaskStatus = "doing"
+	StatusWaiting  TaskStatus = "waiting"
 	StatusDone     TaskStatus = "done"
 	StatusArchived TaskStatus = "archived"
 )
@@ -126,8 +127,13 @@ func WriteTask(t *Task) error {
 	return os.WriteFile(t.FilePath, []byte(buf.String()), 0644)
 }
 
+// Today returns the current date as YYYY-MM-DD.
+func Today() string {
+	return time.Now().Format("2006-01-02")
+}
+
 func NewTask(id, title, project string) *Task {
-	now := time.Now().Format("2006-01-02")
+	now := Today()
 	return &Task{
 		Meta: TaskMeta{
 			ID:      id,

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -116,10 +115,6 @@ func toolError(msg string) (*mcp.CallToolResult, error) {
 		Content: []mcp.Content{&mcp.TextContent{Text: msg}},
 		IsError: true,
 	}, nil
-}
-
-func today() string {
-	return time.Now().Format("2006-01-02")
 }
 
 // --- Tool registration ---
@@ -345,11 +340,14 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 		}
 
 		// Brief: overwrite (current state, not history)
-		if in.Brief != "" {
+		// Clear brief when status transitions to done/archived
+		if task.Meta.Status == storage.StatusDone || task.Meta.Status == storage.StatusArchived {
+			task.Meta.Brief = ""
+		} else if in.Brief != "" {
 			task.Meta.Brief = in.Brief
 		}
 
-		task.Meta.Updated = today()
+		task.Meta.Updated = storage.Today()
 		if err := storage.WriteTask(task); err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
@@ -376,15 +374,8 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 		}
 
 		oldStatus := string(task.Meta.Status)
-		task.Meta.Status = storage.ParseStatus(in.NewStatus)
-		task.Meta.Updated = today()
-
-		// Clear brief when task is done or archived
-		if task.Meta.Status == storage.StatusDone || task.Meta.Status == storage.StatusArchived {
-			task.Meta.Brief = ""
-		}
-
-		if err := storage.WriteTask(task); err != nil {
+		newStatus := storage.ParseStatus(in.NewStatus)
+		if err := store.MoveTask(task, newStatus); err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
 		}
@@ -424,6 +415,7 @@ func projectContext(store *storage.Store, slug string) (*mcp.CallToolResult, any
 	type projectMeta struct {
 		Slug     string            `json:"slug"`
 		Name     string            `json:"name"`
+		Repo     string            `json:"repo,omitempty"`
 		Stack    string            `json:"stack,omitempty"`
 		Notes    string            `json:"notes,omitempty"`
 		Links    map[string]string `json:"links,omitempty"`
@@ -434,6 +426,7 @@ func projectContext(store *storage.Store, slug string) (*mcp.CallToolResult, any
 	statuses := storage.DefaultStatuses
 	if proj != nil {
 		pm.Name = proj.Name
+		pm.Repo = proj.Repo
 		pm.Stack = proj.Stack
 		pm.Notes = proj.Notes
 		pm.Links = proj.Links
@@ -473,6 +466,7 @@ func crossProjectContext(store *storage.Store) (*mcp.CallToolResult, any, error)
 	type projectSummary struct {
 		Slug       string         `json:"slug"`
 		Name       string         `json:"name"`
+		Repo       string         `json:"repo,omitempty"`
 		TaskCounts map[string]int `json:"task_counts"`
 		DoingTasks []taskSummary  `json:"doing_tasks,omitempty"`
 	}
@@ -486,6 +480,7 @@ func crossProjectContext(store *storage.Store) (*mcp.CallToolResult, any, error)
 		}
 		if proj != nil {
 			ps.Name = proj.Name
+			ps.Repo = proj.Repo
 		}
 		tasks, _ := store.GetTasks(slug)
 		for _, t := range tasks {

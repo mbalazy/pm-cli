@@ -519,13 +519,13 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
 			idx := m.statusIndex(t.Meta.Status)
+			var newStatus storage.TaskStatus
 			if idx > 0 {
-				t.Meta.Status = m.statuses[idx-1]
+				newStatus = m.statuses[idx-1]
 			} else {
-				t.Meta.Status = m.statuses[len(m.statuses)-1]
+				newStatus = m.statuses[len(m.statuses)-1]
 			}
-			t.Meta.Updated = time.Now().Format("2006-01-02")
-			storage.WriteTask(t)
+			m.store.MoveTask(t, newStatus)
 			m.reload()
 		}
 
@@ -534,9 +534,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
 			idx := m.statusIndex(t.Meta.Status)
-			t.Meta.Status = m.statuses[(idx+1)%len(m.statuses)]
-			t.Meta.Updated = time.Now().Format("2006-01-02")
-			storage.WriteTask(t)
+			m.store.MoveTask(t, m.statuses[(idx+1)%len(m.statuses)])
 			m.reload()
 		}
 
@@ -564,10 +562,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.confirmAction == "done" && m.confirmTaskID == t.Meta.ID {
 			// confirmed
 			m.lastUndo = &undoAction{kind: "done", task: snapshotTask(t)}
-			t.Meta.Status = m.statuses[len(m.statuses)-1]
-			t.Meta.Updated = time.Now().Format("2006-01-02")
-			t.Meta.Brief = ""
-			storage.WriteTask(t)
+			m.store.MoveTask(t, m.statuses[len(m.statuses)-1])
 			m.confirmAction = ""
 			m.confirmTaskID = ""
 			m.reload()
@@ -583,9 +578,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.confirmAction == "waiting" && m.confirmTaskID == t.Meta.ID {
 			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
-			t.Meta.Status = storage.StatusWaiting
-			t.Meta.Updated = time.Now().Format("2006-01-02")
-			storage.WriteTask(t)
+			m.store.MoveTask(t, storage.StatusWaiting)
 			m.confirmAction = ""
 			m.confirmTaskID = ""
 			m.reload()
@@ -659,10 +652,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		t := m.selectedTask()
 		if t != nil {
 			m.lastUndo = &undoAction{kind: "archive", task: snapshotTask(t)}
-			t.Meta.Status = storage.StatusArchived
-			t.Meta.Updated = time.Now().Format("2006-01-02")
-			t.Meta.Brief = ""
-			storage.WriteTask(t)
+			m.store.MoveTask(t, storage.StatusArchived)
 			m.reload()
 		}
 
@@ -822,7 +812,7 @@ func (m Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if id == "" {
 			id = fmt.Sprintf("%d", time.Now().Unix()%100000)
 		}
-		now := time.Now().Format("2006-01-02")
+		now := storage.Today()
 		t := &storage.Task{
 			Meta: storage.TaskMeta{
 				ID:      id,
@@ -956,9 +946,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
 			idx := m.statusIndex(t.Meta.Status)
-			t.Meta.Status = m.statuses[(idx+1)%len(m.statuses)]
-			t.Meta.Updated = time.Now().Format("2006-01-02")
-			storage.WriteTask(t)
+			m.store.MoveTask(t, m.statuses[(idx+1)%len(m.statuses)])
 			m.currentView = m.previousView
 			m.reload()
 			return m, nil
@@ -968,13 +956,13 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
 			idx := m.statusIndex(t.Meta.Status)
+			var newStatus storage.TaskStatus
 			if idx > 0 {
-				t.Meta.Status = m.statuses[idx-1]
+				newStatus = m.statuses[idx-1]
 			} else {
-				t.Meta.Status = m.statuses[len(m.statuses)-1]
+				newStatus = m.statuses[len(m.statuses)-1]
 			}
-			t.Meta.Updated = time.Now().Format("2006-01-02")
-			storage.WriteTask(t)
+			m.store.MoveTask(t, newStatus)
 			m.currentView = m.previousView
 			m.reload()
 			return m, nil
@@ -984,10 +972,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			if m.confirmAction == "done" && m.confirmTaskID == t.Meta.ID {
 				m.lastUndo = &undoAction{kind: "done", task: snapshotTask(t)}
-				t.Meta.Status = m.statuses[len(m.statuses)-1]
-				t.Meta.Updated = time.Now().Format("2006-01-02")
-				t.Meta.Brief = ""
-				storage.WriteTask(t)
+				m.store.MoveTask(t, m.statuses[len(m.statuses)-1])
 				m.confirmAction = ""
 				m.confirmTaskID = ""
 				m.currentView = m.previousView
@@ -1002,9 +987,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			if m.confirmAction == "waiting" && m.confirmTaskID == t.Meta.ID {
 				m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
-				t.Meta.Status = storage.StatusWaiting
-				t.Meta.Updated = time.Now().Format("2006-01-02")
-				storage.WriteTask(t)
+				m.store.MoveTask(t, storage.StatusWaiting)
 				m.confirmAction = ""
 				m.confirmTaskID = ""
 				m.currentView = m.previousView
@@ -1018,10 +1001,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, common.Keys.Archive):
 		if t != nil {
 			m.lastUndo = &undoAction{kind: "archive", task: snapshotTask(t)}
-			t.Meta.Status = storage.StatusArchived
-			t.Meta.Updated = time.Now().Format("2006-01-02")
-			t.Meta.Brief = ""
-			storage.WriteTask(t)
+			m.store.MoveTask(t, storage.StatusArchived)
 			m.currentView = m.previousView
 			m.reload()
 			return m, nil
@@ -1085,9 +1065,7 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
 			statuses := m.store.GetProjectStatuses(t.Project)
-			t.Meta.Status = statuses[0]
-			t.Meta.Updated = time.Now().Format("2006-01-02")
-			storage.WriteTask(t)
+			m.store.MoveTask(t, statuses[0])
 			m.reload()
 			tasks := m.archivedTasks()
 			if m.archiveCursor >= len(tasks) && len(tasks) > 0 {

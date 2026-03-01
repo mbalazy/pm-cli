@@ -130,6 +130,17 @@ func (s *Store) GetAllTasks() ([]*Task, error) {
 	return all, nil
 }
 
+// MoveTask changes a task's status, updates the timestamp, and clears brief on done/archived.
+// This is the single source of truth for status transition logic.
+func (s *Store) MoveTask(t *Task, newStatus TaskStatus) error {
+	t.Meta.Status = newStatus
+	t.Meta.Updated = Today()
+	if newStatus == StatusDone || newStatus == StatusArchived {
+		t.Meta.Brief = ""
+	}
+	return WriteTask(t)
+}
+
 func (s *Store) DeleteTask(t *Task) error {
 	if t.FilePath == "" {
 		return fmt.Errorf("task has no file path")

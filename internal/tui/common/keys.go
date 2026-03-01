@@ -9,6 +9,7 @@ type KeyMap struct {
 	Right         key.Binding
 	Enter         key.Binding
 	Open          key.Binding
+	Space         key.Binding
 	Move          key.Binding
 	MoveBack      key.Binding
 	Done          key.Binding
@@ -31,6 +32,11 @@ type KeyMap struct {
 	Restore       key.Binding
 	ProjectInfo   key.Binding
 	Undo          key.Binding
+	Waiting       key.Binding
+	ColumnVis     key.Binding
+	HalfDown      key.Binding
+	HalfUp        key.Binding
+	Zoom          key.Binding
 }
 
 var Keys = KeyMap{
@@ -40,6 +46,7 @@ var Keys = KeyMap{
 	Right:         key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→/l", "next column")),
 	Enter:         key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "detail")),
 	Open:          key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open/close")),
+	Space:         key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
 	Move:          key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "move forward")),
 	MoveBack:      key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "move back")),
 	Done:          key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "mark done")),
@@ -62,4 +69,9 @@ var Keys = KeyMap{
 	Restore:       key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "unarchive")),
 	ProjectInfo:   key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "project info")),
 	Undo:          key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "undo")),
+	Waiting:       key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "mark waiting")),
+	ColumnVis:     key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "toggle columns")),
+	HalfDown:      key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("C-d", "half page down")),
+	HalfUp:        key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("C-u", "half page up")),
+	Zoom:          key.NewBinding(key.WithKeys(";"), key.WithHelp(";", "zoom toggle")),
 }

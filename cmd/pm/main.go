@@ -3,9 +3,15 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/mbalazy/pm/internal/cmd"
+	"github.com/mbalazy/pm/internal/tui/board"
 )
+
+func init() {
+	board.ProcessStart = time.Now()
+}
 
 func main() {
 	if err := cmd.NewRootCmd().Execute(); err != nil {

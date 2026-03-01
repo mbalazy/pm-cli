@@ -334,6 +334,80 @@ func TestGetAllStatuses(t *testing.T) {
 	})
 }
 
+func TestMoveTask(t *testing.T) {
+	t.Run("updates status and timestamp", func(t *testing.T) {
+		store, _ := setupTestStore(t)
+		task, _ := store.FindTask("alpha", "a-1")
+
+		err := store.MoveTask(task, StatusDoing)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if task.Meta.Status != StatusDoing {
+			t.Errorf("status = %q, want %q", task.Meta.Status, StatusDoing)
+		}
+		if task.Meta.Updated != Today() {
+			t.Errorf("updated = %q, want %q", task.Meta.Updated, Today())
+		}
+	})
+
+	t.Run("clears brief on done", func(t *testing.T) {
+		store, _ := setupTestStore(t)
+		task, _ := store.FindTask("alpha", "a-2") // has brief "working on it"
+
+		err := store.MoveTask(task, StatusDone)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if task.Meta.Brief != "" {
+			t.Errorf("brief should be cleared on done, got %q", task.Meta.Brief)
+		}
+		// verify persisted
+		reloaded, _ := store.FindTask("alpha", "a-2")
+		if reloaded.Meta.Brief != "" {
+			t.Errorf("persisted brief should be cleared, got %q", reloaded.Meta.Brief)
+		}
+	})
+
+	t.Run("clears brief on archived", func(t *testing.T) {
+		store, _ := setupTestStore(t)
+		task, _ := store.FindTask("alpha", "a-2")
+
+		err := store.MoveTask(task, StatusArchived)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if task.Meta.Brief != "" {
+			t.Errorf("brief should be cleared on archived, got %q", task.Meta.Brief)
+		}
+	})
+
+	t.Run("preserves brief on other statuses", func(t *testing.T) {
+		store, _ := setupTestStore(t)
+		task, _ := store.FindTask("alpha", "a-2")
+
+		err := store.MoveTask(task, StatusWaiting)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if task.Meta.Brief != "working on it" {
+			t.Errorf("brief should be preserved, got %q", task.Meta.Brief)
+		}
+	})
+
+	t.Run("persists to disk", func(t *testing.T) {
+		store, _ := setupTestStore(t)
+		task, _ := store.FindTask("alpha", "a-1")
+
+		store.MoveTask(task, StatusDoing)
+
+		reloaded, _ := store.FindTask("alpha", "a-1")
+		if reloaded.Meta.Status != StatusDoing {
+			t.Errorf("persisted status = %q, want %q", reloaded.Meta.Status, StatusDoing)
+		}
+	})
+}
+
 func TestStoreOperationsOnEmptyRoot(t *testing.T) {
 	emptyStore := &Store{Root: t.TempDir()}
 

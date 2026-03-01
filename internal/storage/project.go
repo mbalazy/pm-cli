@@ -6,7 +6,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var DefaultStatuses = []TaskStatus{StatusTodo, StatusDoing, StatusDone}
+var DefaultStatuses = []TaskStatus{StatusTodo, StatusDoing, StatusWaiting, StatusDone}
 
 type Project struct {
 	Name     string            `yaml:"name"`
