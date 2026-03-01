@@ -27,6 +27,9 @@ func newMvCmd(store *storage.Store) *cobra.Command {
 			old := task.Meta.Status
 			task.Meta.Status = newStatus
 			task.Meta.Updated = time.Now().Format("2006-01-02")
+			if newStatus == storage.StatusDone || newStatus == storage.StatusArchived {
+				task.Meta.Brief = ""
+			}
 			if err := storage.WriteTask(task); err != nil {
 				return err
 			}
@@ -55,6 +58,7 @@ func newDoneCmd(store *storage.Store) *cobra.Command {
 			old := task.Meta.Status
 			task.Meta.Status = storage.StatusDone
 			task.Meta.Updated = time.Now().Format("2006-01-02")
+			task.Meta.Brief = ""
 			if err := storage.WriteTask(task); err != nil {
 				return err
 			}

@@ -19,6 +19,9 @@ import (
 	"github.com/mbalazy/pm/internal/version"
 )
 
+// ProcessStart is set in main's init() to measure startup time.
+var ProcessStart time.Time
+
 type view int
 
 const (
@@ -36,6 +39,11 @@ type yankItem struct {
 type linkItem struct {
 	name string
 	url  string
+}
+
+type colVisItem struct {
+	status  storage.TaskStatus
+	visible bool
 }
 
 type undoAction struct {
@@ -72,6 +80,9 @@ type Model struct {
 	currentView   view
 	previousView  view
 	detailViewport viewport.Model
+	detailTask     *storage.Task
+	infoProject    *storage.Project
+	infoSlug       string
 	searchInput   textinput.Model
 	searchQuery   string
 	searching     bool
@@ -106,6 +117,9 @@ type Model struct {
 	toastMsg    string
 	toastExpiry time.Time
 
+	// column scroll offsets (first visible card index per column)
+	scrollOffsets []int
+
 	// undo
 	lastUndo *undoAction
 
@@ -113,14 +127,26 @@ type Model struct {
 	helpSearch bool
 	helpFilter string
 	helpInput  textinput.Model
+
+	// column visibility
+	colVisMenu     bool
+	colVisItems    []colVisItem
+	colVisCursor   int
+	hiddenStatuses map[storage.TaskStatus]bool
+
+	// zoom
+	zoomed bool
+
+	startupDuration time.Duration
 }
 
 func New(store *storage.Store, filterProject string) Model {
 	m := Model{
-		store:         store,
-		width:         80,
-		height:        24,
-		projectCounts: make(map[string]int),
+		store:          store,
+		width:          80,
+		height:         24,
+		projectCounts:  make(map[string]int),
+		hiddenStatuses: make(map[storage.TaskStatus]bool),
 	}
 
 	projects, _ := store.ListProjects()
@@ -135,8 +161,6 @@ func New(store *storage.Store, filterProject string) Model {
 		}
 	}
 
-	m.loadStatuses()
-	m.cursors = make([]int, len(m.statuses))
 	m.reload()
 
 	ti := textinput.New()
@@ -153,6 +177,10 @@ func New(store *storage.Store, filterProject string) Model {
 	hi.Prompt = "/ "
 	hi.CharLimit = 30
 	m.helpInput = hi
+
+	if !ProcessStart.IsZero() {
+		m.startupDuration = time.Since(ProcessStart)
+	}
 
 	return m
 }
@@ -177,8 +205,50 @@ func (m *Model) loadTasks() {
 
 func (m *Model) reload() {
 	m.loadTasks()
+	m.loadStatuses()
+	m.applyColumnVisibility()
+	n := len(m.statuses)
+	if len(m.cursors) != n {
+		old := m.cursors
+		m.cursors = make([]int, n)
+		copy(m.cursors, old)
+		oldOff := m.scrollOffsets
+		m.scrollOffsets = make([]int, n)
+		copy(m.scrollOffsets, oldOff)
+	}
+	if m.activeCol >= n && n > 0 {
+		m.activeCol = n - 1
+	} else if n == 0 {
+		m.activeCol = 0
+	}
 	m.loadProjectCounts()
 	m.fixCursors()
+}
+
+func (m *Model) applyColumnVisibility() {
+	// Auto-hide waiting if empty and not explicitly shown
+	if _, explicit := m.hiddenStatuses[storage.StatusWaiting]; !explicit {
+		hasWaiting := false
+		for _, t := range m.tasks {
+			if t.Meta.Status == storage.StatusWaiting {
+				hasWaiting = true
+				break
+			}
+		}
+		if !hasWaiting {
+			m.hiddenStatuses[storage.StatusWaiting] = true
+		} else {
+			delete(m.hiddenStatuses, storage.StatusWaiting)
+		}
+	}
+
+	filtered := m.statuses[:0]
+	for _, s := range m.statuses {
+		if !m.hiddenStatuses[s] {
+			filtered = append(filtered, s)
+		}
+	}
+	m.statuses = filtered
 }
 
 func (m *Model) loadProjectCounts() {
@@ -316,6 +386,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentView == viewDetail || m.currentView == viewProjectInfo {
 			return m.updateDetail(msg)
 		}
+		if m.colVisMenu {
+			return m.updateColVisMenu(msg)
+		}
 		if m.yankMenu {
 			return m.updateYankMenu(msg)
 		}
@@ -366,6 +439,8 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch m.confirmAction {
 		case "done":
 			isConfirmKey = key.Matches(msg, common.Keys.Done)
+		case "waiting":
+			isConfirmKey = key.Matches(msg, common.Keys.Waiting)
 		case "delete":
 			isConfirmKey = key.Matches(msg, common.Keys.Delete)
 		case "quit":
@@ -386,52 +461,58 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.confirmAction = "quit"
 
 	case key.Matches(msg, common.Keys.Left):
-		if m.activeCol > 0 {
-			m.activeCol--
+		if len(m.statuses) > 0 {
+			m.activeCol = (m.activeCol - 1 + len(m.statuses)) % len(m.statuses)
 		}
 
 	case key.Matches(msg, common.Keys.Right):
-		if m.activeCol < len(m.statuses)-1 {
-			m.activeCol++
+		if len(m.statuses) > 0 {
+			m.activeCol = (m.activeCol + 1) % len(m.statuses)
 		}
 
 	case key.Matches(msg, common.Keys.Up):
-		if m.cursors[m.activeCol] > 0 {
-			m.cursors[m.activeCol]--
+		tasks := m.columnTasks(m.activeCol)
+		if len(tasks) > 0 {
+			m.cursors[m.activeCol] = (m.cursors[m.activeCol] - 1 + len(tasks)) % len(tasks)
+			m.fixScrollOffsets()
 		}
 
 	case key.Matches(msg, common.Keys.Down):
 		tasks := m.columnTasks(m.activeCol)
-		if m.cursors[m.activeCol] < len(tasks)-1 {
-			m.cursors[m.activeCol]++
+		if len(tasks) > 0 {
+			m.cursors[m.activeCol] = (m.cursors[m.activeCol] + 1) % len(tasks)
+			m.fixScrollOffsets()
 		}
 
 	case key.Matches(msg, common.Keys.JumpTop):
 		m.cursors[m.activeCol] = 0
+		m.fixScrollOffsets()
 
 	case key.Matches(msg, common.Keys.JumpBottom):
 		tasks := m.columnTasks(m.activeCol)
 		if len(tasks) > 0 {
 			m.cursors[m.activeCol] = len(tasks) - 1
+			m.fixScrollOffsets()
 		}
+
+	case key.Matches(msg, common.Keys.HalfDown):
+		tasks := m.columnTasks(m.activeCol)
+		if len(tasks) > 0 {
+			m.cursors[m.activeCol] = min(m.cursors[m.activeCol]+5, len(tasks)-1)
+			m.fixScrollOffsets()
+		}
+
+	case key.Matches(msg, common.Keys.HalfUp):
+		m.cursors[m.activeCol] = max(m.cursors[m.activeCol]-5, 0)
+		m.fixScrollOffsets()
 
 	case key.Matches(msg, common.Keys.Tab):
 		m.activeProject = (m.activeProject + 1) % len(m.projects)
-		m.loadStatuses()
 		m.reload()
-		m.cursors = make([]int, len(m.statuses))
-		if m.activeCol >= len(m.statuses) {
-			m.activeCol = 0
-		}
 
 	case key.Matches(msg, common.Keys.ShiftTab):
 		m.activeProject = (m.activeProject - 1 + len(m.projects)) % len(m.projects)
-		m.loadStatuses()
 		m.reload()
-		m.cursors = make([]int, len(m.statuses))
-		if m.activeCol >= len(m.statuses) {
-			m.activeCol = 0
-		}
 
 	case key.Matches(msg, common.Keys.MoveBack):
 		t := m.selectedTask()
@@ -459,11 +540,12 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.reload()
 		}
 
-	case key.Matches(msg, common.Keys.Enter), key.Matches(msg, common.Keys.Open):
+	case key.Matches(msg, common.Keys.Enter), key.Matches(msg, common.Keys.Open), key.Matches(msg, common.Keys.Space):
 		t := m.selectedTask()
 		if t != nil {
 			m.previousView = viewBoard
 			m.currentView = viewDetail
+			m.detailTask = t
 			m.detailViewport = viewport.New(m.width, m.height-2)
 			m.detailViewport.SetContent(renderTaskDetail(t, m.width))
 		}
@@ -484,12 +566,31 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.lastUndo = &undoAction{kind: "done", task: snapshotTask(t)}
 			t.Meta.Status = m.statuses[len(m.statuses)-1]
 			t.Meta.Updated = time.Now().Format("2006-01-02")
+			t.Meta.Brief = ""
 			storage.WriteTask(t)
 			m.confirmAction = ""
 			m.confirmTaskID = ""
 			m.reload()
 		} else {
 			m.confirmAction = "done"
+			m.confirmTaskID = t.Meta.ID
+		}
+
+	case key.Matches(msg, common.Keys.Waiting):
+		t := m.selectedTask()
+		if t == nil {
+			break
+		}
+		if m.confirmAction == "waiting" && m.confirmTaskID == t.Meta.ID {
+			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
+			t.Meta.Status = storage.StatusWaiting
+			t.Meta.Updated = time.Now().Format("2006-01-02")
+			storage.WriteTask(t)
+			m.confirmAction = ""
+			m.confirmTaskID = ""
+			m.reload()
+		} else {
+			m.confirmAction = "waiting"
 			m.confirmTaskID = t.Meta.ID
 		}
 
@@ -515,10 +616,10 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t == nil {
 			break
 		}
-		if t.Meta.Branch != "" {
-			m.copyToClipboard(t.Meta.Branch)
+		if t.Meta.ID != "" {
+			m.copyToClipboard(t.Meta.ID)
 		} else {
-			m.toastMsg = "no branch set"
+			m.toastMsg = "no id set"
 			m.toastExpiry = time.Now().Add(2 * time.Second)
 		}
 
@@ -547,18 +648,12 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t == nil || len(t.Meta.Links) == 0 {
 			break
 		}
-		if len(t.Meta.Links) == 1 {
-			for _, url := range t.Meta.Links {
-				exec.Command("open", url).Start()
-			}
-		} else {
-			m.linkItems = nil
-			m.linksCursor = 0
-			for name, url := range t.Meta.Links {
-				m.linkItems = append(m.linkItems, linkItem{name, url})
-			}
-			m.linksMenu = true
+		m.linkItems = nil
+		m.linksCursor = 0
+		for name, url := range t.Meta.Links {
+			m.linkItems = append(m.linkItems, linkItem{name, url})
 		}
+		m.linksMenu = true
 
 	case key.Matches(msg, common.Keys.Archive):
 		t := m.selectedTask()
@@ -566,6 +661,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.lastUndo = &undoAction{kind: "archive", task: snapshotTask(t)}
 			t.Meta.Status = storage.StatusArchived
 			t.Meta.Updated = time.Now().Format("2006-01-02")
+			t.Meta.Brief = ""
 			storage.WriteTask(t)
 			m.reload()
 		}
@@ -591,6 +687,8 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if proj != nil {
 			m.previousView = viewBoard
 			m.currentView = viewProjectInfo
+			m.infoProject = proj
+			m.infoSlug = slug
 			m.detailViewport = viewport.New(m.width, m.height-2)
 			m.detailViewport.SetContent(renderProjectInfo(proj, slug, m.width))
 		}
@@ -608,6 +706,28 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.toastExpiry = time.Now().Add(2 * time.Second)
 		m.reload()
 
+	case key.Matches(msg, common.Keys.ColumnVis):
+		var allStatuses []storage.TaskStatus
+		if m.activeProject == 0 {
+			allStatuses = m.store.GetAllStatuses()
+		} else {
+			slug := m.projects[m.activeProject]
+			allStatuses = m.store.GetProjectStatuses(slug)
+		}
+		visibleSet := make(map[storage.TaskStatus]bool)
+		for _, s := range m.statuses {
+			visibleSet[s] = true
+		}
+		m.colVisItems = nil
+		m.colVisCursor = 0
+		for _, s := range allStatuses {
+			m.colVisItems = append(m.colVisItems, colVisItem{status: s, visible: visibleSet[s]})
+		}
+		m.colVisMenu = true
+
+	case key.Matches(msg, common.Keys.Zoom):
+		m.zoomed = !m.zoomed
+
 	case key.Matches(msg, common.Keys.Help):
 		m.showHelp = true
 
@@ -615,9 +735,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.activeProject == 0 {
 			if len(m.projects) > 1 {
 				m.activeProject = 1
-				m.loadStatuses()
 				m.reload()
-				m.cursors = make([]int, len(m.statuses))
 				m.activeCol = 0
 			} else {
 				return m, nil
@@ -728,15 +846,193 @@ func (m Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Overlay menus intercept input first
+	if m.yankMenu {
+		return m.updateYankMenu(msg)
+	}
+	if m.linksMenu {
+		return m.updateLinksMenu(msg)
+	}
+
+	// Project info view: close, scroll, yank, links
+	if m.currentView == viewProjectInfo {
+		switch {
+		case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit), key.Matches(msg, common.Keys.Open), key.Matches(msg, common.Keys.Space):
+			m.currentView = m.previousView
+			m.reload()
+			return m, nil
+		case key.Matches(msg, common.Keys.Yank):
+			if m.infoSlug != "" {
+				m.copyToClipboard(m.infoSlug)
+			}
+			return m, nil
+		case key.Matches(msg, common.Keys.YankMenu):
+			if m.infoProject != nil {
+				m.yankItems = nil
+				m.yankCursor = 0
+				m.yankItems = append(m.yankItems, yankItem{"slug", m.infoSlug})
+				if m.infoProject.Path != "" {
+					m.yankItems = append(m.yankItems, yankItem{"path", m.infoProject.Path})
+				}
+				if m.infoProject.Repo != "" {
+					m.yankItems = append(m.yankItems, yankItem{"repo", m.infoProject.Repo})
+				}
+				for name, url := range m.infoProject.Links {
+					m.yankItems = append(m.yankItems, yankItem{"link: " + name, url})
+				}
+				if len(m.yankItems) > 0 {
+					m.yankMenu = true
+				}
+			}
+			return m, nil
+		case key.Matches(msg, common.Keys.Links):
+			if m.infoProject != nil && len(m.infoProject.Links) > 0 {
+				m.linkItems = nil
+				m.linksCursor = 0
+				for name, url := range m.infoProject.Links {
+					m.linkItems = append(m.linkItems, linkItem{name, url})
+				}
+				m.linksMenu = true
+			}
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.detailViewport, cmd = m.detailViewport.Update(msg)
+		return m, cmd
+	}
+
+	t := m.detailTask
 	switch {
-	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit), key.Matches(msg, common.Keys.Open):
+	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit), key.Matches(msg, common.Keys.Open), key.Matches(msg, common.Keys.Space):
 		m.currentView = m.previousView
 		m.reload()
 		return m, nil
+
+	case key.Matches(msg, common.Keys.Yank):
+		if t != nil && t.Meta.ID != "" {
+			m.copyToClipboard(t.Meta.ID)
+		}
+
+	case key.Matches(msg, common.Keys.YankMenu):
+		if t != nil {
+			m.yankItems = nil
+			m.yankCursor = 0
+			if t.Meta.Branch != "" {
+				m.yankItems = append(m.yankItems, yankItem{"branch", t.Meta.Branch})
+			}
+			m.yankItems = append(m.yankItems, yankItem{"id", t.Meta.ID})
+			m.yankItems = append(m.yankItems, yankItem{"title", t.Meta.Title})
+			m.yankItems = append(m.yankItems, yankItem{"path", t.FilePath})
+			if t.Meta.Brief != "" {
+				m.yankItems = append(m.yankItems, yankItem{"brief", t.Meta.Brief})
+			}
+			if t.Body != "" {
+				m.yankItems = append(m.yankItems, yankItem{"body", t.Body})
+			}
+			for name, url := range t.Meta.Links {
+				m.yankItems = append(m.yankItems, yankItem{"link: " + name, url})
+			}
+			if len(m.yankItems) > 0 {
+				m.yankMenu = true
+			}
+		}
+
+	case key.Matches(msg, common.Keys.Edit):
+		if t != nil {
+			return m, openEditor(t.FilePath)
+		}
+
+	case key.Matches(msg, common.Keys.Links):
+		if t != nil && len(t.Meta.Links) > 0 {
+			m.linkItems = nil
+			m.linksCursor = 0
+			for name, url := range t.Meta.Links {
+				m.linkItems = append(m.linkItems, linkItem{name, url})
+			}
+			m.linksMenu = true
+		}
+
+	case key.Matches(msg, common.Keys.Move):
+		if t != nil {
+			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
+			idx := m.statusIndex(t.Meta.Status)
+			t.Meta.Status = m.statuses[(idx+1)%len(m.statuses)]
+			t.Meta.Updated = time.Now().Format("2006-01-02")
+			storage.WriteTask(t)
+			m.currentView = m.previousView
+			m.reload()
+			return m, nil
+		}
+
+	case key.Matches(msg, common.Keys.MoveBack):
+		if t != nil {
+			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
+			idx := m.statusIndex(t.Meta.Status)
+			if idx > 0 {
+				t.Meta.Status = m.statuses[idx-1]
+			} else {
+				t.Meta.Status = m.statuses[len(m.statuses)-1]
+			}
+			t.Meta.Updated = time.Now().Format("2006-01-02")
+			storage.WriteTask(t)
+			m.currentView = m.previousView
+			m.reload()
+			return m, nil
+		}
+
+	case key.Matches(msg, common.Keys.Done):
+		if t != nil {
+			if m.confirmAction == "done" && m.confirmTaskID == t.Meta.ID {
+				m.lastUndo = &undoAction{kind: "done", task: snapshotTask(t)}
+				t.Meta.Status = m.statuses[len(m.statuses)-1]
+				t.Meta.Updated = time.Now().Format("2006-01-02")
+				t.Meta.Brief = ""
+				storage.WriteTask(t)
+				m.confirmAction = ""
+				m.confirmTaskID = ""
+				m.currentView = m.previousView
+				m.reload()
+				return m, nil
+			}
+			m.confirmAction = "done"
+			m.confirmTaskID = t.Meta.ID
+		}
+
+	case key.Matches(msg, common.Keys.Waiting):
+		if t != nil {
+			if m.confirmAction == "waiting" && m.confirmTaskID == t.Meta.ID {
+				m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
+				t.Meta.Status = storage.StatusWaiting
+				t.Meta.Updated = time.Now().Format("2006-01-02")
+				storage.WriteTask(t)
+				m.confirmAction = ""
+				m.confirmTaskID = ""
+				m.currentView = m.previousView
+				m.reload()
+				return m, nil
+			}
+			m.confirmAction = "waiting"
+			m.confirmTaskID = t.Meta.ID
+		}
+
+	case key.Matches(msg, common.Keys.Archive):
+		if t != nil {
+			m.lastUndo = &undoAction{kind: "archive", task: snapshotTask(t)}
+			t.Meta.Status = storage.StatusArchived
+			t.Meta.Updated = time.Now().Format("2006-01-02")
+			t.Meta.Brief = ""
+			storage.WriteTask(t)
+			m.currentView = m.previousView
+			m.reload()
+			return m, nil
+		}
+
+	default:
+		var cmd tea.Cmd
+		m.detailViewport, cmd = m.detailViewport.Update(msg)
+		return m, cmd
 	}
-	var cmd tea.Cmd
-	m.detailViewport, cmd = m.detailViewport.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
 func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -760,7 +1056,9 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, common.Keys.Quit):
-		return m, tea.Quit
+		m.currentView = viewBoard
+		m.reload()
+		return m, nil
 
 	case key.Matches(msg, common.Keys.Up):
 		if m.archiveCursor > 0 {
@@ -817,24 +1115,23 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirmTaskID = t.Meta.ID
 		}
 
-	case key.Matches(msg, common.Keys.Enter), key.Matches(msg, common.Keys.Open):
+	case key.Matches(msg, common.Keys.Enter), key.Matches(msg, common.Keys.Open), key.Matches(msg, common.Keys.Space):
 		t := m.selectedArchiveTask()
 		if t != nil {
 			m.previousView = viewArchive
 			m.currentView = viewDetail
+			m.detailTask = t
 			m.detailViewport = viewport.New(m.width, m.height-2)
 			m.detailViewport.SetContent(renderTaskDetail(t, m.width))
 		}
 
 	case key.Matches(msg, common.Keys.Tab):
 		m.activeProject = (m.activeProject + 1) % len(m.projects)
-		m.loadStatuses()
 		m.reload()
 		m.archiveCursor = 0
 
 	case key.Matches(msg, common.Keys.ShiftTab):
 		m.activeProject = (m.activeProject - 1 + len(m.projects)) % len(m.projects)
-		m.loadStatuses()
 		m.reload()
 		m.archiveCursor = 0
 
@@ -906,6 +1203,30 @@ func (m Model) updateLinksMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) updateColVisMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit), key.Matches(msg, common.Keys.Left), key.Matches(msg, common.Keys.ColumnVis):
+		m.colVisMenu = false
+		m.reload()
+	case key.Matches(msg, common.Keys.Up):
+		if m.colVisCursor > 0 {
+			m.colVisCursor--
+		}
+	case key.Matches(msg, common.Keys.Down):
+		if m.colVisCursor < len(m.colVisItems)-1 {
+			m.colVisCursor++
+		}
+	case key.Matches(msg, common.Keys.Space):
+		if m.colVisCursor < len(m.colVisItems) {
+			item := &m.colVisItems[m.colVisCursor]
+			item.visible = !item.visible
+			// Mark as explicitly set by user
+			m.hiddenStatuses[item.status] = !item.visible
+		}
+	}
+	return m, nil
+}
+
 func (m *Model) copyToClipboard(value string) {
 	c := exec.Command("pbcopy")
 	c.Stdin = strings.NewReader(value)
@@ -932,6 +1253,71 @@ func (m *Model) fixCursors() {
 		tasks := m.columnTasks(i)
 		if m.cursors[i] >= len(tasks) && len(tasks) > 0 {
 			m.cursors[i] = len(tasks) - 1
+		}
+	}
+	m.fixScrollOffsets()
+}
+
+// cardHeight returns the rendered height of a single task card (border + content + margin).
+func cardHeight(t *storage.Task) int {
+	lines := 2 // title + project
+	if len(t.Meta.Tags) > 0 {
+		lines++
+	}
+	return lines + 3 // +2 border, +1 margin bottom
+}
+
+// fixScrollOffsets ensures the cursor is visible within the column viewport.
+func (m *Model) fixScrollOffsets() {
+	maxH := m.height - 10
+	if maxH < 5 {
+		maxH = 5
+	}
+	for i := range m.statuses {
+		tasks := m.columnTasks(i)
+		cursor := m.cursors[i]
+		if i >= len(m.scrollOffsets) {
+			continue
+		}
+
+		// Scroll up if cursor is above the visible window
+		if cursor < m.scrollOffsets[i] {
+			m.scrollOffsets[i] = cursor
+		}
+
+		// Scroll down if cursor is below the visible window
+		// Calculate how many cards fit from scrollOffset
+		heightFn := cardHeight
+		if m.zoomed {
+			heightFn = zoomCardHeight
+		}
+		usedH := 0
+		lastVisible := m.scrollOffsets[i]
+		for j := m.scrollOffsets[i]; j < len(tasks); j++ {
+			h := heightFn(tasks[j])
+			if usedH+h > maxH && j > m.scrollOffsets[i] {
+				break
+			}
+			usedH += h
+			lastVisible = j
+		}
+		if cursor > lastVisible {
+			// Scroll down: find new offset so cursor fits at bottom
+			usedH = 0
+			start := cursor
+			for start >= 0 {
+				h := heightFn(tasks[start])
+				if usedH+h > maxH && start < cursor {
+					start++
+					break
+				}
+				usedH += h
+				if start == 0 {
+					break
+				}
+				start--
+			}
+			m.scrollOffsets[i] = start
 		}
 	}
 }
@@ -967,6 +1353,9 @@ func renderTaskDetail(t *storage.Task, termWidth int) string {
 	}
 	if len(t.Meta.Tags) > 0 {
 		fmt.Fprintf(&sb, "\n**Tags:** %s\n", strings.Join(t.Meta.Tags, ", "))
+	}
+	if t.Meta.Brief != "" {
+		fmt.Fprintf(&sb, "\n**Brief:**\n%s\n", t.Meta.Brief)
 	}
 	if t.Body != "" {
 		fmt.Fprintf(&sb, "\n---\n\n%s\n", t.Body)
@@ -1060,6 +1449,9 @@ func (m Model) View() string {
 	if m.currentView == viewDetail || m.currentView == viewProjectInfo {
 		return m.viewDetail()
 	}
+	if m.colVisMenu {
+		return m.viewColVisMenu()
+	}
 	if m.yankMenu {
 		return m.viewYankMenu()
 	}
@@ -1076,12 +1468,28 @@ func (m Model) View() string {
 }
 
 func (m Model) viewDetail() string {
+	if m.yankMenu {
+		return m.viewYankMenu()
+	}
+	if m.linksMenu {
+		return m.viewLinksMenu()
+	}
 	var sb strings.Builder
 	sb.WriteString(m.detailViewport.View())
 	sb.WriteString("\n")
 	pct := fmt.Sprintf("%3.f%%", m.detailViewport.ScrollPercent()*100)
-	sb.WriteString(helpStyle.Render("o/esc/q: back  ↑/↓/j/k scroll  " + pct))
-	return sb.String()
+	help := "o/q: back  e: edit  m/w/d/A: move/wait/done/archive  y/Y: yank  L: links  " + pct
+	if m.currentView == viewProjectInfo {
+		help = "o/esc/q: back  ↑/↓/j/k scroll  y/Y: yank  L: links  " + pct
+	}
+	if m.confirmAction == "done" {
+		help = "press d again to confirm done  " + pct
+	}
+	if m.confirmAction == "waiting" {
+		help = "press w again to mark waiting  " + pct
+	}
+	sb.WriteString(helpStyle.Render(help))
+	return m.applyToast(sb.String())
 }
 
 func (m Model) viewHelp() string {
@@ -1093,19 +1501,24 @@ func (m Model) viewHelp() string {
 		{"→ / l", "Next column"},
 		{"g", "Jump to top"},
 		{"G", "Jump to bottom"},
+		{"Ctrl+d", "Half page down"},
+		{"Ctrl+u", "Half page up"},
 		{"m", "Move task forward"},
 		{"M", "Move task back"},
+		{"w", "Mark waiting (confirm)"},
 		{"d", "Mark done (confirm)"},
 		{"x", "Delete task (confirm)"},
 		{"A", "Archive task"},
 		{"a", "Add new task"},
 		{"e", "Edit in $EDITOR"},
-		{"y", "Yank branch"},
+		{"y", "Yank ID"},
 		{"Y", "Yank menu"},
 		{"L", "Open links"},
+		{"v", "Toggle columns"},
 		{"i", "Project info"},
 		{"o / Enter", "Task detail"},
 		{"/ ", "Search tasks"},
+		{";", "Zoom toggle"},
 		{"Ctrl+a", "Archive view"},
 		{"Tab", "Next project"},
 		{"S-Tab", "Previous project"},
@@ -1133,10 +1546,21 @@ func (m Model) viewHelp() string {
 	if len(keys) == 0 {
 		lines = append(lines, helpStyle.Render("  no matches"))
 	} else {
-		for _, k := range keys {
-			keyStyle := lipgloss.NewStyle().Bold(true).Foreground(special).Width(12)
-			lines = append(lines, keyStyle.Render(k.key)+"  "+k.desc)
+		mid := (len(keys) + 1) / 2
+		leftKeys := keys[:mid]
+		rightKeys := keys[mid:]
+		var leftLines, rightLines []string
+		keyStyle := lipgloss.NewStyle().Bold(true).Foreground(special).Width(12)
+		for _, k := range leftKeys {
+			leftLines = append(leftLines, keyStyle.Render(k.key)+"  "+k.desc)
 		}
+		for _, k := range rightKeys {
+			rightLines = append(rightLines, keyStyle.Render(k.key)+"  "+k.desc)
+		}
+		leftCol := strings.Join(leftLines, "\n")
+		rightCol := strings.Join(rightLines, "\n")
+		cols := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, "    ", rightCol)
+		lines = append(lines, cols)
 	}
 	lines = append(lines, "")
 
@@ -1219,6 +1643,37 @@ func (m Model) viewLinksMenu() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
+func (m Model) viewColVisMenu() string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render("Visible columns")
+
+	var lines []string
+	lines = append(lines, title)
+	lines = append(lines, "")
+	for i, item := range m.colVisItems {
+		check := "[ ]"
+		if item.visible {
+			check = "[x]"
+		}
+		style := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
+		prefix := "  "
+		if i == m.colVisCursor {
+			prefix = "> "
+			style = lipgloss.NewStyle().Bold(true).Foreground(special)
+		}
+		lines = append(lines, style.Render(fmt.Sprintf("%s%s %s", prefix, check, string(item.status))))
+	}
+	lines = append(lines, "")
+	lines = append(lines, helpStyle.Render("enter toggle  esc back"))
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(highlight).
+		Padding(1, 3).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
 func (m Model) viewArchive() string {
 	var sb strings.Builder
 
@@ -1260,7 +1715,7 @@ func (m Model) viewArchive() string {
 			}
 			isSelected := i == m.archiveCursor
 			card := renderCard(t, cardWidth, isSelected)
-			sb.WriteString("  " + card)
+			sb.WriteString(lipgloss.NewStyle().PaddingLeft(2).Render(card))
 			sb.WriteString("\n")
 		}
 	}
@@ -1310,6 +1765,22 @@ func (m Model) viewBoard() string {
 	if numCols == 0 {
 		numCols = 1
 	}
+
+	// In zoom mode, show only the active column at full width
+	var visibleStatuses []storage.TaskStatus
+	var visibleIndices []int
+	if m.zoomed && len(m.statuses) > 0 {
+		visibleStatuses = []storage.TaskStatus{m.statuses[m.activeCol]}
+		visibleIndices = []int{m.activeCol}
+		numCols = 1
+	} else {
+		visibleStatuses = m.statuses
+		visibleIndices = make([]int, len(m.statuses))
+		for i := range m.statuses {
+			visibleIndices[i] = i
+		}
+	}
+
 	colWidth := (m.width - 8) / numCols
 	if colWidth < 20 {
 		colWidth = 20
@@ -1320,27 +1791,70 @@ func (m Model) viewBoard() string {
 	}
 
 	var cols []string
-	for i, status := range m.statuses {
+	for vi, status := range visibleStatuses {
+		i := visibleIndices[vi]
 		tasks := m.filteredTasks(status)
 		isActive := i == m.activeCol
 
 		header := strings.ToUpper(string(status))
 		var content strings.Builder
-		content.WriteString(columnHeaderStyle.Render(fmt.Sprintf("%s (%d)", header, len(tasks))))
+		if m.zoomed {
+			content.WriteString(columnHeaderStyle.Render(fmt.Sprintf("[ZOOM] %s (%d)", header, len(tasks))))
+		} else {
+			content.WriteString(columnHeaderStyle.Render(fmt.Sprintf("%s (%d)", header, len(tasks))))
+		}
 		content.WriteString("\n")
 
-		for j, t := range tasks {
+		// Render only visible cards within scroll window
+		offset := 0
+		if i < len(m.scrollOffsets) {
+			offset = m.scrollOffsets[i]
+		}
+
+		if offset > 0 {
+			content.WriteString(helpStyle.Render(fmt.Sprintf("  ▲ %d more", offset)))
+			content.WriteString("\n")
+		}
+
+		usedH := 0
+		rendered := 0
+		for j := offset; j < len(tasks); j++ {
+			var h int
+			if m.zoomed {
+				h = zoomCardHeight(tasks[j])
+			} else {
+				h = cardHeight(tasks[j])
+			}
+			if usedH+h > maxCardHeight && rendered > 0 {
+				remaining := len(tasks) - j
+				content.WriteString(helpStyle.Render(fmt.Sprintf("  ▼ %d more", remaining)))
+				content.WriteString("\n")
+				break
+			}
 			isSelected := isActive && j == m.cursors[i]
-			card := renderCard(t, colWidth-6, isSelected)
+			var card string
+			if m.zoomed {
+				card = renderZoomCard(tasks[j], colWidth-6, isSelected)
+			} else {
+				card = renderCard(tasks[j], colWidth-6, isSelected)
+			}
 			content.WriteString(card)
 			content.WriteString("\n")
+			usedH += h
+			rendered++
 		}
 
 		style := columnStyle
 		if isActive {
 			style = activeColumnStyle
 		}
-		col := style.Width(colWidth).Height(maxCardHeight).Render(content.String())
+		// Pad content so all columns reach the same height
+		contentStr := content.String()
+		contentLines := strings.Count(contentStr, "\n")
+		if contentLines < maxCardHeight {
+			contentStr += strings.Repeat("\n", maxCardHeight-contentLines)
+		}
+		col := style.Width(colWidth).Render(contentStr)
 		cols = append(cols, col)
 	}
 
@@ -1365,6 +1879,8 @@ func (m Model) viewBoard() string {
 		switch m.confirmAction {
 		case "done":
 			prompt = "  press d again to mark done"
+		case "waiting":
+			prompt = "  press w again to mark waiting"
 		case "delete":
 			prompt = "  press x again to delete"
 		case "quit":
@@ -1375,38 +1891,51 @@ func (m Model) viewBoard() string {
 	}
 
 	// status bar
-	ver := helpStyle.Render("pm " + version.Version)
-	help := helpStyle.Render("g/G jump  m/M move  d done  x del  A archive  u undo  a add  y/Y yank  L links  i info  e edit  / search  C-a archived  ? help  q quit")
-	gap := m.width - lipgloss.Width(ver) - lipgloss.Width(help)
-	if gap < 1 {
-		gap = 1
-	}
-	sb.WriteString(ver + strings.Repeat(" ", gap) + help)
-
-	result := sb.String()
-
-	// Overlay toast in top-right corner if active
-	if m.toastMsg != "" && time.Now().Before(m.toastExpiry) {
-		toast := toastStyle.Render(" " + m.toastMsg + " ")
-		// Place toast at the end of the first line
-		lines := strings.SplitN(result, "\n", 2)
-		if len(lines) >= 1 {
-			titleWidth := lipgloss.Width(lines[0])
-			toastWidth := lipgloss.Width(toast)
-			padding := m.width - titleWidth - toastWidth
-			if padding > 0 {
-				lines[0] = lines[0] + strings.Repeat(" ", padding) + toast
-			} else {
-				lines[0] = lines[0] + " " + toast
-			}
-			if len(lines) > 1 {
-				result = lines[0] + "\n" + lines[1]
-			} else {
-				result = lines[0]
-			}
+	statusBar := func() string {
+		startup := fmt.Sprintf("%dms", m.startupDuration.Milliseconds())
+		ver := helpStyle.Render("pm " + version.Version + " " + startup)
+		help := helpStyle.Render("m/M move  w wait  d done  A archive  a add  y/Y yank  L links  e edit  i info  C-a archived")
+		gap := m.width - lipgloss.Width(ver) - lipgloss.Width(help)
+		if gap < 1 {
+			gap = 1
 		}
-	}
+		return ver + strings.Repeat(" ", gap) + help
+	}()
 
+	// Pad to fill terminal height so status bar sits at the bottom
+	currentHeight := strings.Count(sb.String(), "\n") + 1 // +1 for status bar line
+	if pad := m.height - currentHeight - 1; pad > 0 {
+		sb.WriteString(strings.Repeat("\n", pad))
+	}
+	sb.WriteString(statusBar)
+
+	return m.applyToast(sb.String())
+}
+
+func (m Model) applyToast(result string) string {
+	if m.toastMsg == "" || !time.Now().Before(m.toastExpiry) {
+		return result
+	}
+	toast := toastStyle.Render(" " + m.toastMsg + " ")
+	toastWidth := lipgloss.Width(toast)
+	lines := strings.Split(result, "\n")
+	if len(lines) > 0 {
+		first := lines[0]
+		firstWidth := lipgloss.Width(first)
+		if firstWidth+toastWidth+1 <= m.width {
+			gap := m.width - firstWidth - toastWidth
+			lines[0] = first + strings.Repeat(" ", gap) + toast
+		} else {
+			// Overlay: replace end of first line with toast
+			// Truncate first line to make room
+			target := m.width - toastWidth
+			if target < 0 {
+				target = 0
+			}
+			lines[0] = lipgloss.NewStyle().Width(target).Render(first) + toast
+		}
+		result = strings.Join(lines, "\n")
+	}
 	return result
 }
 
@@ -1435,4 +1964,74 @@ func renderCard(t *storage.Task, width int, selected bool) string {
 	}
 
 	return style.Render(strings.Join(lines, "\n"))
+}
+
+func renderZoomCard(t *storage.Task, width int, selected bool) string {
+	style := cardStyle
+	if selected {
+		style = activeCardStyle
+	}
+	style = style.Width(width)
+
+	var lines []string
+
+	// Title (full, no truncation - we have space)
+	title := t.Meta.Title
+	if t.Meta.ID != "" {
+		title = "#" + t.Meta.ID + " " + title
+	}
+	lines = append(lines, cardTitleStyle.Render(title))
+
+	// Project + updated date on same conceptual level
+	meta := t.Project
+	if t.Meta.Updated != "" {
+		meta += "  " + helpStyle.Render(t.Meta.Updated)
+	}
+	lines = append(lines, cardProjectStyle.Render(meta))
+
+	if len(t.Meta.Tags) > 0 {
+		lines = append(lines, cardTagStyle.Render(strings.Join(t.Meta.Tags, ", ")))
+	}
+
+	if t.Meta.Branch != "" {
+		lines = append(lines, helpStyle.Render("branch: "+t.Meta.Branch))
+	}
+
+	if len(t.Meta.Links) > 0 {
+		var lk []string
+		for name := range t.Meta.Links {
+			lk = append(lk, name)
+		}
+		sort.Strings(lk)
+		lines = append(lines, helpStyle.Render("links: "+strings.Join(lk, ", ")))
+	}
+
+	if t.Meta.Brief != "" {
+		brief := t.Meta.Brief
+		maxLen := width * 2 // ~2 lines worth
+		if len(brief) > maxLen {
+			brief = brief[:maxLen-3] + "..."
+		}
+		lines = append(lines, "")
+		lines = append(lines, helpStyle.Render(brief))
+	}
+
+	return style.Render(strings.Join(lines, "\n"))
+}
+
+func zoomCardHeight(t *storage.Task) int {
+	lines := 2 // title + project
+	if len(t.Meta.Tags) > 0 {
+		lines++
+	}
+	if t.Meta.Branch != "" {
+		lines++
+	}
+	if len(t.Meta.Links) > 0 {
+		lines++
+	}
+	if t.Meta.Brief != "" {
+		lines += 3 // blank line + up to 2 lines of brief
+	}
+	return lines + 3 // +2 border, +1 margin
 }
