@@ -8,7 +8,7 @@ Local task tracker. Data: `~/.claude/pm/<project-slug>/`, binary: `pm`.
 go install -buildvcs=false -ldflags "-X github.com/mbalazy/pm/internal/version.Version=X.Y.Z" ./cmd/pm/
 ```
 
-IMPORTANT: Always set version via ldflags. Bump version on each release. Current: **0.7.2**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN). Always use `go install`, not `go build`.
+IMPORTANT: Always set version via ldflags. Bump version on each release. Current: **0.7.3**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN). Always use `go install`, not `go build`.
 
 ## Tests
 
@@ -92,7 +92,7 @@ Stdio MCP server for Claude Code. Registered as user-scope MCP: `claude mcp add 
 - **Package**: `internal/mcpserver/` — `server.go` (setup + Run), `tools.go` (8 tools), `resources.go` (3 resources)
 - **Subcommand**: `internal/cmd/mcp.go` — `pm mcp` cobra command
 - **SDK**: `github.com/modelcontextprotocol/go-sdk/mcp` — typed `AddTool[In, Out]` for auto schema generation
-- **Tools**: `pm_context`, `pm_list_tasks`, `pm_get_task`, `pm_list_projects`, `pm_add_task`, `pm_update_task`, `pm_update_project`, `pm_create_project`, `pm_move_task`
+- **Tools**: `pm_context`, `pm_list_tasks`, `pm_get_task`, `pm_list_projects`, `pm_add_task`, `pm_update_task`, `pm_update_project`, `pm_create_project`, `pm_move_task`, `pm_delete_task`
 - **Resources**: `pm://projects`, `pm://tasks/{project}/{status}`, `pm://project/{slug}`
 - **CWD auto-detection**: `pm_context` with `cwd` param matches against project.yaml `path` fields
 - **Invariants**: links merge (never remove), body appends (never replace), brief overwrites, tags replace if provided

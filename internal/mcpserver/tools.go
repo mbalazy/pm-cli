@@ -71,6 +71,10 @@ type createProjectInput struct {
 	Statuses []string          `json:"statuses,omitempty" jsonschema:"Custom statuses (default: todo, doing, waiting, done)"`
 }
 
+type deleteTaskInput struct {
+	Project string `json:"project" jsonschema:"Project slug or prefix"`
+	TaskID  string `json:"task_id" jsonschema:"Task ID or search query"`
+}
 type updateProjectInput struct {
 	Project  string            `json:"project" jsonschema:"Project slug or prefix"`
 	Name     string            `json:"name,omitempty" jsonschema:"Project display name"`
@@ -484,6 +488,37 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 		return r, nil, err
 	})
 
+	// pm_delete_task
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "pm_delete_task",
+		Description: "Permanently delete a task file. Use for removing junk, test tasks, or duplicates. Cannot be undone.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in deleteTaskInput) (*mcp.CallToolResult, any, error) {
+		slug, err := store.ResolveProject(in.Project)
+		if err != nil {
+			r, _ := toolError(err.Error())
+			return r, nil, nil
+		}
+		task, err := store.FindTask(slug, in.TaskID)
+		if err != nil {
+			r, _ := toolError(err.Error())
+			return r, nil, nil
+		}
+
+		taskID := task.Meta.ID
+		taskTitle := task.Meta.Title
+		if err := store.DeleteTask(task); err != nil {
+			r, _ := toolError(err.Error())
+			return r, nil, nil
+		}
+
+		result := map[string]string{
+			"id":      taskID,
+			"title":   taskTitle,
+			"deleted": "true",
+		}
+		r, err := jsonText(result)
+		return r, nil, err
+	})
 	// pm_update_project
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_update_project",
