@@ -8,7 +8,7 @@ Local task tracker. Data: `~/.claude/pm/<project-slug>/`, binary: `pm`.
 go install -buildvcs=false -ldflags "-X github.com/mbalazy/pm/internal/version.Version=X.Y.Z" ./cmd/pm/
 ```
 
-IMPORTANT: Always set version via ldflags. Bump version on each release. Current: **0.7.3**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN). Always use `go install`, not `go build`.
+IMPORTANT: Always set version via ldflags. Bump version on each release. Current: **0.7.4**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN). Always use `go install`, not `go build`.
 
 ## Tests
 
