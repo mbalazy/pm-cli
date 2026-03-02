@@ -1,6 +1,7 @@
 package board
 
 import (
+	"crypto/rand"
 	"fmt"
 	"os"
 	"os/exec"
@@ -46,6 +47,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.linksMenu {
 			return m.updateLinksMenu(msg)
+		}
+		if m.claudeMenu {
+			return m.updateClaudeMenu(msg)
 		}
 		if m.currentView == viewArchive {
 			return m.updateArchive(msg)
@@ -95,6 +99,8 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			isConfirmKey = key.Matches(msg, common.Keys.Waiting)
 		case "delete":
 			isConfirmKey = key.Matches(msg, common.Keys.Delete)
+		case "archive":
+			isConfirmKey = key.Matches(msg, common.Keys.Archive)
 		case "quit":
 			isConfirmKey = key.Matches(msg, common.Keys.Quit)
 		}
@@ -124,15 +130,15 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, common.Keys.Up):
 		tasks := m.columnTasks(m.activeCol)
-		if len(tasks) > 0 {
-			m.cursors[m.activeCol] = (m.cursors[m.activeCol] - 1 + len(tasks)) % len(tasks)
+		if len(tasks) > 0 && m.cursors[m.activeCol] > 0 {
+			m.cursors[m.activeCol]--
 			m.fixScrollOffsets()
 		}
 
 	case key.Matches(msg, common.Keys.Down):
 		tasks := m.columnTasks(m.activeCol)
-		if len(tasks) > 0 {
-			m.cursors[m.activeCol] = (m.cursors[m.activeCol] + 1) % len(tasks)
+		if len(tasks) > 0 && m.cursors[m.activeCol] < len(tasks)-1 {
+			m.cursors[m.activeCol]++
 			m.fixScrollOffsets()
 		}
 
@@ -282,8 +288,17 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.linksMenu = true
 
 	case key.Matches(msg, common.Keys.Archive):
-		if t := m.selectedTask(); t != nil {
+		t := m.selectedTask()
+		if t == nil {
+			break
+		}
+		if m.confirmAction == "archive" && m.confirmTaskID == t.Meta.ID {
 			m.doArchive(t)
+			m.confirmAction = ""
+			m.confirmTaskID = ""
+		} else {
+			m.confirmAction = "archive"
+			m.confirmTaskID = t.Meta.ID
 		}
 
 	case key.Matches(msg, common.Keys.ToggleArchive):
@@ -335,8 +350,48 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.colVisMenu = true
 
+	case key.Matches(msg, common.Keys.ReorderDown):
+		m.doReorder(1)
+
+	case key.Matches(msg, common.Keys.ReorderUp):
+		m.doReorder(-1)
+
 	case key.Matches(msg, common.Keys.Zoom):
 		m.zoomed = !m.zoomed
+
+	case key.Matches(msg, common.Keys.Claude):
+		t := m.selectedTask()
+		if t == nil {
+			break
+		}
+		inTmux := os.Getenv("TMUX") != ""
+		hasSession := t.Meta.Links["cc-session"] != ""
+		m.claudeMenuItems = nil
+		m.claudeMenuCursor = 0
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
+		if inTmux {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
+		}
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree (here)", "worktree", "w"})
+		if inTmux {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree + tmux", "worktree-tmux", "W"})
+		}
+		if hasSession {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume session", "resume", "r"})
+			if inTmux {
+				m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume in tmux", "resume-tmux", "R"})
+			}
+		}
+		// Smart default: tmux if available, else here
+		if inTmux {
+			for i, item := range m.claudeMenuItems {
+				if item.kind == "tmux" {
+					m.claudeMenuCursor = i
+					break
+				}
+			}
+		}
+		m.claudeMenu = true
 
 	case key.Matches(msg, common.Keys.Help):
 		m.showHelp = true
@@ -604,9 +659,15 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, common.Keys.Archive):
 		if t != nil {
-			m.doArchive(t)
-			m.currentView = m.previousView
-			return m, nil
+			if m.confirmAction == "archive" && m.confirmTaskID == t.Meta.ID {
+				m.doArchive(t)
+				m.confirmAction = ""
+				m.confirmTaskID = ""
+				m.currentView = m.previousView
+				return m, nil
+			}
+			m.confirmAction = "archive"
+			m.confirmTaskID = t.Meta.ID
 		}
 
 	default:
@@ -811,8 +872,13 @@ func (m Model) statusIndex(s storage.TaskStatus) int {
 
 func (m *Model) fixCursors() {
 	for i := range m.statuses {
+		if i >= len(m.cursors) {
+			continue
+		}
 		tasks := m.columnTasks(i)
-		if m.cursors[i] >= len(tasks) && len(tasks) > 0 {
+		if len(tasks) == 0 {
+			m.cursors[i] = 0
+		} else if m.cursors[i] >= len(tasks) {
 			m.cursors[i] = len(tasks) - 1
 		}
 	}
@@ -829,16 +895,57 @@ func cardHeight(t *storage.Task) int {
 }
 
 // fixScrollOffsets ensures the cursor is visible within the column viewport.
+// It renders cards to measure actual heights (accounting for text wrapping).
 func (m *Model) fixScrollOffsets() {
-	maxH := m.height - 10
-	if maxH < 5 {
-		maxH = 5
+	overhead := 11
+	if m.adding || m.searching || m.searchQuery != "" {
+		overhead++
 	}
+	maxCardHeight := m.height - overhead
+	if maxCardHeight < 5 {
+		maxCardHeight = 5
+	}
+	// Conservative budget: subtract 2 for column header + possible scroll indicator
+	cardBudget := maxCardHeight - 2
+	if cardBudget < 3 {
+		cardBudget = 3
+	}
+
+	numCols := len(m.statuses)
+	if numCols == 0 {
+		numCols = 1
+	}
+	colWidth := (m.width - 8) / numCols
+	if m.zoomed {
+		colWidth = m.width - 8
+	}
+	if colWidth < 20 {
+		colWidth = 20
+	}
+	cardW := colWidth - 6
+
 	for i := range m.statuses {
-		tasks := m.columnTasks(i)
-		cursor := m.cursors[i]
-		if i >= len(m.scrollOffsets) {
+		if i >= len(m.cursors) || i >= len(m.scrollOffsets) {
 			continue
+		}
+		tasks := m.columnTasks(i)
+		if len(tasks) == 0 {
+			m.scrollOffsets[i] = 0
+			continue
+		}
+		cursor := m.cursors[i]
+		if cursor >= len(tasks) {
+			cursor = len(tasks) - 1
+		}
+
+		measure := func(j int) int {
+			var card string
+			if m.zoomed {
+				card = renderZoomCard(tasks[j], cardW, false)
+			} else {
+				card = renderCard(tasks[j], cardW, false)
+			}
+			return strings.Count(card, "\n") + 1
 		}
 
 		// Scroll up if cursor is above the visible window
@@ -847,16 +954,11 @@ func (m *Model) fixScrollOffsets() {
 		}
 
 		// Scroll down if cursor is below the visible window
-		// Calculate how many cards fit from scrollOffset
-		heightFn := cardHeight
-		if m.zoomed {
-			heightFn = zoomCardHeight
-		}
 		usedH := 0
 		lastVisible := m.scrollOffsets[i]
 		for j := m.scrollOffsets[i]; j < len(tasks); j++ {
-			h := heightFn(tasks[j])
-			if usedH+h > maxH && j > m.scrollOffsets[i] {
+			h := measure(j)
+			if usedH+h > cardBudget && j > m.scrollOffsets[i] {
 				break
 			}
 			usedH += h
@@ -867,8 +969,8 @@ func (m *Model) fixScrollOffsets() {
 			usedH = 0
 			start := cursor
 			for start >= 0 {
-				h := heightFn(tasks[start])
-				if usedH+h > maxH && start < cursor {
+				h := measure(start)
+				if usedH+h > cardBudget && start < cursor {
 					start++
 					break
 				}
@@ -949,6 +1051,180 @@ func (m *Model) doUndo() {
 	m.toastMsg = "undone: " + u.kind
 	m.toastExpiry = time.Now().Add(2 * time.Second)
 	m.reload()
+}
+
+// doReorder swaps the selected task with a neighbor in the column.
+// direction: +1 = move down, -1 = move up.
+func (m *Model) doReorder(direction int) {
+	tasks := m.columnTasks(m.activeCol)
+	if len(tasks) < 2 {
+		return
+	}
+	cursor := m.cursors[m.activeCol]
+	target := cursor + direction
+	if target < 0 || target >= len(tasks) {
+		return
+	}
+
+	a := tasks[cursor]
+	b := tasks[target]
+
+	// If all tasks have Order==0, assign sequential orders to all tasks in column
+	allZero := true
+	for _, t := range tasks {
+		if t.Meta.Order != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		for i, t := range tasks {
+			t.Meta.Order = (i + 1) * 10
+			t.Meta.Updated = storage.Today()
+			storage.WriteTask(t)
+		}
+	}
+
+	// Swap orders
+	a.Meta.Order, b.Meta.Order = b.Meta.Order, a.Meta.Order
+	a.Meta.Updated = storage.Today()
+	b.Meta.Updated = storage.Today()
+	storage.WriteTask(a)
+	storage.WriteTask(b)
+
+	m.cursors[m.activeCol] = target
+	m.reload()
+}
+
+func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Check mnemonic shortcut keys first
+	typed := msg.String()
+	for _, item := range m.claudeMenuItems {
+		if typed == item.shortcut {
+			m.claudeMenu = false
+			return m.launchClaude(item.kind)
+		}
+	}
+
+	switch {
+	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit), key.Matches(msg, common.Keys.Left):
+		m.claudeMenu = false
+	case key.Matches(msg, common.Keys.Up):
+		if m.claudeMenuCursor > 0 {
+			m.claudeMenuCursor--
+		}
+	case key.Matches(msg, common.Keys.Down):
+		if m.claudeMenuCursor < len(m.claudeMenuItems)-1 {
+			m.claudeMenuCursor++
+		}
+	case key.Matches(msg, common.Keys.Enter):
+		if m.claudeMenuCursor < len(m.claudeMenuItems) {
+			item := m.claudeMenuItems[m.claudeMenuCursor]
+			m.claudeMenu = false
+			return m.launchClaude(item.kind)
+		}
+	}
+	return m, nil
+}
+
+func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
+	t := m.selectedTask()
+	if t == nil {
+		return m, nil
+	}
+
+	prompt := buildClaudePrompt(t, m.store)
+
+	switch kind {
+	case "here":
+		sessionID := generateSessionID()
+		m.saveSessionLink(t, sessionID)
+		c := exec.Command("claude", "--session-id", sessionID, prompt)
+		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			return reloadMsg{}
+		})
+
+	case "tmux":
+		sessionID := generateSessionID()
+		m.saveSessionLink(t, sessionID)
+		shellCmd := fmt.Sprintf("claude --session-id %s %s", sessionID, shellQuote(prompt))
+		exec.Command("tmux", "new-window", "-n", "cc:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
+		m.toastMsg = "Launched in tmux: cc:" + t.Meta.ID
+		m.toastExpiry = time.Now().Add(3 * time.Second)
+
+	case "worktree":
+		sessionID := generateSessionID()
+		m.saveSessionLink(t, sessionID)
+		c := exec.Command("claude", "-w", t.Meta.ID, "--session-id", sessionID, prompt)
+		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			return reloadMsg{}
+		})
+
+	case "worktree-tmux":
+		sessionID := generateSessionID()
+		m.saveSessionLink(t, sessionID)
+		shellCmd := fmt.Sprintf("claude -w %s --session-id %s %s", shellQuote(t.Meta.ID), sessionID, shellQuote(prompt))
+		exec.Command("tmux", "new-window", "-n", "wt:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
+		m.toastMsg = "Launched worktree in tmux: wt:" + t.Meta.ID
+		m.toastExpiry = time.Now().Add(3 * time.Second)
+
+	case "resume":
+		sessionID := t.Meta.Links["cc-session"]
+		c := exec.Command("claude", "--resume", sessionID, prompt)
+		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			return reloadMsg{}
+		})
+
+	case "resume-tmux":
+		sessionID := t.Meta.Links["cc-session"]
+		shellCmd := fmt.Sprintf("claude --resume %s %s", sessionID, shellQuote(prompt))
+		exec.Command("tmux", "new-window", "-n", "cc:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
+		m.toastMsg = "Resumed in tmux: cc:" + t.Meta.ID
+		m.toastExpiry = time.Now().Add(3 * time.Second)
+	}
+
+	return m, nil
+}
+
+func buildClaudePrompt(t *storage.Task, store *storage.Store) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Working on: #%s %s [%s]\n", t.Meta.ID, t.Meta.Title, t.Meta.Status)
+	fmt.Fprintf(&sb, "Project: %s\n", t.Project)
+	if t.Meta.Branch != "" {
+		fmt.Fprintf(&sb, "Branch: %s\n", t.Meta.Branch)
+	}
+
+	// Add project path for context
+	if proj, err := store.GetProject(t.Project); err == nil && proj.Path != "" {
+		fmt.Fprintf(&sb, "Path: %s\n", proj.Path)
+	}
+
+	if t.Meta.Brief != "" {
+		fmt.Fprintf(&sb, "\n%s\n", t.Meta.Brief)
+	}
+
+	sb.WriteString("\nUse pm MCP (pm_get_task) for full task details.")
+	return sb.String()
+}
+
+func generateSessionID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+func (m *Model) saveSessionLink(t *storage.Task, sessionID string) {
+	if t.Meta.Links == nil {
+		t.Meta.Links = make(map[string]string)
+	}
+	t.Meta.Links["cc-session"] = sessionID
+	t.Meta.Updated = storage.Today()
+	storage.WriteTask(t)
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 func openEditor(path string) tea.Cmd {

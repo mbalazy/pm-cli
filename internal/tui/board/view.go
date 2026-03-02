@@ -137,6 +137,9 @@ func (m Model) View() string {
 	if m.linksMenu {
 		return m.viewLinksMenu()
 	}
+	if m.claudeMenu {
+		return m.viewClaudeMenu()
+	}
 	if m.showHelp {
 		return m.viewHelp()
 	}
@@ -167,6 +170,9 @@ func (m Model) viewDetail() string {
 	if m.confirmAction == "waiting" {
 		help = "press w again to mark waiting  " + pct
 	}
+	if m.confirmAction == "archive" {
+		help = "press A again to archive  " + pct
+	}
 	sb.WriteString(helpStyle.Render(help))
 	return m.applyToast(sb.String())
 }
@@ -182,12 +188,14 @@ func (m Model) viewHelp() string {
 		{"G", "Jump to bottom"},
 		{"Ctrl+d", "Half page down"},
 		{"Ctrl+u", "Half page up"},
+		{"Ctrl+j", "Reorder task down"},
+		{"Ctrl+k", "Reorder task up"},
 		{"m", "Move task forward"},
 		{"M", "Move task back"},
 		{"w", "Mark waiting (confirm)"},
 		{"d", "Mark done (confirm)"},
 		{"x", "Delete task (confirm)"},
-		{"A", "Archive task"},
+		{"A", "Archive task (confirm)"},
 		{"a", "Add new task"},
 		{"e", "Edit in $EDITOR"},
 		{"y", "Yank ID"},
@@ -195,6 +203,7 @@ func (m Model) viewHelp() string {
 		{"L", "Open links"},
 		{"v", "Toggle columns"},
 		{"i", "Project info"},
+		{"c", "Claude Code"},
 		{"o / Enter", "Task detail"},
 		{"/ ", "Search tasks"},
 		{";", "Zoom toggle"},
@@ -353,6 +362,37 @@ func (m Model) viewColVisMenu() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
+func (m Model) viewClaudeMenu() string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render("Launch Claude Code")
+
+	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(highlight)
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
+
+	var lines []string
+	lines = append(lines, title)
+	lines = append(lines, "")
+	for i, item := range m.claudeMenuItems {
+		prefix := "  "
+		labelStyle := dimStyle
+		if i == m.claudeMenuCursor {
+			prefix = "> "
+			labelStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
+		}
+		shortcut := keyStyle.Render("[" + item.shortcut + "]")
+		lines = append(lines, prefix+shortcut+" "+labelStyle.Render(item.label))
+	}
+	lines = append(lines, "")
+	lines = append(lines, helpStyle.Render("press key or enter  esc back"))
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(highlight).
+		Padding(1, 3).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
 func (m Model) viewArchive() string {
 	var sb strings.Builder
 
@@ -464,7 +504,14 @@ func (m Model) viewBoard() string {
 	if colWidth < 20 {
 		colWidth = 20
 	}
-	maxCardHeight := m.height - 10
+	// Non-column overhead: title(2\n) + tabs(2\n) + after-cols(1\n) + confirm(1\n)
+	// + status bar(1 line) + column border/padding(4\n) = 11 lines.
+	// Search/add input adds 1 more when active.
+	overhead := 11
+	if m.adding || m.searching || m.searchQuery != "" {
+		overhead++
+	}
+	maxCardHeight := m.height - overhead
 	if maxCardHeight < 5 {
 		maxCardHeight = 5
 	}
@@ -490,26 +537,18 @@ func (m Model) viewBoard() string {
 			offset = m.scrollOffsets[i]
 		}
 
+		// Card budget: maxCardHeight minus header lines (header + scroll-up indicator)
+		headerLines := 1 // column header line
 		if offset > 0 {
 			content.WriteString(helpStyle.Render(fmt.Sprintf("  ▲ %d more", offset)))
 			content.WriteString("\n")
+			headerLines++
 		}
+		cardBudget := maxCardHeight - headerLines
 
 		usedH := 0
 		rendered := 0
 		for j := offset; j < len(tasks); j++ {
-			var h int
-			if m.zoomed {
-				h = zoomCardHeight(tasks[j])
-			} else {
-				h = cardHeight(tasks[j])
-			}
-			if usedH+h > maxCardHeight && rendered > 0 {
-				remaining := len(tasks) - j
-				content.WriteString(helpStyle.Render(fmt.Sprintf("  ▼ %d more", remaining)))
-				content.WriteString("\n")
-				break
-			}
 			isSelected := isActive && j == m.cursors[i]
 			var card string
 			if m.zoomed {
@@ -517,9 +556,16 @@ func (m Model) viewBoard() string {
 			} else {
 				card = renderCard(tasks[j], colWidth-6, isSelected)
 			}
+			actualH := strings.Count(card, "\n") + 1
+			if usedH+actualH > cardBudget && rendered > 0 {
+				remaining := len(tasks) - j
+				content.WriteString(helpStyle.Render(fmt.Sprintf("  ▼ %d more", remaining)))
+				content.WriteString("\n")
+				break
+			}
 			content.WriteString(card)
 			content.WriteString("\n")
-			usedH += h
+			usedH += actualH
 			rendered++
 		}
 
@@ -527,10 +573,14 @@ func (m Model) viewBoard() string {
 		if isActive {
 			style = activeColumnStyle
 		}
-		// Pad content so all columns reach the same height
+		// Clamp content to exactly maxCardHeight newlines so all columns
+		// have identical height (text wrapping in cards can exceed cardHeight).
 		contentStr := content.String()
 		contentLines := strings.Count(contentStr, "\n")
-		if contentLines < maxCardHeight {
+		if contentLines > maxCardHeight {
+			parts := strings.SplitN(contentStr, "\n", maxCardHeight+1)
+			contentStr = strings.Join(parts[:maxCardHeight], "\n") + "\n"
+		} else if contentLines < maxCardHeight {
 			contentStr += strings.Repeat("\n", maxCardHeight-contentLines)
 		}
 		col := style.Width(colWidth).Render(contentStr)
@@ -552,7 +602,7 @@ func (m Model) viewBoard() string {
 		sb.WriteString("\n")
 	}
 
-	// confirmation prompt
+	// confirmation prompt (always reserve 1 line to prevent layout shift)
 	if m.confirmAction != "" {
 		var prompt string
 		switch m.confirmAction {
@@ -562,18 +612,20 @@ func (m Model) viewBoard() string {
 			prompt = "  press w again to mark waiting"
 		case "delete":
 			prompt = "  press x again to delete"
+		case "archive":
+			prompt = "  press A again to archive"
 		case "quit":
 			prompt = "  press q again to quit"
 		}
 		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#FF0000", Dark: "#FF6666"}).Render(prompt))
-		sb.WriteString("\n")
 	}
+	sb.WriteString("\n")
 
 	// status bar
 	statusBar := func() string {
 		startup := fmt.Sprintf("%dms", m.startupDuration.Milliseconds())
 		ver := helpStyle.Render("pm " + version.Version + " " + startup)
-		help := helpStyle.Render("m/M move  w wait  d done  A archive  a add  y/Y yank  L links  e edit  i info  C-a archived")
+		help := helpStyle.Render("m/M move  d done  a add  c claude  e edit  y/Y yank  L links  i info  C-a archived")
 		gap := m.width - lipgloss.Width(ver) - lipgloss.Width(help)
 		if gap < 1 {
 			gap = 1

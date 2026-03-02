@@ -38,6 +38,12 @@ type colVisItem struct {
 	visible bool
 }
 
+type claudeMenuItem struct {
+	label    string
+	kind     string // "here", "tmux", "worktree", "worktree-tmux", "resume", "resume-tmux"
+	shortcut string // single key mnemonic
+}
+
 type undoAction struct {
 	kind string        // "move" | "done" | "archive" | "delete"
 	task *storage.Task // snapshot before the action
@@ -128,6 +134,11 @@ type Model struct {
 
 	// zoom
 	zoomed bool
+
+	// claude menu
+	claudeMenu       bool
+	claudeMenuItems  []claudeMenuItem
+	claudeMenuCursor int
 
 	startupDuration time.Duration
 }
@@ -277,6 +288,9 @@ func (m Model) filteredTasks(status storage.TaskStatus) []*storage.Task {
 		result = append(result, t)
 	}
 	sort.Slice(result, func(i, j int) bool {
+		if result[i].Meta.Order != result[j].Meta.Order {
+			return result[i].Meta.Order < result[j].Meta.Order
+		}
 		return result[i].Meta.Updated > result[j].Meta.Updated
 	})
 	return result

@@ -37,6 +37,9 @@ type KeyMap struct {
 	HalfDown      key.Binding
 	HalfUp        key.Binding
 	Zoom          key.Binding
+	ReorderUp     key.Binding
+	ReorderDown   key.Binding
+	Claude        key.Binding
 }
 
 var Keys = KeyMap{
@@ -74,4 +77,7 @@ var Keys = KeyMap{
 	HalfDown:      key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("C-d", "half page down")),
 	HalfUp:        key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("C-u", "half page up")),
 	Zoom:          key.NewBinding(key.WithKeys(";"), key.WithHelp(";", "zoom toggle")),
+	ReorderUp:     key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("C-k", "reorder up")),
+	ReorderDown:   key.NewBinding(key.WithKeys("ctrl+j"), key.WithHelp("C-j", "reorder down")),
+	Claude:        key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "claude code")),
 }

@@ -49,6 +49,7 @@ type TaskMeta struct {
 	Branch  string            `yaml:"branch,omitempty"`
 	Tags    []string          `yaml:"tags,omitempty"`
 	Brief   string            `yaml:"brief,omitempty"`
+	Order   int               `yaml:"order,omitempty"`
 }
 
 type Task struct {
