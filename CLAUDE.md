@@ -89,10 +89,10 @@ The `maxCardHeight` is computed dynamically: `m.height - overhead` where overhea
 
 Stdio MCP server for Claude Code. Registered as user-scope MCP: `claude mcp add --transport stdio --scope user pm -- ~/.local/share/go/bin/pm mcp`.
 
-- **Package**: `internal/mcpserver/` — `server.go` (setup + Run), `tools.go` (7 tools), `resources.go` (3 resources)
+- **Package**: `internal/mcpserver/` — `server.go` (setup + Run), `tools.go` (8 tools), `resources.go` (3 resources)
 - **Subcommand**: `internal/cmd/mcp.go` — `pm mcp` cobra command
 - **SDK**: `github.com/modelcontextprotocol/go-sdk/mcp` — typed `AddTool[In, Out]` for auto schema generation
-- **Tools**: `pm_context`, `pm_list_tasks`, `pm_get_task`, `pm_list_projects`, `pm_add_task`, `pm_update_task`, `pm_update_project`, `pm_move_task`
+- **Tools**: `pm_context`, `pm_list_tasks`, `pm_get_task`, `pm_list_projects`, `pm_add_task`, `pm_update_task`, `pm_update_project`, `pm_create_project`, `pm_move_task`
 - **Resources**: `pm://projects`, `pm://tasks/{project}/{status}`, `pm://project/{slug}`
 - **CWD auto-detection**: `pm_context` with `cwd` param matches against project.yaml `path` fields
 - **Invariants**: links merge (never remove), body appends (never replace), brief overwrites, tags replace if provided

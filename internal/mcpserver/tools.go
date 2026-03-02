@@ -58,6 +58,19 @@ type moveTaskInput struct {
 	NewStatus string `json:"new_status" jsonschema:"Target status"`
 }
 
+type createProjectInput struct {
+	Slug     string            `json:"slug" jsonschema:"Project slug (directory name, lowercase, no spaces)"`
+	Name     string            `json:"name,omitempty" jsonschema:"Project display name (defaults to slug)"`
+	Path     string            `json:"path,omitempty" jsonschema:"Local filesystem path"`
+	Repo     string            `json:"repo,omitempty" jsonschema:"Repository URL"`
+	Stack    string            `json:"stack,omitempty" jsonschema:"Tech stack description"`
+	Notes    string            `json:"notes,omitempty" jsonschema:"Project notes"`
+	Prefix   string            `json:"prefix,omitempty" jsonschema:"Task ID prefix (defaults to slug)"`
+	Links    map[string]string `json:"links,omitempty" jsonschema:"Links as key=url pairs"`
+	Tags     []string          `json:"tags,omitempty" jsonschema:"Tags"`
+	Statuses []string          `json:"statuses,omitempty" jsonschema:"Custom statuses (default: todo, doing, waiting, done)"`
+}
+
 type updateProjectInput struct {
 	Project  string            `json:"project" jsonschema:"Project slug or prefix"`
 	Name     string            `json:"name,omitempty" jsonschema:"Project display name"`
@@ -399,6 +412,75 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 			"new_status": string(task.Meta.Status),
 		}
 		r, err := jsonText(result)
+		return r, nil, err
+	})
+
+	// pm_create_project
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "pm_create_project",
+		Description: "Create a new project. Creates project directory and project.yaml.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in createProjectInput) (*mcp.CallToolResult, any, error) {
+		if in.Slug == "" {
+			r, _ := toolError("slug is required")
+			return r, nil, nil
+		}
+
+		// Check if project already exists
+		existing, _ := store.ListProjects()
+		for _, s := range existing {
+			if s == in.Slug {
+				r, _ := toolError(fmt.Sprintf("project %q already exists", in.Slug))
+				return r, nil, nil
+			}
+		}
+
+		name := in.Slug
+		if in.Name != "" {
+			name = in.Name
+		}
+
+		p := &storage.Project{
+			Name:     name,
+			Prefix:   in.Prefix,
+			Path:     in.Path,
+			Repo:     in.Repo,
+			Stack:    in.Stack,
+			Notes:    in.Notes,
+			Links:    in.Links,
+			Tags:     in.Tags,
+			Statuses: in.Statuses,
+		}
+
+		if err := store.CreateProject(in.Slug, p); err != nil {
+			r, _ := toolError(err.Error())
+			return r, nil, nil
+		}
+
+		type projectResult struct {
+			Slug     string            `json:"slug"`
+			Name     string            `json:"name"`
+			Path     string            `json:"path,omitempty"`
+			Repo     string            `json:"repo,omitempty"`
+			Stack    string            `json:"stack,omitempty"`
+			Notes    string            `json:"notes,omitempty"`
+			Prefix   string            `json:"prefix,omitempty"`
+			Links    map[string]string `json:"links,omitempty"`
+			Tags     []string          `json:"tags,omitempty"`
+			Statuses []string          `json:"statuses,omitempty"`
+		}
+
+		r, err := jsonText(projectResult{
+			Slug:     in.Slug,
+			Name:     p.Name,
+			Path:     p.Path,
+			Repo:     p.Repo,
+			Stack:    p.Stack,
+			Notes:    p.Notes,
+			Prefix:   p.Prefix,
+			Links:    p.Links,
+			Tags:     p.Tags,
+			Statuses: p.Statuses,
+		})
 		return r, nil, err
 	})
 

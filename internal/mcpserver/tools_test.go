@@ -231,6 +231,91 @@ func TestMoveTaskClearsBriefOnDoneArchived(t *testing.T) {
 	})
 }
 
+func TestCreateProjectDuplicateBlocked(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+
+	// "test" project already exists from setup
+	existing, _ := store.ListProjects()
+	found := false
+	for _, s := range existing {
+		if s == "test" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected 'test' project to exist")
+	}
+
+	// Creating a new project with different slug should work
+	err := store.CreateProject("newproj", &storage.Project{Name: "New"})
+	if err != nil {
+		t.Fatalf("CreateProject failed: %v", err)
+	}
+	proj, err := store.GetProject("newproj")
+	if err != nil {
+		t.Fatalf("GetProject failed: %v", err)
+	}
+	if proj.Name != "New" {
+		t.Errorf("name = %q, want %q", proj.Name, "New")
+	}
+}
+
+func TestCreateProjectWithAllFields(t *testing.T) {
+	dir := t.TempDir()
+	store := &storage.Store{Root: dir}
+
+	p := &storage.Project{
+		Name:     "Full Project",
+		Prefix:   "fp",
+		Path:     "/home/user/full",
+		Repo:     "https://github.com/user/full",
+		Stack:    "Go, React",
+		Notes:    "Test project",
+		Links:    map[string]string{"jira": "https://jira.example.com"},
+		Tags:     []string{"client-a"},
+		Statuses: []string{"backlog", "doing", "review", "done"},
+	}
+
+	err := store.CreateProject("full-project", p)
+	if err != nil {
+		t.Fatalf("CreateProject failed: %v", err)
+	}
+
+	loaded, err := store.GetProject("full-project")
+	if err != nil {
+		t.Fatalf("GetProject failed: %v", err)
+	}
+
+	if loaded.Name != "Full Project" {
+		t.Errorf("name = %q", loaded.Name)
+	}
+	if loaded.Prefix != "fp" {
+		t.Errorf("prefix = %q", loaded.Prefix)
+	}
+	if loaded.Path != "/home/user/full" {
+		t.Errorf("path = %q", loaded.Path)
+	}
+	if loaded.Repo != "https://github.com/user/full" {
+		t.Errorf("repo = %q", loaded.Repo)
+	}
+	if loaded.Stack != "Go, React" {
+		t.Errorf("stack = %q", loaded.Stack)
+	}
+	if loaded.Notes != "Test project" {
+		t.Errorf("notes = %q", loaded.Notes)
+	}
+	if loaded.Links["jira"] != "https://jira.example.com" {
+		t.Errorf("links[jira] = %q", loaded.Links["jira"])
+	}
+	if len(loaded.Tags) != 1 || loaded.Tags[0] != "client-a" {
+		t.Errorf("tags = %v", loaded.Tags)
+	}
+	if len(loaded.Statuses) != 4 || loaded.Statuses[0] != "backlog" {
+		t.Errorf("statuses = %v", loaded.Statuses)
+	}
+}
+
 func TestResolveProjectFromCwd(t *testing.T) {
 	dir := t.TempDir()
 	store := &storage.Store{Root: dir}
