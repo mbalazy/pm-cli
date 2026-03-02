@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -404,6 +405,55 @@ func TestMoveTask(t *testing.T) {
 		reloaded, _ := store.FindTask("alpha", "a-1")
 		if reloaded.Meta.Status != StatusDoing {
 			t.Errorf("persisted status = %q, want %q", reloaded.Meta.Status, StatusDoing)
+		}
+	})
+
+	t.Run("appends brief to body on done", func(t *testing.T) {
+		store, _ := setupTestStore(t)
+		task, _ := store.FindTask("alpha", "a-2") // brief: "working on it", body: ""
+
+		err := store.MoveTask(task, StatusDone)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expected := fmt.Sprintf("---\n**Session brief (archived %s):**\nworking on it", Today())
+		if task.Body != expected {
+			t.Errorf("body = %q, want %q", task.Body, expected)
+		}
+		// verify persisted
+		reloaded, _ := store.FindTask("alpha", "a-2")
+		if reloaded.Body != expected {
+			t.Errorf("persisted body = %q, want %q", reloaded.Body, expected)
+		}
+	})
+
+	t.Run("appends brief to body on archived", func(t *testing.T) {
+		store, _ := setupTestStore(t)
+		task, _ := store.FindTask("alpha", "a-2")
+
+		err := store.MoveTask(task, StatusArchived)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(task.Body, "**Session brief (archived") {
+			t.Errorf("body should contain archived brief, got %q", task.Body)
+		}
+		if !strings.Contains(task.Body, "working on it") {
+			t.Errorf("body should contain brief text, got %q", task.Body)
+		}
+	})
+
+	t.Run("no body append when brief is empty", func(t *testing.T) {
+		store, _ := setupTestStore(t)
+		task, _ := store.FindTask("alpha", "a-1") // no brief
+
+		originalBody := task.Body
+		err := store.MoveTask(task, StatusDone)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if task.Body != originalBody {
+			t.Errorf("body should be unchanged when brief is empty, got %q", task.Body)
 		}
 	})
 }

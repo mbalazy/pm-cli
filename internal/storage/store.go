@@ -136,6 +136,14 @@ func (s *Store) MoveTask(t *Task, newStatus TaskStatus) error {
 	t.Meta.Status = newStatus
 	t.Meta.Updated = Today()
 	if newStatus == StatusDone || newStatus == StatusArchived {
+		if t.Meta.Brief != "" {
+			sep := "\n\n"
+			if t.Body == "" {
+				sep = ""
+			}
+			briefNote := fmt.Sprintf("%s---\n**Session brief (archived %s):**\n%s", sep, Today(), t.Meta.Brief)
+			t.Body += briefNote
+		}
 		t.Meta.Brief = ""
 	}
 	return WriteTask(t)
