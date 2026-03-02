@@ -58,6 +58,19 @@ type moveTaskInput struct {
 	NewStatus string `json:"new_status" jsonschema:"Target status"`
 }
 
+type updateProjectInput struct {
+	Project  string            `json:"project" jsonschema:"Project slug or prefix"`
+	Name     string            `json:"name,omitempty" jsonschema:"Project display name"`
+	Path     string            `json:"path,omitempty" jsonschema:"Local filesystem path"`
+	Repo     string            `json:"repo,omitempty" jsonschema:"Repository URL"`
+	Stack    string            `json:"stack,omitempty" jsonschema:"Tech stack description"`
+	Notes    string            `json:"notes,omitempty" jsonschema:"Project notes"`
+	Prefix   string            `json:"prefix,omitempty" jsonschema:"Task ID prefix"`
+	Links    map[string]string `json:"links,omitempty" jsonschema:"Links to merge (existing links are preserved)"`
+	Tags     []string          `json:"tags,omitempty" jsonschema:"Replace tags (omit to keep current)"`
+	Statuses []string          `json:"statuses,omitempty" jsonschema:"Replace statuses (omit to keep current)"`
+}
+
 // --- JSON output helpers ---
 
 type taskSummary struct {
@@ -386,6 +399,94 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 			"new_status": string(task.Meta.Status),
 		}
 		r, err := jsonText(result)
+		return r, nil, err
+	})
+
+	// pm_update_project
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "pm_update_project",
+		Description: "Update project metadata. Links merge (never removed). Tags and statuses replace if provided. Scalar fields overwrite if non-empty.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateProjectInput) (*mcp.CallToolResult, any, error) {
+		slug, err := store.ResolveProject(in.Project)
+		if err != nil {
+			r, _ := toolError(err.Error())
+			return r, nil, nil
+		}
+		proj, err := store.GetProject(slug)
+		if err != nil {
+			r, _ := toolError(err.Error())
+			return r, nil, nil
+		}
+
+		if in.Name != "" {
+			proj.Name = in.Name
+		}
+		if in.Path != "" {
+			proj.Path = in.Path
+		}
+		if in.Repo != "" {
+			proj.Repo = in.Repo
+		}
+		if in.Stack != "" {
+			proj.Stack = in.Stack
+		}
+		if in.Notes != "" {
+			proj.Notes = in.Notes
+		}
+		if in.Prefix != "" {
+			proj.Prefix = in.Prefix
+		}
+
+		// Links: merge, never remove
+		if len(in.Links) > 0 {
+			if proj.Links == nil {
+				proj.Links = make(map[string]string)
+			}
+			for k, v := range in.Links {
+				proj.Links[k] = v
+			}
+		}
+
+		// Tags: replace if provided
+		if in.Tags != nil {
+			proj.Tags = in.Tags
+		}
+
+		// Statuses: replace if provided
+		if in.Statuses != nil {
+			proj.Statuses = in.Statuses
+		}
+
+		if err := storage.WriteProject(store.ProjectYAML(slug), proj); err != nil {
+			r, _ := toolError(err.Error())
+			return r, nil, nil
+		}
+
+		type projectResult struct {
+			Slug     string            `json:"slug"`
+			Name     string            `json:"name"`
+			Path     string            `json:"path,omitempty"`
+			Repo     string            `json:"repo,omitempty"`
+			Stack    string            `json:"stack,omitempty"`
+			Notes    string            `json:"notes,omitempty"`
+			Prefix   string            `json:"prefix,omitempty"`
+			Links    map[string]string `json:"links,omitempty"`
+			Tags     []string          `json:"tags,omitempty"`
+			Statuses []string          `json:"statuses,omitempty"`
+		}
+
+		r, err := jsonText(projectResult{
+			Slug:     slug,
+			Name:     proj.Name,
+			Path:     proj.Path,
+			Repo:     proj.Repo,
+			Stack:    proj.Stack,
+			Notes:    proj.Notes,
+			Prefix:   proj.Prefix,
+			Links:    proj.Links,
+			Tags:     proj.Tags,
+			Statuses: proj.Statuses,
+		})
 		return r, nil, err
 	})
 }
