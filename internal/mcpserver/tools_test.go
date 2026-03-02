@@ -231,6 +231,49 @@ func TestMoveTaskClearsBriefOnDoneArchived(t *testing.T) {
 	})
 }
 
+func TestDeleteTaskRemovesFile(t *testing.T) {
+	t.Run("task file deleted", func(t *testing.T) {
+		store, task := setupMCPTestStore(t)
+
+		// Verify file exists
+		if _, err := os.Stat(task.FilePath); os.IsNotExist(err) {
+			t.Fatal("task file should exist before delete")
+		}
+
+		found, err := store.FindTask("test", "t-1")
+		if err != nil {
+			t.Fatalf("FindTask failed: %v", err)
+		}
+
+		if err := store.DeleteTask(found); err != nil {
+			t.Fatalf("DeleteTask failed: %v", err)
+		}
+
+		// File should be gone
+		if _, err := os.Stat(task.FilePath); !os.IsNotExist(err) {
+			t.Error("task file should not exist after delete")
+		}
+
+		// FindTask should fail
+		_, err = store.FindTask("test", "t-1")
+		if err == nil {
+			t.Error("FindTask should fail after delete")
+		}
+	})
+
+	t.Run("delete nonexistent file returns error", func(t *testing.T) {
+		store, _ := setupMCPTestStore(t)
+
+		ghost := &storage.Task{
+			Meta:     storage.TaskMeta{ID: "t-999"},
+			FilePath: filepath.Join(store.Root, "test", "t-999-ghost.md"),
+		}
+		if err := store.DeleteTask(ghost); err == nil {
+			t.Error("expected error deleting nonexistent file")
+		}
+	})
+}
+
 func TestResolveProjectFromCwd(t *testing.T) {
 	dir := t.TempDir()
 	store := &storage.Store{Root: dir}
