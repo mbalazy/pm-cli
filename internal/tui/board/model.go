@@ -136,9 +136,10 @@ type Model struct {
 	zoomed bool
 
 	// claude menu
-	claudeMenu       bool
-	claudeMenuItems  []claudeMenuItem
-	claudeMenuCursor int
+	claudeMenu          bool
+	claudeMenuItems     []claudeMenuItem
+	claudeMenuCursor    int
+	claudeMenuSkipPerms bool
 
 	startupDuration time.Duration
 }

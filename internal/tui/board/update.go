@@ -364,34 +364,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t == nil {
 			break
 		}
-		inTmux := os.Getenv("TMUX") != ""
-		hasSession := t.Meta.Links["cc-session"] != ""
-		m.claudeMenuItems = nil
-		m.claudeMenuCursor = 0
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
-		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
-		}
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree (here)", "worktree", "w"})
-		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree + tmux", "worktree-tmux", "W"})
-		}
-		if hasSession {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume session", "resume", "r"})
-			if inTmux {
-				m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume in tmux", "resume-tmux", "R"})
-			}
-		}
-		// Smart default: tmux if available, else here
-		if inTmux {
-			for i, item := range m.claudeMenuItems {
-				if item.kind == "tmux" {
-					m.claudeMenuCursor = i
-					break
-				}
-			}
-		}
-		m.claudeMenu = true
+		m.openClaudeMenu(t)
 
 	case key.Matches(msg, common.Keys.Help):
 		m.showHelp = true
@@ -512,6 +485,9 @@ func (m Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Overlay menus intercept input first
+	if m.claudeMenu {
+		return m.updateClaudeMenu(msg)
+	}
 	if m.yankMenu {
 		return m.updateYankMenu(msg)
 	}
@@ -668,6 +644,11 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.confirmAction = "archive"
 			m.confirmTaskID = t.Meta.ID
+		}
+
+	case key.Matches(msg, common.Keys.Claude):
+		if t != nil {
+			m.openClaudeMenu(t)
 		}
 
 	default:
@@ -1096,9 +1077,47 @@ func (m *Model) doReorder(direction int) {
 	m.reload()
 }
 
+func (m *Model) openClaudeMenu(t *storage.Task) {
+	inTmux := os.Getenv("TMUX") != ""
+	hasSession := lastSession(t) != ""
+	m.claudeMenuItems = nil
+	m.claudeMenuCursor = 0
+	m.claudeMenuSkipPerms = false
+	m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
+	if inTmux {
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
+	}
+	m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree (here)", "worktree", "w"})
+	if inTmux {
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree + tmux", "worktree-tmux", "W"})
+	}
+	if hasSession {
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume session", "resume", "r"})
+		if inTmux {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume in tmux", "resume-tmux", "R"})
+		}
+	}
+	// Smart default: tmux if available, else here
+	if inTmux {
+		for i, item := range m.claudeMenuItems {
+			if item.kind == "tmux" {
+				m.claudeMenuCursor = i
+				break
+			}
+		}
+	}
+	m.claudeMenu = true
+}
+
 func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Check mnemonic shortcut keys first
+	// Toggle skip-permissions
 	typed := msg.String()
+	if typed == "!" {
+		m.claudeMenuSkipPerms = !m.claudeMenuSkipPerms
+		return m, nil
+	}
+
+	// Check mnemonic shortcut keys first
 	for _, item := range m.claudeMenuItems {
 		if typed == item.shortcut {
 			m.claudeMenu = false
@@ -1134,50 +1153,93 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	}
 
 	prompt := buildClaudePrompt(t, m.store)
+	skipFlag := ""
+	if m.claudeMenuSkipPerms {
+		skipFlag = "--dangerously-skip-permissions"
+	}
+
+	// Resolve project working directory
+	var projDir string
+	if proj, err := m.store.GetProject(t.Project); err == nil && proj.Path != "" {
+		if info, err := os.Stat(proj.Path); err == nil && info.IsDir() {
+			projDir = proj.Path
+		}
+	}
+
+	setDir := func(c *exec.Cmd) {
+		if projDir != "" {
+			c.Dir = projDir
+		}
+	}
+
+	withCd := func(cmd string) string {
+		if projDir != "" {
+			return fmt.Sprintf("cd %s && %s", shellQuote(projDir), cmd)
+		}
+		return cmd
+	}
 
 	switch kind {
 	case "here":
 		sessionID := generateSessionID()
-		m.saveSessionLink(t, sessionID)
-		c := exec.Command("claude", "--session-id", sessionID, prompt)
+		m.saveSession(t, sessionID)
+		args := []string{"--session-id", sessionID}
+		if skipFlag != "" {
+			args = append(args, skipFlag)
+		}
+		args = append(args, prompt)
+		c := exec.Command("claude", args...)
+		setDir(c)
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
 			return reloadMsg{}
 		})
 
 	case "tmux":
 		sessionID := generateSessionID()
-		m.saveSessionLink(t, sessionID)
-		shellCmd := fmt.Sprintf("claude --session-id %s %s", sessionID, shellQuote(prompt))
+		m.saveSession(t, sessionID)
+		shellCmd := withCd(fmt.Sprintf("claude --session-id %s %s %s", sessionID, skipFlag, shellQuote(prompt)))
 		exec.Command("tmux", "new-window", "-n", "cc:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
 		m.toastMsg = "Launched in tmux: cc:" + t.Meta.ID
 		m.toastExpiry = time.Now().Add(3 * time.Second)
 
 	case "worktree":
 		sessionID := generateSessionID()
-		m.saveSessionLink(t, sessionID)
-		c := exec.Command("claude", "-w", t.Meta.ID, "--session-id", sessionID, prompt)
+		m.saveSession(t, sessionID)
+		args := []string{"-w", t.Meta.ID, "--session-id", sessionID}
+		if skipFlag != "" {
+			args = append(args, skipFlag)
+		}
+		args = append(args, prompt)
+		c := exec.Command("claude", args...)
+		setDir(c)
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
 			return reloadMsg{}
 		})
 
 	case "worktree-tmux":
 		sessionID := generateSessionID()
-		m.saveSessionLink(t, sessionID)
-		shellCmd := fmt.Sprintf("claude -w %s --session-id %s %s", shellQuote(t.Meta.ID), sessionID, shellQuote(prompt))
+		m.saveSession(t, sessionID)
+		shellCmd := withCd(fmt.Sprintf("claude -w %s --session-id %s %s %s", shellQuote(t.Meta.ID), sessionID, skipFlag, shellQuote(prompt)))
 		exec.Command("tmux", "new-window", "-n", "wt:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
 		m.toastMsg = "Launched worktree in tmux: wt:" + t.Meta.ID
 		m.toastExpiry = time.Now().Add(3 * time.Second)
 
 	case "resume":
-		sessionID := t.Meta.Links["cc-session"]
-		c := exec.Command("claude", "--resume", sessionID, prompt)
+		sessionID := lastSession(t)
+		args := []string{"--resume", sessionID}
+		if skipFlag != "" {
+			args = append(args, skipFlag)
+		}
+		args = append(args, prompt)
+		c := exec.Command("claude", args...)
+		setDir(c)
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
 			return reloadMsg{}
 		})
 
 	case "resume-tmux":
-		sessionID := t.Meta.Links["cc-session"]
-		shellCmd := fmt.Sprintf("claude --resume %s %s", sessionID, shellQuote(prompt))
+		sessionID := lastSession(t)
+		shellCmd := withCd(fmt.Sprintf("claude --resume %s %s %s", sessionID, skipFlag, shellQuote(prompt)))
 		exec.Command("tmux", "new-window", "-n", "cc:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
 		m.toastMsg = "Resumed in tmux: cc:" + t.Meta.ID
 		m.toastExpiry = time.Now().Add(3 * time.Second)
@@ -1194,9 +1256,19 @@ func buildClaudePrompt(t *storage.Task, store *storage.Store) string {
 		fmt.Fprintf(&sb, "Branch: %s\n", t.Meta.Branch)
 	}
 
-	// Add project path for context
-	if proj, err := store.GetProject(t.Project); err == nil && proj.Path != "" {
-		fmt.Fprintf(&sb, "Path: %s\n", proj.Path)
+	if proj, err := store.GetProject(t.Project); err == nil {
+		if proj.Path != "" {
+			fmt.Fprintf(&sb, "Path: %s\n", proj.Path)
+		}
+		if proj.Stack != "" {
+			fmt.Fprintf(&sb, "Stack: %s\n", proj.Stack)
+		}
+		if proj.Repo != "" {
+			fmt.Fprintf(&sb, "Repo: %s\n", proj.Repo)
+		}
+		if proj.Notes != "" {
+			fmt.Fprintf(&sb, "Notes: %s\n", proj.Notes)
+		}
 	}
 
 	if t.Meta.Brief != "" {
@@ -1214,11 +1286,25 @@ func generateSessionID() string {
 		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-func (m *Model) saveSessionLink(t *storage.Task, sessionID string) {
-	if t.Meta.Links == nil {
-		t.Meta.Links = make(map[string]string)
+func lastSession(t *storage.Task) string {
+	if len(t.Meta.Sessions) > 0 {
+		return t.Meta.Sessions[len(t.Meta.Sessions)-1]
 	}
-	t.Meta.Links["cc-session"] = sessionID
+	return t.Meta.Links["cc-session"] // legacy fallback
+}
+
+func (m *Model) saveSession(t *storage.Task, sessionID string) {
+	// Migrate legacy cc-session link
+	if old := t.Meta.Links["cc-session"]; old != "" {
+		if len(t.Meta.Sessions) == 0 || t.Meta.Sessions[len(t.Meta.Sessions)-1] != old {
+			t.Meta.Sessions = append(t.Meta.Sessions, old)
+		}
+		delete(t.Meta.Links, "cc-session")
+		if len(t.Meta.Links) == 0 {
+			t.Meta.Links = nil
+		}
+	}
+	t.Meta.Sessions = append(t.Meta.Sessions, sessionID)
 	t.Meta.Updated = storage.Today()
 	storage.WriteTask(t)
 }

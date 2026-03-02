@@ -371,6 +371,17 @@ func (m Model) viewClaudeMenu() string {
 	var lines []string
 	lines = append(lines, title)
 	lines = append(lines, "")
+
+	// skip-permissions toggle
+	check := "[ ]"
+	checkStyle := dimStyle
+	if m.claudeMenuSkipPerms {
+		check = "[x]"
+		checkStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF6B6B"))
+	}
+	lines = append(lines, "  "+keyStyle.Render("!")+checkStyle.Render(" "+check+" skip permissions"))
+	lines = append(lines, "")
+
 	for i, item := range m.claudeMenuItems {
 		prefix := "  "
 		labelStyle := dimStyle
@@ -382,7 +393,7 @@ func (m Model) viewClaudeMenu() string {
 		lines = append(lines, prefix+shortcut+" "+labelStyle.Render(item.label))
 	}
 	lines = append(lines, "")
-	lines = append(lines, helpStyle.Render("press key or enter  esc back"))
+	lines = append(lines, helpStyle.Render("press key or enter  ! toggle perms  esc back"))
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

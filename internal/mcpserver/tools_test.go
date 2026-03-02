@@ -358,6 +358,34 @@ func TestDeleteTaskRemovesFile(t *testing.T) {
 		}
 	})
 }
+func TestToSummarySessionCount(t *testing.T) {
+	t.Run("zero sessions", func(t *testing.T) {
+		task := &storage.Task{
+			Meta:    storage.TaskMeta{ID: "t-1", Title: "No sessions"},
+			Project: "test",
+		}
+		s := toSummary(task)
+		if s.SessionCount != 0 {
+			t.Errorf("session_count = %d, want 0", s.SessionCount)
+		}
+	})
+
+	t.Run("multiple sessions", func(t *testing.T) {
+		task := &storage.Task{
+			Meta: storage.TaskMeta{
+				ID:       "t-2",
+				Title:    "With sessions",
+				Sessions: []string{"abc-123", "def-456", "ghi-789"},
+			},
+			Project: "test",
+		}
+		s := toSummary(task)
+		if s.SessionCount != 3 {
+			t.Errorf("session_count = %d, want 3", s.SessionCount)
+		}
+	})
+}
+
 func TestResolveProjectFromCwd(t *testing.T) {
 	dir := t.TempDir()
 	store := &storage.Store{Root: dir}

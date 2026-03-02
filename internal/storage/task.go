@@ -48,8 +48,9 @@ type TaskMeta struct {
 	Links   map[string]string `yaml:"links,omitempty"`
 	Branch  string            `yaml:"branch,omitempty"`
 	Tags    []string          `yaml:"tags,omitempty"`
-	Brief   string            `yaml:"brief,omitempty"`
-	Order   int               `yaml:"order,omitempty"`
+	Brief    string            `yaml:"brief,omitempty"`
+	Order    int               `yaml:"order,omitempty"`
+	Sessions []string          `yaml:"sessions,omitempty"`
 }
 
 type Task struct {

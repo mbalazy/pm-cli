@@ -91,15 +91,16 @@ type updateProjectInput struct {
 // --- JSON output helpers ---
 
 type taskSummary struct {
-	ID      string            `json:"id"`
-	Title   string            `json:"title"`
-	Status  string            `json:"status"`
-	Project string            `json:"project"`
-	Updated string            `json:"updated"`
-	Branch  string            `json:"branch,omitempty"`
-	Tags    []string          `json:"tags,omitempty"`
-	Links   map[string]string `json:"links,omitempty"`
-	Brief   string            `json:"brief,omitempty"`
+	ID           string            `json:"id"`
+	Title        string            `json:"title"`
+	Status       string            `json:"status"`
+	Project      string            `json:"project"`
+	Updated      string            `json:"updated"`
+	Branch       string            `json:"branch,omitempty"`
+	Tags         []string          `json:"tags,omitempty"`
+	Links        map[string]string `json:"links,omitempty"`
+	Brief        string            `json:"brief,omitempty"`
+	SessionCount int               `json:"session_count"`
 }
 
 type taskDetail struct {
@@ -110,15 +111,16 @@ type taskDetail struct {
 
 func toSummary(t *storage.Task) taskSummary {
 	return taskSummary{
-		ID:      t.Meta.ID,
-		Title:   t.Meta.Title,
-		Status:  string(t.Meta.Status),
-		Project: t.Project,
-		Updated: t.Meta.Updated,
-		Branch:  t.Meta.Branch,
-		Tags:    t.Meta.Tags,
-		Links:   t.Meta.Links,
-		Brief:   t.Meta.Brief,
+		ID:           t.Meta.ID,
+		Title:        t.Meta.Title,
+		Status:       string(t.Meta.Status),
+		Project:      t.Project,
+		Updated:      t.Meta.Updated,
+		Branch:       t.Meta.Branch,
+		Tags:         t.Meta.Tags,
+		Links:        t.Meta.Links,
+		Brief:        t.Meta.Brief,
+		SessionCount: len(t.Meta.Sessions),
 	}
 }
 

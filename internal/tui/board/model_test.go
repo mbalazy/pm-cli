@@ -1,8 +1,11 @@
 package board
 
 import (
+	"os"
+	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mbalazy/pm/internal/storage"
 )
 
@@ -142,6 +145,245 @@ func TestCardHeight(t *testing.T) {
 		h := cardHeight(task)
 		if h != 5 {
 			t.Errorf("cardHeight = %d, want 5 (empty tags = no extra line)", h)
+		}
+	})
+}
+
+func keyMsg(key string) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+}
+
+func TestOpenClaudeMenu(t *testing.T) {
+	task := &storage.Task{
+		Meta: storage.TaskMeta{
+			ID:    "p-1",
+			Title: "Test task",
+			Links: map[string]string{},
+		},
+	}
+
+	t.Run("basic items without tmux", func(t *testing.T) {
+		os.Unsetenv("TMUX")
+		m := Model{}
+		m.openClaudeMenu(task)
+
+		if !m.claudeMenu {
+			t.Error("claudeMenu should be true")
+		}
+		if m.claudeMenuSkipPerms {
+			t.Error("skipPerms should default to false")
+		}
+		if m.claudeMenuCursor != 0 {
+			t.Errorf("cursor = %d, want 0 (default to 'here' without tmux)", m.claudeMenuCursor)
+		}
+
+		kinds := make([]string, len(m.claudeMenuItems))
+		for i, item := range m.claudeMenuItems {
+			kinds[i] = item.kind
+		}
+		// Without tmux: here, worktree
+		if len(kinds) != 2 || kinds[0] != "here" || kinds[1] != "worktree" {
+			t.Errorf("items = %v, want [here worktree]", kinds)
+		}
+	})
+
+	t.Run("tmux items when TMUX set", func(t *testing.T) {
+		os.Setenv("TMUX", "/tmp/tmux-1000/default,12345,0")
+		defer os.Unsetenv("TMUX")
+
+		m := Model{}
+		m.openClaudeMenu(task)
+
+		kinds := make([]string, len(m.claudeMenuItems))
+		for i, item := range m.claudeMenuItems {
+			kinds[i] = item.kind
+		}
+		// With tmux: here, tmux, worktree, worktree-tmux
+		expected := []string{"here", "tmux", "worktree", "worktree-tmux"}
+		if len(kinds) != len(expected) {
+			t.Fatalf("items = %v, want %v", kinds, expected)
+		}
+		for i, k := range expected {
+			if kinds[i] != k {
+				t.Errorf("item[%d] = %q, want %q", i, kinds[i], k)
+			}
+		}
+
+		// Cursor should default to tmux option
+		if m.claudeMenuItems[m.claudeMenuCursor].kind != "tmux" {
+			t.Errorf("cursor at %q, want tmux", m.claudeMenuItems[m.claudeMenuCursor].kind)
+		}
+	})
+
+	t.Run("resume items with session", func(t *testing.T) {
+		os.Unsetenv("TMUX")
+		taskWithSession := &storage.Task{
+			Meta: storage.TaskMeta{
+				ID:       "p-2",
+				Sessions: []string{"sess-abc"},
+				Links:    map[string]string{},
+			},
+		}
+		m := Model{}
+		m.openClaudeMenu(taskWithSession)
+
+		kinds := make([]string, len(m.claudeMenuItems))
+		for i, item := range m.claudeMenuItems {
+			kinds[i] = item.kind
+		}
+		expected := []string{"here", "worktree", "resume"}
+		if len(kinds) != len(expected) {
+			t.Fatalf("items = %v, want %v", kinds, expected)
+		}
+		for i, k := range expected {
+			if kinds[i] != k {
+				t.Errorf("item[%d] = %q, want %q", i, kinds[i], k)
+			}
+		}
+	})
+
+	t.Run("resets state on open", func(t *testing.T) {
+		m := Model{
+			claudeMenuSkipPerms: true,
+			claudeMenuCursor:    5,
+			claudeMenuItems:     []claudeMenuItem{{"old", "old", "o"}},
+		}
+		os.Unsetenv("TMUX")
+		m.openClaudeMenu(task)
+
+		if m.claudeMenuSkipPerms {
+			t.Error("skipPerms should reset to false")
+		}
+		if m.claudeMenuCursor != 0 {
+			t.Errorf("cursor should reset to 0, got %d", m.claudeMenuCursor)
+		}
+		if m.claudeMenuItems[0].kind == "old" {
+			t.Error("items should be rebuilt")
+		}
+	})
+}
+
+func TestUpdateClaudeMenuSkipPerms(t *testing.T) {
+	t.Run("toggle with !", func(t *testing.T) {
+		m := Model{
+			claudeMenu:      true,
+			claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
+		}
+
+		// First toggle: off -> on
+		result, _ := m.updateClaudeMenu(keyMsg("!"))
+		m = result.(Model)
+		if !m.claudeMenuSkipPerms {
+			t.Error("skipPerms should be true after first toggle")
+		}
+
+		// Second toggle: on -> off
+		result, _ = m.updateClaudeMenu(keyMsg("!"))
+		m = result.(Model)
+		if m.claudeMenuSkipPerms {
+			t.Error("skipPerms should be false after second toggle")
+		}
+	})
+
+	t.Run("escape closes menu", func(t *testing.T) {
+		m := Model{
+			claudeMenu:          true,
+			claudeMenuSkipPerms: true,
+			claudeMenuItems:     []claudeMenuItem{{"Here", "here", "h"}},
+		}
+
+		result, _ := m.updateClaudeMenu(tea.KeyMsg{Type: tea.KeyEsc})
+		m = result.(Model)
+		if m.claudeMenu {
+			t.Error("menu should close on escape")
+		}
+	})
+
+	t.Run("navigation with j/k", func(t *testing.T) {
+		m := Model{
+			claudeMenu: true,
+			claudeMenuItems: []claudeMenuItem{
+				{"Here", "here", "h"},
+				{"Worktree", "worktree", "w"},
+			},
+			claudeMenuCursor: 0,
+		}
+
+		// Down
+		result, _ := m.updateClaudeMenu(tea.KeyMsg{Type: tea.KeyDown})
+		m = result.(Model)
+		if m.claudeMenuCursor != 1 {
+			t.Errorf("cursor = %d, want 1 after down", m.claudeMenuCursor)
+		}
+
+		// Down at bottom - stays
+		result, _ = m.updateClaudeMenu(tea.KeyMsg{Type: tea.KeyDown})
+		m = result.(Model)
+		if m.claudeMenuCursor != 1 {
+			t.Errorf("cursor = %d, want 1 (clamped at bottom)", m.claudeMenuCursor)
+		}
+
+		// Up
+		result, _ = m.updateClaudeMenu(tea.KeyMsg{Type: tea.KeyUp})
+		m = result.(Model)
+		if m.claudeMenuCursor != 0 {
+			t.Errorf("cursor = %d, want 0 after up", m.claudeMenuCursor)
+		}
+
+		// Up at top - stays
+		result, _ = m.updateClaudeMenu(tea.KeyMsg{Type: tea.KeyUp})
+		m = result.(Model)
+		if m.claudeMenuCursor != 0 {
+			t.Errorf("cursor = %d, want 0 (clamped at top)", m.claudeMenuCursor)
+		}
+	})
+}
+
+func TestViewClaudeMenuSkipPerms(t *testing.T) {
+	t.Run("shows unchecked by default", func(t *testing.T) {
+		m := Model{
+			claudeMenu:          true,
+			claudeMenuSkipPerms: false,
+			claudeMenuItems:     []claudeMenuItem{{"Here", "here", "h"}},
+			width:               80,
+			height:              24,
+		}
+		output := m.viewClaudeMenu()
+		if !strings.Contains(output, "[ ]") {
+			t.Error("should show unchecked [ ] when skipPerms is false")
+		}
+		if strings.Contains(output, "[x]") {
+			t.Error("should not show [x] when skipPerms is false")
+		}
+		if !strings.Contains(output, "skip permissions") {
+			t.Error("should contain 'skip permissions' label")
+		}
+	})
+
+	t.Run("shows checked when enabled", func(t *testing.T) {
+		m := Model{
+			claudeMenu:          true,
+			claudeMenuSkipPerms: true,
+			claudeMenuItems:     []claudeMenuItem{{"Here", "here", "h"}},
+			width:               80,
+			height:              24,
+		}
+		output := m.viewClaudeMenu()
+		if !strings.Contains(output, "[x]") {
+			t.Error("should show [x] when skipPerms is true")
+		}
+	})
+
+	t.Run("help text mentions toggle", func(t *testing.T) {
+		m := Model{
+			claudeMenu:      true,
+			claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
+			width:           80,
+			height:          24,
+		}
+		output := m.viewClaudeMenu()
+		if !strings.Contains(output, "! toggle perms") {
+			t.Error("help text should mention ! toggle perms")
 		}
 	})
 }
