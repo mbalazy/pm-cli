@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -1181,8 +1182,26 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Check if the session lives in a worktree. Claude Code stores conversations
+	// in ~/.claude/projects/<path-hash>/ where path-hash is derived from cwd.
+	// When a session was created inside a worktree, we need to resume from that
+	// worktree dir so CC finds the conversation.
+	var worktreeDir string
+	if projDir != "" && (kind == "resume" || kind == "resume-tmux") {
+		sessionID := lastSession(t)
+		worktreeDir = findWorktreeForSession(projDir, sessionID)
+	}
+
 	setDir := func(c *exec.Cmd) {
 		if projDir != "" {
+			c.Dir = projDir
+		}
+	}
+
+	setResumeDir := func(c *exec.Cmd) {
+		if worktreeDir != "" {
+			c.Dir = worktreeDir
+		} else if projDir != "" {
 			c.Dir = projDir
 		}
 	}
@@ -1192,6 +1211,13 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 			return fmt.Sprintf("cd %s && %s", shellQuote(projDir), cmd)
 		}
 		return cmd
+	}
+
+	withResumeCd := func(cmd string) string {
+		if worktreeDir != "" {
+			return fmt.Sprintf("cd %s && %s", shellQuote(worktreeDir), cmd)
+		}
+		return withCd(cmd)
 	}
 
 	switch kind {
@@ -1247,16 +1273,15 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		if skipFlag != "" {
 			args = append(args, skipFlag)
 		}
-		args = append(args, prompt)
 		c := exec.Command("claude", args...)
-		setDir(c)
+		setResumeDir(c)
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
 			return reloadMsg{}
 		})
 
 	case "resume-tmux":
 		sessionID := lastSession(t)
-		shellCmd := withCd(fmt.Sprintf("claude --resume %s %s %s", sessionID, skipFlag, shellQuote(prompt)))
+		shellCmd := withResumeCd(fmt.Sprintf("claude --resume %s %s", sessionID, skipFlag))
 		exec.Command("tmux", "new-window", "-n", "cc:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
 		m.toastMsg = "Resumed in tmux: cc:" + t.Meta.ID
 		m.toastExpiry = time.Now().Add(3 * time.Second)
@@ -1324,6 +1349,45 @@ func (m *Model) saveSession(t *storage.Task, sessionID string) {
 	t.Meta.Sessions = append(t.Meta.Sessions, sessionID)
 	t.Meta.Updated = storage.Today()
 	storage.WriteTask(t)
+}
+
+// findWorktreeForSession scans worktree subdirs under projDir and checks
+// if Claude Code has a conversation file for the given session ID stored
+// under a project directory corresponding to that worktree path.
+// Returns the worktree absolute path if found, empty string otherwise.
+func findWorktreeForSession(projDir, sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	wtBase := filepath.Join(projDir, ".claude", "worktrees")
+	entries, err := os.ReadDir(wtBase)
+	if err != nil {
+		return ""
+	}
+	homeDir, _ := os.UserHomeDir()
+	ccProjectsDir := filepath.Join(homeDir, ".claude", "projects")
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		wtPath := filepath.Join(wtBase, e.Name())
+		// Claude Code maps absolute path to project dir name by replacing
+		// "/" with "-" and stripping "." from directory names.
+		ccDirName := pathToCCProject(wtPath)
+		sessionFile := filepath.Join(ccProjectsDir, ccDirName, sessionID+".jsonl")
+		if _, err := os.Stat(sessionFile); err == nil {
+			return wtPath
+		}
+	}
+	return ""
+}
+
+// pathToCCProject converts an absolute path to the Claude Code project
+// directory name format: replace "/" and "." with "-".
+func pathToCCProject(absPath string) string {
+	s := strings.ReplaceAll(absPath, "/", "-")
+	s = strings.ReplaceAll(s, ".", "-")
+	return s
 }
 
 func shellQuote(s string) string {
