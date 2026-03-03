@@ -130,22 +130,12 @@ func (s *Store) GetAllTasks() ([]*Task, error) {
 	return all, nil
 }
 
-// MoveTask changes a task's status, updates the timestamp, and clears brief on done/archived.
+// MoveTask changes a task's status and updates the timestamp.
 // This is the single source of truth for status transition logic.
+// Brief is preserved on all status transitions (useful for summaries/reverts).
 func (s *Store) MoveTask(t *Task, newStatus TaskStatus) error {
 	t.Meta.Status = newStatus
 	t.Meta.Updated = Today()
-	if newStatus == StatusDone || newStatus == StatusArchived {
-		if t.Meta.Brief != "" {
-			sep := "\n\n"
-			if t.Body == "" {
-				sep = ""
-			}
-			briefNote := fmt.Sprintf("%s---\n**Session brief (archived %s):**\n%s", sep, Today(), t.Meta.Brief)
-			t.Body += briefNote
-		}
-		t.Meta.Brief = ""
-	}
 	return WriteTask(t)
 }
 

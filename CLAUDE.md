@@ -34,8 +34,8 @@ Always add tests when implementing new features or fixing bugs. Conventions:
 
 ## Key patterns
 
-- **Frontmatter tasks**: `.md` file with YAML frontmatter (id, title, status, created, updated, links, branch, tags, brief, order) + markdown body
-- **Brief field**: `brief` in frontmatter stores short session context ("where we left off"). Overwrites on each update (not append). Cleared when task moves to done/archived. Returned by `pm_context` for doing tasks.
+- **Frontmatter tasks**: `.md` file with YAML frontmatter (id, title, status, created, updated, links, branch, tags, brief, order, sessions) + markdown body
+- **Brief field**: `brief` in frontmatter stores short session context ("where we left off"). Overwrites on each update (not append). Preserved on all status transitions (including done/archived - useful for summaries/reverts). Returned by `pm_context` for doing tasks.
 - **Project config**: `~/.claude/pm/<slug>/project.yaml` — name, path, repo, stack, notes, links, tags, statuses
 - **Statuses are per-project** — read via `Store.GetProjectStatuses(slug)`. Default: `[todo, doing, waiting, done]`. Override in `project.yaml`. "ALL" view merges all projects' statuses.
 - **Archive is system-level** — `StatusArchived` is NOT a project status. Never add to `DefaultStatuses` or `project.yaml`. `filteredTasks()` excludes archived. `Ctrl+a` toggles archive view.
@@ -78,6 +78,8 @@ The `maxCardHeight` is computed dynamically: `m.height - overhead` where overhea
 - Version is set via ldflags at build time (`internal/version/version.go`) - defaults to "dev" without ldflags
 - `cardHeight()` / `zoomCardHeight()` are estimates for reference only - not used for scroll or rendering logic. Both `fixScrollOffsets` and `viewBoard` render cards and measure actual `\n` count to handle text wrapping correctly. Column content is clamped to `maxCardHeight` as a safety net.
 - **Task reorder**: `Ctrl+j/k` swaps task order within a column via `Order int` field in TaskMeta. If all tasks have `Order==0`, sequential orders are assigned first. `filteredTasks()` sorts by Order asc, then Updated desc.
+- **Sessions**: `Sessions []string` in TaskMeta stores Claude session IDs (appended by TUI on launch). Used for `--resume` and `session_count` in MCP output. MCP exposes `session_count` (not full list).
+- **Worktree naming**: `worktreeName(t)` uses `t.Meta.Branch` if set, otherwise `Slugify(t.Meta.Title)`. Produces semantic branch names (e.g. `feat/enable-analytics` not `atlas-9`).
 
 ## Workflow
 

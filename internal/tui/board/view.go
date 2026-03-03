@@ -125,6 +125,10 @@ func renderProjectInfo(proj *storage.Project, slug string, termWidth int) string
 }
 
 func (m Model) View() string {
+	// Overlay menus take priority over all views
+	if m.claudeMenu {
+		return m.viewClaudeMenu()
+	}
 	if m.currentView == viewDetail || m.currentView == viewProjectInfo {
 		return m.viewDetail()
 	}
@@ -136,9 +140,6 @@ func (m Model) View() string {
 	}
 	if m.linksMenu {
 		return m.viewLinksMenu()
-	}
-	if m.claudeMenu {
-		return m.viewClaudeMenu()
 	}
 	if m.showHelp {
 		return m.viewHelp()

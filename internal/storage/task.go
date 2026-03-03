@@ -61,14 +61,15 @@ type Task struct {
 }
 
 func (t *Task) Filename() string {
-	slug := slugify(t.Meta.Title)
+	slug := Slugify(t.Meta.Title)
 	if t.Meta.ID != "" {
 		return t.Meta.ID + "-" + slug + ".md"
 	}
 	return slug + ".md"
 }
 
-func slugify(s string) string {
+// Slugify converts a string to a URL/branch-safe slug.
+func Slugify(s string) string {
 	s = strings.ToLower(s)
 	s = strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {

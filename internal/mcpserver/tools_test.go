@@ -193,32 +193,32 @@ func TestUpdateTaskBriefOverwrites(t *testing.T) {
 	})
 }
 
-func TestMoveTaskClearsBriefOnDoneArchived(t *testing.T) {
-	t.Run("done clears brief via MoveTask", func(t *testing.T) {
+func TestMoveTaskPreservesBrief(t *testing.T) {
+	t.Run("done preserves brief", func(t *testing.T) {
 		store, _ := setupMCPTestStore(t)
 		task, _ := store.FindTask("test", "t-1")
 
 		store.MoveTask(task, storage.StatusDone)
 
 		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.Brief != "" {
-			t.Errorf("brief should be cleared on done, got %q", reloaded.Meta.Brief)
+		if reloaded.Meta.Brief != "initial brief" {
+			t.Errorf("brief = %q, want %q", reloaded.Meta.Brief, "initial brief")
 		}
 	})
 
-	t.Run("archived clears brief via MoveTask", func(t *testing.T) {
+	t.Run("archived preserves brief", func(t *testing.T) {
 		store, _ := setupMCPTestStore(t)
 		task, _ := store.FindTask("test", "t-1")
 
 		store.MoveTask(task, storage.StatusArchived)
 
 		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.Brief != "" {
-			t.Errorf("brief should be cleared on archived, got %q", reloaded.Meta.Brief)
+		if reloaded.Meta.Brief != "initial brief" {
+			t.Errorf("brief = %q, want %q", reloaded.Meta.Brief, "initial brief")
 		}
 	})
 
-	t.Run("move to other status preserves brief", func(t *testing.T) {
+	t.Run("waiting preserves brief", func(t *testing.T) {
 		store, _ := setupMCPTestStore(t)
 		task, _ := store.FindTask("test", "t-1")
 
@@ -226,7 +226,7 @@ func TestMoveTaskClearsBriefOnDoneArchived(t *testing.T) {
 
 		reloaded, _ := store.FindTask("test", "t-1")
 		if reloaded.Meta.Brief != "initial brief" {
-			t.Errorf("brief should be preserved on waiting, got %q", reloaded.Meta.Brief)
+			t.Errorf("brief = %q, want %q", reloaded.Meta.Brief, "initial brief")
 		}
 	})
 }

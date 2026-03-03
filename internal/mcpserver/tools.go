@@ -372,10 +372,7 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 		}
 
 		// Brief: overwrite (current state, not history)
-		// Clear brief when status transitions to done/archived
-		if task.Meta.Status == storage.StatusDone || task.Meta.Status == storage.StatusArchived {
-			task.Meta.Brief = ""
-		} else if in.Brief != "" {
+		if in.Brief != "" {
 			task.Meta.Brief = in.Brief
 		}
 

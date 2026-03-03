@@ -268,6 +268,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.yankItems = append(m.yankItems, yankItem{"id", t.Meta.ID})
 		m.yankItems = append(m.yankItems, yankItem{"title", t.Meta.Title})
 		m.yankItems = append(m.yankItems, yankItem{"path", t.FilePath})
+		if sid := lastSession(t); sid != "" {
+			m.yankItems = append(m.yankItems, yankItem{"session", sid})
+		}
 		for name, url := range t.Meta.Links {
 			m.yankItems = append(m.yankItems, yankItem{"link: " + name, url})
 		}
@@ -564,6 +567,9 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.yankItems = append(m.yankItems, yankItem{"id", t.Meta.ID})
 			m.yankItems = append(m.yankItems, yankItem{"title", t.Meta.Title})
 			m.yankItems = append(m.yankItems, yankItem{"path", t.FilePath})
+			if sid := lastSession(t); sid != "" {
+				m.yankItems = append(m.yankItems, yankItem{"session", sid})
+			}
 			if t.Meta.Brief != "" {
 				m.yankItems = append(m.yankItems, yankItem{"brief", t.Meta.Brief})
 			}
@@ -1146,6 +1152,15 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// worktreeName returns a semantic name for the worktree branch.
+// Uses task branch if set, otherwise slugifies the task title.
+func worktreeName(t *storage.Task) string {
+	if t.Meta.Branch != "" {
+		return t.Meta.Branch
+	}
+	return storage.Slugify(t.Meta.Title)
+}
+
 func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	t := m.selectedTask()
 	if t == nil {
@@ -1205,7 +1220,8 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	case "worktree":
 		sessionID := generateSessionID()
 		m.saveSession(t, sessionID)
-		args := []string{"-w", t.Meta.ID, "--session-id", sessionID}
+		wtName := worktreeName(t)
+		args := []string{"-w", wtName, "--session-id", sessionID}
 		if skipFlag != "" {
 			args = append(args, skipFlag)
 		}
@@ -1219,7 +1235,8 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	case "worktree-tmux":
 		sessionID := generateSessionID()
 		m.saveSession(t, sessionID)
-		shellCmd := withCd(fmt.Sprintf("claude -w %s --session-id %s %s %s", shellQuote(t.Meta.ID), sessionID, skipFlag, shellQuote(prompt)))
+		wtName := worktreeName(t)
+		shellCmd := withCd(fmt.Sprintf("claude -w %s --session-id %s %s %s", shellQuote(wtName), sessionID, skipFlag, shellQuote(prompt)))
 		exec.Command("tmux", "new-window", "-n", "wt:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
 		m.toastMsg = "Launched worktree in tmux: wt:" + t.Meta.ID
 		m.toastExpiry = time.Now().Add(3 * time.Second)
