@@ -174,7 +174,7 @@ func (m Model) viewDetail() string {
 	sb.WriteString(m.detailViewport.View())
 	sb.WriteString("\n")
 	pct := fmt.Sprintf("%3.f%%", m.detailViewport.ScrollPercent()*100)
-	help := "o/q: back  e: edit  m/w/d/A: move/wait/done/archive  y/Y: yank  L: links  s: sessions  " + pct
+	help := "o/q: back  e: edit  r: refresh  m/w/d/A: move/wait/done/archive  y/Y: yank  L: links  s: sessions  " + pct
 	if m.currentView == viewProjectInfo {
 		help = "o/esc/q: back  ↑/↓/j/k scroll  y/Y: yank  L: links  " + pct
 	}
@@ -225,7 +225,7 @@ func (m Model) viewHelp() string {
 		{"Tab", "Next project"},
 		{"S-Tab", "Previous project"},
 		{"u", "Undo last action"},
-		{"R", "Refresh"},
+		{"r", "Refresh"},
 		{"?", "This help"},
 		{"q", "Quit (confirm)"},
 	}

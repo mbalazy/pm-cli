@@ -166,7 +166,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursors[m.activeCol] = max(m.cursors[m.activeCol]-5, 0)
 		m.fixScrollOffsets()
 
-	case msg.String() == "R":
+	case msg.String() == "r":
 		m.refreshProjects()
 		m.reload()
 		m.toastMsg = "Refreshed"
@@ -671,6 +671,18 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case msg.String() == "s":
 		if t != nil {
 			m.openSessionMenu(t)
+		}
+
+	case msg.String() == "r":
+		if t != nil {
+			reloaded, err := m.store.FindTask(t.Project, t.Meta.ID)
+			if err == nil {
+				m.detailTask = reloaded
+				content := renderTaskDetail(reloaded, m.width)
+				m.detailViewport.SetContent(content)
+				m.toastMsg = "Refreshed"
+				m.toastExpiry = time.Now().Add(2 * time.Second)
+			}
 		}
 
 	default:
