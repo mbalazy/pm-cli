@@ -2,6 +2,7 @@ package board
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +43,15 @@ type claudeMenuItem struct {
 	label    string
 	kind     string // "here", "tmux", "worktree", "worktree-tmux", "resume", "resume-tmux"
 	shortcut string // single key mnemonic
+}
+
+type sessionMenuItem struct {
+	sessionID string
+	summary   string // from sessions-index.json
+	msgCount  int
+	modified  string // formatted date
+	branch    string
+	isLatest  bool
 }
 
 type undoAction struct {
@@ -141,6 +151,14 @@ type Model struct {
 	claudeMenuCursor    int
 	claudeMenuSkipPerms bool
 
+	// session menu
+	sessionMenu      bool
+	sessionMenuItems []sessionMenuItem
+	sessionCursor    int
+	resumeSessionID  string // override for launchClaude resume
+	resumeOnly       bool   // when true, claude menu shows only resume options
+	forkMode         bool   // when true with resumeOnly, claude menu shows fork options
+
 	startupDuration time.Duration
 }
 
@@ -153,7 +171,7 @@ func New(store *storage.Store, filterProject string) Model {
 		hiddenStatuses: make(map[storage.TaskStatus]bool),
 	}
 
-	projects, _ := store.ListProjects()
+	projects, _ := store.ListActiveProjects()
 	m.projects = append([]string{"all"}, projects...)
 
 	if filterProject != "" {
@@ -187,6 +205,14 @@ func New(store *storage.Store, filterProject string) Model {
 	}
 
 	return m
+}
+
+func (m *Model) refreshProjects() {
+	projects, _ := m.store.ListActiveProjects()
+	m.projects = append([]string{"all"}, projects...)
+	if m.activeProject >= len(m.projects) {
+		m.activeProject = 0
+	}
 }
 
 func (m *Model) loadStatuses() {
@@ -246,7 +272,7 @@ func (m *Model) applyColumnVisibility() {
 		}
 	}
 
-	filtered := m.statuses[:0]
+	var filtered []storage.TaskStatus
 	for _, s := range m.statuses {
 		if !m.hiddenStatuses[s] {
 			filtered = append(filtered, s)
@@ -292,9 +318,24 @@ func (m Model) filteredTasks(status storage.TaskStatus) []*storage.Task {
 		if result[i].Meta.Order != result[j].Meta.Order {
 			return result[i].Meta.Order < result[j].Meta.Order
 		}
+		ni := taskIDNum(result[i].Meta.ID)
+		nj := taskIDNum(result[j].Meta.ID)
+		if ni != nj {
+			return ni < nj
+		}
 		return result[i].Meta.Updated > result[j].Meta.Updated
 	})
 	return result
+}
+
+// taskIDNum extracts the trailing number from a task ID (e.g. "proj-10" -> 10).
+func taskIDNum(id string) int {
+	if idx := strings.LastIndex(id, "-"); idx >= 0 {
+		if n, err := strconv.Atoi(id[idx+1:]); err == nil {
+			return n
+		}
+	}
+	return 0
 }
 
 func (m Model) archivedTasks() []*storage.Task {

@@ -2,6 +2,7 @@ package board
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -164,6 +165,12 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, common.Keys.HalfUp):
 		m.cursors[m.activeCol] = max(m.cursors[m.activeCol]-5, 0)
 		m.fixScrollOffsets()
+
+	case msg.String() == "R":
+		m.refreshProjects()
+		m.reload()
+		m.toastMsg = "Refreshed"
+		m.toastExpiry = time.Now().Add(2 * time.Second)
 
 	case key.Matches(msg, common.Keys.Tab):
 		m.activeProject = (m.activeProject + 1) % len(m.projects)
@@ -498,6 +505,9 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.linksMenu {
 		return m.updateLinksMenu(msg)
 	}
+	if m.sessionMenu {
+		return m.updateSessionMenu(msg)
+	}
 
 	// Project info view: close, scroll, yank, links
 	if m.currentView == viewProjectInfo {
@@ -658,6 +668,11 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.openClaudeMenu(t)
 		}
 
+	case msg.String() == "s":
+		if t != nil {
+			m.openSessionMenu(t)
+		}
+
 	default:
 		var cmd tea.Cmd
 		m.detailViewport, cmd = m.detailViewport.Update(msg)
@@ -809,6 +824,150 @@ func (m Model) updateLinksMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			exec.Command("open", m.linkItems[m.linksCursor].url).Start()
 		}
 		m.linksMenu = false
+	case msg.String() == "y":
+		if m.linksCursor < len(m.linkItems) {
+			m.copyToClipboard(m.linkItems[m.linksCursor].url)
+			m.linksMenu = false
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) openSessionMenu(t *storage.Task) {
+	m.sessionMenuItems = nil
+	m.sessionCursor = 0
+
+	// Resolve project dir for CC metadata lookup
+	var projDir string
+	if proj, err := m.store.GetProject(t.Project); err == nil && proj.Path != "" {
+		projDir = proj.Path
+	}
+
+	enrichItem := func(sid string, isLatest bool) sessionMenuItem {
+		item := sessionMenuItem{sessionID: sid, isLatest: isLatest}
+		if meta := loadSessionMeta(projDir, sid); meta != nil {
+			item.summary = meta.Summary
+			item.msgCount = meta.MessageCount
+			item.branch = meta.GitBranch
+			if meta.Modified != "" {
+				if t, err := time.Parse(time.RFC3339, meta.Modified); err == nil {
+					item.modified = t.Local().Format("Jan 2, 15:04")
+				}
+			}
+		}
+		return item
+	}
+
+	// Migrate legacy cc-session if present
+	if old := t.Meta.Links["cc-session"]; old != "" {
+		found := false
+		for _, s := range t.Meta.Sessions {
+			if s == old {
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.sessionMenuItems = append(m.sessionMenuItems, enrichItem(old, false))
+		}
+	}
+
+	// Add sessions in reverse order (latest first)
+	for i := len(t.Meta.Sessions) - 1; i >= 0; i-- {
+		sid := t.Meta.Sessions[i]
+		isLatest := i == len(t.Meta.Sessions)-1
+		m.sessionMenuItems = append(m.sessionMenuItems, enrichItem(sid, isLatest))
+	}
+
+	if len(m.sessionMenuItems) > 0 {
+		m.sessionMenu = true
+	}
+}
+
+func (m Model) updateSessionMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit), key.Matches(msg, common.Keys.Left):
+		m.sessionMenu = false
+		m.confirmAction = ""
+	case key.Matches(msg, common.Keys.Up):
+		if m.sessionCursor > 0 {
+			m.sessionCursor--
+			m.confirmAction = ""
+		}
+	case key.Matches(msg, common.Keys.Down):
+		if m.sessionCursor < len(m.sessionMenuItems)-1 {
+			m.sessionCursor++
+			m.confirmAction = ""
+		}
+	case key.Matches(msg, common.Keys.Enter), msg.String() == "r":
+		if m.sessionCursor < len(m.sessionMenuItems) {
+			m.resumeSessionID = m.sessionMenuItems[m.sessionCursor].sessionID
+			m.sessionMenu = false
+			m.resumeOnly = true
+			m.forkMode = false
+			t := m.selectedTask()
+			if t != nil {
+				m.openClaudeMenu(t)
+			}
+			return m, nil
+		}
+	case msg.String() == "f":
+		if m.sessionCursor < len(m.sessionMenuItems) {
+			m.resumeSessionID = m.sessionMenuItems[m.sessionCursor].sessionID
+			m.sessionMenu = false
+			m.resumeOnly = true
+			m.forkMode = true
+			t := m.selectedTask()
+			if t != nil {
+				m.openClaudeMenu(t)
+			}
+			return m, nil
+		}
+	case msg.String() == "y":
+		if m.sessionCursor < len(m.sessionMenuItems) {
+			m.copyToClipboard(m.sessionMenuItems[m.sessionCursor].sessionID)
+			m.sessionMenu = false
+		}
+	case msg.String() == "x":
+		if m.sessionCursor >= len(m.sessionMenuItems) {
+			break
+		}
+		if m.confirmAction == "delete-session" {
+			// Second press - confirmed
+			m.confirmAction = ""
+			t := m.selectedTask()
+			if t == nil {
+				break
+			}
+			sid := m.sessionMenuItems[m.sessionCursor].sessionID
+			newSessions := make([]string, 0, len(t.Meta.Sessions))
+			for _, s := range t.Meta.Sessions {
+				if s != sid {
+					newSessions = append(newSessions, s)
+				}
+			}
+			t.Meta.Sessions = newSessions
+			if t.Meta.Links["cc-session"] == sid {
+				delete(t.Meta.Links, "cc-session")
+				if len(t.Meta.Links) == 0 {
+					t.Meta.Links = nil
+				}
+			}
+			t.Meta.Updated = storage.Today()
+			storage.WriteTask(t)
+			m.openSessionMenu(t)
+			if len(m.sessionMenuItems) == 0 {
+				m.sessionMenu = false
+			} else if m.sessionCursor >= len(m.sessionMenuItems) {
+				m.sessionCursor = len(m.sessionMenuItems) - 1
+			}
+			m.toastMsg = "Deleted session " + sid[:8] + "..."
+			m.toastExpiry = time.Now().Add(2 * time.Second)
+			m.detailViewport.SetContent(renderTaskDetail(t, m.width))
+		} else {
+			// First press - ask for confirmation
+			m.confirmAction = "delete-session"
+		}
 	}
 	return m, nil
 }
@@ -1090,26 +1249,43 @@ func (m *Model) openClaudeMenu(t *storage.Task) {
 	m.claudeMenuItems = nil
 	m.claudeMenuCursor = 0
 	m.claudeMenuSkipPerms = false
-	m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
-	if inTmux {
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
-	}
-	m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree (here)", "worktree", "w"})
-	if inTmux {
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree + tmux", "worktree-tmux", "W"})
-	}
-	if hasSession {
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume session", "resume", "r"})
+
+	if m.resumeOnly && m.forkMode {
+		// Fork sub-menu: fork from selected session
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Fork here", "fork", "h"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume in tmux", "resume-tmux", "R"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Fork in tmux", "fork-tmux", "t"})
+			m.claudeMenuCursor = 1 // default to tmux
 		}
-	}
-	// Smart default: tmux if available, else here
-	if inTmux {
-		for i, item := range m.claudeMenuItems {
-			if item.kind == "tmux" {
-				m.claudeMenuCursor = i
-				break
+	} else if m.resumeOnly {
+		// Resume sub-menu: only show resume options
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume here", "resume", "h"})
+		if inTmux {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume in tmux", "resume-tmux", "t"})
+			m.claudeMenuCursor = 1 // default to tmux
+		}
+	} else {
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
+		if inTmux {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
+		}
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree (here)", "worktree", "w"})
+		if inTmux {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree + tmux", "worktree-tmux", "W"})
+		}
+		if hasSession {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume session", "resume", "r"})
+			if inTmux {
+				m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume in tmux", "resume-tmux", "R"})
+			}
+		}
+		// Smart default: tmux if available, else here
+		if inTmux {
+			for i, item := range m.claudeMenuItems {
+				if item.kind == "tmux" {
+					m.claudeMenuCursor = i
+					break
+				}
 			}
 		}
 	}
@@ -1128,6 +1304,8 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	for _, item := range m.claudeMenuItems {
 		if typed == item.shortcut {
 			m.claudeMenu = false
+			m.resumeOnly = false
+			m.forkMode = false
 			return m.launchClaude(item.kind)
 		}
 	}
@@ -1135,6 +1313,9 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit), key.Matches(msg, common.Keys.Left):
 		m.claudeMenu = false
+		m.resumeOnly = false
+		m.forkMode = false
+		m.resumeSessionID = ""
 	case key.Matches(msg, common.Keys.Up):
 		if m.claudeMenuCursor > 0 {
 			m.claudeMenuCursor--
@@ -1147,6 +1328,8 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.claudeMenuCursor < len(m.claudeMenuItems) {
 			item := m.claudeMenuItems[m.claudeMenuCursor]
 			m.claudeMenu = false
+			m.resumeOnly = false
+			m.forkMode = false
 			return m.launchClaude(item.kind)
 		}
 	}
@@ -1188,7 +1371,10 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	// worktree dir so CC finds the conversation.
 	var worktreeDir string
 	if projDir != "" && (kind == "resume" || kind == "resume-tmux") {
-		sessionID := lastSession(t)
+		sessionID := m.resumeSessionID
+		if sessionID == "" {
+			sessionID = lastSession(t)
+		}
 		worktreeDir = findWorktreeForSession(projDir, sessionID)
 	}
 
@@ -1268,7 +1454,11 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		m.toastExpiry = time.Now().Add(3 * time.Second)
 
 	case "resume":
-		sessionID := lastSession(t)
+		sessionID := m.resumeSessionID
+		if sessionID == "" {
+			sessionID = lastSession(t)
+		}
+		m.resumeSessionID = ""
 		args := []string{"--resume", sessionID}
 		if skipFlag != "" {
 			args = append(args, skipFlag)
@@ -1280,10 +1470,43 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		})
 
 	case "resume-tmux":
-		sessionID := lastSession(t)
+		sessionID := m.resumeSessionID
+		if sessionID == "" {
+			sessionID = lastSession(t)
+		}
+		m.resumeSessionID = ""
 		shellCmd := withResumeCd(fmt.Sprintf("claude --resume %s %s", sessionID, skipFlag))
 		exec.Command("tmux", "new-window", "-n", "cc:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
 		m.toastMsg = "Resumed in tmux: cc:" + t.Meta.ID
+		m.toastExpiry = time.Now().Add(3 * time.Second)
+
+	case "fork":
+		sessionID := m.resumeSessionID
+		if sessionID == "" {
+			sessionID = lastSession(t)
+		}
+		m.resumeSessionID = ""
+		m.forkMode = false
+		args := []string{"--resume", sessionID, "--fork-session"}
+		if skipFlag != "" {
+			args = append(args, skipFlag)
+		}
+		c := exec.Command("claude", args...)
+		setResumeDir(c)
+		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			return reloadMsg{}
+		})
+
+	case "fork-tmux":
+		sessionID := m.resumeSessionID
+		if sessionID == "" {
+			sessionID = lastSession(t)
+		}
+		m.resumeSessionID = ""
+		m.forkMode = false
+		shellCmd := withResumeCd(fmt.Sprintf("claude --resume %s --fork-session %s", sessionID, skipFlag))
+		exec.Command("tmux", "new-window", "-n", "cc:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
+		m.toastMsg = "Forked in tmux: cc:" + t.Meta.ID
 		m.toastExpiry = time.Now().Add(3 * time.Second)
 	}
 
@@ -1349,6 +1572,106 @@ func (m *Model) saveSession(t *storage.Task, sessionID string) {
 	t.Meta.Sessions = append(t.Meta.Sessions, sessionID)
 	t.Meta.Updated = storage.Today()
 	storage.WriteTask(t)
+}
+
+type sessionIndexEntry struct {
+	SessionID    string `json:"sessionId"`
+	Summary      string `json:"summary"`
+	MessageCount int    `json:"messageCount"`
+	Modified     string `json:"modified"`
+	GitBranch    string `json:"gitBranch"`
+}
+
+type sessionsIndex struct {
+	Entries []sessionIndexEntry `json:"entries"`
+}
+
+// ccProjectDirs returns CC project directories to search for session data.
+// Includes main project dir and all worktree dirs.
+func ccProjectDirs(projDir string) []string {
+	homeDir, _ := os.UserHomeDir()
+	ccProjectsDir := filepath.Join(homeDir, ".claude", "projects")
+
+	var dirs []string
+	dirs = append(dirs, filepath.Join(ccProjectsDir, pathToCCProject(projDir)))
+	wtBase := filepath.Join(projDir, ".claude", "worktrees")
+	if entries, err := os.ReadDir(wtBase); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				wtPath := filepath.Join(wtBase, e.Name())
+				dirs = append(dirs, filepath.Join(ccProjectsDir, pathToCCProject(wtPath)))
+			}
+		}
+	}
+	return dirs
+}
+
+// loadSessionMeta looks up session metadata from Claude Code's sessions-index.json.
+// Falls back to parsing the JSONL file directly if not found in index.
+func loadSessionMeta(projDir, sessionID string) *sessionIndexEntry {
+	if projDir == "" || sessionID == "" {
+		return nil
+	}
+
+	ccDirs := ccProjectDirs(projDir)
+
+	// Try sessions-index.json first (fast path)
+	for _, dir := range ccDirs {
+		indexPath := filepath.Join(dir, "sessions-index.json")
+		data, err := os.ReadFile(indexPath)
+		if err != nil {
+			continue
+		}
+		var idx sessionsIndex
+		if err := json.Unmarshal(data, &idx); err != nil {
+			continue
+		}
+		for _, e := range idx.Entries {
+			if e.SessionID == sessionID {
+				return &e
+			}
+		}
+	}
+
+	// Fallback: parse JSONL file directly
+	for _, dir := range ccDirs {
+		jsonlPath := filepath.Join(dir, sessionID+".jsonl")
+		info, err := os.Stat(jsonlPath)
+		if err != nil {
+			continue
+		}
+		entry := &sessionIndexEntry{
+			SessionID: sessionID,
+			Modified:  info.ModTime().UTC().Format(time.RFC3339),
+		}
+		data, err := os.ReadFile(jsonlPath)
+		if err != nil {
+			return entry
+		}
+		msgCount := 0
+		for _, line := range strings.Split(string(data), "\n") {
+			if line == "" {
+				continue
+			}
+			var rec struct {
+				Type    string `json:"type"`
+				Summary string `json:"summary"`
+			}
+			if json.Unmarshal([]byte(line), &rec) != nil {
+				continue
+			}
+			if rec.Type == "user" || rec.Type == "assistant" {
+				msgCount++
+			}
+			if rec.Type == "summary" && rec.Summary != "" {
+				entry.Summary = rec.Summary
+			}
+		}
+		entry.MessageCount = msgCount
+		return entry
+	}
+
+	return nil
 }
 
 // findWorktreeForSession scans worktree subdirs under projDir and checks

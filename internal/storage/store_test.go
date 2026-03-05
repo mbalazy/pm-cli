@@ -299,6 +299,22 @@ func TestGetProjectStatuses(t *testing.T) {
 			t.Errorf("got %d statuses, want %d defaults", len(statuses), len(DefaultStatuses))
 		}
 	})
+
+	t.Run("default statuses returned as copy not reference", func(t *testing.T) {
+		statuses := store.GetProjectStatuses("alpha")
+		original := make([]TaskStatus, len(DefaultStatuses))
+		copy(original, DefaultStatuses)
+
+		// Mutate the returned slice
+		statuses[2] = "mutated"
+
+		// DefaultStatuses must not be affected
+		for i, s := range DefaultStatuses {
+			if s != original[i] {
+				t.Errorf("DefaultStatuses[%d] = %q, was mutated (want %q)", i, s, original[i])
+			}
+		}
+	})
 }
 
 func TestGetAllStatuses(t *testing.T) {
@@ -464,6 +480,82 @@ func TestStoreOperationsOnEmptyRoot(t *testing.T) {
 		_, err := emptyStore.ResolveProject("anything")
 		if err == nil {
 			t.Error("expected error")
+		}
+	})
+}
+
+func TestListActiveProjects(t *testing.T) {
+	store, dir := setupTestStore(t)
+
+	// Create an archived project
+	archivedDir := filepath.Join(dir, "old-project")
+	os.MkdirAll(archivedDir, 0755)
+	WriteProject(filepath.Join(archivedDir, "project.yaml"), &Project{
+		Name:     "Old Project",
+		Archived: true,
+	})
+
+	// Create another active project
+	betaDir := filepath.Join(dir, "beta")
+	os.MkdirAll(betaDir, 0755)
+	WriteProject(filepath.Join(betaDir, "project.yaml"), &Project{
+		Name: "Beta Project",
+	})
+
+	t.Run("excludes archived projects", func(t *testing.T) {
+		active, err := store.ListActiveProjects()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, slug := range active {
+			if slug == "old-project" {
+				t.Error("archived project should not appear in active list")
+			}
+		}
+		// alpha and beta should be present
+		found := map[string]bool{}
+		for _, slug := range active {
+			found[slug] = true
+		}
+		if !found["alpha"] {
+			t.Error("expected alpha in active projects")
+		}
+		if !found["beta"] {
+			t.Error("expected beta in active projects")
+		}
+	})
+
+	t.Run("ListProjects still returns all", func(t *testing.T) {
+		all, err := store.ListProjects()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		found := map[string]bool{}
+		for _, slug := range all {
+			found[slug] = true
+		}
+		if !found["old-project"] {
+			t.Error("expected old-project in all projects")
+		}
+		if !found["alpha"] {
+			t.Error("expected alpha in all projects")
+		}
+	})
+
+	t.Run("GetAllTasks excludes archived project tasks", func(t *testing.T) {
+		// Add a task to the archived project
+		WriteTask(&Task{
+			Meta:     TaskMeta{ID: "old-1", Title: "Old task", Status: StatusTodo, Created: "2025-01-01", Updated: "2025-01-01"},
+			FilePath: filepath.Join(archivedDir, "old-1-old-task.md"),
+		})
+		tasks, err := store.GetAllTasks()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, task := range tasks {
+			if task.Project == "old-project" {
+				t.Error("tasks from archived project should not appear in GetAllTasks")
+			}
 		}
 	})
 }

@@ -386,6 +386,102 @@ func TestToSummarySessionCount(t *testing.T) {
 	})
 }
 
+func TestUpdateTaskSessionsAppend(t *testing.T) {
+	t.Run("append sessions to task with none", func(t *testing.T) {
+		store, _ := setupMCPTestStore(t)
+		task, _ := store.FindTask("test", "t-1")
+
+		task.Meta.Sessions = append(task.Meta.Sessions, "abc-123")
+		storage.WriteTask(task)
+
+		reloaded, _ := store.FindTask("test", "t-1")
+		if len(reloaded.Meta.Sessions) != 1 || reloaded.Meta.Sessions[0] != "abc-123" {
+			t.Errorf("sessions = %v, want [abc-123]", reloaded.Meta.Sessions)
+		}
+	})
+
+	t.Run("append preserves existing sessions", func(t *testing.T) {
+		store, _ := setupMCPTestStore(t)
+		task, _ := store.FindTask("test", "t-1")
+
+		task.Meta.Sessions = []string{"abc-123"}
+		storage.WriteTask(task)
+
+		task, _ = store.FindTask("test", "t-1")
+		task.Meta.Sessions = append(task.Meta.Sessions, "def-456")
+		storage.WriteTask(task)
+
+		reloaded, _ := store.FindTask("test", "t-1")
+		if len(reloaded.Meta.Sessions) != 2 {
+			t.Fatalf("sessions len = %d, want 2", len(reloaded.Meta.Sessions))
+		}
+		if reloaded.Meta.Sessions[0] != "abc-123" {
+			t.Errorf("sessions[0] = %q, want abc-123", reloaded.Meta.Sessions[0])
+		}
+		if reloaded.Meta.Sessions[1] != "def-456" {
+			t.Errorf("sessions[1] = %q, want def-456", reloaded.Meta.Sessions[1])
+		}
+	})
+
+	t.Run("empty sessions input preserves existing", func(t *testing.T) {
+		store, _ := setupMCPTestStore(t)
+		task, _ := store.FindTask("test", "t-1")
+
+		task.Meta.Sessions = []string{"abc-123"}
+		storage.WriteTask(task)
+
+		task, _ = store.FindTask("test", "t-1")
+		// Simulate: no sessions in update (don't touch task.Meta.Sessions)
+		storage.WriteTask(task)
+
+		reloaded, _ := store.FindTask("test", "t-1")
+		if len(reloaded.Meta.Sessions) != 1 || reloaded.Meta.Sessions[0] != "abc-123" {
+			t.Errorf("sessions = %v, want [abc-123]", reloaded.Meta.Sessions)
+		}
+	})
+}
+
+func TestAddTaskWithSessions(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+
+	task := storage.NewTask("t-2", "Task with sessions", "test")
+	task.Meta.Sessions = []string{"sess-1", "sess-2"}
+	task.FilePath = filepath.Join(store.Root, "test", "t-2-task-with-sessions.md")
+	storage.WriteTask(task)
+
+	reloaded, err := store.FindTask("test", "t-2")
+	if err != nil {
+		t.Fatalf("FindTask failed: %v", err)
+	}
+	if len(reloaded.Meta.Sessions) != 2 {
+		t.Fatalf("sessions len = %d, want 2", len(reloaded.Meta.Sessions))
+	}
+	if reloaded.Meta.Sessions[0] != "sess-1" || reloaded.Meta.Sessions[1] != "sess-2" {
+		t.Errorf("sessions = %v, want [sess-1 sess-2]", reloaded.Meta.Sessions)
+	}
+}
+
+func TestToDetailIncludesSessions(t *testing.T) {
+	task := &storage.Task{
+		Meta: storage.TaskMeta{
+			ID:       "t-1",
+			Title:    "With sessions",
+			Sessions: []string{"abc-123", "def-456"},
+		},
+		Project: "test",
+	}
+	d := toDetail(task)
+	if len(d.Sessions) != 2 {
+		t.Fatalf("detail sessions len = %d, want 2", len(d.Sessions))
+	}
+	if d.Sessions[0] != "abc-123" || d.Sessions[1] != "def-456" {
+		t.Errorf("detail sessions = %v", d.Sessions)
+	}
+	if d.SessionCount != 2 {
+		t.Errorf("session_count = %d, want 2", d.SessionCount)
+	}
+}
+
 func TestResolveProjectFromCwd(t *testing.T) {
 	dir := t.TempDir()
 	store := &storage.Store{Root: dir}
@@ -434,6 +530,59 @@ func TestResolveProjectFromCwd(t *testing.T) {
 		_, err := resolveProjectFromCwd(store, "/anywhere")
 		if err == nil {
 			t.Error("expected error - project without path should not match")
+		}
+	})
+}
+
+func TestUpdateProjectArchived(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+
+	t.Run("archive project", func(t *testing.T) {
+		proj, err := store.GetProject("test")
+		if err != nil {
+			t.Fatalf("GetProject failed: %v", err)
+		}
+		if proj.Archived {
+			t.Fatal("project should not be archived initially")
+		}
+
+		proj.Archived = true
+		err = storage.WriteProject(store.ProjectYAML("test"), proj)
+		if err != nil {
+			t.Fatalf("WriteProject failed: %v", err)
+		}
+
+		loaded, err := store.GetProject("test")
+		if err != nil {
+			t.Fatalf("GetProject failed: %v", err)
+		}
+		if !loaded.Archived {
+			t.Error("project should be archived after update")
+		}
+
+		// ListActiveProjects should exclude it
+		active, _ := store.ListActiveProjects()
+		for _, slug := range active {
+			if slug == "test" {
+				t.Error("archived project should not appear in ListActiveProjects")
+			}
+		}
+	})
+
+	t.Run("unarchive project", func(t *testing.T) {
+		proj, _ := store.GetProject("test")
+		proj.Archived = false
+		storage.WriteProject(store.ProjectYAML("test"), proj)
+
+		active, _ := store.ListActiveProjects()
+		found := false
+		for _, slug := range active {
+			if slug == "test" {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("unarchived project should appear in ListActiveProjects")
 		}
 	})
 }

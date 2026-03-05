@@ -53,6 +53,22 @@ func (s *Store) ListProjects() ([]string, error) {
 	return projects, nil
 }
 
+// ListActiveProjects returns project slugs excluding archived ones.
+func (s *Store) ListActiveProjects() ([]string, error) {
+	all, err := s.ListProjects()
+	if err != nil {
+		return nil, err
+	}
+	var active []string
+	for _, slug := range all {
+		proj, err := s.GetProject(slug)
+		if err != nil || !proj.Archived {
+			active = append(active, slug)
+		}
+	}
+	return active, nil
+}
+
 func (s *Store) GetProject(slug string) (*Project, error) {
 	return ReadProject(s.ProjectYAML(slug))
 }
@@ -66,10 +82,10 @@ func (s *Store) GetProjectStatuses(slug string) []TaskStatus {
 	return p.GetStatuses()
 }
 
-// GetAllStatuses returns the union of statuses across all projects, preserving order.
+// GetAllStatuses returns the union of statuses across all active (non-archived) projects, preserving order.
 // Default statuses come first, then any unique custom statuses.
 func (s *Store) GetAllStatuses() []TaskStatus {
-	projects, err := s.ListProjects()
+	projects, err := s.ListActiveProjects()
 	if err != nil {
 		return DefaultStatuses
 	}
@@ -112,9 +128,9 @@ func (s *Store) GetTasks(projectSlug string) ([]*Task, error) {
 	return tasks, nil
 }
 
-// GetAllTasks returns tasks from all projects.
+// GetAllTasks returns tasks from all active (non-archived) projects.
 func (s *Store) GetAllTasks() ([]*Task, error) {
-	projects, err := s.ListProjects()
+	projects, err := s.ListActiveProjects()
 	if err != nil {
 		return nil, err
 	}

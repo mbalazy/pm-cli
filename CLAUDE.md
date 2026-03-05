@@ -5,10 +5,12 @@ Local task tracker. Data: `~/.claude/pm/<project-slug>/`, binary: `pm`.
 ## Build
 
 ```
-go install -buildvcs=false -ldflags "-X github.com/mbalazy/pm/internal/version.Version=X.Y.Z" ./cmd/pm/
+make install              # build + install (uses VERSION from Makefile)
+make check                # go vet + go test
+make install VERSION=X.Y.Z  # override version
 ```
 
-IMPORTANT: Always set version via ldflags. Bump version on each release. Current: **0.7.4**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN). Always use `go install`, not `go build`.
+IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.7.4**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN).
 
 ## Tests
 
@@ -27,9 +29,9 @@ Always add tests when implementing new features or fixing bugs. Conventions:
 
 ## Verification
 
-- After code changes: `go vet ./...` && `go test ./internal/... -count=1`
-- After TUI changes: rebuild with `go install` (see Build above) + run `pm board` and test interactively
-- After MCP changes: rebuild + test with `pm_context` / `pm_list_tasks` in Claude Code
+- After code changes: `make check` (runs vet + test)
+- After TUI changes: `make install` + run `pm board` and test interactively
+- After MCP changes: `make install` + test with `pm_context` / `pm_list_tasks` in Claude Code
 - After storage changes: verify task files in `~/.claude/pm/` have correct frontmatter
 
 ## Key patterns
@@ -78,7 +80,8 @@ The `maxCardHeight` is computed dynamically: `m.height - overhead` where overhea
 - Version is set via ldflags at build time (`internal/version/version.go`) - defaults to "dev" without ldflags
 - `cardHeight()` / `zoomCardHeight()` are estimates for reference only - not used for scroll or rendering logic. Both `fixScrollOffsets` and `viewBoard` render cards and measure actual `\n` count to handle text wrapping correctly. Column content is clamped to `maxCardHeight` as a safety net.
 - **Task reorder**: `Ctrl+j/k` swaps task order within a column via `Order int` field in TaskMeta. If all tasks have `Order==0`, sequential orders are assigned first. `filteredTasks()` sorts by Order asc, then Updated desc.
-- **Sessions**: `Sessions []string` in TaskMeta stores Claude session IDs (appended by TUI on launch). Used for `--resume` and `session_count` in MCP output. MCP exposes `session_count` (not full list).
+- **Sessions**: `Sessions []string` in TaskMeta stores Claude session IDs (appended by TUI on launch, or via MCP `sessions` param). Used for `--resume` and `session_count` in MCP output. MCP `pm_get_task` returns full `sessions` list; `pm_update_task` and `pm_add_task` accept `sessions` param (append-only).
+- **Session detection**: `pm session-id` prints current CC session UUID. Strategy: (1) walk process tree for `claude --resume <id>` arg, (2) fallback to newest .jsonl in `~/.claude/projects/<encoded-cwd>/`. Requires `CLAUDECODE=1` env var.
 - **Worktree naming**: `worktreeName(t)` uses `t.Meta.Branch` if set, otherwise `Slugify(t.Meta.Title)`. Produces semantic branch names (e.g. `feat/enable-analytics` not `atlas-9`).
 
 ## Workflow

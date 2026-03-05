@@ -40,13 +40,13 @@ func TestFilteredTasks(t *testing.T) {
 		}
 	})
 
-	t.Run("sorted by updated desc", func(t *testing.T) {
+	t.Run("sorted by id number asc", func(t *testing.T) {
 		todos := m.filteredTasks(storage.StatusTodo)
 		if len(todos) < 2 {
 			t.Fatal("need at least 2 todos")
 		}
-		if todos[0].Meta.Updated < todos[1].Meta.Updated {
-			t.Error("tasks not sorted by updated desc")
+		if todos[0].Meta.ID != "a-1" || todos[1].Meta.ID != "a-5" {
+			t.Errorf("got [%s, %s], want [a-1, a-5]", todos[0].Meta.ID, todos[1].Meta.ID)
 		}
 	})
 

@@ -33,6 +33,16 @@ func renderTaskDetail(t *storage.Task, termWidth int) string {
 	if len(t.Meta.Tags) > 0 {
 		fmt.Fprintf(&sb, "\n**Tags:** %s\n", strings.Join(t.Meta.Tags, ", "))
 	}
+	if len(t.Meta.Sessions) > 0 {
+		fmt.Fprintf(&sb, "\n**Sessions:** (%d)\n", len(t.Meta.Sessions))
+		for i, s := range t.Meta.Sessions {
+			fmt.Fprintf(&sb, "- `%s`", s)
+			if i == len(t.Meta.Sessions)-1 {
+				fmt.Fprint(&sb, " *(latest)*")
+			}
+			fmt.Fprintln(&sb)
+		}
+	}
 	if t.Meta.Brief != "" {
 		fmt.Fprintf(&sb, "\n**Brief:**\n%s\n", t.Meta.Brief)
 	}
@@ -157,11 +167,14 @@ func (m Model) viewDetail() string {
 	if m.linksMenu {
 		return m.viewLinksMenu()
 	}
+	if m.sessionMenu {
+		return m.viewSessionMenu()
+	}
 	var sb strings.Builder
 	sb.WriteString(m.detailViewport.View())
 	sb.WriteString("\n")
 	pct := fmt.Sprintf("%3.f%%", m.detailViewport.ScrollPercent()*100)
-	help := "o/q: back  e: edit  m/w/d/A: move/wait/done/archive  y/Y: yank  L: links  " + pct
+	help := "o/q: back  e: edit  m/w/d/A: move/wait/done/archive  y/Y: yank  L: links  s: sessions  " + pct
 	if m.currentView == viewProjectInfo {
 		help = "o/esc/q: back  ↑/↓/j/k scroll  y/Y: yank  L: links  " + pct
 	}
@@ -212,6 +225,7 @@ func (m Model) viewHelp() string {
 		{"Tab", "Next project"},
 		{"S-Tab", "Previous project"},
 		{"u", "Undo last action"},
+		{"R", "Refresh"},
 		{"?", "This help"},
 		{"q", "Quit (confirm)"},
 	}
@@ -321,7 +335,78 @@ func (m Model) viewLinksMenu() string {
 		lines = append(lines, style.Render(fmt.Sprintf("%s%s: %s", prefix, item.name, display)))
 	}
 	lines = append(lines, "")
-	lines = append(lines, helpStyle.Render("enter open  esc back"))
+	lines = append(lines, helpStyle.Render("enter open  y yank  esc back"))
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(highlight).
+		Padding(1, 3).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+func (m Model) viewSessionMenu() string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render(
+		fmt.Sprintf("Sessions (%d)", len(m.sessionMenuItems)))
+
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
+
+	var lines []string
+	lines = append(lines, title)
+	lines = append(lines, "")
+	for i, item := range m.sessionMenuItems {
+		prefix := "  "
+		primaryStyle := dimStyle
+		secondaryStyle := dimStyle
+		if i == m.sessionCursor {
+			prefix = "> "
+			primaryStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
+			secondaryStyle = lipgloss.NewStyle().Foreground(special)
+		}
+
+		// Line 1: summary or meta (msgs | date) + (latest) tag
+		var primaryParts []string
+		if item.summary != "" {
+			s := item.summary
+			if len(s) > 45 {
+				s = s[:42] + "..."
+			}
+			primaryParts = append(primaryParts, s)
+		}
+		if item.msgCount > 0 {
+			label := fmt.Sprintf("%d msgs", item.msgCount)
+			if item.msgCount == 1 {
+				label = "1 msg"
+			}
+			primaryParts = append(primaryParts, label)
+		}
+		if item.modified != "" {
+			primaryParts = append(primaryParts, item.modified)
+		}
+		primaryLine := strings.Join(primaryParts, " | ")
+		if item.isLatest {
+			primaryLine += " (latest)"
+		}
+		lines = append(lines, primaryStyle.Render(prefix+primaryLine))
+
+		// Line 2: session ID + branch
+		idLabel := item.sessionID
+		if len(idLabel) > 10 {
+			idLabel = idLabel[:10] + "..."
+		}
+		if item.branch != "" {
+			idLabel += " | " + item.branch
+		}
+		lines = append(lines, secondaryStyle.Render("    "+idLabel))
+	}
+	lines = append(lines, "")
+	if m.confirmAction == "delete-session" {
+		warnStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#FF0000", Dark: "#FF6666"})
+		lines = append(lines, warnStyle.Render("  press x again to delete session"))
+	} else {
+		lines = append(lines, helpStyle.Render("enter/r resume  f fork  x delete  y yank  esc back"))
+	}
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -364,7 +449,19 @@ func (m Model) viewColVisMenu() string {
 }
 
 func (m Model) viewClaudeMenu() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render("Launch Claude Code")
+	titleText := "Launch Claude Code"
+	if m.resumeOnly {
+		sid := m.resumeSessionID
+		if len(sid) > 8 {
+			sid = sid[:8] + "..."
+		}
+		if m.forkMode {
+			titleText = "Fork session " + sid
+		} else {
+			titleText = "Resume session " + sid
+		}
+	}
+	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render(titleText)
 
 	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(highlight)
 	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})

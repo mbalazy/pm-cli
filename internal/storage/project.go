@@ -18,11 +18,14 @@ type Project struct {
 	Tags     []string          `yaml:"tags,omitempty"`
 	Statuses []string          `yaml:"statuses,omitempty"`
 	Notes    string            `yaml:"notes,omitempty"`
+	Archived bool              `yaml:"archived,omitempty"`
 }
 
 func (p *Project) GetStatuses() []TaskStatus {
 	if len(p.Statuses) == 0 {
-		return DefaultStatuses
+		out := make([]TaskStatus, len(DefaultStatuses))
+		copy(out, DefaultStatuses)
+		return out
 	}
 	out := make([]TaskStatus, len(p.Statuses))
 	for i, s := range p.Statuses {

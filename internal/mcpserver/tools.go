@@ -29,15 +29,16 @@ type contextInput struct {
 }
 
 type addTaskInput struct {
-	Project string            `json:"project" jsonschema:"Project slug or prefix"`
-	Title   string            `json:"title" jsonschema:"Task title"`
-	Status  string            `json:"status,omitempty" jsonschema:"Initial status (default: first project status)"`
-	Branch  string            `json:"branch,omitempty" jsonschema:"Git branch name"`
-	Tags    []string          `json:"tags,omitempty" jsonschema:"Tags"`
-	Links   map[string]string `json:"links,omitempty" jsonschema:"Links as key=url pairs (e.g. azure, pr, slack)"`
-	Body    string            `json:"body,omitempty" jsonschema:"Markdown body content"`
-	ID      string            `json:"id,omitempty" jsonschema:"Task ID (auto-generated if omitted)"`
-	Brief   string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
+	Project  string            `json:"project" jsonschema:"Project slug or prefix"`
+	Title    string            `json:"title" jsonschema:"Task title"`
+	Status   string            `json:"status,omitempty" jsonschema:"Initial status (default: first project status)"`
+	Branch   string            `json:"branch,omitempty" jsonschema:"Git branch name"`
+	Tags     []string          `json:"tags,omitempty" jsonschema:"Tags"`
+	Links    map[string]string `json:"links,omitempty" jsonschema:"Links as key=url pairs (e.g. azure, pr, slack)"`
+	Body     string            `json:"body,omitempty" jsonschema:"Markdown body content"`
+	ID       string            `json:"id,omitempty" jsonschema:"Task ID (auto-generated if omitted)"`
+	Brief    string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
+	Sessions []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to attach"`
 }
 
 type updateTaskInput struct {
@@ -50,6 +51,7 @@ type updateTaskInput struct {
 	Links      map[string]string `json:"links,omitempty" jsonschema:"Links to merge (existing links are preserved)"`
 	BodyAppend string            `json:"body_append,omitempty" jsonschema:"Text to append to body (never replaces existing content)"`
 	Brief      string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
+	Sessions   []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to append (never removes existing)"`
 }
 
 type moveTaskInput struct {
@@ -86,6 +88,7 @@ type updateProjectInput struct {
 	Links    map[string]string `json:"links,omitempty" jsonschema:"Links to merge (existing links are preserved)"`
 	Tags     []string          `json:"tags,omitempty" jsonschema:"Replace tags (omit to keep current)"`
 	Statuses []string          `json:"statuses,omitempty" jsonschema:"Replace statuses (omit to keep current)"`
+	Archived *bool             `json:"archived,omitempty" jsonschema:"Archive or unarchive the project"`
 }
 
 // --- JSON output helpers ---
@@ -105,8 +108,9 @@ type taskSummary struct {
 
 type taskDetail struct {
 	taskSummary
-	Created string `json:"created"`
-	Body    string `json:"body,omitempty"`
+	Created  string   `json:"created"`
+	Body     string   `json:"body,omitempty"`
+	Sessions []string `json:"sessions,omitempty"`
 }
 
 func toSummary(t *storage.Task) taskSummary {
@@ -129,6 +133,7 @@ func toDetail(t *storage.Task) taskDetail {
 		taskSummary: toSummary(t),
 		Created:     t.Meta.Created,
 		Body:        t.Body,
+		Sessions:    t.Meta.Sessions,
 	}
 }
 
@@ -254,6 +259,7 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 			Slug       string         `json:"slug"`
 			Name       string         `json:"name"`
 			Stack      string         `json:"stack,omitempty"`
+			Archived   bool           `json:"archived,omitempty"`
 			TaskCounts map[string]int `json:"task_counts"`
 		}
 
@@ -267,6 +273,7 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 			if proj != nil {
 				pi.Name = proj.Name
 				pi.Stack = proj.Stack
+				pi.Archived = proj.Archived
 			}
 			tasks, _ := store.GetTasks(slug)
 			for _, t := range tasks {
@@ -313,6 +320,7 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 		}
 		t.Body = in.Body
 		t.Meta.Brief = in.Brief
+		t.Meta.Sessions = in.Sessions
 
 		if err := store.AddTask(slug, t); err != nil {
 			r, _ := toolError(err.Error())
@@ -374,6 +382,11 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 		// Brief: overwrite (current state, not history)
 		if in.Brief != "" {
 			task.Meta.Brief = in.Brief
+		}
+
+		// Sessions: append, never remove
+		if len(in.Sessions) > 0 {
+			task.Meta.Sessions = append(task.Meta.Sessions, in.Sessions...)
 		}
 
 		task.Meta.Updated = storage.Today()
@@ -573,6 +586,11 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 			proj.Statuses = in.Statuses
 		}
 
+		// Archived: set if provided
+		if in.Archived != nil {
+			proj.Archived = *in.Archived
+		}
+
 		if err := storage.WriteProject(store.ProjectYAML(slug), proj); err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
@@ -589,6 +607,7 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 			Links    map[string]string `json:"links,omitempty"`
 			Tags     []string          `json:"tags,omitempty"`
 			Statuses []string          `json:"statuses,omitempty"`
+			Archived bool              `json:"archived,omitempty"`
 		}
 
 		r, err := jsonText(projectResult{
@@ -602,6 +621,7 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 			Links:    proj.Links,
 			Tags:     proj.Tags,
 			Statuses: proj.Statuses,
+			Archived: proj.Archived,
 		})
 		return r, nil, err
 	})
@@ -678,7 +698,7 @@ func projectContext(store *storage.Store, slug string) (*mcp.CallToolResult, any
 }
 
 func crossProjectContext(store *storage.Store) (*mcp.CallToolResult, any, error) {
-	projects, _ := store.ListProjects()
+	projects, _ := store.ListActiveProjects()
 
 	type projectSummary struct {
 		Slug       string         `json:"slug"`
