@@ -2,6 +2,8 @@ package board
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -384,6 +386,95 @@ func TestViewClaudeMenuSkipPerms(t *testing.T) {
 		output := m.viewClaudeMenu()
 		if !strings.Contains(output, "! toggle perms") {
 			t.Error("help text should mention ! toggle perms")
+		}
+	})
+}
+
+func TestCopyWorktreeFiles(t *testing.T) {
+	// Set up a git repo in a temp dir
+	projDir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = projDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v failed: %s", args, out)
+		}
+	}
+	run("git", "init")
+	run("git", "config", "user.email", "test@test.com")
+	run("git", "config", "user.name", "Test")
+	os.WriteFile(filepath.Join(projDir, "main.go"), []byte("package main"), 0644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	// Create untracked files (not in git)
+	os.WriteFile(filepath.Join(projDir, ".env"), []byte("SECRET=abc"), 0644)
+	os.WriteFile(filepath.Join(projDir, ".env.local"), []byte("LOCAL=xyz"), 0600)
+	os.MkdirAll(filepath.Join(projDir, "config"), 0755)
+	os.WriteFile(filepath.Join(projDir, "config", "local.json"), []byte(`{"db":"localhost"}`), 0644)
+
+	t.Run("copies all untracked files", func(t *testing.T) {
+		wtName := "test-copy"
+		copyWorktreeFiles(projDir, wtName)
+
+		wtPath := filepath.Join(projDir, ".claude", "worktrees", wtName)
+
+		// Verify worktree was created
+		if _, err := os.Stat(wtPath); os.IsNotExist(err) {
+			t.Fatal("worktree dir was not created")
+		}
+
+		// Verify all untracked files were copied
+		for _, f := range []string{".env", ".env.local", "config/local.json"} {
+			data, err := os.ReadFile(filepath.Join(wtPath, f))
+			if err != nil {
+				t.Errorf("file %s not copied: %v", f, err)
+				continue
+			}
+			orig, _ := os.ReadFile(filepath.Join(projDir, f))
+			if string(data) != string(orig) {
+				t.Errorf("file %s content mismatch: got %q, want %q", f, data, orig)
+			}
+		}
+
+		// Verify file permissions preserved
+		info, _ := os.Stat(filepath.Join(wtPath, ".env.local"))
+		if info.Mode().Perm() != 0600 {
+			t.Errorf(".env.local perms = %o, want 0600", info.Mode().Perm())
+		}
+	})
+
+	t.Run("skips existing files", func(t *testing.T) {
+		wtName := "test-skip"
+		wtPath := filepath.Join(projDir, ".claude", "worktrees", wtName)
+
+		// Create worktree with files
+		copyWorktreeFiles(projDir, wtName)
+		// Modify a file in the worktree
+		os.WriteFile(filepath.Join(wtPath, ".env"), []byte("MODIFIED"), 0644)
+
+		// Copy again - should NOT overwrite
+		copyWorktreeFiles(projDir, wtName)
+		data, _ := os.ReadFile(filepath.Join(wtPath, ".env"))
+		if string(data) != "MODIFIED" {
+			t.Errorf("existing file was overwritten: got %q, want %q", data, "MODIFIED")
+		}
+	})
+
+	t.Run("does not copy tracked files", func(t *testing.T) {
+		wtName := "test-tracked"
+		copyWorktreeFiles(projDir, wtName)
+
+		wtPath := filepath.Join(projDir, ".claude", "worktrees", wtName)
+		// main.go is tracked - it should come from git, not our copy
+		// Verify the tracked file exists (from git worktree add)
+		data, err := os.ReadFile(filepath.Join(wtPath, "main.go"))
+		if err != nil {
+			t.Fatal("tracked file main.go missing from worktree")
+		}
+		if string(data) != "package main" {
+			t.Errorf("tracked file content wrong: %q", data)
 		}
 	})
 }

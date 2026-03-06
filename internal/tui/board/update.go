@@ -1357,6 +1357,50 @@ func worktreeName(t *storage.Task) string {
 	return storage.Slugify(t.Meta.Title)
 }
 
+// copyWorktreeFiles pre-creates a git worktree (if needed) and copies all
+// untracked files from the main repo into the worktree.
+func copyWorktreeFiles(projDir, wtName string) {
+	wtPath := filepath.Join(projDir, ".claude", "worktrees", wtName)
+
+	// Pre-create worktree if it doesn't exist yet
+	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
+		cmd := exec.Command("git", "worktree", "add", wtPath)
+		cmd.Dir = projDir
+		if err := cmd.Run(); err != nil {
+			return
+		}
+	}
+
+	// Find all untracked files (both ignored and non-ignored)
+	cmd := exec.Command("git", "ls-files", "--others")
+	cmd.Dir = projDir
+	out, err := cmd.Output()
+	if err != nil {
+		return
+	}
+
+	for _, rel := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if rel == "" {
+			continue
+		}
+		src := filepath.Join(projDir, rel)
+		dst := filepath.Join(wtPath, rel)
+
+		// Skip if destination already exists
+		if _, err := os.Stat(dst); err == nil {
+			continue
+		}
+
+		data, err := os.ReadFile(src)
+		if err != nil {
+			continue
+		}
+		info, _ := os.Stat(src)
+		os.MkdirAll(filepath.Dir(dst), 0755)
+		os.WriteFile(dst, data, info.Mode())
+	}
+}
+
 func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	t := m.selectedTask()
 	if t == nil {
@@ -1445,6 +1489,9 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		sessionID := generateSessionID()
 		m.saveSession(t, sessionID)
 		wtName := worktreeName(t)
+		if projDir != "" {
+			copyWorktreeFiles(projDir, wtName)
+		}
 		args := []string{"-w", wtName, "--session-id", sessionID}
 		if skipFlag != "" {
 			args = append(args, skipFlag)
@@ -1460,6 +1507,9 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		sessionID := generateSessionID()
 		m.saveSession(t, sessionID)
 		wtName := worktreeName(t)
+		if projDir != "" {
+			copyWorktreeFiles(projDir, wtName)
+		}
 		shellCmd := withCd(fmt.Sprintf("claude -w %s --session-id %s %s %s", shellQuote(wtName), sessionID, skipFlag, shellQuote(prompt)))
 		exec.Command("tmux", "new-window", "-n", "wt:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
 		m.toastMsg = "Launched worktree in tmux: wt:" + t.Meta.ID
