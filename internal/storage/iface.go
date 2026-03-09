@@ -2,7 +2,6 @@ package storage
 
 // TaskStore is the interface for all storage operations.
 // Store is the concrete local-filesystem implementation.
-// SyncStore wraps TaskStore to enqueue sync events on writes.
 type TaskStore interface {
 	// Paths
 	RootDir() string
