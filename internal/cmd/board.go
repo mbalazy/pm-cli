@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newBoardCmd(store *storage.Store) *cobra.Command {
+func newBoardCmd(store storage.TaskStore) *cobra.Command {
 	return &cobra.Command{
 		Use:   "board [project]",
 		Short: "Open interactive kanban board",
@@ -26,7 +26,7 @@ func newBoardCmd(store *storage.Store) *cobra.Command {
 	}
 }
 
-func runBoard(store *storage.Store, project string) error {
+func runBoard(store storage.TaskStore, project string) error {
 	m := board.New(store, project)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()

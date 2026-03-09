@@ -18,6 +18,10 @@ func NewStore() *Store {
 	return &Store{Root: filepath.Join(home, ".claude", "pm")}
 }
 
+func (s *Store) RootDir() string {
+	return s.Root
+}
+
 func (s *Store) Init() error {
 	return os.MkdirAll(s.Root, 0755)
 }
@@ -113,7 +117,7 @@ func (s *Store) CreateProject(slug string, p *Project) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	return WriteProject(s.ProjectYAML(slug), p)
+	return writeProject(s.ProjectYAML(slug), p)
 }
 
 func (s *Store) GetTasks(projectSlug string) ([]*Task, error) {
@@ -152,7 +156,18 @@ func (s *Store) GetAllTasks() ([]*Task, error) {
 func (s *Store) MoveTask(t *Task, newStatus TaskStatus) error {
 	t.Meta.Status = newStatus
 	t.Meta.Updated = Today()
-	return WriteTask(t)
+	return writeTask(t)
+}
+
+// WriteTask persists a task to disk. Use for in-place updates (reorder, undo, field changes).
+// For new tasks, use AddTask. For status changes, use MoveTask.
+func (s *Store) WriteTask(t *Task) error {
+	return writeTask(t)
+}
+
+// UpdateProject persists project metadata to disk.
+func (s *Store) UpdateProject(slug string, p *Project) error {
+	return writeProject(s.ProjectYAML(slug), p)
 }
 
 func (s *Store) DeleteTask(t *Task) error {
@@ -171,7 +186,7 @@ func (s *Store) AddTask(projectSlug string, t *Task) error {
 		return fmt.Errorf("task file already exists: %s", t.FilePath)
 	}
 
-	return WriteTask(t)
+	return writeTask(t)
 }
 
 // ProjectPrefix returns the task ID prefix for a project.

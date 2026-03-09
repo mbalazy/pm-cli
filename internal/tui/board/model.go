@@ -76,7 +76,7 @@ func snapshotTask(t *storage.Task) *storage.Task {
 }
 
 type Model struct {
-	store         *storage.Store
+	store         storage.TaskStore
 	tasks         []*storage.Task
 	projects      []string
 	statuses      []storage.TaskStatus
@@ -162,7 +162,7 @@ type Model struct {
 	startupDuration time.Duration
 }
 
-func New(store *storage.Store, filterProject string) Model {
+func New(store storage.TaskStore, filterProject string) Model {
 	m := Model{
 		store:          store,
 		width:          80,

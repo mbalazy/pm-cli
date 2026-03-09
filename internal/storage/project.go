@@ -46,7 +46,13 @@ func ReadProject(path string) (*Project, error) {
 	return &p, nil
 }
 
+// WriteProject is the exported package-level writer, used by tests and setupTestStore.
+// Production code should use Store.CreateProject() or Store.UpdateProject() instead.
 func WriteProject(path string, p *Project) error {
+	return writeProject(path, p)
+}
+
+func writeProject(path string, p *Project) error {
 	data, err := yaml.Marshal(p)
 	if err != nil {
 		return err

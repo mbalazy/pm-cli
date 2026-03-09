@@ -966,7 +966,7 @@ func (m Model) updateSessionMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			t.Meta.Updated = storage.Today()
-			storage.WriteTask(t)
+			m.store.WriteTask(t)
 			m.openSessionMenu(t)
 			if len(m.sessionMenuItems) == 0 {
 				m.sessionMenu = false
@@ -1205,7 +1205,7 @@ func (m *Model) doUndo() {
 		return
 	}
 	u := m.lastUndo
-	storage.WriteTask(u.task)
+	m.store.WriteTask(u.task)
 	m.lastUndo = nil
 	m.toastMsg = "undone: " + u.kind
 	m.toastExpiry = time.Now().Add(2 * time.Second)
@@ -1240,7 +1240,7 @@ func (m *Model) doReorder(direction int) {
 		for i, t := range tasks {
 			t.Meta.Order = (i + 1) * 10
 			t.Meta.Updated = storage.Today()
-			storage.WriteTask(t)
+			m.store.WriteTask(t)
 		}
 	}
 
@@ -1248,8 +1248,8 @@ func (m *Model) doReorder(direction int) {
 	a.Meta.Order, b.Meta.Order = b.Meta.Order, a.Meta.Order
 	a.Meta.Updated = storage.Today()
 	b.Meta.Updated = storage.Today()
-	storage.WriteTask(a)
-	storage.WriteTask(b)
+	m.store.WriteTask(a)
+	m.store.WriteTask(b)
 
 	m.cursors[m.activeCol] = target
 	m.reload()
@@ -1575,7 +1575,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func buildClaudePrompt(t *storage.Task, store *storage.Store) string {
+func buildClaudePrompt(t *storage.Task, store storage.TaskStore) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Working on: #%s %s [%s]\n", t.Meta.ID, t.Meta.Title, t.Meta.Status)
 	fmt.Fprintf(&sb, "Project: %s\n", t.Project)
@@ -1636,7 +1636,7 @@ func (m *Model) saveSession(t *storage.Task, sessionID string) {
 	}
 	t.Meta.Sessions = append(t.Meta.Sessions, sessionID)
 	t.Meta.Updated = storage.Today()
-	storage.WriteTask(t)
+	m.store.WriteTask(t)
 }
 
 type sessionIndexEntry struct {

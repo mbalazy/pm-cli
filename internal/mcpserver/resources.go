@@ -9,7 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func registerResources(s *mcp.Server, store *storage.Store) {
+func registerResources(s *mcp.Server, store storage.TaskStore) {
 	// pm://projects — static: all projects with task counts
 	s.AddResource(
 		&mcp.Resource{

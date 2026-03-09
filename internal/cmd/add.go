@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newAddCmd(store *storage.Store) *cobra.Command {
+func newAddCmd(store storage.TaskStore) *cobra.Command {
 	var status, branch string
 	var links map[string]string
 	var tags []string

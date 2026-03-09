@@ -111,7 +111,13 @@ func ReadTask(path string) (*Task, error) {
 	}, nil
 }
 
+// WriteTask is the exported package-level writer, used by tests and setupTestStore.
+// Production code should use Store.WriteTask() or Store.AddTask() instead.
 func WriteTask(t *Task) error {
+	return writeTask(t)
+}
+
+func writeTask(t *Task) error {
 	metaBytes, err := yaml.Marshal(t.Meta)
 	if err != nil {
 		return err

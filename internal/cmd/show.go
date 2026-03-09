@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newShowCmd(store *storage.Store) *cobra.Command {
+func newShowCmd(store storage.TaskStore) *cobra.Command {
 	return &cobra.Command{
 		Use:   "show <project> <task-id>",
 		Short: "Show task details",

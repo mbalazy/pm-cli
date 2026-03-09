@@ -156,7 +156,7 @@ func toolError(msg string) (*mcp.CallToolResult, error) {
 
 // --- Tool registration ---
 
-func registerTools(s *mcp.Server, store *storage.Store) {
+func registerTools(s *mcp.Server, store storage.TaskStore) {
 	// pm_list_tasks
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_list_tasks",
@@ -390,7 +390,7 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 		}
 
 		task.Meta.Updated = storage.Today()
-		if err := storage.WriteTask(task); err != nil {
+		if err := store.WriteTask(task); err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
 		}
@@ -591,7 +591,7 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 			proj.Archived = *in.Archived
 		}
 
-		if err := storage.WriteProject(store.ProjectYAML(slug), proj); err != nil {
+		if err := store.UpdateProject(slug, proj); err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
 		}
@@ -629,7 +629,7 @@ func registerTools(s *mcp.Server, store *storage.Store) {
 
 // --- Context helpers ---
 
-func resolveProjectFromCwd(store *storage.Store, cwd string) (string, error) {
+func resolveProjectFromCwd(store storage.TaskStore, cwd string) (string, error) {
 	projects, err := store.ListProjects()
 	if err != nil {
 		return "", err
@@ -646,7 +646,7 @@ func resolveProjectFromCwd(store *storage.Store, cwd string) (string, error) {
 	return "", fmt.Errorf("no project found for: %s", cwd)
 }
 
-func projectContext(store *storage.Store, slug string) (*mcp.CallToolResult, any, error) {
+func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, any, error) {
 	proj, _ := store.GetProject(slug)
 
 	type projectMeta struct {
@@ -697,7 +697,7 @@ func projectContext(store *storage.Store, slug string) (*mcp.CallToolResult, any
 	return r, nil, err
 }
 
-func crossProjectContext(store *storage.Store) (*mcp.CallToolResult, any, error) {
+func crossProjectContext(store storage.TaskStore) (*mcp.CallToolResult, any, error) {
 	projects, _ := store.ListActiveProjects()
 
 	type projectSummary struct {

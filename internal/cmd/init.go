@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newInitCmd(store *storage.Store) *cobra.Command {
+func newInitCmd(store storage.TaskStore) *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
 		Short: "Initialize pm storage directory",
@@ -15,7 +15,7 @@ func newInitCmd(store *storage.Store) *cobra.Command {
 			if err := store.Init(); err != nil {
 				return err
 			}
-			fmt.Printf("Initialized pm at %s\n", store.Root)
+			fmt.Printf("Initialized pm at %s\n", store.RootDir())
 			return nil
 		},
 	}

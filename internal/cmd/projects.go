@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newProjectsCmd(store *storage.Store) *cobra.Command {
+func newProjectsCmd(store storage.TaskStore) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "projects",
 		Aliases: []string{"proj"},
@@ -55,7 +55,7 @@ func newProjectsCmd(store *storage.Store) *cobra.Command {
 	return cmd
 }
 
-func newProjectsEditCmd(store *storage.Store) *cobra.Command {
+func newProjectsEditCmd(store storage.TaskStore) *cobra.Command {
 	return &cobra.Command{
 		Use:   "edit <slug>",
 		Short: "Open project.yaml in $EDITOR",
@@ -78,7 +78,7 @@ func newProjectsEditCmd(store *storage.Store) *cobra.Command {
 	}
 }
 
-func newProjectsAddCmd(store *storage.Store) *cobra.Command {
+func newProjectsAddCmd(store storage.TaskStore) *cobra.Command {
 	var repoPath, repoURL, displayName, stack, notes string
 	var tags []string
 

@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newEditCmd(store *storage.Store) *cobra.Command {
+func newEditCmd(store storage.TaskStore) *cobra.Command {
 	return &cobra.Command{
 		Use:   "edit <project> <task-id>",
 		Short: "Open task in $EDITOR",
