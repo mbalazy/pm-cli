@@ -1599,10 +1599,13 @@ func buildClaudePrompt(t *storage.Task, store *storage.Store) string {
 	}
 
 	if t.Meta.Brief != "" {
-		fmt.Fprintf(&sb, "\n%s\n", t.Meta.Brief)
+		fmt.Fprintf(&sb, "\nBrief: %s\n", t.Meta.Brief)
 	}
 
-	sb.WriteString("\nUse pm MCP (pm_get_task) for full task details.")
+	if body := strings.TrimSpace(t.Body); body != "" {
+		fmt.Fprintf(&sb, "\n---\n%s\n", body)
+	}
+
 	return sb.String()
 }
 
