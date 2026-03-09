@@ -14,6 +14,9 @@ type Store struct {
 }
 
 func NewStore() *Store {
+	if dir := os.Getenv("PM_DATA_DIR"); dir != "" {
+		return &Store{Root: dir}
+	}
 	home, _ := os.UserHomeDir()
 	return &Store{Root: filepath.Join(home, ".claude", "pm")}
 }
