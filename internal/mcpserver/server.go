@@ -8,7 +8,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func Run(store *storage.Store) error {
+func Run(store storage.TaskStore) error {
 	s := mcp.NewServer(
 		&mcp.Implementation{
 			Name:    "pm",

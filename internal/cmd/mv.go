@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newMvCmd(store *storage.Store) *cobra.Command {
+func newMvCmd(store storage.TaskStore) *cobra.Command {
 	return &cobra.Command{
 		Use:   "mv <project> <task-id> <status>",
 		Short: "Move task to a different status",
@@ -33,7 +33,7 @@ func newMvCmd(store *storage.Store) *cobra.Command {
 	}
 }
 
-func newDoneCmd(store *storage.Store) *cobra.Command {
+func newDoneCmd(store storage.TaskStore) *cobra.Command {
 	return &cobra.Command{
 		Use:   "done <project> <task-id>",
 		Short: "Mark task as done",

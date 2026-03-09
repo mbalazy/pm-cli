@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newMigrateIDsCmd(store *storage.Store) *cobra.Command {
+func newMigrateIDsCmd(store storage.TaskStore) *cobra.Command {
 	return &cobra.Command{
 		Use:   "migrate-ids",
 		Short: "Migrate task IDs to sequential project-prefixed format (e.g. orbit2-1, atlas-2)",
@@ -47,7 +47,7 @@ func newMigrateIDsCmd(store *storage.Store) *cobra.Command {
 					t.Meta.ID = newID
 					t.FilePath = filepath.Join(store.ProjectDir(slug), t.Filename())
 
-					if err := storage.WriteTask(t); err != nil {
+					if err := store.WriteTask(t); err != nil {
 						return fmt.Errorf("write %s: %w", newID, err)
 					}
 

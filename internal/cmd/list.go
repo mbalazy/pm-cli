@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newListCmd(store *storage.Store) *cobra.Command {
+func newListCmd(store storage.TaskStore) *cobra.Command {
 	var project, status string
 
 	cmd := &cobra.Command{

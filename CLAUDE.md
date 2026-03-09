@@ -12,6 +12,19 @@ make install VERSION=X.Y.Z  # override version
 
 IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.7.4**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN).
 
+## Deploy to VPS
+
+After code changes to pm or pm-sync, redeploy to runner.example.net:
+
+```
+make build-pm-linux build-sync-linux
+scp bin/pm-linux runner:~/bin/pm
+scp bin/pm-sync-linux runner:~/bin/pm-sync
+ssh runner systemctl restart pm-sync
+```
+
+VPS: `ssh runner` (runner.example.net:10139, Tailscale: runner01/100.64.0.1). pm-sync runs as systemd service on :8080.
+
 ## Tests
 
 ```

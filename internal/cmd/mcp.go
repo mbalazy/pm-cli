@@ -6,7 +6,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newMcpCmd(store *storage.Store) *cobra.Command {
+func newMcpCmd(store storage.TaskStore) *cobra.Command {
 	return &cobra.Command{
 		Use:   "mcp",
 		Short: "Start MCP server (stdio transport)",
