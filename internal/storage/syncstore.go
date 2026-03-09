@@ -2,8 +2,11 @@ package storage
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -223,31 +226,52 @@ func (ss *SyncStore) drainQueue() error {
 	// Deduplicate: keep last op per file
 	deduped := deduplicateOps(ops)
 
-	var failed []SyncOp
+	// Build bulk ops with file content
+	type bulkOp struct {
+		Op      string `json:"op"`
+		Path    string `json:"path"`
+		Content string `json:"content,omitempty"`
+		TS      string `json:"ts"`
+	}
+	var bulkOps []bulkOp
+	var opMapping []SyncOp
+
 	for _, op := range deduped {
-		absPath := filepath.Join(ss.TaskStore.RootDir(), op.File)
-		var sendErr error
-		switch op.Op {
-		case "upsert":
+		bop := bulkOp{Op: op.Op, Path: op.File, TS: op.TS}
+		if op.Op == "upsert" {
+			absPath := filepath.Join(ss.TaskStore.RootDir(), op.File)
 			data, readErr := os.ReadFile(absPath)
 			if readErr != nil {
-				// File was deleted between enqueue and flush - skip
-				continue
+				continue // file deleted between enqueue and flush
 			}
-			sendErr = ss.client.Upsert(op.File, data)
-		case "delete":
-			sendErr = ss.client.Delete(op.File)
+			bop.Content = string(data)
 		}
-		if sendErr != nil {
-			failed = append(failed, op)
-		}
+		bulkOps = append(bulkOps, bop)
+		opMapping = append(opMapping, op)
 	}
 
-	// Re-enqueue failed ops
-	if len(failed) > 0 {
+	if len(bulkOps) == 0 {
+		return nil
+	}
+
+	failedIdx, err := ss.client.BulkSync(bulkOps)
+	if err != nil {
+		// Total failure - re-enqueue all
 		ss.mu.Lock()
 		defer ss.mu.Unlock()
-		// Merge with any new ops that arrived during flush
+		newOps, _ := ss.readQueue()
+		all := append(opMapping, newOps...)
+		return ss.rewriteQueue(all)
+	}
+
+	// Re-enqueue partially failed ops
+	if len(failedIdx) > 0 {
+		var failed []SyncOp
+		for _, idx := range failedIdx {
+			failed = append(failed, opMapping[idx])
+		}
+		ss.mu.Lock()
+		defer ss.mu.Unlock()
 		newOps, _ := ss.readQueue()
 		all := append(failed, newOps...)
 		return ss.rewriteQueue(all)
@@ -273,29 +297,60 @@ func deduplicateOps(ops []SyncOp) []SyncOp {
 // --- HTTP client ---
 
 type syncClient struct {
-	baseURL string
-	token   string
+	baseURL    string
+	token      string
+	httpClient *http.Client
 }
 
 func newSyncClient(baseURL, token string) *syncClient {
-	return &syncClient{baseURL: strings.TrimRight(baseURL, "/"), token: token}
+	return &syncClient{
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		token:      token,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+	}
 }
 
-func (c *syncClient) Upsert(relPath string, data []byte) error {
-	// TODO: implement HTTP PUT to pm-sync API
-	// PUT {baseURL}/files/{relPath}
-	// Headers: Authorization: Bearer {token}, Content-Type: application/octet-stream
-	// Body: raw file content
-	// On 409: field-level merge (links union, brief LWW, body concat, etc.)
-	_ = relPath
-	_ = data
-	return fmt.Errorf("sync client not yet implemented")
-}
+// BulkSync sends all ops to the server in a single request.
+// Returns indices of failed ops (empty on full success).
+func (c *syncClient) BulkSync(ops any) (failedIdx []int, err error) {
+	reqBody, err := json.Marshal(map[string]any{"ops": ops})
+	if err != nil {
+		return nil, fmt.Errorf("marshal bulk request: %w", err)
+	}
 
-func (c *syncClient) Delete(relPath string) error {
-	// TODO: implement HTTP DELETE to pm-sync API
-	// DELETE {baseURL}/files/{relPath}
-	// Headers: Authorization: Bearer {token}
-	_ = relPath
-	return fmt.Errorf("sync client not yet implemented")
+	req, err := http.NewRequest("POST", c.baseURL+"/sync/bulk", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("sync request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("sync failed: %s %s", resp.Status, body)
+	}
+
+	var result struct {
+		Results []struct {
+			Path   string `json:"path"`
+			Status string `json:"status"`
+			Error  string `json:"error,omitempty"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	for i, r := range result.Results {
+		if r.Status != "ok" {
+			failedIdx = append(failedIdx, i)
+		}
+	}
+	return failedIdx, nil
 }
