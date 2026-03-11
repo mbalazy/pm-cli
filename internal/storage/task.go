@@ -133,7 +133,34 @@ func writeTask(t *Task) error {
 		buf.WriteString("\n")
 	}
 
-	return os.WriteFile(t.FilePath, []byte(buf.String()), 0644)
+	return atomicWriteFile(t.FilePath, []byte(buf.String()), 0644)
+}
+
+// atomicWriteFile writes data to a temp file then renames it to path.
+// This prevents partial writes on crash.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".pm-tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // Today returns the current date as YYYY-MM-DD.

@@ -453,6 +453,102 @@ func TestMoveTask(t *testing.T) {
 	})
 }
 
+func TestAddTaskValidatesStatus(t *testing.T) {
+	store, _ := setupTestStore(t)
+
+	t.Run("valid status accepted", func(t *testing.T) {
+		task := NewTask("a-10", "Valid status", "alpha")
+		task.Meta.Status = StatusDoing
+		err := store.AddTask("alpha", task)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("invalid status rejected", func(t *testing.T) {
+		task := NewTask("a-11", "Bad status", "alpha")
+		task.Meta.Status = ParseStatus("banana")
+		err := store.AddTask("alpha", task)
+		if err == nil {
+			t.Error("expected error for invalid status")
+		}
+		if !strings.Contains(err.Error(), "invalid status") {
+			t.Errorf("error should mention 'invalid status', got: %v", err)
+		}
+	})
+
+	t.Run("custom project status accepted", func(t *testing.T) {
+		dir := store.ProjectDir("custom-st")
+		os.MkdirAll(dir, 0755)
+		WriteProject(filepath.Join(dir, "project.yaml"), &Project{
+			Name:     "Custom Statuses",
+			Prefix:   "cs",
+			Statuses: []string{"backlog", "review", "shipped"},
+		})
+		task := NewTask("cs-1", "Custom status task", "custom-st")
+		task.Meta.Status = ParseStatus("review")
+		err := store.AddTask("custom-st", task)
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestAddTaskAtomicDuplicate(t *testing.T) {
+	store, _ := setupTestStore(t)
+
+	t.Run("duplicate rejected via O_EXCL", func(t *testing.T) {
+		// a-1 already exists from setupTestStore
+		dup := NewTask("a-1", "First task", "alpha")
+		err := store.AddTask("alpha", dup)
+		if err == nil {
+			t.Error("expected error for duplicate filename")
+		}
+		if !strings.Contains(err.Error(), "already exists") {
+			t.Errorf("error should mention 'already exists', got: %v", err)
+		}
+	})
+}
+
+func TestWriteTaskAtomicRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	task := &Task{
+		Meta: TaskMeta{
+			ID:      "at-1",
+			Title:   "Atomic write",
+			Status:  StatusTodo,
+			Created: "2025-01-01",
+			Updated: "2025-01-01",
+		},
+		FilePath: filepath.Join(dir, "at-1-atomic-write.md"),
+		Body:     "test body",
+	}
+
+	if err := writeTask(task); err != nil {
+		t.Fatalf("writeTask failed: %v", err)
+	}
+
+	// Verify file exists and content is correct
+	got, err := ReadTask(task.FilePath)
+	if err != nil {
+		t.Fatalf("ReadTask failed: %v", err)
+	}
+	if got.Meta.ID != "at-1" {
+		t.Errorf("ID = %q, want %q", got.Meta.ID, "at-1")
+	}
+	if got.Body != "test body" {
+		t.Errorf("Body = %q, want %q", got.Body, "test body")
+	}
+
+	// No temp files left behind
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".pm-tmp-") {
+			t.Errorf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
 func TestStoreOperationsOnEmptyRoot(t *testing.T) {
 	emptyStore := &Store{Root: t.TempDir()}
 

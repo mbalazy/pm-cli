@@ -29,6 +29,12 @@ func newAddCmd(store storage.TaskStore) *cobra.Command {
 				t.Meta.Status = storage.ParseStatus(status)
 			}
 
+			// Validate status against project's allowed statuses
+			allowed := store.GetProjectStatuses(projectSlug)
+			if err := storage.ValidateStatus(t.Meta.Status, allowed); err != nil {
+				return err
+			}
+
 			if id, _ := cmd.Flags().GetString("id"); id != "" {
 				t.Meta.ID = id
 			} else {

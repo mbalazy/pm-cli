@@ -313,6 +313,13 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			}
 		}
 
+		// Validate status (AddTask also validates, but fail early with a clear MCP error)
+		statuses := store.GetProjectStatuses(slug)
+		if err := storage.ValidateStatus(t.Meta.Status, statuses); err != nil {
+			r, _ := toolError(err.Error())
+			return r, nil, nil
+		}
+
 		t.Meta.Branch = in.Branch
 		t.Meta.Tags = in.Tags
 		if len(in.Links) > 0 {

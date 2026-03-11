@@ -184,11 +184,23 @@ func (s *Store) AddTask(projectSlug string, t *Task) error {
 	t.Project = projectSlug
 	t.FilePath = filepath.Join(s.ProjectDir(projectSlug), t.Filename())
 
-	// check for duplicate filename
-	if _, err := os.Stat(t.FilePath); err == nil {
-		return fmt.Errorf("task file already exists: %s", t.FilePath)
+	// Validate status against project's allowed statuses
+	allowed := s.GetProjectStatuses(projectSlug)
+	if err := ValidateStatus(t.Meta.Status, allowed); err != nil {
+		return err
 	}
 
+	// O_EXCL: atomic create-or-fail, no race between stat and write
+	f, err := os.OpenFile(t.FilePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("task file already exists: %s", t.FilePath)
+		}
+		return err
+	}
+	f.Close()
+
+	// File claimed; now write content atomically (temp+rename)
 	return writeTask(t)
 }
 
