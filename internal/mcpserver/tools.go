@@ -289,7 +289,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	// pm_add_task
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_add_task",
-		Description: "Create a new task in a project.",
+		Description: "Create a new task in a project. Body must contain ONLY verified facts from the conversation - never include speculative implementation details, architecture suggestions, or technical approaches that were not explicitly discussed.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in addTaskInput) (*mcp.CallToolResult, any, error) {
 		slug, err := store.ResolveProject(in.Project)
 		if err != nil {
