@@ -1,6 +1,7 @@
 package board
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ const (
 	viewDetail
 	viewArchive
 	viewProjectInfo
+	viewDaily
 )
 
 type yankItem struct {
@@ -52,6 +54,22 @@ type sessionMenuItem struct {
 	modified  string // formatted date
 	branch    string
 	isLatest  bool
+}
+
+type pickerItem struct {
+	slug         string
+	name         string
+	stack        string
+	taskCount    int
+	doingCount   int
+	hidden       bool
+	path         string
+	repo         string
+	links        map[string]string
+	tags         []string
+	statusCounts map[storage.TaskStatus]int
+	statuses     []storage.TaskStatus
+	lastUpdated  string
 }
 
 type undoAction struct {
@@ -145,11 +163,27 @@ type Model struct {
 	// zoom
 	zoomed bool
 
+	// multi-select
+	selecting bool
+	selected  map[string]bool // task Meta.ID -> true
+
 	// claude menu
 	claudeMenu          bool
 	claudeMenuItems     []claudeMenuItem
 	claudeMenuCursor    int
 	claudeMenuSkipPerms bool
+
+	// project-scope claude launch (no task)
+	projectScopeLaunch bool
+	projectScopeSlug   string
+
+	// detail search
+	detailSearching     bool
+	detailSearchInput   textinput.Model
+	detailSearchQuery   string
+	detailSearchMatches []int // line numbers of matches
+	detailSearchIdx     int
+	detailPlainContent  string // ANSI-stripped for searching
 
 	// session menu
 	sessionMenu      bool
@@ -160,6 +194,21 @@ type Model struct {
 	forkMode         bool   // when true with resumeOnly, claude menu shows fork options
 
 	startupDuration time.Duration
+
+	// daily plan
+	dailyCursor int
+	dailyPlan   storage.DailyPlan
+	dailySet    map[string]bool // O(1) lookup for card rendering
+
+	// hidden projects (not shown in tab bar)
+	hiddenProjects map[string]bool
+
+	// project picker overlay
+	projectPicker bool
+	pickerItems   []pickerItem
+	pickerCursor  int
+	pickerInput   textinput.Model
+	pickerFilter  string
 }
 
 func New(store storage.TaskStore, filterProject string) Model {
@@ -169,10 +218,19 @@ func New(store storage.TaskStore, filterProject string) Model {
 		height:         24,
 		projectCounts:  make(map[string]int),
 		hiddenStatuses: make(map[storage.TaskStatus]bool),
+		hiddenProjects: make(map[string]bool),
+		selected:       make(map[string]bool),
+		dailySet:       make(map[string]bool),
+	}
+
+	// load hidden projects from config
+	cfg := loadTUIConfig(store.RootDir())
+	for _, s := range cfg.HiddenProjects {
+		m.hiddenProjects[s] = true
 	}
 
 	projects, _ := store.ListActiveProjects()
-	m.projects = append([]string{"all"}, projects...)
+	m.projects = append([]string{"all"}, applyProjectOrder(projects, cfg.ProjectOrder)...)
 
 	if filterProject != "" {
 		for i, p := range m.projects {
@@ -184,6 +242,8 @@ func New(store storage.TaskStore, filterProject string) Model {
 	}
 
 	m.reload()
+	m.loadDailyPlan()
+	m.handleStalePlan()
 
 	ti := textinput.New()
 	ti.Prompt = "/ "
@@ -200,6 +260,16 @@ func New(store storage.TaskStore, filterProject string) Model {
 	hi.CharLimit = 30
 	m.helpInput = hi
 
+	di := textinput.New()
+	di.Prompt = "/ "
+	di.CharLimit = 100
+	m.detailSearchInput = di
+
+	pi := textinput.New()
+	pi.Prompt = "> "
+	pi.CharLimit = 50
+	m.pickerInput = pi
+
 	if !ProcessStart.IsZero() {
 		m.startupDuration = time.Since(ProcessStart)
 	}
@@ -209,10 +279,64 @@ func New(store storage.TaskStore, filterProject string) Model {
 
 func (m *Model) refreshProjects() {
 	projects, _ := m.store.ListActiveProjects()
-	m.projects = append([]string{"all"}, projects...)
+	cfg := loadTUIConfig(m.store.RootDir())
+	m.projects = append([]string{"all"}, applyProjectOrder(projects, cfg.ProjectOrder)...)
 	if m.activeProject >= len(m.projects) {
 		m.activeProject = 0
 	}
+}
+
+// applyProjectOrder sorts projects according to a saved order. Projects not in order go to the end.
+func applyProjectOrder(projects []string, order []string) []string {
+	if len(order) == 0 {
+		return projects
+	}
+	pos := make(map[string]int, len(order))
+	for i, slug := range order {
+		pos[slug] = i
+	}
+	sorted := make([]string, len(projects))
+	copy(sorted, projects)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		pi, oki := pos[sorted[i]]
+		pj, okj := pos[sorted[j]]
+		if oki && okj {
+			return pi < pj
+		}
+		if oki {
+			return true
+		}
+		return false
+	})
+	return sorted
+}
+
+// visibleProjects returns projects not hidden by the user. "all" is always visible.
+func (m Model) visibleProjects() []string {
+	var result []string
+	for _, p := range m.projects {
+		if p == "all" || !m.hiddenProjects[p] {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// nextVisibleProject finds the next non-hidden project index in direction dir (+1 or -1).
+func (m Model) nextVisibleProject(dir int) int {
+	n := len(m.projects)
+	if n <= 1 {
+		return 0
+	}
+	idx := m.activeProject
+	for i := 0; i < n; i++ {
+		idx = (idx + dir + n) % n
+		p := m.projects[idx]
+		if p == "all" || !m.hiddenProjects[p] {
+			return idx
+		}
+	}
+	return 0
 }
 
 func (m *Model) loadStatuses() {
@@ -253,25 +377,16 @@ func (m *Model) reload() {
 	}
 	m.loadProjectCounts()
 	m.fixCursors()
+
+	// refresh daily plan: remove done/archived/deleted tasks
+	m.loadDailyPlan()
+	allTasks, _ := m.store.GetAllTasks()
+	if m.dailyPlan.Cleanup(allTasks) {
+		m.saveDailyPlan()
+	}
 }
 
 func (m *Model) applyColumnVisibility() {
-	// Auto-hide waiting if empty and not explicitly shown
-	if _, explicit := m.hiddenStatuses[storage.StatusWaiting]; !explicit {
-		hasWaiting := false
-		for _, t := range m.tasks {
-			if t.Meta.Status == storage.StatusWaiting {
-				hasWaiting = true
-				break
-			}
-		}
-		if !hasWaiting {
-			m.hiddenStatuses[storage.StatusWaiting] = true
-		} else {
-			delete(m.hiddenStatuses, storage.StatusWaiting)
-		}
-	}
-
 	var filtered []storage.TaskStatus
 	for _, s := range m.statuses {
 		if !m.hiddenStatuses[s] {
@@ -305,12 +420,8 @@ func (m Model) filteredTasks(status storage.TaskStatus) []*storage.Task {
 		if t.Meta.Status != status {
 			continue
 		}
-		if q != "" {
-			title := strings.ToLower(t.Meta.Title)
-			id := strings.ToLower(t.Meta.ID)
-			if !strings.Contains(title, q) && !strings.Contains(id, q) {
-				continue
-			}
+		if q != "" && !matchesQuery(t, q) {
+			continue
 		}
 		result = append(result, t)
 	}
@@ -326,6 +437,42 @@ func (m Model) filteredTasks(status storage.TaskStatus) []*storage.Task {
 		return result[i].Meta.Updated > result[j].Meta.Updated
 	})
 	return result
+}
+
+// matchesQuery checks if a task matches the search query across all fields.
+// q must be pre-lowercased.
+func matchesQuery(t *storage.Task, q string) bool {
+	if strings.Contains(strings.ToLower(t.Meta.Title), q) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(t.Meta.ID), q) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(t.Body), q) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(t.Meta.Brief), q) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(t.Meta.Branch), q) {
+		return true
+	}
+	for _, tag := range t.Meta.Tags {
+		if strings.Contains(strings.ToLower(tag), q) {
+			return true
+		}
+	}
+	for k, v := range t.Meta.Links {
+		if strings.Contains(strings.ToLower(k), q) || strings.Contains(strings.ToLower(v), q) {
+			return true
+		}
+	}
+	for _, sid := range t.Meta.Sessions {
+		if strings.Contains(strings.ToLower(sid), q) {
+			return true
+		}
+	}
+	return false
 }
 
 // taskIDNum extracts the trailing number from a task ID (e.g. "proj-10" -> 10).
@@ -345,12 +492,8 @@ func (m Model) archivedTasks() []*storage.Task {
 		if t.Meta.Status != storage.StatusArchived {
 			continue
 		}
-		if q != "" {
-			title := strings.ToLower(t.Meta.Title)
-			id := strings.ToLower(t.Meta.ID)
-			if !strings.Contains(title, q) && !strings.Contains(id, q) {
-				continue
-			}
+		if q != "" && !matchesQuery(t, q) {
+			continue
 		}
 		result = append(result, t)
 	}
@@ -389,6 +532,88 @@ func (m Model) selectedTask() *storage.Task {
 		idx = len(tasks) - 1
 	}
 	return tasks[idx]
+}
+
+// markedTasks returns all tasks currently in the selection set.
+func (m Model) markedTasks() []*storage.Task {
+	var result []*storage.Task
+	for _, t := range m.tasks {
+		if m.selected[t.Meta.ID] {
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
+// --- daily plan helpers ---
+
+func (m *Model) rebuildDailySet() {
+	m.dailySet = make(map[string]bool, len(m.dailyPlan.Tasks))
+	for _, id := range m.dailyPlan.Tasks {
+		m.dailySet[id] = true
+	}
+}
+
+func (m *Model) loadDailyPlan() {
+	m.dailyPlan = storage.ReadDailyPlan(m.store.RootDir())
+	m.rebuildDailySet()
+}
+
+func (m *Model) saveDailyPlan() {
+	storage.WriteDailyPlan(m.store.RootDir(), m.dailyPlan)
+}
+
+func (m *Model) handleStalePlan() {
+	if !m.dailyPlan.IsStale() {
+		return
+	}
+	allTasks, _ := m.store.GetAllTasks()
+	m.dailyPlan.Cleanup(allTasks)
+	n := len(m.dailyPlan.Tasks)
+	m.dailyPlan.Date = storage.Today()
+	m.saveDailyPlan()
+	m.rebuildDailySet()
+	if n > 0 {
+		m.toastMsg = fmt.Sprintf("Yesterday's plan carried over (%d tasks)", n)
+		m.toastExpiry = time.Now().Add(4 * time.Second)
+	}
+}
+
+func (m *Model) dailyTasks() []*storage.Task {
+	allTasks, _ := m.store.GetAllTasks()
+	lookup := make(map[string]*storage.Task, len(allTasks))
+	for _, t := range allTasks {
+		lookup[t.Meta.ID] = t
+	}
+	var result []*storage.Task
+	for _, id := range m.dailyPlan.Tasks {
+		if t, ok := lookup[id]; ok {
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
+func (m Model) selectedDailyTask() *storage.Task {
+	tasks := m.dailyTasks()
+	if len(tasks) == 0 {
+		return nil
+	}
+	idx := m.dailyCursor
+	if idx >= len(tasks) {
+		idx = len(tasks) - 1
+	}
+	return tasks[idx]
+}
+
+func (m *Model) fixDailyCursor() {
+	tasks := m.dailyTasks()
+	if m.dailyCursor >= len(tasks) && len(tasks) > 0 {
+		m.dailyCursor = len(tasks) - 1
+	}
+	if len(tasks) == 0 {
+		m.dailyCursor = 0
+	}
 }
 
 type tickMsg time.Time

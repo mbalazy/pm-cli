@@ -33,6 +33,7 @@ type KeyMap struct {
 	ProjectInfo   key.Binding
 	Undo          key.Binding
 	Waiting       key.Binding
+	Select        key.Binding
 	ColumnVis     key.Binding
 	HalfDown      key.Binding
 	HalfUp        key.Binding
@@ -40,6 +41,9 @@ type KeyMap struct {
 	ReorderUp     key.Binding
 	ReorderDown   key.Binding
 	Claude        key.Binding
+	ProjectPicker key.Binding
+	Today         key.Binding
+	ToggleDaily   key.Binding
 }
 
 var Keys = KeyMap{
@@ -73,11 +77,15 @@ var Keys = KeyMap{
 	ProjectInfo:   key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "project info")),
 	Undo:          key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "undo")),
 	Waiting:       key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "mark waiting")),
-	ColumnVis:     key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "toggle columns")),
+	Select:        key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "select mode")),
+	ColumnVis:     key.NewBinding(key.WithKeys("V"), key.WithHelp("V", "toggle columns")),
 	HalfDown:      key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("C-d", "half page down")),
 	HalfUp:        key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("C-u", "half page up")),
 	Zoom:          key.NewBinding(key.WithKeys(";"), key.WithHelp(";", "zoom toggle")),
 	ReorderUp:     key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("C-k", "reorder up")),
 	ReorderDown:   key.NewBinding(key.WithKeys("ctrl+j"), key.WithHelp("C-j", "reorder down")),
 	Claude:        key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "claude code")),
+	ProjectPicker: key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "project picker")),
+	Today:         key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "today")),
+	ToggleDaily:   key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "daily plan")),
 }

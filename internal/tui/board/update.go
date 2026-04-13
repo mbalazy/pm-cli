@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +18,12 @@ import (
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/mbalazy/pm/internal/tui/common"
 )
+
+var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+func stripANSI(s string) string {
+	return ansiRegexp.ReplaceAllString(s, "")
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -31,15 +39,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentView == viewArchive {
 			m.fixArchiveCursor()
 		}
+		if m.currentView == viewDaily {
+			m.fixDailyCursor()
+		}
 		return m, doTick()
 
 	case reloadMsg:
 		m.reload()
 		return m, doTick()
 
+	case tea.MouseMsg:
+		if m.currentView == viewDetail || m.currentView == viewProjectInfo {
+			var cmd tea.Cmd
+			m.detailViewport, cmd = m.detailViewport.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.currentView == viewDetail || m.currentView == viewProjectInfo {
 			return m.updateDetail(msg)
+		}
+		if m.projectPicker {
+			return m.updateProjectPicker(msg)
 		}
 		if m.colVisMenu {
 			return m.updateColVisMenu(msg)
@@ -55,6 +77,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.currentView == viewArchive {
 			return m.updateArchive(msg)
+		}
+		if m.currentView == viewDaily {
+			return m.updateDaily(msg)
 		}
 		if m.showHelp {
 			if m.helpSearch {
@@ -84,6 +109,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.searching {
 			return m.updateSearch(msg)
+		}
+		if m.selecting {
+			return m.updateSelectMode(msg)
 		}
 		return m.updateBoard(msg)
 	}
@@ -173,11 +201,11 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.toastExpiry = time.Now().Add(2 * time.Second)
 
 	case key.Matches(msg, common.Keys.Tab):
-		m.activeProject = (m.activeProject + 1) % len(m.projects)
+		m.activeProject = m.nextVisibleProject(1)
 		m.reload()
 
 	case key.Matches(msg, common.Keys.ShiftTab):
-		m.activeProject = (m.activeProject - 1 + len(m.projects)) % len(m.projects)
+		m.activeProject = m.nextVisibleProject(-1)
 		m.reload()
 
 	case key.Matches(msg, common.Keys.MoveBack):
@@ -197,7 +225,13 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.currentView = viewDetail
 			m.detailTask = t
 			m.detailViewport = viewport.New(m.width, m.height-2)
-			m.detailViewport.SetContent(renderTaskDetail(t, m.width))
+			content := renderTaskDetail(t, m.width)
+			m.detailViewport.SetContent(content)
+			m.detailPlainContent = stripANSI(content)
+			m.detailSearchQuery = ""
+			m.detailSearchMatches = nil
+			m.detailSearchIdx = 0
+			m.detailSearching = false
 		}
 
 	case key.Matches(msg, common.Keys.Edit):
@@ -361,6 +395,12 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.colVisMenu = true
 
+	case key.Matches(msg, common.Keys.Select):
+		m.selecting = true
+		if t := m.selectedTask(); t != nil {
+			m.selected[t.Meta.ID] = true
+		}
+
 	case key.Matches(msg, common.Keys.ReorderDown):
 		m.doReorder(1)
 
@@ -376,6 +416,24 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.openClaudeMenu(t)
+
+	case key.Matches(msg, common.Keys.Today):
+		if t := m.selectedTask(); t != nil {
+			m.dailyPlan.Toggle(t.Meta.ID)
+			if m.dailyPlan.Contains(t.Meta.ID) {
+				m.toastMsg = "Added to today"
+			} else {
+				m.toastMsg = "Removed from today"
+			}
+			m.dailyPlan.Date = storage.Today()
+			m.saveDailyPlan()
+			m.rebuildDailySet()
+			m.toastExpiry = time.Now().Add(2 * time.Second)
+		}
+
+	case key.Matches(msg, common.Keys.ToggleDaily):
+		m.currentView = viewDaily
+		m.dailyCursor = 0
 
 	case key.Matches(msg, common.Keys.Help):
 		m.showHelp = true
@@ -397,11 +455,31 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.addInput.Focus()
 		return m, m.addInput.Cursor.BlinkCmd()
 
+	case key.Matches(msg, common.Keys.ProjectPicker):
+		m.openProjectPicker()
+
 	case key.Matches(msg, common.Keys.Search):
 		m.searching = true
 		m.searchInput.SetValue(m.searchQuery)
 		m.searchInput.Focus()
 		return m, m.searchInput.Cursor.BlinkCmd()
+
+	default:
+		// numeric shortcuts 1-9: jump to visible project by position
+		if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 && msg.Runes[0] >= '1' && msg.Runes[0] <= '9' {
+			n := int(msg.Runes[0] - '0')
+			visible := m.visibleProjects()
+			if n <= len(visible) {
+				target := visible[n-1]
+				for i, p := range m.projects {
+					if p == target {
+						m.activeProject = i
+						m.reload()
+						break
+					}
+				}
+			}
+		}
 	}
 	return m, nil
 }
@@ -426,6 +504,512 @@ func (m Model) updateSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.fixCursors()
 		return m, cmd
 	}
+	return m, nil
+}
+
+func (m *Model) openProjectPicker() {
+	m.pickerItems = nil
+	m.pickerCursor = 0
+	m.pickerFilter = ""
+	m.pickerInput.SetValue("")
+	m.pickerInput.Blur()
+
+	allTasks, _ := m.store.GetAllTasks()
+
+	// aggregate per-project stats
+	type projectStats struct {
+		statusCounts map[storage.TaskStatus]int
+		lastUpdated  string
+	}
+	stats := make(map[string]*projectStats)
+	for _, t := range allTasks {
+		if t.Meta.Status == storage.StatusArchived {
+			continue
+		}
+		s, ok := stats[t.Project]
+		if !ok {
+			s = &projectStats{statusCounts: make(map[storage.TaskStatus]int)}
+			stats[t.Project] = s
+		}
+		s.statusCounts[t.Meta.Status]++
+		if t.Meta.Updated > s.lastUpdated {
+			s.lastUpdated = t.Meta.Updated
+		}
+	}
+
+	for _, slug := range m.projects[1:] { // skip "all"
+		proj, _ := m.store.GetProject(slug)
+		name := slug
+		stack := ""
+		var path, repo string
+		var links map[string]string
+		var tags []string
+		if proj != nil {
+			if proj.Name != "" {
+				name = proj.Name
+			}
+			stack = proj.Stack
+			path = proj.Path
+			repo = proj.Repo
+			links = proj.Links
+			tags = proj.Tags
+		}
+		item := pickerItem{
+			slug:     slug,
+			name:     name,
+			stack:    stack,
+			hidden:   m.hiddenProjects[slug],
+			path:     path,
+			repo:     repo,
+			links:    links,
+			tags:     tags,
+			statuses: m.store.GetProjectStatuses(slug),
+		}
+		if s, ok := stats[slug]; ok {
+			item.statusCounts = s.statusCounts
+			item.lastUpdated = s.lastUpdated
+			total := 0
+			for _, c := range s.statusCounts {
+				total += c
+			}
+			item.taskCount = total
+			item.doingCount = s.statusCounts[storage.ParseStatus("doing")]
+		}
+		m.pickerItems = append(m.pickerItems, item)
+	}
+
+	m.sortPickerItems()
+	m.projectPicker = true
+}
+
+func (m *Model) sortPickerItems() {
+	sort.SliceStable(m.pickerItems, func(i, j int) bool {
+		a, b := m.pickerItems[i], m.pickerItems[j]
+		// only rule: hidden projects sink to the bottom
+		if a.hidden != b.hidden {
+			return !a.hidden
+		}
+		return false // preserve insertion order (from m.projects)
+	})
+}
+
+func (m Model) filteredPickerItems() []pickerItem {
+	if m.pickerFilter == "" {
+		return m.pickerItems
+	}
+	q := strings.ToLower(m.pickerFilter)
+	var result []pickerItem
+	for _, item := range m.pickerItems {
+		if strings.Contains(strings.ToLower(item.name), q) ||
+			strings.Contains(strings.ToLower(item.slug), q) ||
+			strings.Contains(strings.ToLower(item.stack), q) {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func (m *Model) saveTUIState() {
+	var hidden []string
+	for slug, h := range m.hiddenProjects {
+		if h {
+			hidden = append(hidden, slug)
+		}
+	}
+	sort.Strings(hidden)
+	saveTUIConfig(m.store.RootDir(), tuiConfig{
+		HiddenProjects: hidden,
+		ProjectOrder:   m.projects[1:], // skip "all"
+	})
+}
+
+func (m Model) updateProjectPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.yankMenu {
+		return m.updateYankMenu(msg)
+	}
+	// handle filter input mode
+	if m.pickerInput.Focused() {
+		switch {
+		case key.Matches(msg, common.Keys.Enter):
+			m.pickerFilter = m.pickerInput.Value()
+			m.pickerInput.Blur()
+			m.pickerCursor = 0
+			return m, nil
+		case key.Matches(msg, common.Keys.Escape):
+			if m.pickerFilter != "" || m.pickerInput.Value() != "" {
+				m.pickerFilter = ""
+				m.pickerInput.SetValue("")
+				m.pickerInput.Blur()
+				m.pickerCursor = 0
+				return m, nil
+			}
+			m.pickerInput.Blur()
+			m.projectPicker = false
+			return m, nil
+		default:
+			var cmd tea.Cmd
+			m.pickerInput, cmd = m.pickerInput.Update(msg)
+			m.pickerFilter = m.pickerInput.Value()
+			m.pickerCursor = 0
+			return m, cmd
+		}
+	}
+
+	items := m.filteredPickerItems()
+
+	switch {
+	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit):
+		if m.pickerFilter != "" {
+			m.pickerFilter = ""
+			m.pickerInput.SetValue("")
+			m.pickerCursor = 0
+			return m, nil
+		}
+		m.projectPicker = false
+
+	case key.Matches(msg, common.Keys.Up):
+		if m.pickerCursor > 0 {
+			m.pickerCursor--
+		}
+
+	case key.Matches(msg, common.Keys.Down):
+		if m.pickerCursor < len(items)-1 {
+			m.pickerCursor++
+		}
+
+	case key.Matches(msg, common.Keys.Enter):
+		if m.pickerCursor < len(items) {
+			slug := items[m.pickerCursor].slug
+			for i, p := range m.projects {
+				if p == slug {
+					m.activeProject = i
+					break
+				}
+			}
+			m.projectPicker = false
+			m.pickerFilter = ""
+			m.reload()
+		}
+
+	case key.Matches(msg, common.Keys.Space):
+		if m.pickerCursor < len(items) {
+			slug := items[m.pickerCursor].slug
+			if m.hiddenProjects[slug] {
+				delete(m.hiddenProjects, slug)
+			} else {
+				m.hiddenProjects[slug] = true
+			}
+			for i := range m.pickerItems {
+				if m.pickerItems[i].slug == slug {
+					m.pickerItems[i].hidden = m.hiddenProjects[slug]
+				}
+			}
+			m.saveTUIState()
+			m.sortPickerItems()
+			filtered := m.filteredPickerItems()
+			if m.pickerCursor >= len(filtered) {
+				m.pickerCursor = max(0, len(filtered)-1)
+			}
+		}
+
+	case key.Matches(msg, common.Keys.ReorderDown):
+		if m.pickerFilter == "" && m.pickerCursor < len(m.pickerItems)-1 {
+			m.pickerReorder(1)
+			m.saveTUIState()
+		}
+
+	case key.Matches(msg, common.Keys.ReorderUp):
+		if m.pickerFilter == "" && m.pickerCursor > 0 {
+			m.pickerReorder(-1)
+			m.saveTUIState()
+		}
+
+	case key.Matches(msg, common.Keys.Claude):
+		if m.pickerCursor < len(items) {
+			slug := items[m.pickerCursor].slug
+			m.projectPicker = false
+			m.pickerFilter = ""
+			m.openProjectClaudeMenu(slug)
+		}
+
+	case key.Matches(msg, common.Keys.ProjectInfo):
+		if m.pickerCursor < len(items) {
+			slug := items[m.pickerCursor].slug
+			proj, _ := m.store.GetProject(slug)
+			if proj != nil {
+				m.projectPicker = false
+				m.pickerFilter = ""
+				m.previousView = viewBoard
+				m.currentView = viewProjectInfo
+				m.infoProject = proj
+				m.infoSlug = slug
+				m.detailViewport = viewport.New(m.width, m.height-2)
+				m.detailViewport.SetContent(renderProjectInfo(proj, slug, m.width))
+			}
+		}
+
+	case key.Matches(msg, common.Keys.Yank):
+		if m.pickerCursor < len(items) {
+			item := items[m.pickerCursor]
+			if item.path != "" {
+				m.copyToClipboard(item.path)
+			} else {
+				m.copyToClipboard(item.slug)
+			}
+		}
+
+	case key.Matches(msg, common.Keys.YankMenu):
+		if m.pickerCursor < len(items) {
+			item := items[m.pickerCursor]
+			m.yankItems = nil
+			m.yankCursor = 0
+			m.yankItems = append(m.yankItems, yankItem{"slug", item.slug})
+			m.yankItems = append(m.yankItems, yankItem{"name", item.name})
+			if item.path != "" {
+				m.yankItems = append(m.yankItems, yankItem{"path", item.path})
+			}
+			if item.repo != "" {
+				m.yankItems = append(m.yankItems, yankItem{"repo", item.repo})
+			}
+			if item.stack != "" {
+				m.yankItems = append(m.yankItems, yankItem{"stack", item.stack})
+			}
+			for name, url := range item.links {
+				m.yankItems = append(m.yankItems, yankItem{"link: " + name, url})
+			}
+			if len(item.tags) > 0 {
+				m.yankItems = append(m.yankItems, yankItem{"tags", strings.Join(item.tags, ", ")})
+			}
+			if len(m.yankItems) > 0 {
+				m.yankMenu = true
+			}
+		}
+
+	case key.Matches(msg, common.Keys.Search):
+		m.pickerInput.SetValue(m.pickerFilter)
+		m.pickerInput.Focus()
+		return m, m.pickerInput.Cursor.BlinkCmd()
+	}
+
+	return m, nil
+}
+
+func (m *Model) pickerReorder(dir int) {
+	target := m.pickerCursor + dir
+	if target < 0 || target >= len(m.pickerItems) {
+		return
+	}
+	// don't swap across hidden/visible boundary
+	if m.pickerItems[m.pickerCursor].hidden != m.pickerItems[target].hidden {
+		return
+	}
+	// swap in picker
+	m.pickerItems[m.pickerCursor], m.pickerItems[target] = m.pickerItems[target], m.pickerItems[m.pickerCursor]
+	m.pickerCursor = target
+
+	// rebuild m.projects from picker order (visible first, then hidden - matching picker)
+	newProjects := []string{"all"}
+	for _, item := range m.pickerItems {
+		newProjects = append(newProjects, item.slug)
+	}
+	// preserve activeProject by slug
+	activeSlug := ""
+	if m.activeProject > 0 && m.activeProject < len(m.projects) {
+		activeSlug = m.projects[m.activeProject]
+	}
+	m.projects = newProjects
+	if activeSlug != "" {
+		for i, p := range m.projects {
+			if p == activeSlug {
+				m.activeProject = i
+				break
+			}
+		}
+	}
+}
+
+func (m Model) updateSelectMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Confirmation for bulk delete
+	if m.confirmAction == "delete-selected" {
+		if key.Matches(msg, common.Keys.Delete) {
+			tasks := m.markedTasks()
+			count := 0
+			for _, t := range tasks {
+				m.store.DeleteTask(t)
+				count++
+			}
+			m.confirmAction = ""
+			m.selecting = false
+			m.selected = make(map[string]bool)
+			m.reload()
+			m.toastMsg = fmt.Sprintf("Deleted %d tasks", count)
+			m.toastExpiry = time.Now().Add(2 * time.Second)
+			return m, nil
+		}
+		m.confirmAction = ""
+		return m, nil
+	}
+
+	switch {
+	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit):
+		m.selecting = false
+		m.selected = make(map[string]bool)
+
+	// Navigation - same as board
+	case key.Matches(msg, common.Keys.Up):
+		if m.cursors[m.activeCol] > 0 {
+			m.cursors[m.activeCol]--
+			m.fixScrollOffsets()
+		}
+	case key.Matches(msg, common.Keys.Down):
+		tasks := m.columnTasks(m.activeCol)
+		if m.cursors[m.activeCol] < len(tasks)-1 {
+			m.cursors[m.activeCol]++
+			m.fixScrollOffsets()
+		}
+	case key.Matches(msg, common.Keys.Left):
+		if m.activeCol > 0 {
+			m.activeCol--
+		}
+	case key.Matches(msg, common.Keys.Right):
+		if m.activeCol < len(m.statuses)-1 {
+			m.activeCol++
+		}
+	case key.Matches(msg, common.Keys.JumpTop):
+		m.cursors[m.activeCol] = 0
+		m.fixScrollOffsets()
+	case key.Matches(msg, common.Keys.JumpBottom):
+		tasks := m.columnTasks(m.activeCol)
+		if len(tasks) > 0 {
+			m.cursors[m.activeCol] = len(tasks) - 1
+			m.fixScrollOffsets()
+		}
+
+	// Toggle selection
+	case key.Matches(msg, common.Keys.Space), key.Matches(msg, common.Keys.Select):
+		if t := m.selectedTask(); t != nil {
+			if m.selected[t.Meta.ID] {
+				delete(m.selected, t.Meta.ID)
+			} else {
+				m.selected[t.Meta.ID] = true
+			}
+		}
+
+	// Bulk actions
+	case key.Matches(msg, common.Keys.Move):
+		tasks := m.markedTasks()
+		if len(tasks) > 0 {
+			for _, t := range tasks {
+				idx := m.statusIndex(t.Meta.Status)
+				m.store.MoveTask(t, m.statuses[(idx+1)%len(m.statuses)])
+			}
+			m.selecting = false
+			m.selected = make(map[string]bool)
+			m.reload()
+			m.toastMsg = fmt.Sprintf("Moved %d tasks forward", len(tasks))
+			m.toastExpiry = time.Now().Add(2 * time.Second)
+		}
+
+	case key.Matches(msg, common.Keys.MoveBack):
+		tasks := m.markedTasks()
+		if len(tasks) > 0 {
+			for _, t := range tasks {
+				idx := m.statusIndex(t.Meta.Status)
+				var newStatus storage.TaskStatus
+				if idx > 0 {
+					newStatus = m.statuses[idx-1]
+				} else {
+					newStatus = m.statuses[len(m.statuses)-1]
+				}
+				m.store.MoveTask(t, newStatus)
+			}
+			m.selecting = false
+			m.selected = make(map[string]bool)
+			m.reload()
+			m.toastMsg = fmt.Sprintf("Moved %d tasks back", len(tasks))
+			m.toastExpiry = time.Now().Add(2 * time.Second)
+		}
+
+	case key.Matches(msg, common.Keys.Done):
+		tasks := m.markedTasks()
+		if len(tasks) > 0 {
+			for _, t := range tasks {
+				m.store.MoveTask(t, m.statuses[len(m.statuses)-1])
+			}
+			m.selecting = false
+			m.selected = make(map[string]bool)
+			m.reload()
+			m.toastMsg = fmt.Sprintf("Marked %d tasks done", len(tasks))
+			m.toastExpiry = time.Now().Add(2 * time.Second)
+		}
+
+	case key.Matches(msg, common.Keys.Waiting):
+		tasks := m.markedTasks()
+		if len(tasks) > 0 {
+			for _, t := range tasks {
+				m.store.MoveTask(t, storage.StatusWaiting)
+			}
+			m.selecting = false
+			m.selected = make(map[string]bool)
+			m.reload()
+			m.toastMsg = fmt.Sprintf("Marked %d tasks waiting", len(tasks))
+			m.toastExpiry = time.Now().Add(2 * time.Second)
+		}
+
+	case key.Matches(msg, common.Keys.Archive):
+		tasks := m.markedTasks()
+		if len(tasks) > 0 {
+			for _, t := range tasks {
+				m.store.MoveTask(t, storage.StatusArchived)
+			}
+			m.selecting = false
+			m.selected = make(map[string]bool)
+			m.reload()
+			m.toastMsg = fmt.Sprintf("Archived %d tasks", len(tasks))
+			m.toastExpiry = time.Now().Add(2 * time.Second)
+		}
+
+	case key.Matches(msg, common.Keys.Delete):
+		if len(m.selected) > 0 {
+			m.confirmAction = "delete-selected"
+		}
+
+	case key.Matches(msg, common.Keys.Yank):
+		tasks := m.markedTasks()
+		if len(tasks) > 0 {
+			var ids []string
+			for _, t := range tasks {
+				ids = append(ids, t.Meta.ID)
+			}
+			m.copyToClipboard(strings.Join(ids, "\n"))
+		}
+
+	case key.Matches(msg, common.Keys.YankMenu):
+		tasks := m.markedTasks()
+		if len(tasks) > 0 {
+			var ids, titles, idTitles, branches, paths []string
+			for _, t := range tasks {
+				ids = append(ids, t.Meta.ID)
+				titles = append(titles, t.Meta.Title)
+				idTitles = append(idTitles, t.Meta.ID+": "+t.Meta.Title)
+				if t.Meta.Branch != "" {
+					branches = append(branches, t.Meta.Branch)
+				}
+				paths = append(paths, t.FilePath)
+			}
+			m.yankItems = nil
+			m.yankCursor = 0
+			m.yankItems = append(m.yankItems, yankItem{"IDs", strings.Join(ids, "\n")})
+			m.yankItems = append(m.yankItems, yankItem{"titles", strings.Join(titles, "\n")})
+			m.yankItems = append(m.yankItems, yankItem{"IDs + titles", strings.Join(idTitles, "\n")})
+			if len(branches) > 0 {
+				m.yankItems = append(m.yankItems, yankItem{"branches", strings.Join(branches, "\n")})
+			}
+			m.yankItems = append(m.yankItems, yankItem{"file paths", strings.Join(paths, "\n")})
+			m.yankMenu = true
+		}
+	}
+
 	return m, nil
 }
 
@@ -509,6 +1093,11 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateSessionMenu(msg)
 	}
 
+	// Detail search input mode
+	if m.detailSearching {
+		return m.updateDetailSearch(msg)
+	}
+
 	// Project info view: close, scroll, yank, links
 	if m.currentView == viewProjectInfo {
 		switch {
@@ -550,6 +1139,11 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.linksMenu = true
 			}
 			return m, nil
+		case key.Matches(msg, common.Keys.Claude):
+			if m.infoSlug != "" {
+				m.openProjectClaudeMenu(m.infoSlug)
+			}
+			return m, nil
 		}
 		var cmd tea.Cmd
 		m.detailViewport, cmd = m.detailViewport.Update(msg)
@@ -558,9 +1152,46 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	t := m.detailTask
 	switch {
-	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit), key.Matches(msg, common.Keys.Open), key.Matches(msg, common.Keys.Space):
+	case key.Matches(msg, common.Keys.Escape):
+		if m.detailSearchQuery != "" {
+			m.detailSearchQuery = ""
+			m.detailSearchMatches = nil
+			// Restore original content (remove highlights)
+			if t != nil {
+				content := renderTaskDetail(t, m.width)
+				m.detailViewport.SetContent(content)
+			}
+			return m, nil
+		}
 		m.currentView = m.previousView
 		m.reload()
+		return m, nil
+
+	case key.Matches(msg, common.Keys.Quit), key.Matches(msg, common.Keys.Open), key.Matches(msg, common.Keys.Space):
+		m.currentView = m.previousView
+		m.reload()
+		return m, nil
+
+	case key.Matches(msg, common.Keys.Search):
+		m.detailSearching = true
+		m.detailSearchInput.SetValue(m.detailSearchQuery)
+		m.detailSearchInput.Focus()
+		return m, m.detailSearchInput.Cursor.BlinkCmd()
+
+	case msg.String() == "n":
+		if len(m.detailSearchMatches) > 0 {
+			m.detailSearchIdx = (m.detailSearchIdx + 1) % len(m.detailSearchMatches)
+			m.applySearchHighlights()
+			m.detailViewport.SetYOffset(m.detailSearchMatches[m.detailSearchIdx])
+		}
+		return m, nil
+
+	case msg.String() == "N":
+		if len(m.detailSearchMatches) > 0 {
+			m.detailSearchIdx = (m.detailSearchIdx - 1 + len(m.detailSearchMatches)) % len(m.detailSearchMatches)
+			m.applySearchHighlights()
+			m.detailViewport.SetYOffset(m.detailSearchMatches[m.detailSearchIdx])
+		}
 		return m, nil
 
 	case key.Matches(msg, common.Keys.Yank):
@@ -680,6 +1311,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.detailTask = reloaded
 				content := renderTaskDetail(reloaded, m.width)
 				m.detailViewport.SetContent(content)
+				m.detailPlainContent = stripANSI(content)
 				m.toastMsg = "Refreshed"
 				m.toastExpiry = time.Now().Add(2 * time.Second)
 			}
@@ -691,6 +1323,153 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+func (m Model) updateDetailSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, common.Keys.Enter):
+		m.detailSearching = false
+		m.detailSearchQuery = m.detailSearchInput.Value()
+		m.detailSearchInput.Blur()
+		m.computeDetailSearchMatches()
+		if len(m.detailSearchMatches) > 0 {
+			m.detailSearchIdx = 0
+			m.detailViewport.SetYOffset(m.detailSearchMatches[0])
+		}
+	case key.Matches(msg, common.Keys.Escape):
+		m.detailSearching = false
+		m.detailSearchQuery = ""
+		m.detailSearchMatches = nil
+		m.detailSearchInput.SetValue("")
+		m.detailSearchInput.Blur()
+		// Restore original content (remove highlights)
+		if m.detailTask != nil {
+			content := renderTaskDetail(m.detailTask, m.width)
+			m.detailViewport.SetContent(content)
+		}
+	default:
+		var cmd tea.Cmd
+		m.detailSearchInput, cmd = m.detailSearchInput.Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
+
+func (m *Model) computeDetailSearchMatches() {
+	m.detailSearchMatches = nil
+	m.detailSearchIdx = 0
+	q := strings.ToLower(m.detailSearchQuery)
+	if q == "" {
+		// Restore original content (remove highlights)
+		if m.detailTask != nil {
+			content := renderTaskDetail(m.detailTask, m.width)
+			m.detailViewport.SetContent(content)
+		}
+		return
+	}
+	plainLines := strings.Split(m.detailPlainContent, "\n")
+	for i, line := range plainLines {
+		if strings.Contains(strings.ToLower(line), q) {
+			m.detailSearchMatches = append(m.detailSearchMatches, i)
+		}
+	}
+
+	// Apply highlighting to rendered content
+	m.applySearchHighlights()
+}
+
+// applySearchHighlights re-renders the viewport content with search highlights.
+// The active match line gets a distinct color (cyan), others get yellow.
+func (m *Model) applySearchHighlights() {
+	if m.detailTask == nil || m.detailSearchQuery == "" {
+		return
+	}
+	original := renderTaskDetail(m.detailTask, m.width)
+	renderedLines := strings.Split(original, "\n")
+	q := strings.ToLower(m.detailSearchQuery)
+
+	// Determine which line is the active match
+	activeLine := -1
+	if len(m.detailSearchMatches) > 0 && m.detailSearchIdx < len(m.detailSearchMatches) {
+		activeLine = m.detailSearchMatches[m.detailSearchIdx]
+	}
+
+	var highlighted []string
+	for i, line := range renderedLines {
+		highlighted = append(highlighted, highlightSearchTerm(line, q, i == activeLine))
+	}
+	m.detailViewport.SetContent(strings.Join(highlighted, "\n"))
+}
+
+// highlightSearchTerm highlights occurrences of query in a line that may contain ANSI codes.
+// active=true uses cyan highlight for the current match, false uses yellow for others.
+func highlightSearchTerm(line, query string, active bool) string {
+	plain := stripANSI(line)
+	lowerPlain := strings.ToLower(plain)
+	if !strings.Contains(lowerPlain, query) {
+		return line
+	}
+
+	// Build a mapping from plain-text index to original-string index
+	plainToOrig := make([]int, len(plain))
+	pi := 0
+	for i := 0; i < len(line); {
+		if line[i] == '\x1b' && i+1 < len(line) && line[i+1] == '[' {
+			j := i + 2
+			for j < len(line) && !((line[j] >= 'A' && line[j] <= 'Z') || (line[j] >= 'a' && line[j] <= 'z')) {
+				j++
+			}
+			if j < len(line) {
+				j++
+			}
+			i = j
+			continue
+		}
+		if pi < len(plain) {
+			plainToOrig[pi] = i
+			pi++
+		}
+		i++
+	}
+
+	// Find all match positions in plain text
+	type match struct{ start, end int }
+	var matches []match
+	pos := 0
+	for {
+		idx := strings.Index(lowerPlain[pos:], query)
+		if idx < 0 {
+			break
+		}
+		start := pos + idx
+		matches = append(matches, match{start, start + len(query)})
+		pos = start + len(query)
+	}
+	if len(matches) == 0 {
+		return line
+	}
+
+	hlOn := "\x1b[30;43m" // black on yellow (inactive)
+	if active {
+		hlOn = "\x1b[30;46m" // black on cyan (active)
+	}
+	hlOff := "\x1b[0m"
+	var result strings.Builder
+	lastOrig := 0
+	for _, m := range matches {
+		origStart := plainToOrig[m.start]
+		origEnd := len(line)
+		if m.end < len(plainToOrig) {
+			origEnd = plainToOrig[m.end]
+		}
+		result.WriteString(line[lastOrig:origStart])
+		result.WriteString(hlOn)
+		result.WriteString(line[origStart:origEnd])
+		result.WriteString(hlOff)
+		lastOrig = origEnd
+	}
+	result.WriteString(line[lastOrig:])
+	return result.String()
 }
 
 func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -772,16 +1551,22 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.currentView = viewDetail
 			m.detailTask = t
 			m.detailViewport = viewport.New(m.width, m.height-2)
-			m.detailViewport.SetContent(renderTaskDetail(t, m.width))
+			content := renderTaskDetail(t, m.width)
+			m.detailViewport.SetContent(content)
+			m.detailPlainContent = stripANSI(content)
+			m.detailSearchQuery = ""
+			m.detailSearchMatches = nil
+			m.detailSearchIdx = 0
+			m.detailSearching = false
 		}
 
 	case key.Matches(msg, common.Keys.Tab):
-		m.activeProject = (m.activeProject + 1) % len(m.projects)
+		m.activeProject = m.nextVisibleProject(1)
 		m.reload()
 		m.archiveCursor = 0
 
 	case key.Matches(msg, common.Keys.ShiftTab):
-		m.activeProject = (m.activeProject - 1 + len(m.projects)) % len(m.projects)
+		m.activeProject = m.nextVisibleProject(-1)
 		m.reload()
 		m.archiveCursor = 0
 
@@ -794,6 +1579,149 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searchInput.SetValue(m.searchQuery)
 		m.searchInput.Focus()
 		return m, m.searchInput.Cursor.BlinkCmd()
+	}
+	return m, nil
+}
+
+func (m Model) updateDaily(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.ToggleDaily):
+		m.currentView = viewBoard
+		return m, nil
+
+	case key.Matches(msg, common.Keys.Quit):
+		m.currentView = viewBoard
+		return m, nil
+
+	case key.Matches(msg, common.Keys.Up):
+		if m.dailyCursor > 0 {
+			m.dailyCursor--
+		}
+
+	case key.Matches(msg, common.Keys.Down):
+		tasks := m.dailyTasks()
+		if m.dailyCursor < len(tasks)-1 {
+			m.dailyCursor++
+		}
+
+	case key.Matches(msg, common.Keys.JumpTop):
+		m.dailyCursor = 0
+
+	case key.Matches(msg, common.Keys.JumpBottom):
+		tasks := m.dailyTasks()
+		if len(tasks) > 0 {
+			m.dailyCursor = len(tasks) - 1
+		}
+
+	case key.Matches(msg, common.Keys.Enter), key.Matches(msg, common.Keys.Open), key.Matches(msg, common.Keys.Space):
+		t := m.selectedDailyTask()
+		if t != nil {
+			m.previousView = viewDaily
+			m.currentView = viewDetail
+			m.detailTask = t
+			m.detailViewport = viewport.New(m.width, m.height-2)
+			content := renderTaskDetail(t, m.width)
+			m.detailViewport.SetContent(content)
+			m.detailPlainContent = stripANSI(content)
+			m.detailSearchQuery = ""
+			m.detailSearchMatches = nil
+			m.detailSearchIdx = 0
+			m.detailSearching = false
+		}
+
+	case key.Matches(msg, common.Keys.Today), key.Matches(msg, common.Keys.Delete):
+		t := m.selectedDailyTask()
+		if t != nil {
+			m.dailyPlan.Remove(t.Meta.ID)
+			m.dailyPlan.Date = storage.Today()
+			m.saveDailyPlan()
+			m.rebuildDailySet()
+			m.fixDailyCursor()
+			m.toastMsg = "Removed from today"
+			m.toastExpiry = time.Now().Add(2 * time.Second)
+		}
+
+	case key.Matches(msg, common.Keys.ReorderDown):
+		tasks := m.dailyTasks()
+		if m.dailyCursor < len(tasks)-1 {
+			m.dailyPlan.Swap(m.dailyCursor, m.dailyCursor+1)
+			m.dailyCursor++
+			m.saveDailyPlan()
+		}
+
+	case key.Matches(msg, common.Keys.ReorderUp):
+		tasks := m.dailyTasks()
+		if len(tasks) > 0 && m.dailyCursor > 0 {
+			m.dailyPlan.Swap(m.dailyCursor, m.dailyCursor-1)
+			m.dailyCursor--
+			m.saveDailyPlan()
+		}
+
+	case key.Matches(msg, common.Keys.Move):
+		if t := m.selectedDailyTask(); t != nil {
+			m.doMoveForward(t)
+			m.fixDailyCursor()
+		}
+
+	case key.Matches(msg, common.Keys.MoveBack):
+		if t := m.selectedDailyTask(); t != nil {
+			m.doMoveBack(t)
+			m.fixDailyCursor()
+		}
+
+	case key.Matches(msg, common.Keys.Done):
+		if t := m.selectedDailyTask(); t != nil {
+			m.doDone(t)
+			m.dailyPlan.Remove(t.Meta.ID)
+			m.saveDailyPlan()
+			m.rebuildDailySet()
+			m.fixDailyCursor()
+		}
+
+	case key.Matches(msg, common.Keys.Waiting):
+		if t := m.selectedDailyTask(); t != nil {
+			m.doWaiting(t)
+			m.fixDailyCursor()
+		}
+
+	case key.Matches(msg, common.Keys.Undo):
+		m.doUndo()
+		m.fixDailyCursor()
+
+	case key.Matches(msg, common.Keys.Claude):
+		if t := m.selectedDailyTask(); t != nil {
+			m.openClaudeMenu(t)
+		}
+
+	case key.Matches(msg, common.Keys.Yank):
+		if t := m.selectedDailyTask(); t != nil && t.Meta.ID != "" {
+			m.copyToClipboard(t.Meta.ID)
+		}
+
+	case key.Matches(msg, common.Keys.YankMenu):
+		t := m.selectedDailyTask()
+		if t != nil {
+			m.yankItems = nil
+			m.yankCursor = 0
+			if t.Meta.Branch != "" {
+				m.yankItems = append(m.yankItems, yankItem{"branch", t.Meta.Branch})
+			}
+			m.yankItems = append(m.yankItems, yankItem{"id", t.Meta.ID})
+			m.yankItems = append(m.yankItems, yankItem{"title", t.Meta.Title})
+			m.yankItems = append(m.yankItems, yankItem{"path", t.FilePath})
+			if sid := lastSession(t); sid != "" {
+				m.yankItems = append(m.yankItems, yankItem{"session", sid})
+			}
+			for name, url := range t.Meta.Links {
+				m.yankItems = append(m.yankItems, yankItem{"link: " + name, url})
+			}
+			if len(m.yankItems) > 0 {
+				m.yankMenu = true
+			}
+		}
+
+	case key.Matches(msg, common.Keys.Zoom):
+		m.zoomed = !m.zoomed
 	}
 	return m, nil
 }
@@ -835,7 +1763,9 @@ func (m Model) updateLinksMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.linksCursor < len(m.linkItems) {
 			exec.Command("open", m.linkItems[m.linksCursor].url).Start()
 		}
-		m.linksMenu = false
+		if len(m.linkItems) <= 1 {
+			m.linksMenu = false
+		}
 	case msg.String() == "y":
 		if m.linksCursor < len(m.linkItems) {
 			m.copyToClipboard(m.linkItems[m.linksCursor].url)
@@ -937,8 +1867,21 @@ func (m Model) updateSessionMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case msg.String() == "y":
 		if m.sessionCursor < len(m.sessionMenuItems) {
-			m.copyToClipboard(m.sessionMenuItems[m.sessionCursor].sessionID)
-			m.sessionMenu = false
+			sid := m.sessionMenuItems[m.sessionCursor].sessionID
+			m.yankItems = nil
+			m.yankCursor = 0
+			m.yankItems = append(m.yankItems, yankItem{"id", sid})
+			t := m.selectedTask()
+			if t != nil {
+				var projDir string
+				if proj, err := m.store.GetProject(t.Project); err == nil && proj.Path != "" {
+					projDir = proj.Path
+				}
+				if p := resolveSessionPath(projDir, sid); p != "" {
+					m.yankItems = append(m.yankItems, yankItem{"path", p})
+				}
+			}
+			m.yankMenu = true
 		}
 	case msg.String() == "x":
 		if m.sessionCursor >= len(m.sessionMenuItems) {
@@ -975,7 +1918,9 @@ func (m Model) updateSessionMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.toastMsg = "Deleted session " + sid[:8] + "..."
 			m.toastExpiry = time.Now().Add(2 * time.Second)
-			m.detailViewport.SetContent(renderTaskDetail(t, m.width))
+			content := renderTaskDetail(t, m.width)
+			m.detailViewport.SetContent(content)
+			m.detailPlainContent = stripANSI(content)
 		} else {
 			// First press - ask for confirmation
 			m.confirmAction = "delete-session"
@@ -1100,9 +2045,9 @@ func (m *Model) fixScrollOffsets() {
 		measure := func(j int) int {
 			var card string
 			if m.zoomed {
-				card = renderZoomCard(tasks[j], cardW, false)
+				card = renderZoomCard(tasks[j], cardW, false, "")
 			} else {
-				card = renderCard(tasks[j], cardW, false)
+				card = renderCard(tasks[j], cardW, false, "")
 			}
 			return strings.Count(card, "\n") + 1
 		}
@@ -1281,16 +2226,17 @@ func (m *Model) openClaudeMenu(t *storage.Task) {
 		if inTmux {
 			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
 		}
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree (here)", "worktree", "w"})
-		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree + tmux", "worktree-tmux", "W"})
-		}
 		if hasSession {
 			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume session", "resume", "r"})
 			if inTmux {
 				m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume in tmux", "resume-tmux", "R"})
 			}
 		}
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree (here)", "worktree", "w"})
+		if inTmux {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree + tmux", "worktree-tmux", "W"})
+		}
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Project scope (no task)", "project", "p"})
 		// Smart default: tmux if available, else here
 		if inTmux {
 			for i, item := range m.claudeMenuItems {
@@ -1300,6 +2246,24 @@ func (m *Model) openClaudeMenu(t *storage.Task) {
 				}
 			}
 		}
+	}
+	m.claudeMenu = true
+}
+
+func (m *Model) openProjectClaudeMenu(slug string) {
+	inTmux := os.Getenv("TMUX") != ""
+	m.claudeMenuItems = nil
+	m.claudeMenuCursor = 0
+	m.claudeMenuSkipPerms = false
+	m.resumeOnly = false
+	m.forkMode = false
+	m.projectScopeLaunch = true
+	m.projectScopeSlug = slug
+
+	m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
+	if inTmux {
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
+		m.claudeMenuCursor = 1
 	}
 	m.claudeMenu = true
 }
@@ -1328,6 +2292,8 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.resumeOnly = false
 		m.forkMode = false
 		m.resumeSessionID = ""
+		m.projectScopeLaunch = false
+		m.projectScopeSlug = ""
 	case key.Matches(msg, common.Keys.Up):
 		if m.claudeMenuCursor > 0 {
 			m.claudeMenuCursor--
@@ -1355,6 +2321,28 @@ func worktreeName(t *storage.Task) string {
 		return t.Meta.Branch
 	}
 	return storage.Slugify(t.Meta.Title)
+}
+
+func tmuxWindowName(prefix, taskID, sessionID string) string {
+	short := sessionID
+	if len(short) > 4 {
+		short = short[:4]
+	}
+	return fmt.Sprintf("%s:%s:%s", prefix, short, taskID)
+}
+
+func tmuxGetWindowName() string {
+	out, err := exec.Command("tmux", "display-message", "-p", "#W").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func tmuxRenameWindow(name string) {
+	if name != "" {
+		exec.Command("tmux", "rename-window", name).Run()
+	}
 }
 
 // copyWorktreeFiles pre-creates a git worktree (if needed) and copies all
@@ -1401,7 +2389,71 @@ func copyWorktreeFiles(projDir, wtName string) {
 	}
 }
 
+func (m Model) launchProjectClaude(kind string) (tea.Model, tea.Cmd) {
+	m.projectScopeLaunch = false
+	slug := m.projectScopeSlug
+	m.projectScopeSlug = ""
+
+	proj, err := m.store.GetProject(slug)
+	if err != nil || proj == nil {
+		return m, nil
+	}
+
+	prompt := buildProjectPrompt(proj, slug)
+	skipFlag := ""
+	if m.claudeMenuSkipPerms {
+		skipFlag = "--dangerously-skip-permissions"
+	}
+
+	var projDir string
+	if proj.Path != "" {
+		if info, err := os.Stat(proj.Path); err == nil && info.IsDir() {
+			projDir = proj.Path
+		}
+	}
+
+	sessionID := generateSessionID()
+
+	switch kind {
+	case "here":
+		args := []string{"--session-id", sessionID}
+		if skipFlag != "" {
+			args = append(args, skipFlag)
+		}
+		args = append(args, prompt)
+		c := exec.Command("claude", args...)
+		if projDir != "" {
+			c.Dir = projDir
+		}
+		origWin := tmuxGetWindowName()
+		tmuxRenameWindow(tmuxWindowName("cc", slug, sessionID))
+		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			tmuxRenameWindow(origWin)
+			return reloadMsg{}
+		})
+
+	case "tmux":
+		withCd := func(cmd string) string {
+			if projDir != "" {
+				return fmt.Sprintf("cd %s && %s", shellQuote(projDir), cmd)
+			}
+			return cmd
+		}
+		shellCmd := withCd(fmt.Sprintf("claude --session-id %s %s %s", sessionID, skipFlag, shellQuote(prompt)))
+		winName := fmt.Sprintf("cc:%s:%s", sessionID[:4], slug)
+		exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start()
+		m.toastMsg = "Launched in tmux: " + winName
+		m.toastExpiry = time.Now().Add(3 * time.Second)
+	}
+
+	return m, nil
+}
+
 func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
+	if m.projectScopeLaunch {
+		return m.launchProjectClaude(kind)
+	}
+
 	t := m.selectedTask()
 	if t == nil {
 		return m, nil
@@ -1463,6 +2515,10 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	}
 
 	switch kind {
+	case "project":
+		m.openProjectClaudeMenu(t.Project)
+		return m, nil
+
 	case "here":
 		sessionID := generateSessionID()
 		m.saveSession(t, sessionID)
@@ -1473,7 +2529,10 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		args = append(args, prompt)
 		c := exec.Command("claude", args...)
 		setDir(c)
+		origWin := tmuxGetWindowName()
+		tmuxRenameWindow(tmuxWindowName("cc", t.Meta.ID, sessionID))
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			tmuxRenameWindow(origWin)
 			return reloadMsg{}
 		})
 
@@ -1481,8 +2540,9 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		sessionID := generateSessionID()
 		m.saveSession(t, sessionID)
 		shellCmd := withCd(fmt.Sprintf("claude --session-id %s %s %s", sessionID, skipFlag, shellQuote(prompt)))
-		exec.Command("tmux", "new-window", "-n", "cc:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
-		m.toastMsg = "Launched in tmux: cc:" + t.Meta.ID
+		winName := tmuxWindowName("cc", t.Meta.ID, sessionID)
+		exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start()
+		m.toastMsg = "Launched in tmux: " + winName
 		m.toastExpiry = time.Now().Add(3 * time.Second)
 
 	case "worktree":
@@ -1499,7 +2559,10 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		args = append(args, prompt)
 		c := exec.Command("claude", args...)
 		setDir(c)
+		origWin := tmuxGetWindowName()
+		tmuxRenameWindow(tmuxWindowName("wt", t.Meta.ID, sessionID))
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			tmuxRenameWindow(origWin)
 			return reloadMsg{}
 		})
 
@@ -1511,8 +2574,9 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 			copyWorktreeFiles(projDir, wtName)
 		}
 		shellCmd := withCd(fmt.Sprintf("claude -w %s --session-id %s %s %s", shellQuote(wtName), sessionID, skipFlag, shellQuote(prompt)))
-		exec.Command("tmux", "new-window", "-n", "wt:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
-		m.toastMsg = "Launched worktree in tmux: wt:" + t.Meta.ID
+		winName := tmuxWindowName("wt", t.Meta.ID, sessionID)
+		exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start()
+		m.toastMsg = "Launched worktree in tmux: " + winName
 		m.toastExpiry = time.Now().Add(3 * time.Second)
 
 	case "resume":
@@ -1527,7 +2591,10 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 		c := exec.Command("claude", args...)
 		setResumeDir(c)
+		origWin := tmuxGetWindowName()
+		tmuxRenameWindow(tmuxWindowName("cc", t.Meta.ID, sessionID))
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			tmuxRenameWindow(origWin)
 			return reloadMsg{}
 		})
 
@@ -1538,37 +2605,46 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 		m.resumeSessionID = ""
 		shellCmd := withResumeCd(fmt.Sprintf("claude --resume %s %s", sessionID, skipFlag))
-		exec.Command("tmux", "new-window", "-n", "cc:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
-		m.toastMsg = "Resumed in tmux: cc:" + t.Meta.ID
+		winName := tmuxWindowName("cc", t.Meta.ID, sessionID)
+		exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start()
+		m.toastMsg = "Resumed in tmux: " + winName
 		m.toastExpiry = time.Now().Add(3 * time.Second)
 
 	case "fork":
-		sessionID := m.resumeSessionID
-		if sessionID == "" {
-			sessionID = lastSession(t)
+		parentID := m.resumeSessionID
+		if parentID == "" {
+			parentID = lastSession(t)
 		}
 		m.resumeSessionID = ""
 		m.forkMode = false
-		args := []string{"--resume", sessionID, "--fork-session"}
+		newID := generateSessionID()
+		m.saveSession(t, newID)
+		args := []string{"--resume", parentID, "--fork-session", "--session-id", newID}
 		if skipFlag != "" {
 			args = append(args, skipFlag)
 		}
 		c := exec.Command("claude", args...)
 		setResumeDir(c)
+		origWin := tmuxGetWindowName()
+		tmuxRenameWindow(tmuxWindowName("cc", t.Meta.ID, newID))
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			tmuxRenameWindow(origWin)
 			return reloadMsg{}
 		})
 
 	case "fork-tmux":
-		sessionID := m.resumeSessionID
-		if sessionID == "" {
-			sessionID = lastSession(t)
+		parentID := m.resumeSessionID
+		if parentID == "" {
+			parentID = lastSession(t)
 		}
 		m.resumeSessionID = ""
 		m.forkMode = false
-		shellCmd := withResumeCd(fmt.Sprintf("claude --resume %s --fork-session %s", sessionID, skipFlag))
-		exec.Command("tmux", "new-window", "-n", "cc:"+t.Meta.ID, "sh", "-c", shellCmd).Start()
-		m.toastMsg = "Forked in tmux: cc:" + t.Meta.ID
+		newID := generateSessionID()
+		m.saveSession(t, newID)
+		shellCmd := withResumeCd(fmt.Sprintf("claude --resume %s --fork-session --session-id %s %s", parentID, newID, skipFlag))
+		winName := tmuxWindowName("cc", t.Meta.ID, newID)
+		exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start()
+		m.toastMsg = "Forked in tmux: " + winName
 		m.toastExpiry = time.Now().Add(3 * time.Second)
 	}
 
@@ -1606,6 +2682,27 @@ func buildClaudePrompt(t *storage.Task, store storage.TaskStore) string {
 		fmt.Fprintf(&sb, "\n---\n%s\n", body)
 	}
 
+	return sb.String()
+}
+
+func buildProjectPrompt(proj *storage.Project, slug string) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Project: %s\n", slug)
+	if proj.Name != "" {
+		fmt.Fprintf(&sb, "Name: %s\n", proj.Name)
+	}
+	if proj.Path != "" {
+		fmt.Fprintf(&sb, "Path: %s\n", proj.Path)
+	}
+	if proj.Stack != "" {
+		fmt.Fprintf(&sb, "Stack: %s\n", proj.Stack)
+	}
+	if proj.Repo != "" {
+		fmt.Fprintf(&sb, "Repo: %s\n", proj.Repo)
+	}
+	if proj.Notes != "" {
+		fmt.Fprintf(&sb, "Notes: %s\n", proj.Notes)
+	}
 	return sb.String()
 }
 
@@ -1669,6 +2766,21 @@ func ccProjectDirs(projDir string) []string {
 		}
 	}
 	return dirs
+}
+
+// resolveSessionPath returns the absolute path to the session JSONL file,
+// or empty string if the file cannot be found.
+func resolveSessionPath(projDir, sessionID string) string {
+	if projDir == "" || sessionID == "" {
+		return ""
+	}
+	for _, dir := range ccProjectDirs(projDir) {
+		p := filepath.Join(dir, sessionID+".jsonl")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
 }
 
 // loadSessionMeta looks up session metadata from Claude Code's sessions-index.json.

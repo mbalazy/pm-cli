@@ -2,6 +2,7 @@ package board
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -142,11 +143,14 @@ func (m Model) View() string {
 	if m.currentView == viewDetail || m.currentView == viewProjectInfo {
 		return m.viewDetail()
 	}
-	if m.colVisMenu {
-		return m.viewColVisMenu()
-	}
 	if m.yankMenu {
 		return m.viewYankMenu()
+	}
+	if m.projectPicker {
+		return m.viewProjectPicker()
+	}
+	if m.colVisMenu {
+		return m.viewColVisMenu()
 	}
 	if m.linksMenu {
 		return m.viewLinksMenu()
@@ -156,6 +160,9 @@ func (m Model) View() string {
 	}
 	if m.currentView == viewArchive {
 		return m.viewArchive()
+	}
+	if m.currentView == viewDaily {
+		return m.viewDaily()
 	}
 	return m.viewBoard()
 }
@@ -173,21 +180,33 @@ func (m Model) viewDetail() string {
 	var sb strings.Builder
 	sb.WriteString(m.detailViewport.View())
 	sb.WriteString("\n")
-	pct := fmt.Sprintf("%3.f%%", m.detailViewport.ScrollPercent()*100)
-	help := "o/q: back  e: edit  r: refresh  m/w/d/A: move/wait/done/archive  y/Y: yank  L: links  s: sessions  " + pct
-	if m.currentView == viewProjectInfo {
-		help = "o/esc/q: back  ↑/↓/j/k scroll  y/Y: yank  L: links  " + pct
+
+	if m.detailSearching {
+		sb.WriteString(m.detailSearchInput.View())
+	} else if m.detailSearchQuery != "" {
+		pct := fmt.Sprintf("%3.f%%", m.detailViewport.ScrollPercent()*100)
+		matchInfo := fmt.Sprintf("[%d/%d]", m.detailSearchIdx+1, len(m.detailSearchMatches))
+		if len(m.detailSearchMatches) == 0 {
+			matchInfo = "[no matches]"
+		}
+		sb.WriteString(helpStyle.Render(fmt.Sprintf("/%s %s  n/N: next/prev  esc: clear  %s", m.detailSearchQuery, matchInfo, pct)))
+	} else {
+		pct := fmt.Sprintf("%3.f%%", m.detailViewport.ScrollPercent()*100)
+		help := "o/q: back  e: edit  r: refresh  m/w/d/A: move/wait/done/archive  y/Y: yank  L: links  s: sessions  " + pct
+		if m.currentView == viewProjectInfo {
+			help = "o/esc/q: back  ↑/↓/j/k scroll  c: claude  y/Y: yank  L: links  " + pct
+		}
+		if m.confirmAction == "done" {
+			help = "press d again to confirm done  " + pct
+		}
+		if m.confirmAction == "waiting" {
+			help = "press w again to mark waiting  " + pct
+		}
+		if m.confirmAction == "archive" {
+			help = "press A again to archive  " + pct
+		}
+		sb.WriteString(helpStyle.Render(help))
 	}
-	if m.confirmAction == "done" {
-		help = "press d again to confirm done  " + pct
-	}
-	if m.confirmAction == "waiting" {
-		help = "press w again to mark waiting  " + pct
-	}
-	if m.confirmAction == "archive" {
-		help = "press A again to archive  " + pct
-	}
-	sb.WriteString(helpStyle.Render(help))
 	return m.applyToast(sb.String())
 }
 
@@ -215,13 +234,18 @@ func (m Model) viewHelp() string {
 		{"y", "Yank ID"},
 		{"Y", "Yank menu"},
 		{"L", "Open links"},
-		{"v", "Toggle columns"},
+		{"v", "Select mode (multi-select)"},
+		{"V", "Toggle columns"},
 		{"i", "Project info"},
 		{"c", "Claude Code"},
 		{"o / Enter", "Task detail"},
 		{"/ ", "Search tasks"},
 		{";", "Zoom toggle"},
+		{"t", "Toggle today"},
+		{"T", "Daily plan view"},
 		{"Ctrl+a", "Archive view"},
+		{"P", "Project picker"},
+		{"1-9", "Jump to project"},
 		{"Tab", "Next project"},
 		{"S-Tab", "Previous project"},
 		{"u", "Undo last action"},
@@ -450,7 +474,9 @@ func (m Model) viewColVisMenu() string {
 
 func (m Model) viewClaudeMenu() string {
 	titleText := "Launch Claude Code"
-	if m.resumeOnly {
+	if m.projectScopeLaunch {
+		titleText = "Launch Claude Code (project)"
+	} else if m.resumeOnly {
 		sid := m.resumeSessionID
 		if len(sid) > 8 {
 			sid = sid[:8] + "..."
@@ -509,19 +535,7 @@ func (m Model) viewArchive() string {
 	sb.WriteString("\n")
 
 	// project tabs
-	var tabs []string
-	for i, p := range m.projects {
-		name := p
-		if i == 0 {
-			name = "ALL"
-		}
-		if i == m.activeProject {
-			tabs = append(tabs, activeTabStyle.Render("["+name+"]"))
-		} else {
-			tabs = append(tabs, tabStyle.Render(name))
-		}
-	}
-	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, tabs...))
+	sb.WriteString(m.renderTabs(false))
 	sb.WriteString("\n\n")
 
 	tasks := m.archivedTasks()
@@ -542,7 +556,7 @@ func (m Model) viewArchive() string {
 				break
 			}
 			isSelected := i == m.archiveCursor
-			card := renderCard(t, cardWidth, isSelected)
+			card := renderCard(t, cardWidth, isSelected, "")
 			sb.WriteString(lipgloss.NewStyle().PaddingLeft(2).Render(card))
 			sb.WriteString("\n")
 		}
@@ -563,6 +577,318 @@ func (m Model) viewArchive() string {
 	return sb.String()
 }
 
+func (m Model) viewDaily() string {
+	var sb strings.Builder
+
+	sb.WriteString(titleStyle.Render("pm today"))
+	sb.WriteString("\n")
+
+	dateLabel := m.dailyPlan.Date
+	if dateLabel == "" {
+		dateLabel = storage.Today()
+	}
+	sb.WriteString(helpStyle.Render("  " + dateLabel))
+	sb.WriteString("\n\n")
+
+	tasks := m.dailyTasks()
+	if len(tasks) == 0 {
+		sb.WriteString(helpStyle.Render("  No tasks planned for today."))
+		sb.WriteString("\n")
+		sb.WriteString(helpStyle.Render("  Press t on any task in the board to add it."))
+		sb.WriteString("\n")
+	} else {
+		listHeight := m.height - 10
+		if listHeight < 3 {
+			listHeight = 3
+		}
+		cardWidth := m.width - 8
+		if cardWidth > 100 {
+			cardWidth = 100
+		}
+		for i, t := range tasks {
+			if i >= listHeight {
+				break
+			}
+			isSelected := i == m.dailyCursor
+			var card string
+			if m.zoomed {
+				card = renderZoomCard(t, cardWidth, isSelected, "")
+			} else {
+				card = renderCard(t, cardWidth, isSelected, "")
+			}
+			sb.WriteString(lipgloss.NewStyle().PaddingLeft(2).Render(card))
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("\n")
+	help := helpStyle.Render(fmt.Sprintf(
+		"today: %d  ↑/↓ navigate  t/x remove  C-j/C-k reorder  m move  d done  o detail  ; zoom  esc back",
+		len(tasks)))
+	sb.WriteString(help)
+
+	return m.applyToast(sb.String())
+}
+
+func shortenPath(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if strings.HasPrefix(path, home) {
+		return "~" + path[len(home):]
+	}
+	return path
+}
+
+func relativeTime(dateStr string) string {
+	t, err := time.Parse("2006-01-02", dateStr)
+	if err != nil {
+		return dateStr
+	}
+	days := int(time.Since(t).Hours() / 24)
+	switch {
+	case days <= 0:
+		return "today"
+	case days == 1:
+		return "1d ago"
+	default:
+		return fmt.Sprintf("%dd ago", days)
+	}
+}
+
+func (m Model) viewProjectPicker() string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render("Projects")
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
+	hiddenDimStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#444444"})
+
+	items := m.filteredPickerItems()
+
+	const leftWidth = 40
+
+	// --- LEFT PANEL: project list ---
+	var leftLines []string
+	leftLines = append(leftLines, title)
+	leftLines = append(leftLines, "")
+
+	lastWasVisible := true
+	for i, item := range items {
+		if lastWasVisible && item.hidden {
+			leftLines = append(leftLines, "")
+			leftLines = append(leftLines, dimStyle.Render("  -- hidden --"))
+			lastWasVisible = false
+		}
+
+		prefix := "  "
+		style := dimStyle
+		if i == m.pickerCursor {
+			prefix = "> "
+			style = lipgloss.NewStyle().Bold(true).Foreground(special)
+		} else if item.hidden {
+			style = hiddenDimStyle
+		}
+
+		label := item.name
+		count := fmt.Sprintf(" %d", item.taskCount)
+		maxName := leftWidth - 4 - len(count) // prefix + count + margin
+		if len(label) > maxName {
+			label = label[:maxName-3] + "..."
+		}
+
+		line := style.Render(prefix+label) + dimStyle.Render(count)
+		leftLines = append(leftLines, line)
+		if !item.hidden {
+			lastWasVisible = true
+		}
+	}
+
+	if len(items) == 0 {
+		leftLines = append(leftLines, dimStyle.Render("  no matches"))
+	}
+
+	// --- RIGHT PANEL: detail for cursor item ---
+	var rightLines []string
+	if m.pickerCursor < len(items) {
+		item := items[m.pickerCursor]
+		nameStyle := lipgloss.NewStyle().Bold(true).Foreground(highlight)
+		labelStyle := lipgloss.NewStyle().Bold(true)
+
+		// name + slug
+		nameLabel := item.name
+		if item.name != item.slug {
+			nameLabel += dimStyle.Render(" (" + item.slug + ")")
+		}
+		rightLines = append(rightLines, nameStyle.Render(nameLabel))
+
+		// stack
+		if item.stack != "" {
+			rightLines = append(rightLines, dimStyle.Render(item.stack))
+		}
+
+		// status counts
+		if len(item.statusCounts) > 0 {
+			rightLines = append(rightLines, "")
+			var counts []string
+			for _, s := range item.statuses {
+				c := item.statusCounts[s]
+				if c > 0 {
+					counts = append(counts, fmt.Sprintf("%s %d", s, c))
+				}
+			}
+			if len(counts) > 0 {
+				rightLines = append(rightLines, strings.Join(counts, "  "))
+			}
+		} else {
+			rightLines = append(rightLines, "")
+			rightLines = append(rightLines, dimStyle.Render("No tasks"))
+		}
+
+		// path + repo
+		if item.path != "" || item.repo != "" {
+			rightLines = append(rightLines, "")
+			if item.path != "" {
+				rightLines = append(rightLines, labelStyle.Render("Path: ")+dimStyle.Render(shortenPath(item.path)))
+			}
+			if item.repo != "" {
+				rightLines = append(rightLines, labelStyle.Render("Repo: ")+dimStyle.Render(item.repo))
+			}
+		}
+
+		// links
+		if len(item.links) > 0 {
+			rightLines = append(rightLines, "")
+			var names []string
+			for k := range item.links {
+				names = append(names, k)
+			}
+			sort.Strings(names)
+			rightLines = append(rightLines, labelStyle.Render("Links: ")+dimStyle.Render(strings.Join(names, ", ")))
+		}
+
+		// tags
+		if len(item.tags) > 0 {
+			rightLines = append(rightLines, labelStyle.Render("Tags: ")+dimStyle.Render(strings.Join(item.tags, ", ")))
+		}
+
+		// last updated
+		if item.lastUpdated != "" {
+			rightLines = append(rightLines, "")
+			rightLines = append(rightLines, dimStyle.Render("Updated: "+relativeTime(item.lastUpdated)))
+		}
+
+		// hidden indicator
+		if item.hidden {
+			rightLines = append(rightLines, "")
+			rightLines = append(rightLines, hiddenDimStyle.Render("(hidden from tab bar)"))
+		}
+	}
+
+	// --- COMBINE PANELS ---
+	// fixed content height (excluding footer)
+	const panelHeight = 20
+	maxH := panelHeight
+	// truncate if too many lines
+	if len(leftLines) > maxH {
+		leftLines = leftLines[:maxH]
+	}
+	if len(rightLines) > maxH {
+		rightLines = rightLines[:maxH]
+	}
+	// pad to fixed height
+	for len(leftLines) < maxH {
+		leftLines = append(leftLines, "")
+	}
+	for len(rightLines) < maxH {
+		rightLines = append(rightLines, "")
+	}
+
+	// build separator column
+	sepLines := make([]string, maxH)
+	for i := range sepLines {
+		sepLines[i] = dimStyle.Render(" │ ")
+	}
+
+	// pad both columns to fixed width
+	const rightWidth = 40
+	for i, l := range leftLines {
+		plain := stripANSI(l)
+		pad := leftWidth - len(plain)
+		if pad > 0 {
+			leftLines[i] = l + strings.Repeat(" ", pad)
+		}
+	}
+	for i, l := range rightLines {
+		plain := stripANSI(l)
+		if len(plain) > rightWidth {
+			// truncate long lines
+			rightLines[i] = l[:rightWidth-3] + "..."
+		} else {
+			pad := rightWidth - len(plain)
+			if pad > 0 {
+				rightLines[i] = l + strings.Repeat(" ", pad)
+			}
+		}
+	}
+
+	leftCol := strings.Join(leftLines, "\n")
+	sepCol := strings.Join(sepLines, "\n")
+	rightCol := strings.Join(rightLines, "\n")
+
+	content := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, sepCol, rightCol)
+
+	// footer
+	var footer string
+	if m.pickerInput.Focused() {
+		footer = m.pickerInput.View()
+	} else if m.pickerFilter != "" {
+		footer = helpStyle.Render(fmt.Sprintf("filter: %q  / edit  esc close", m.pickerFilter))
+	} else {
+		footer = helpStyle.Render("enter switch  space hide  C-j/k reorder  / filter  y path  Y yank  c claude  i info  esc")
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(highlight).
+		Padding(1, 3).
+		Render(content + "\n\n" + footer)
+
+	return m.applyToast(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box))
+}
+
+func (m Model) renderTabs(showCounts bool) string {
+	visible := m.visibleProjects()
+	var tabs []string
+	for vi, p := range visible {
+		name := p
+		if p == "all" {
+			name = "ALL"
+		}
+		var label string
+		if showCounts {
+			count := m.projectCounts[p]
+			label = fmt.Sprintf("%s (%d)", name, count)
+		} else {
+			label = name
+		}
+		if vi < 9 {
+			label = fmt.Sprintf("%d %s", vi+1, label)
+		}
+		isActive := false
+		for i, mp := range m.projects {
+			if mp == p && i == m.activeProject {
+				isActive = true
+				break
+			}
+		}
+		if isActive {
+			tabs = append(tabs, activeTabStyle.Render("["+label+"]"))
+		} else {
+			tabs = append(tabs, tabStyle.Render(label))
+		}
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+}
+
 func (m Model) viewBoard() string {
 	var sb strings.Builder
 
@@ -571,21 +897,7 @@ func (m Model) viewBoard() string {
 	sb.WriteString("\n")
 
 	// project tabs with counts
-	var tabs []string
-	for i, p := range m.projects {
-		name := p
-		if i == 0 {
-			name = "ALL"
-		}
-		count := m.projectCounts[p]
-		label := fmt.Sprintf("%s (%d)", name, count)
-		if i == m.activeProject {
-			tabs = append(tabs, activeTabStyle.Render("["+label+"]"))
-		} else {
-			tabs = append(tabs, tabStyle.Render(label))
-		}
-	}
-	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, tabs...))
+	sb.WriteString(m.renderTabs(true))
 	sb.WriteString("\n\n")
 
 	// columns
@@ -659,11 +971,21 @@ func (m Model) viewBoard() string {
 		rendered := 0
 		for j := offset; j < len(tasks); j++ {
 			isSelected := isActive && j == m.cursors[i]
+			selectMark := ""
+			if m.selecting {
+				if m.selected[tasks[j].Meta.ID] {
+					selectMark = "[x] "
+				} else {
+					selectMark = "[ ] "
+				}
+			} else if m.dailySet[tasks[j].Meta.ID] {
+				selectMark = "● "
+			}
 			var card string
 			if m.zoomed {
-				card = renderZoomCard(tasks[j], colWidth-6, isSelected)
+				card = renderZoomCard(tasks[j], colWidth-6, isSelected, selectMark)
 			} else {
-				card = renderCard(tasks[j], colWidth-6, isSelected)
+				card = renderCard(tasks[j], colWidth-6, isSelected, selectMark)
 			}
 			actualH := strings.Count(card, "\n") + 1
 			if usedH+actualH > cardBudget && rendered > 0 {
@@ -725,6 +1047,8 @@ func (m Model) viewBoard() string {
 			prompt = "  press A again to archive"
 		case "quit":
 			prompt = "  press q again to quit"
+		case "delete-selected":
+			prompt = fmt.Sprintf("  press x again to delete %d tasks", len(m.selected))
 		}
 		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#FF0000", Dark: "#FF6666"}).Render(prompt))
 	}
@@ -732,6 +1056,16 @@ func (m Model) viewBoard() string {
 
 	// status bar
 	statusBar := func() string {
+		if m.selecting {
+			selectStyle := lipgloss.NewStyle().Bold(true).Foreground(special)
+			label := selectStyle.Render(fmt.Sprintf(" SELECT: %d selected ", len(m.selected)))
+			help := helpStyle.Render("v toggle  m/M move  d done  w wait  A archive  x del  y yank  Y menu  esc")
+			gap := m.width - lipgloss.Width(label) - lipgloss.Width(help)
+			if gap < 1 {
+				gap = 1
+			}
+			return label + strings.Repeat(" ", gap) + help
+		}
 		startup := fmt.Sprintf("%dms", m.startupDuration.Milliseconds())
 		ver := helpStyle.Render("pm " + version.Version + " " + startup)
 		help := helpStyle.Render("m/M move  d done  a add  c claude  e edit  y/Y yank  L links  i info  C-a archived")
@@ -779,7 +1113,7 @@ func (m Model) applyToast(result string) string {
 	return result
 }
 
-func renderCard(t *storage.Task, width int, selected bool) string {
+func renderCard(t *storage.Task, width int, selected bool, selectMark string) string {
 	style := cardStyle
 	if selected {
 		style = activeCardStyle
@@ -789,15 +1123,18 @@ func renderCard(t *storage.Task, width int, selected bool) string {
 	var lines []string
 
 	title := t.Meta.Title
-	if t.Meta.ID != "" {
-		title = "#" + t.Meta.ID + " " + title
+	if selectMark != "" {
+		title = selectMark + title
 	}
-	// truncate title if too long
 	if len(title) > width-2 {
 		title = title[:width-5] + "..."
 	}
 	lines = append(lines, cardTitleStyle.Render(title))
-	lines = append(lines, cardProjectStyle.Render(t.Project))
+	if t.Meta.ID != "" {
+		lines = append(lines, cardProjectStyle.Render("#"+t.Meta.ID))
+	} else {
+		lines = append(lines, cardProjectStyle.Render(t.Project))
+	}
 
 	if len(t.Meta.Tags) > 0 {
 		lines = append(lines, cardTagStyle.Render(strings.Join(t.Meta.Tags, ", ")))
@@ -806,7 +1143,7 @@ func renderCard(t *storage.Task, width int, selected bool) string {
 	return style.Render(strings.Join(lines, "\n"))
 }
 
-func renderZoomCard(t *storage.Task, width int, selected bool) string {
+func renderZoomCard(t *storage.Task, width int, selected bool, selectMark string) string {
 	style := cardStyle
 	if selected {
 		style = activeCardStyle
@@ -817,13 +1154,18 @@ func renderZoomCard(t *storage.Task, width int, selected bool) string {
 
 	// Title (full, no truncation - we have space)
 	title := t.Meta.Title
-	if t.Meta.ID != "" {
-		title = "#" + t.Meta.ID + " " + title
+	if selectMark != "" {
+		title = selectMark + title
 	}
 	lines = append(lines, cardTitleStyle.Render(title))
 
-	// Project + updated date on same conceptual level
-	meta := t.Project
+	// ID + updated date
+	meta := ""
+	if t.Meta.ID != "" {
+		meta = "#" + t.Meta.ID
+	} else {
+		meta = t.Project
+	}
 	if t.Meta.Updated != "" {
 		meta += "  " + helpStyle.Render(t.Meta.Updated)
 	}
