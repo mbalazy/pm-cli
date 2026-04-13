@@ -1,6 +1,10 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/mbalazy/pm/internal/tui/board"
@@ -21,14 +25,47 @@ func newBoardCmd(store storage.TaskStore) *cobra.Command {
 				}
 				project = slug
 			}
+			if project == "" {
+				project = detectProjectFromCwd(store)
+			}
 			return runBoard(store, project)
 		},
 	}
 }
 
+func detectProjectFromCwd(store storage.TaskStore) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	cwd, err = filepath.Abs(cwd)
+	if err != nil {
+		return ""
+	}
+	projects, err := store.ListProjects()
+	if err != nil {
+		return ""
+	}
+	for _, slug := range projects {
+		proj, err := store.GetProject(slug)
+		if err != nil || proj == nil || proj.Path == "" {
+			continue
+		}
+		projectPath, err := filepath.Abs(proj.Path)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(projectPath, cwd)
+		if err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, "../"))) {
+			return slug
+		}
+	}
+	return ""
+}
+
 func runBoard(store storage.TaskStore, project string) error {
 	m := board.New(store, project)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }

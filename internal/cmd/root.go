@@ -19,8 +19,8 @@ func NewRootCmd() *cobra.Command {
 		Long:    "A local, file-based project manager with interactive TUI board. Integrates with Claude Code.",
 		Version: version.Version,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// default: open board
-			return runBoard(store, "")
+			// default: open board, auto-detect project from cwd
+			return runBoard(store, detectProjectFromCwd(store))
 		},
 		SilenceUsage: true,
 	}
