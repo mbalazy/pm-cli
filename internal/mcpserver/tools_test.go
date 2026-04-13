@@ -1,11 +1,13 @@
 package mcpserver
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/mbalazy/pm/internal/storage"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // setupMCPTestStore creates a temp store with a project and a task.
@@ -585,4 +587,41 @@ func TestUpdateProjectArchived(t *testing.T) {
 			t.Error("unarchived project should appear in ListActiveProjects")
 		}
 	})
+}
+
+func TestCrossProjectContextWrapsProjectsAndDailyTasks(t *testing.T) {
+	store, task := setupMCPTestStore(t)
+	storage.WriteDailyPlan(store.RootDir(), storage.DailyPlan{
+		Date:  storage.Today(),
+		Tasks: []string{task.Meta.ID},
+	})
+
+	result, _, err := crossProjectContext(store)
+	if err != nil {
+		t.Fatalf("crossProjectContext failed: %v", err)
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("content len = %d, want 1", len(result.Content))
+	}
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("content[0] type = %T, want *mcp.TextContent", result.Content[0])
+	}
+
+	var payload struct {
+		Projects   []map[string]any `json:"projects"`
+		DailyTasks []taskSummary    `json:"daily_tasks"`
+	}
+	if err := json.Unmarshal([]byte(text.Text), &payload); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if len(payload.Projects) != 1 {
+		t.Fatalf("projects len = %d, want 1", len(payload.Projects))
+	}
+	if len(payload.DailyTasks) != 1 {
+		t.Fatalf("daily_tasks len = %d, want 1", len(payload.DailyTasks))
+	}
+	if payload.DailyTasks[0].ID != task.Meta.ID {
+		t.Errorf("daily task ID = %q, want %q", payload.DailyTasks[0].ID, task.Meta.ID)
+	}
 }

@@ -128,6 +128,25 @@ func toSummary(t *storage.Task) taskSummary {
 	}
 }
 
+func dailyTaskSummaries(store storage.TaskStore) []taskSummary {
+	dp := storage.ReadDailyPlan(store.RootDir())
+	if dp.Date != storage.Today() || len(dp.Tasks) == 0 {
+		return nil
+	}
+	allTasks, _ := store.GetAllTasks()
+	lookup := make(map[string]*storage.Task, len(allTasks))
+	for _, t := range allTasks {
+		lookup[t.Meta.ID] = t
+	}
+	var result []taskSummary
+	for _, id := range dp.Tasks {
+		if t, ok := lookup[id]; ok && t.Meta.Status != storage.StatusDone && t.Meta.Status != storage.StatusArchived {
+			result = append(result, toSummary(t))
+		}
+	}
+	return result
+}
+
 func toDetail(t *storage.Task) taskDetail {
 	return taskDetail{
 		taskSummary: toSummary(t),
@@ -700,6 +719,10 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 		"task_counts": counts,
 	}
 
+	if daily := dailyTaskSummaries(store); len(daily) > 0 {
+		result["daily_tasks"] = daily
+	}
+
 	r, err := jsonText(result)
 	return r, nil, err
 }
@@ -739,6 +762,13 @@ func crossProjectContext(store storage.TaskStore) (*mcp.CallToolResult, any, err
 		result = append(result, ps)
 	}
 
-	r, err := jsonText(result)
+	output := map[string]any{
+		"projects": result,
+	}
+	if daily := dailyTaskSummaries(store); len(daily) > 0 {
+		output["daily_tasks"] = daily
+	}
+
+	r, err := jsonText(output)
 	return r, nil, err
 }
