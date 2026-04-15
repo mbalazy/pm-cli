@@ -38,6 +38,7 @@ type addTaskInput struct {
 	Body     string            `json:"body,omitempty" jsonschema:"Markdown body content"`
 	ID       string            `json:"id,omitempty" jsonschema:"Task ID (auto-generated if omitted)"`
 	Brief    string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
+	AC       string            `json:"ac,omitempty" jsonschema:"Acceptance criteria (overwrites previous)"`
 	Sessions []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to attach"`
 }
 
@@ -51,6 +52,7 @@ type updateTaskInput struct {
 	Links      map[string]string `json:"links,omitempty" jsonschema:"Links to merge (existing links are preserved)"`
 	BodyAppend string            `json:"body_append,omitempty" jsonschema:"Text to append to body (never replaces existing content)"`
 	Brief      string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
+	AC         string            `json:"ac,omitempty" jsonschema:"Acceptance criteria (overwrites previous)"`
 	Sessions   []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to append (never removes existing)"`
 }
 
@@ -103,6 +105,7 @@ type taskSummary struct {
 	Tags         []string          `json:"tags,omitempty"`
 	Links        map[string]string `json:"links,omitempty"`
 	Brief        string            `json:"brief,omitempty"`
+	AC           string            `json:"ac,omitempty"`
 	SessionCount int               `json:"session_count"`
 }
 
@@ -124,6 +127,7 @@ func toSummary(t *storage.Task) taskSummary {
 		Tags:         t.Meta.Tags,
 		Links:        t.Meta.Links,
 		Brief:        t.Meta.Brief,
+		AC:           t.Meta.AC,
 		SessionCount: len(t.Meta.Sessions),
 	}
 }
@@ -346,6 +350,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		}
 		t.Body = in.Body
 		t.Meta.Brief = in.Brief
+		t.Meta.AC = in.AC
 		t.Meta.Sessions = in.Sessions
 
 		if err := store.AddTask(slug, t); err != nil {
@@ -408,6 +413,11 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		// Brief: overwrite (current state, not history)
 		if in.Brief != "" {
 			task.Meta.Brief = in.Brief
+		}
+
+		// AC: overwrite (acceptance criteria, not history)
+		if in.AC != "" {
+			task.Meta.AC = in.AC
 		}
 
 		// Sessions: append, never remove

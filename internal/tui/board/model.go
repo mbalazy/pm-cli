@@ -47,6 +47,22 @@ type claudeMenuItem struct {
 	shortcut string // single key mnemonic
 }
 
+type launchAgent string
+
+const (
+	launchAgentClaude launchAgent = "claude"
+	launchAgentCodex  launchAgent = "codex"
+)
+
+func (a launchAgent) label() string {
+	switch a {
+	case launchAgentCodex:
+		return "Codex"
+	default:
+		return "Claude Code"
+	}
+}
+
 type sessionMenuItem struct {
 	sessionID string
 	summary   string // from sessions-index.json
@@ -94,30 +110,30 @@ func snapshotTask(t *storage.Task) *storage.Task {
 }
 
 type Model struct {
-	store         storage.TaskStore
-	tasks         []*storage.Task
-	projects      []string
-	statuses      []storage.TaskStatus
-	activeProject int // 0 = all, 1+ = specific project
-	activeCol     int
-	cursors       []int
-	width         int
-	height        int
-	currentView   view
-	previousView  view
+	store          storage.TaskStore
+	tasks          []*storage.Task
+	projects       []string
+	statuses       []storage.TaskStatus
+	activeProject  int // 0 = all, 1+ = specific project
+	activeCol      int
+	cursors        []int
+	width          int
+	height         int
+	currentView    view
+	previousView   view
 	detailViewport viewport.Model
 	detailTask     *storage.Task
 	infoProject    *storage.Project
 	infoSlug       string
-	searchInput   textinput.Model
-	searchQuery   string
-	searching     bool
-	showHelp      bool
-	adding        bool
-	addStep       int // 0=title, 1=ID
-	addInput      textinput.Model
-	addTitle      string
-	err           error
+	searchInput    textinput.Model
+	searchQuery    string
+	searching      bool
+	showHelp       bool
+	adding         bool
+	addStep        int // 0=title, 1=ID
+	addInput       textinput.Model
+	addTitle       string
+	err            error
 
 	// confirmation
 	confirmAction string // "" | "done" | "delete"
@@ -172,6 +188,7 @@ type Model struct {
 	claudeMenuItems     []claudeMenuItem
 	claudeMenuCursor    int
 	claudeMenuSkipPerms bool
+	launchAgent         launchAgent
 
 	// project-scope claude launch (no task)
 	projectScopeLaunch bool
@@ -454,6 +471,9 @@ func matchesQuery(t *storage.Task, q string) bool {
 	if strings.Contains(strings.ToLower(t.Meta.Brief), q) {
 		return true
 	}
+	if strings.Contains(strings.ToLower(t.Meta.AC), q) {
+		return true
+	}
 	if strings.Contains(strings.ToLower(t.Meta.Branch), q) {
 		return true
 	}
@@ -631,3 +651,9 @@ func (m Model) Init() tea.Cmd {
 }
 
 type reloadMsg struct{}
+
+type launchResultMsg struct {
+	agent launchAgent
+	kind  string
+	err   error
+}

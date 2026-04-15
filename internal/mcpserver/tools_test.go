@@ -33,6 +33,7 @@ func setupMCPTestStore(t *testing.T) (*storage.Store, *storage.Task) {
 			Updated: "2025-01-01",
 			Links:   map[string]string{"jira": "SCRUM-1"},
 			Brief:   "initial brief",
+			AC:      "- Login works\n- Error shown on invalid creds",
 		},
 		Body:     "## Description\n\nOriginal body",
 		FilePath: filepath.Join(projDir, "t-1-test-task.md"),
@@ -229,6 +230,60 @@ func TestMoveTaskPreservesBrief(t *testing.T) {
 		reloaded, _ := store.FindTask("test", "t-1")
 		if reloaded.Meta.Brief != "initial brief" {
 			t.Errorf("brief = %q, want %q", reloaded.Meta.Brief, "initial brief")
+		}
+	})
+}
+
+func TestUpdateTaskACOverwrites(t *testing.T) {
+	t.Run("ac overwritten", func(t *testing.T) {
+		store, _ := setupMCPTestStore(t)
+		task, _ := store.FindTask("test", "t-1")
+
+		task.Meta.AC = "new acceptance criteria"
+		storage.WriteTask(task)
+
+		reloaded, _ := store.FindTask("test", "t-1")
+		if reloaded.Meta.AC != "new acceptance criteria" {
+			t.Errorf("ac = %q, want %q", reloaded.Meta.AC, "new acceptance criteria")
+		}
+	})
+
+	t.Run("empty ac input preserves existing", func(t *testing.T) {
+		store, _ := setupMCPTestStore(t)
+		task, _ := store.FindTask("test", "t-1")
+
+		// Simulate: no ac in update (don't touch task.Meta.AC)
+		storage.WriteTask(task)
+
+		reloaded, _ := store.FindTask("test", "t-1")
+		if reloaded.Meta.AC != "- Login works\n- Error shown on invalid creds" {
+			t.Errorf("ac changed unexpectedly: %q", reloaded.Meta.AC)
+		}
+	})
+}
+
+func TestMoveTaskPreservesAC(t *testing.T) {
+	t.Run("done preserves ac", func(t *testing.T) {
+		store, _ := setupMCPTestStore(t)
+		task, _ := store.FindTask("test", "t-1")
+
+		store.MoveTask(task, storage.StatusDone)
+
+		reloaded, _ := store.FindTask("test", "t-1")
+		if reloaded.Meta.AC != "- Login works\n- Error shown on invalid creds" {
+			t.Errorf("ac = %q, want preserved", reloaded.Meta.AC)
+		}
+	})
+
+	t.Run("archived preserves ac", func(t *testing.T) {
+		store, _ := setupMCPTestStore(t)
+		task, _ := store.FindTask("test", "t-1")
+
+		store.MoveTask(task, storage.StatusArchived)
+
+		reloaded, _ := store.FindTask("test", "t-1")
+		if reloaded.Meta.AC != "- Login works\n- Error shown on invalid creds" {
+			t.Errorf("ac = %q, want preserved", reloaded.Meta.AC)
 		}
 	})
 }

@@ -1,6 +1,7 @@
 package board
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,6 +89,7 @@ func TestMatchesQuery(t *testing.T) {
 			Brief:    "Working on OAuth integration",
 			Branch:   "feat/auth-flow",
 			Tags:     []string{"backend", "security"},
+			AC:       "Must support SSO login",
 			Links:    map[string]string{"jira": "https://jira.example.com/PROJ-42", "figma": "https://figma.com/design"},
 			Sessions: []string{"abc-123-def"},
 		},
@@ -109,6 +111,7 @@ func TestMatchesQuery(t *testing.T) {
 		{"matches link key", "figma", true},
 		{"matches link value", "jira.example", true},
 		{"matches session", "abc-123", true},
+		{"matches ac", "sso login", true},
 		{"no match", "nonexistent", false},
 	}
 	for _, tt := range tests {
@@ -216,6 +219,9 @@ func TestOpenClaudeMenu(t *testing.T) {
 		if m.claudeMenuSkipPerms {
 			t.Error("skipPerms should default to false")
 		}
+		if m.launchAgent != launchAgentClaude {
+			t.Errorf("launchAgent = %q, want %q", m.launchAgent, launchAgentClaude)
+		}
 		if m.claudeMenuCursor != 0 {
 			t.Errorf("cursor = %d, want 0 (default to 'here' without tmux)", m.claudeMenuCursor)
 		}
@@ -291,11 +297,91 @@ func TestOpenClaudeMenu(t *testing.T) {
 		}
 	})
 
+	t.Run("codex items hide resume", func(t *testing.T) {
+		os.Unsetenv("TMUX")
+		taskWithSession := &storage.Task{
+			Meta: storage.TaskMeta{
+				ID:       "p-2",
+				Sessions: []string{"sess-abc"},
+				Links:    map[string]string{},
+			},
+		}
+		m := Model{}
+		m.openClaudeMenu(taskWithSession)
+		m.launchAgent = launchAgentCodex
+		m.rebuildClaudeMenuItems(taskWithSession)
+
+		kinds := make([]string, len(m.claudeMenuItems))
+		for i, item := range m.claudeMenuItems {
+			kinds[i] = item.kind
+		}
+		expected := []string{"here", "worktree", "project"}
+		if len(kinds) != len(expected) {
+			t.Fatalf("items = %v, want %v", kinds, expected)
+		}
+		for i, k := range expected {
+			if kinds[i] != k {
+				t.Errorf("item[%d] = %q, want %q", i, kinds[i], k)
+			}
+		}
+	})
+
+	t.Run("codex items with tmux", func(t *testing.T) {
+		os.Setenv("TMUX", "/tmp/tmux-1000/default,12345,0")
+		defer os.Unsetenv("TMUX")
+
+		m := Model{launchAgent: launchAgentCodex}
+		m.rebuildClaudeMenuItems(task)
+
+		kinds := make([]string, len(m.claudeMenuItems))
+		for i, item := range m.claudeMenuItems {
+			kinds[i] = item.kind
+		}
+		expected := []string{"here", "tmux", "worktree", "worktree-tmux", "project"}
+		if len(kinds) != len(expected) {
+			t.Fatalf("items = %v, want %v", kinds, expected)
+		}
+		for i, k := range expected {
+			if kinds[i] != k {
+				t.Errorf("item[%d] = %q, want %q", i, kinds[i], k)
+			}
+		}
+		if m.claudeMenuItems[m.claudeMenuCursor].kind != "tmux" {
+			t.Errorf("cursor at %q, want tmux", m.claudeMenuItems[m.claudeMenuCursor].kind)
+		}
+	})
+
+	t.Run("project scope codex items with tmux", func(t *testing.T) {
+		os.Setenv("TMUX", "/tmp/tmux-1000/default,12345,0")
+		defer os.Unsetenv("TMUX")
+
+		m := Model{
+			launchAgent:        launchAgentCodex,
+			projectScopeLaunch: true,
+		}
+		m.rebuildClaudeMenuItems(nil)
+
+		kinds := make([]string, len(m.claudeMenuItems))
+		for i, item := range m.claudeMenuItems {
+			kinds[i] = item.kind
+		}
+		expected := []string{"here", "tmux"}
+		if len(kinds) != len(expected) {
+			t.Fatalf("items = %v, want %v", kinds, expected)
+		}
+		for i, k := range expected {
+			if kinds[i] != k {
+				t.Errorf("item[%d] = %q, want %q", i, kinds[i], k)
+			}
+		}
+	})
+
 	t.Run("resets state on open", func(t *testing.T) {
 		m := Model{
 			claudeMenuSkipPerms: true,
 			claudeMenuCursor:    5,
 			claudeMenuItems:     []claudeMenuItem{{"old", "old", "o"}},
+			launchAgent:         launchAgentCodex,
 		}
 		os.Unsetenv("TMUX")
 		m.openClaudeMenu(task)
@@ -308,6 +394,9 @@ func TestOpenClaudeMenu(t *testing.T) {
 		}
 		if m.claudeMenuItems[0].kind == "old" {
 			t.Error("items should be rebuilt")
+		}
+		if m.launchAgent != launchAgentClaude {
+			t.Errorf("launchAgent = %q, want %q", m.launchAgent, launchAgentClaude)
 		}
 	})
 }
@@ -386,6 +475,27 @@ func TestUpdateClaudeMenuSkipPerms(t *testing.T) {
 			t.Errorf("cursor = %d, want 0 (clamped at top)", m.claudeMenuCursor)
 		}
 	})
+
+	t.Run("toggle agent with @", func(t *testing.T) {
+		os.Unsetenv("TMUX")
+		m := Model{
+			claudeMenu:      true,
+			launchAgent:     launchAgentClaude,
+			claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
+		}
+
+		result, _ := m.updateClaudeMenu(keyMsg("@"))
+		m = result.(Model)
+		if m.launchAgent != launchAgentCodex {
+			t.Errorf("launchAgent = %q, want %q", m.launchAgent, launchAgentCodex)
+		}
+
+		result, _ = m.updateClaudeMenu(keyMsg("@"))
+		m = result.(Model)
+		if m.launchAgent != launchAgentClaude {
+			t.Errorf("launchAgent = %q, want %q", m.launchAgent, launchAgentClaude)
+		}
+	})
 }
 
 func TestTmuxWindowName(t *testing.T) {
@@ -394,7 +504,7 @@ func TestTmuxWindowName(t *testing.T) {
 	}{
 		{"cc", "protem-12", "a1b2c3d4-xxxx-yyyy", "cc:a1b2:protem-12"},
 		{"wt", "proj-5", "deadbeef-1234", "wt:dead:proj-5"},
-		{"cc", "t-1", "ab", "cc:ab:t-1"},   // short session
+		{"cc", "t-1", "ab", "cc:ab:t-1"},     // short session
 		{"cc", "t-1", "abcd", "cc:abcd:t-1"}, // exactly 4
 	}
 	for _, tt := range tests {
@@ -402,6 +512,74 @@ func TestTmuxWindowName(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("tmuxWindowName(%q, %q, %q) = %q, want %q", tt.prefix, tt.taskID, tt.sessionID, got, tt.want)
 		}
+	}
+}
+
+func TestCodexCommandHelpers(t *testing.T) {
+	t.Run("args without bypass", func(t *testing.T) {
+		args := codexArgs("hello", false)
+		if len(args) != 1 || args[0] != "hello" {
+			t.Errorf("codexArgs = %v, want [hello]", args)
+		}
+	})
+
+	t.Run("args with bypass", func(t *testing.T) {
+		args := codexArgs("hello", true)
+		expected := []string{"--dangerously-bypass-approvals-and-sandbox", "hello"}
+		if len(args) != len(expected) {
+			t.Fatalf("codexArgs = %v, want %v", args, expected)
+		}
+		for i, want := range expected {
+			if args[i] != want {
+				t.Errorf("arg[%d] = %q, want %q", i, args[i], want)
+			}
+		}
+	})
+
+	t.Run("shell command quotes prompt", func(t *testing.T) {
+		got := codexShellCommand("it's ok", true)
+		want := "codex '--dangerously-bypass-approvals-and-sandbox' 'it'\\''s ok'"
+		if got != want {
+			t.Errorf("codexShellCommand = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("window name", func(t *testing.T) {
+		if got := codexWindowName("task-1"); got != "cx:task-1" {
+			t.Errorf("codexWindowName = %q, want cx:task-1", got)
+		}
+	})
+
+	t.Run("interactive shell command pauses on error", func(t *testing.T) {
+		got := codexInteractiveShellCommand("hello", false)
+		if !strings.Contains(got, "Codex exited with status") {
+			t.Errorf("codexInteractiveShellCommand should include visible failure message, got %q", got)
+		}
+		if !strings.Contains(got, "read _") {
+			t.Errorf("codexInteractiveShellCommand should wait for Enter on failure, got %q", got)
+		}
+	})
+}
+
+func TestLaunchResultMsgShowsToast(t *testing.T) {
+	store := &storage.Store{Root: t.TempDir()}
+	m := Model{
+		store:         store,
+		projects:      []string{"all"},
+		statuses:      []storage.TaskStatus{storage.StatusTodo},
+		cursors:       []int{0},
+		scrollOffsets: []int{0},
+	}
+
+	result, _ := m.Update(launchResultMsg{
+		agent: launchAgentCodex,
+		kind:  "here",
+		err:   errors.New("boom"),
+	})
+	m = result.(Model)
+
+	if !strings.Contains(m.toastMsg, "Codex here failed: boom") {
+		t.Fatalf("toastMsg = %q, want Codex failure", m.toastMsg)
 	}
 }
 
@@ -450,6 +628,40 @@ func TestViewClaudeMenuSkipPerms(t *testing.T) {
 		output := m.viewClaudeMenu()
 		if !strings.Contains(output, "! toggle perms") {
 			t.Error("help text should mention ! toggle perms")
+		}
+		if !strings.Contains(output, "@ toggle agent") {
+			t.Error("help text should mention @ toggle agent")
+		}
+	})
+
+	t.Run("shows default claude agent", func(t *testing.T) {
+		m := Model{
+			claudeMenu:      true,
+			launchAgent:     launchAgentClaude,
+			claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
+			width:           80,
+			height:          24,
+		}
+		output := stripANSI(m.viewClaudeMenu())
+		if !strings.Contains(output, "Agent: Claude Code") {
+			t.Error("should show Claude Code as selected agent")
+		}
+	})
+
+	t.Run("shows codex agent and bypass label", func(t *testing.T) {
+		m := Model{
+			claudeMenu:      true,
+			launchAgent:     launchAgentCodex,
+			claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
+			width:           80,
+			height:          24,
+		}
+		output := stripANSI(m.viewClaudeMenu())
+		if !strings.Contains(output, "Agent: Codex") {
+			t.Error("should show Codex as selected agent")
+		}
+		if !strings.Contains(output, "bypass sandbox") {
+			t.Error("should show Codex bypass label")
 		}
 	})
 }
@@ -779,13 +991,13 @@ func TestMarkedTasks(t *testing.T) {
 
 func TestSelectModeToggle(t *testing.T) {
 	m := Model{
-		tasks:    makeTasks(),
-		statuses: []storage.TaskStatus{storage.StatusTodo, storage.StatusDoing, storage.StatusDone},
-		cursors:  []int{0, 0, 0},
+		tasks:         makeTasks(),
+		statuses:      []storage.TaskStatus{storage.StatusTodo, storage.StatusDoing, storage.StatusDone},
+		cursors:       []int{0, 0, 0},
 		scrollOffsets: []int{0, 0, 0},
-		selected: make(map[string]bool),
-		width:    80,
-		height:   24,
+		selected:      make(map[string]bool),
+		width:         80,
+		height:        24,
 	}
 
 	// Enter select mode

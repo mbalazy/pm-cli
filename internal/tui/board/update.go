@@ -48,6 +48,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.reload()
 		return m, doTick()
 
+	case launchResultMsg:
+		m.reload()
+		if msg.err != nil {
+			m.toastMsg = fmt.Sprintf("%s %s failed: %v", msg.agent.label(), msg.kind, msg.err)
+		} else {
+			m.toastMsg = fmt.Sprintf("%s %s exited", msg.agent.label(), msg.kind)
+		}
+		m.toastExpiry = time.Now().Add(15 * time.Second)
+		return m, doTick()
+
 	case tea.MouseMsg:
 		if m.currentView == viewDetail || m.currentView == viewProjectInfo {
 			var cmd tea.Cmd
@@ -1215,6 +1225,9 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if t.Meta.Brief != "" {
 				m.yankItems = append(m.yankItems, yankItem{"brief", t.Meta.Brief})
 			}
+			if t.Meta.AC != "" {
+				m.yankItems = append(m.yankItems, yankItem{"ac", t.Meta.AC})
+			}
 			if t.Body != "" {
 				m.yankItems = append(m.yankItems, yankItem{"body", t.Body})
 			}
@@ -2201,11 +2214,43 @@ func (m *Model) doReorder(direction int) {
 }
 
 func (m *Model) openClaudeMenu(t *storage.Task) {
-	inTmux := os.Getenv("TMUX") != ""
-	hasSession := lastSession(t) != ""
 	m.claudeMenuItems = nil
 	m.claudeMenuCursor = 0
 	m.claudeMenuSkipPerms = false
+	m.launchAgent = launchAgentClaude
+	m.rebuildClaudeMenuItems(t)
+	m.claudeMenu = true
+}
+
+func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
+	inTmux := os.Getenv("TMUX") != ""
+	m.claudeMenuItems = nil
+	m.claudeMenuCursor = 0
+
+	if m.projectScopeLaunch {
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
+		if inTmux {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
+			m.claudeMenuCursor = 1
+		}
+		return
+	}
+
+	if m.launchAgent == launchAgentCodex {
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
+		if inTmux {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
+		}
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree (here)", "worktree", "w"})
+		if inTmux {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree + tmux", "worktree-tmux", "W"})
+		}
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Project scope (no task)", "project", "p"})
+		if inTmux {
+			m.claudeMenuCursor = 1
+		}
+		return
+	}
 
 	if m.resumeOnly && m.forkMode {
 		// Fork sub-menu: fork from selected session
@@ -2214,7 +2259,11 @@ func (m *Model) openClaudeMenu(t *storage.Task) {
 			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Fork in tmux", "fork-tmux", "t"})
 			m.claudeMenuCursor = 1 // default to tmux
 		}
-	} else if m.resumeOnly {
+		return
+	}
+
+	hasSession := t != nil && lastSession(t) != ""
+	if m.resumeOnly {
 		// Resume sub-menu: only show resume options
 		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume here", "resume", "h"})
 		if inTmux {
@@ -2247,24 +2296,22 @@ func (m *Model) openClaudeMenu(t *storage.Task) {
 			}
 		}
 	}
-	m.claudeMenu = true
 }
 
 func (m *Model) openProjectClaudeMenu(slug string) {
-	inTmux := os.Getenv("TMUX") != ""
+	m.openProjectClaudeMenuWithAgent(slug, launchAgentClaude)
+}
+
+func (m *Model) openProjectClaudeMenuWithAgent(slug string, agent launchAgent) {
 	m.claudeMenuItems = nil
 	m.claudeMenuCursor = 0
 	m.claudeMenuSkipPerms = false
+	m.launchAgent = agent
 	m.resumeOnly = false
 	m.forkMode = false
 	m.projectScopeLaunch = true
 	m.projectScopeSlug = slug
-
-	m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
-	if inTmux {
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
-		m.claudeMenuCursor = 1
-	}
+	m.rebuildClaudeMenuItems(nil)
 	m.claudeMenu = true
 }
 
@@ -2275,6 +2322,15 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.claudeMenuSkipPerms = !m.claudeMenuSkipPerms
 		return m, nil
 	}
+	if typed == "@" {
+		if m.launchAgent == launchAgentCodex {
+			m.launchAgent = launchAgentClaude
+		} else {
+			m.launchAgent = launchAgentCodex
+		}
+		m.rebuildClaudeMenuItems(m.selectedTask())
+		return m, nil
+	}
 
 	// Check mnemonic shortcut keys first
 	for _, item := range m.claudeMenuItems {
@@ -2282,7 +2338,7 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.claudeMenu = false
 			m.resumeOnly = false
 			m.forkMode = false
-			return m.launchClaude(item.kind)
+			return m.launchLLM(item.kind)
 		}
 	}
 
@@ -2308,7 +2364,7 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.claudeMenu = false
 			m.resumeOnly = false
 			m.forkMode = false
-			return m.launchClaude(item.kind)
+			return m.launchLLM(item.kind)
 		}
 	}
 	return m, nil
@@ -2387,6 +2443,197 @@ func copyWorktreeFiles(projDir, wtName string) {
 		os.MkdirAll(filepath.Dir(dst), 0755)
 		os.WriteFile(dst, data, info.Mode())
 	}
+}
+
+func codexArgs(prompt string, bypass bool) []string {
+	args := []string{}
+	if bypass {
+		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+	}
+	return append(args, prompt)
+}
+
+func codexShellCommand(prompt string, bypass bool) string {
+	args := codexArgs(prompt, bypass)
+	parts := []string{"codex"}
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func codexInteractiveShellCommand(prompt string, bypass bool) string {
+	return codexShellCommand(prompt, bypass) + "; status=$?; if [ $status -ne 0 ]; then printf '\\n[pm] Codex exited with status %s. Press Enter to return to board...' \"$status\"; read _; fi; exit $status"
+}
+
+func codexWindowName(id string) string {
+	return "cx:" + id
+}
+
+func (m Model) launchLLM(kind string) (tea.Model, tea.Cmd) {
+	if m.launchAgent == launchAgentCodex {
+		return m.launchCodex(kind)
+	}
+	return m.launchClaude(kind)
+}
+
+func (m Model) launchProjectCodex(kind string) (tea.Model, tea.Cmd) {
+	m.projectScopeLaunch = false
+	slug := m.projectScopeSlug
+	m.projectScopeSlug = ""
+
+	proj, err := m.store.GetProject(slug)
+	if err != nil || proj == nil {
+		return m, nil
+	}
+
+	prompt := buildProjectPrompt(proj, slug)
+
+	var projDir string
+	if proj.Path != "" {
+		if info, err := os.Stat(proj.Path); err == nil && info.IsDir() {
+			projDir = proj.Path
+		}
+	}
+
+	switch kind {
+	case "here":
+		c := exec.Command("sh", "-c", codexInteractiveShellCommand(prompt, m.claudeMenuSkipPerms))
+		if projDir != "" {
+			c.Dir = projDir
+		}
+		origWin := tmuxGetWindowName()
+		tmuxRenameWindow(codexWindowName(slug))
+		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			tmuxRenameWindow(origWin)
+			return launchResultMsg{agent: launchAgentCodex, kind: "project here", err: err}
+		})
+
+	case "tmux":
+		shellCmd := codexInteractiveShellCommand(prompt, m.claudeMenuSkipPerms)
+		if projDir != "" {
+			shellCmd = fmt.Sprintf("cd %s && %s", shellQuote(projDir), shellCmd)
+		}
+		winName := codexWindowName(slug)
+		if err := exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start(); err != nil {
+			m.toastMsg = "Codex tmux failed: " + err.Error()
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+		} else {
+			m.toastMsg = "Launched Codex in tmux: " + winName
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+		}
+	}
+
+	return m, nil
+}
+
+func (m Model) launchCodex(kind string) (tea.Model, tea.Cmd) {
+	if m.projectScopeLaunch {
+		return m.launchProjectCodex(kind)
+	}
+
+	t := m.selectedTask()
+	if t == nil {
+		return m, nil
+	}
+
+	if kind == "project" {
+		m.openProjectClaudeMenuWithAgent(t.Project, launchAgentCodex)
+		return m, nil
+	}
+
+	prompt := buildClaudePrompt(t, m.store)
+
+	var projDir string
+	if proj, err := m.store.GetProject(t.Project); err == nil && proj.Path != "" {
+		if info, err := os.Stat(proj.Path); err == nil && info.IsDir() {
+			projDir = proj.Path
+		}
+	}
+
+	setDir := func(c *exec.Cmd) {
+		if projDir != "" {
+			c.Dir = projDir
+		}
+	}
+
+	withCd := func(cmd string) string {
+		if projDir != "" {
+			return fmt.Sprintf("cd %s && %s", shellQuote(projDir), cmd)
+		}
+		return cmd
+	}
+
+	worktreeDir := func() string {
+		if projDir == "" {
+			return ""
+		}
+		wtName := worktreeName(t)
+		copyWorktreeFiles(projDir, wtName)
+		wtPath := filepath.Join(projDir, ".claude", "worktrees", wtName)
+		if info, err := os.Stat(wtPath); err == nil && info.IsDir() {
+			return wtPath
+		}
+		return ""
+	}
+
+	withWorktreeCd := func(cmd string) string {
+		if wtDir := worktreeDir(); wtDir != "" {
+			return fmt.Sprintf("cd %s && %s", shellQuote(wtDir), cmd)
+		}
+		return withCd(cmd)
+	}
+
+	switch kind {
+	case "here":
+		c := exec.Command("sh", "-c", codexInteractiveShellCommand(prompt, m.claudeMenuSkipPerms))
+		setDir(c)
+		origWin := tmuxGetWindowName()
+		tmuxRenameWindow(codexWindowName(t.Meta.ID))
+		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			tmuxRenameWindow(origWin)
+			return launchResultMsg{agent: launchAgentCodex, kind: "here", err: err}
+		})
+
+	case "tmux":
+		shellCmd := withCd(codexInteractiveShellCommand(prompt, m.claudeMenuSkipPerms))
+		winName := codexWindowName(t.Meta.ID)
+		if err := exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start(); err != nil {
+			m.toastMsg = "Codex tmux failed: " + err.Error()
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+		} else {
+			m.toastMsg = "Launched Codex in tmux: " + winName
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+		}
+
+	case "worktree":
+		wtDir := worktreeDir()
+		c := exec.Command("sh", "-c", codexInteractiveShellCommand(prompt, m.claudeMenuSkipPerms))
+		if wtDir != "" {
+			c.Dir = wtDir
+		} else {
+			setDir(c)
+		}
+		origWin := tmuxGetWindowName()
+		tmuxRenameWindow(codexWindowName(t.Meta.ID))
+		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			tmuxRenameWindow(origWin)
+			return launchResultMsg{agent: launchAgentCodex, kind: "worktree", err: err}
+		})
+
+	case "worktree-tmux":
+		shellCmd := withWorktreeCd(codexInteractiveShellCommand(prompt, m.claudeMenuSkipPerms))
+		winName := codexWindowName(t.Meta.ID)
+		if err := exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start(); err != nil {
+			m.toastMsg = "Codex worktree tmux failed: " + err.Error()
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+		} else {
+			m.toastMsg = "Launched Codex worktree in tmux: " + winName
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+		}
+	}
+
+	return m, nil
 }
 
 func (m Model) launchProjectClaude(kind string) (tea.Model, tea.Cmd) {
@@ -2676,6 +2923,10 @@ func buildClaudePrompt(t *storage.Task, store storage.TaskStore) string {
 
 	if t.Meta.Brief != "" {
 		fmt.Fprintf(&sb, "\nBrief: %s\n", t.Meta.Brief)
+	}
+
+	if t.Meta.AC != "" {
+		fmt.Fprintf(&sb, "\nAcceptance Criteria:\n%s\n", t.Meta.AC)
 	}
 
 	if body := strings.TrimSpace(t.Body); body != "" {

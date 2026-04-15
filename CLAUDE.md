@@ -36,8 +36,9 @@ Always add tests when implementing new features or fixing bugs. Conventions:
 
 ## Key patterns
 
-- **Frontmatter tasks**: `.md` file with YAML frontmatter (id, title, status, created, updated, links, branch, tags, brief, order, sessions) + markdown body
+- **Frontmatter tasks**: `.md` file with YAML frontmatter (id, title, status, created, updated, links, branch, tags, brief, ac, order, sessions) + markdown body
 - **Brief field**: `brief` in frontmatter stores short session context ("where we left off"). Overwrites on each update (not append). Preserved on all status transitions (including done/archived - useful for summaries/reverts). Returned by `pm_context` for doing tasks.
+- **AC field**: `ac` in frontmatter stores acceptance criteria. Overwrites on each update (same as brief). Preserved on all status transitions. Returned in `pm_context` and `pm_list_tasks` summaries. When executing a task, constrain work to AC - don't add unrequested features or deviate from stated criteria.
 - **Project config**: `~/.claude/pm/<slug>/project.yaml` — name, path, repo, stack, notes, links, tags, statuses
 - **Statuses are per-project** — read via `Store.GetProjectStatuses(slug)`. Default: `[todo, doing, waiting, done]`. Override in `project.yaml`. "ALL" view merges all projects' statuses.
 - **Archive is system-level** — `StatusArchived` is NOT a project status. Never add to `DefaultStatuses` or `project.yaml`. `filteredTasks()` excludes archived. `Ctrl+a` toggles archive view.
@@ -100,4 +101,4 @@ Stdio MCP server for Claude Code. Registered as user-scope MCP: `claude mcp add 
 - **Tools**: `pm_context`, `pm_list_tasks`, `pm_get_task`, `pm_list_projects`, `pm_add_task`, `pm_update_task`, `pm_update_project`, `pm_create_project`, `pm_move_task`, `pm_delete_task`
 - **Resources**: `pm://projects`, `pm://tasks/{project}/{status}`, `pm://project/{slug}`
 - **CWD auto-detection**: `pm_context` with `cwd` param matches against project.yaml `path` fields
-- **Invariants**: links merge (never remove), body appends (never replace), brief overwrites, tags replace if provided
+- **Invariants**: links merge (never remove), body appends (never replace), brief overwrites, ac overwrites, tags replace if provided

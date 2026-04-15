@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/mbalazy/pm/internal/version"
 )
@@ -43,6 +43,9 @@ func renderTaskDetail(t *storage.Task, termWidth int) string {
 			}
 			fmt.Fprintln(&sb)
 		}
+	}
+	if t.Meta.AC != "" {
+		fmt.Fprintf(&sb, "\n**Acceptance Criteria:**\n%s\n", t.Meta.AC)
 	}
 	if t.Meta.Brief != "" {
 		fmt.Fprintf(&sb, "\n**Brief:**\n%s\n", t.Meta.Brief)
@@ -473,10 +476,10 @@ func (m Model) viewColVisMenu() string {
 }
 
 func (m Model) viewClaudeMenu() string {
-	titleText := "Launch Claude Code"
+	titleText := "Launch LLM"
 	if m.projectScopeLaunch {
-		titleText = "Launch Claude Code (project)"
-	} else if m.resumeOnly {
+		titleText = "Launch LLM (project)"
+	} else if m.launchAgent != launchAgentCodex && m.resumeOnly {
 		sid := m.resumeSessionID
 		if len(sid) > 8 {
 			sid = sid[:8] + "..."
@@ -496,6 +499,9 @@ func (m Model) viewClaudeMenu() string {
 	lines = append(lines, title)
 	lines = append(lines, "")
 
+	lines = append(lines, "  "+keyStyle.Render("@")+" Agent: "+lipgloss.NewStyle().Bold(true).Foreground(special).Render(m.launchAgent.label()))
+	lines = append(lines, "")
+
 	// skip-permissions toggle
 	check := "[ ]"
 	checkStyle := dimStyle
@@ -503,7 +509,11 @@ func (m Model) viewClaudeMenu() string {
 		check = "[x]"
 		checkStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF6B6B"))
 	}
-	lines = append(lines, "  "+keyStyle.Render("!")+checkStyle.Render(" "+check+" skip permissions"))
+	permsLabel := "skip permissions"
+	if m.launchAgent == launchAgentCodex {
+		permsLabel = "bypass sandbox"
+	}
+	lines = append(lines, "  "+keyStyle.Render("!")+checkStyle.Render(" "+check+" "+permsLabel))
 	lines = append(lines, "")
 
 	for i, item := range m.claudeMenuItems {
@@ -517,7 +527,7 @@ func (m Model) viewClaudeMenu() string {
 		lines = append(lines, prefix+shortcut+" "+labelStyle.Render(item.label))
 	}
 	lines = append(lines, "")
-	lines = append(lines, helpStyle.Render("press key or enter  ! toggle perms  esc back"))
+	lines = append(lines, helpStyle.Render("press key or enter  @ toggle agent  ! toggle perms  esc back"))
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
