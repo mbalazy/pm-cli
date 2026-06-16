@@ -19,6 +19,7 @@ type Project struct {
 	Statuses []string          `yaml:"statuses,omitempty"`
 	Notes    string            `yaml:"notes,omitempty"`
 	Archived bool              `yaml:"archived,omitempty"`
+	Executor *Executor         `yaml:"executor,omitempty"`
 }
 
 func (p *Project) GetStatuses() []TaskStatus {
