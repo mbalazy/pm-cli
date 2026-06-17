@@ -72,65 +72,30 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := store.GetProject(slug)
-			if err != nil {
-				return fmt.Errorf("load project %s: %w", slug, err)
-			}
-			if proj.Path == "" {
-				return fmt.Errorf("project %s has no path - the executor needs a git repo (set `path` in project.yaml)", slug)
-			}
-			if !isGitRepo(proj.Path) {
-				return fmt.Errorf("project path %s is not a git repository - the executor only runs on git projects", proj.Path)
+			opts := workOptions{
+				standalone: !epic,
+				model:      model,
+				maxTurns:   maxTurns,
+				yolo:       yolo,
+				allowDirty: allowDirty,
+				timeout:    timeout,
 			}
 
-			var parent *storage.Task
-			if task.Meta.Parent != "" {
-				if p, err := store.FindTask(slug, task.Meta.Parent); err == nil {
-					parent = p
-				}
-			}
-
-			exec := proj.GetExecutor()
-			if !exec.Enabled {
-				return fmt.Errorf("executor disabled for project %s (executor.enabled: false)", slug)
-			}
-			standalone := !epic
-			branch := resolveWorkBranch(task)
-
-			prompt := buildWorkerPrompt(task, parent, proj, slug, exec, branch, standalone)
-			sysPrompt := buildWorkerSystemPrompt(exec, standalone)
-
-			cmdArgs := buildClaudeArgs(prompt, sysPrompt, model, maxTurns, yolo)
-
-			if dryRun {
-				fmt.Printf("# pm work (dry-run)\nproject: %s\ntask: %s\nbranch: %s\nmode: %s\ncwd: %s\n\n",
-					slug, task.Meta.ID, branch, modeLabel(standalone), proj.Path)
-				fmt.Printf("$ claude %s\n\n", strings.Join(quoteArgs(cmdArgs), " "))
-				fmt.Printf("=== SYSTEM PROMPT ===\n%s\n\n=== PROMPT ===\n%s\n", sysPrompt, prompt)
-				return nil
-			}
-
-			// Git topology: in standalone mode pm owns the branch; in epic mode the
-			// manager has already checked out the sub branch.
-			if standalone {
-				if !allowDirty {
-					if dirty, _ := gitDirty(proj.Path); dirty {
-						return fmt.Errorf("working tree at %s is dirty - commit/stash first or pass --allow-dirty", proj.Path)
-					}
-				}
-				if err := gitCheckoutBranch(proj.Path, branch); err != nil {
-					return fmt.Errorf("prepare branch %s: %w", branch, err)
-				}
-			}
-
-			fmt.Fprintf(os.Stderr, "pm work: launching headless worker for %s on %s (%s)...\n", task.Meta.ID, branch, modeLabel(standalone))
-
-			res, sessionID, err := runWorker(proj.Path, cmdArgs, timeout)
+			plan, err := planWork(store, task, slug, opts)
 			if err != nil {
 				return err
 			}
 
-			if err := applyWorkerResult(store, task, branch, sessionID, res, standalone); err != nil {
+			if dryRun {
+				fmt.Printf("# pm work (dry-run)\nproject: %s\ntask: %s\nbranch: %s\nmode: %s\ncwd: %s\n\n",
+					slug, task.Meta.ID, plan.branch, modeLabel(opts.standalone), plan.proj.Path)
+				fmt.Printf("$ claude %s\n\n", strings.Join(quoteArgs(plan.cmdArgs), " "))
+				fmt.Printf("=== SYSTEM PROMPT ===\n%s\n\n=== PROMPT ===\n%s\n", plan.sysPrompt, plan.prompt)
+				return nil
+			}
+
+			res, err := executeWork(store, task, plan, opts)
+			if err != nil {
 				return err
 			}
 
@@ -194,6 +159,90 @@ func resolveWorkBranch(t *storage.Task) string {
 		return t.Meta.Branch
 	}
 	return "feat/" + storage.Slugify(t.Meta.Title)
+}
+
+// workOptions are the knobs shared by the `pm work` command and the manager
+// (`pm run-epic`). standalone=false is epic mode (the manager owns git; the
+// worker only commits on the already-checked-out branch).
+type workOptions struct {
+	standalone bool
+	model      string
+	maxTurns   int
+	yolo       bool
+	allowDirty bool
+	timeout    time.Duration
+}
+
+// workPlan is the resolved, ready-to-run worker invocation: the project, the
+// branch the worker commits on, and the assembled prompts/argv.
+type workPlan struct {
+	proj      *storage.Project
+	branch    string
+	prompt    string
+	sysPrompt string
+	cmdArgs   []string
+}
+
+// planWork validates preconditions and assembles everything needed to invoke a
+// worker for task, without touching git or spending tokens. Used by both the
+// dry-run path and the real run.
+func planWork(store storage.TaskStore, task *storage.Task, slug string, opts workOptions) (*workPlan, error) {
+	proj, err := store.GetProject(slug)
+	if err != nil {
+		return nil, fmt.Errorf("load project %s: %w", slug, err)
+	}
+	if proj.Path == "" {
+		return nil, fmt.Errorf("project %s has no path - the executor needs a git repo (set `path` in project.yaml)", slug)
+	}
+	if !isGitRepo(proj.Path) {
+		return nil, fmt.Errorf("project path %s is not a git repository - the executor only runs on git projects", proj.Path)
+	}
+
+	exec := proj.GetExecutor()
+	if !exec.Enabled {
+		return nil, fmt.Errorf("executor disabled for project %s (executor.enabled: false)", slug)
+	}
+
+	var parent *storage.Task
+	if task.Meta.Parent != "" {
+		if p, err := store.FindTask(slug, task.Meta.Parent); err == nil {
+			parent = p
+		}
+	}
+
+	branch := resolveWorkBranch(task)
+	prompt := buildWorkerPrompt(task, parent, proj, slug, exec, branch, opts.standalone)
+	sysPrompt := buildWorkerSystemPrompt(exec, opts.standalone)
+	cmdArgs := buildClaudeArgs(prompt, sysPrompt, opts.model, opts.maxTurns, opts.yolo)
+
+	return &workPlan{proj: proj, branch: branch, prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs}, nil
+}
+
+// executeWork runs a planned worker and records the result into pm. In
+// standalone mode it owns the branch (clean-tree precondition + checkout); in
+// epic mode the manager has already checked out the branch.
+func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, opts workOptions) (*workerResult, error) {
+	if opts.standalone {
+		if !opts.allowDirty {
+			if dirty, _ := gitDirty(plan.proj.Path); dirty {
+				return nil, fmt.Errorf("working tree at %s is dirty - commit/stash first or pass --allow-dirty", plan.proj.Path)
+			}
+		}
+		if err := gitCheckoutBranch(plan.proj.Path, plan.branch); err != nil {
+			return nil, fmt.Errorf("prepare branch %s: %w", plan.branch, err)
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "pm work: launching headless worker for %s on %s (%s)...\n", task.Meta.ID, plan.branch, modeLabel(opts.standalone))
+
+	res, sessionID, err := runWorker(plan.proj.Path, plan.cmdArgs, opts.timeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := applyWorkerResult(store, task, plan.branch, sessionID, res, opts.standalone); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 func modeLabel(standalone bool) string {

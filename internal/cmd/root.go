@@ -37,6 +37,8 @@ func NewRootCmd() *cobra.Command {
 		newEditCmd(store),
 		newBoardCmd(store),
 		newWorkCmd(store),
+		newRunEpicCmd(store),
+		newExecutorCmd(store),
 		newMcpCmd(store),
 		newMigrateIDsCmd(store),
 		newSessionIDCmd(),
