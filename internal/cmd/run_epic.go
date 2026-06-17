@@ -246,6 +246,11 @@ func driveSub(store storage.TaskStore, proj *storage.Project, slug string, track
 		if sub.Meta.Status != storage.StatusWaiting {
 			_ = store.MoveTask(sub, storage.StatusWaiting)
 		}
+		// Bubble the parked sub's reason + open questions up to the parent so the
+		// human sees, in one place (the epic), why a sub stalled - without opening
+		// each child. Status itself stays in the child + generated rollup; this is
+		// open-questions content, not a status table.
+		_ = recordSubFeedback(store, tracker, sub.Meta.ID, res.Status, parkedFindings(res))
 		return subOutcome{sub.Meta.ID, res.Status, briefReason(res)}
 	}
 
@@ -265,7 +270,7 @@ func driveSub(store storage.TaskStore, proj *storage.Project, slug string, track
 
 	// Propagate cross-cutting findings to the parent SPEC so later subs see them.
 	if len(res.Unresolved) > 0 {
-		_ = recordCrossCutting(store, tracker, sub.Meta.ID, res.Unresolved)
+		_ = recordSubFeedback(store, tracker, sub.Meta.ID, "merged", res.Unresolved)
 	}
 	return subOutcome{sub.Meta.ID, "merged", briefReason(res)}
 }
@@ -292,15 +297,34 @@ func briefReason(res *workerResult) string {
 
 const managerNotesHeading = "## Manager Notes (cross-cutting)"
 
-// recordCrossCutting appends a sub's unresolved findings to the parent's Manager
-// Notes section inside the Spec (so later subs, whose prompt carries the parent
-// SPEC, see them). Falls back to the Log when the parent has no Spec block.
-func recordCrossCutting(store storage.TaskStore, parent *storage.Task, subID string, findings []string) error {
-	note := managerNoteBlock(subID, findings)
+// parkedFindings is the feedback to bubble up for a non-merged sub: its open
+// questions if any, else its summary, so the parent always carries a one-line
+// reason even when the worker raised no explicit questions.
+func parkedFindings(res *workerResult) []string {
+	if len(res.Unresolved) > 0 {
+		return res.Unresolved
+	}
+	if s := strings.TrimSpace(res.Summary); s != "" {
+		return []string{s}
+	}
+	return []string{"(no detail)"}
+}
+
+// recordSubFeedback records a sub's findings into the parent's Manager Notes
+// section inside the Spec (so later subs, whose prompt carries the parent SPEC,
+// see them, and the human sees parked subs in one place). Falls back to the Log
+// when the parent has no Spec block. Per-sub dedupe: any prior lines for the
+// same subID are replaced, so re-running the epic refreshes a sub's note instead
+// of stacking duplicates. outcome != "merged" tags the line (e.g. "x2 · blocked")
+// so a parked sub reads differently from a merged sub's cross-cutting note.
+func recordSubFeedback(store storage.TaskStore, parent *storage.Task, subID, outcome string, findings []string) error {
+	note := managerNoteBlock(subID, outcome, findings)
 	spec := storage.ExtractSpec(parent.Body)
 	if spec == "" {
-		parent.Body = appendLog(parent.Body, managerNotesHeading+"\n"+note)
+		body := dropSubLines(parent.Body, subID)
+		parent.Body = appendLog(body, managerNotesHeading+"\n"+note)
 	} else {
+		spec = dropSubLines(spec, subID)
 		if strings.Contains(spec, managerNotesHeading) {
 			spec = strings.TrimRight(spec, "\n") + "\n" + note
 		} else {
@@ -312,10 +336,32 @@ func recordCrossCutting(store storage.TaskStore, parent *storage.Task, subID str
 	return store.WriteTask(parent)
 }
 
-func managerNoteBlock(subID string, findings []string) string {
+// dropSubLines removes any Manager-Notes bullet that belongs to subID, so a
+// sub's feedback can be refreshed in place. Matches "- [subID]" and the tagged
+// "- [subID · outcome]" form, but not a different sub that shares a prefix
+// (e.g. dropping "x2" must not touch "x2-1").
+func dropSubLines(body, subID string) string {
+	exact := "- [" + subID + "]"
+	tagged := "- [" + subID + " "
+	var kept []string
+	for _, ln := range strings.Split(body, "\n") {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, exact) || strings.HasPrefix(t, tagged) {
+			continue
+		}
+		kept = append(kept, ln)
+	}
+	return strings.Join(kept, "\n")
+}
+
+func managerNoteBlock(subID, outcome string, findings []string) string {
+	tag := subID
+	if outcome != "" && outcome != "merged" {
+		tag = subID + " · " + outcome
+	}
 	var sb strings.Builder
 	for _, f := range findings {
-		fmt.Fprintf(&sb, "- [%s] %s\n", subID, strings.TrimSpace(f))
+		fmt.Fprintf(&sb, "- [%s] %s\n", tag, strings.TrimSpace(f))
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }

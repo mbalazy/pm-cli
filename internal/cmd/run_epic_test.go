@@ -52,19 +52,19 @@ func TestReadySubs(t *testing.T) {
 	}
 }
 
-func TestRecordCrossCutting(t *testing.T) {
+func TestRecordSubFeedback(t *testing.T) {
 	store, slug := tempStore(t)
 
 	t.Run("appends Manager Notes section into the spec", func(t *testing.T) {
 		parent := addTask(t, store, slug, storage.TaskMeta{ID: "proj-10", Title: "Epic", Status: storage.StatusDoing},
 			storage.SpecStart+"\n## Description\nbuild it\n"+storage.SpecEnd+"\n\nlog tail")
 
-		if err := recordCrossCutting(store, parent, "proj-10-1", []string{"streak store seam"}); err != nil {
-			t.Fatalf("recordCrossCutting: %v", err)
+		if err := recordSubFeedback(store, parent, "proj-10-1", "merged", []string{"streak store seam"}); err != nil {
+			t.Fatalf("recordSubFeedback: %v", err)
 		}
 		// second finding from a later sub accumulates
-		if err := recordCrossCutting(store, parent, "proj-10-2", []string{"nav handoff"}); err != nil {
-			t.Fatalf("recordCrossCutting 2: %v", err)
+		if err := recordSubFeedback(store, parent, "proj-10-2", "merged", []string{"nav handoff"}); err != nil {
+			t.Fatalf("recordSubFeedback 2: %v", err)
 		}
 
 		reloaded, err := store.FindTask(slug, "proj-10")
@@ -84,10 +84,48 @@ func TestRecordCrossCutting(t *testing.T) {
 		mustContain(t, reloaded.Body, "log tail")
 	})
 
+	t.Run("tags a parked sub and refreshes it in place on re-run", func(t *testing.T) {
+		parent := addTask(t, store, slug, storage.TaskMeta{ID: "proj-12", Title: "Epic3", Status: storage.StatusDoing},
+			storage.SpecStart+"\n## Description\nbuild it\n"+storage.SpecEnd)
+
+		if err := recordSubFeedback(store, parent, "proj-12-2", "blocked", []string{"needs API field X"}); err != nil {
+			t.Fatalf("record blocked: %v", err)
+		}
+		reloaded, _ := store.FindTask(slug, "proj-12")
+		spec := storage.ExtractSpec(reloaded.Body)
+		mustContain(t, spec, "[proj-12-2 · blocked] needs API field X")
+
+		// Re-run: same sub, fresh reason -> the old line is replaced, not stacked.
+		if err := recordSubFeedback(store, reloaded, "proj-12-2", "blocked", []string{"still needs API field X (v2)"}); err != nil {
+			t.Fatalf("record blocked 2: %v", err)
+		}
+		reloaded2, _ := store.FindTask(slug, "proj-12")
+		spec2 := storage.ExtractSpec(reloaded2.Body)
+		mustContain(t, spec2, "[proj-12-2 · blocked] still needs API field X (v2)")
+		if strings.Contains(spec2, "needs API field X\n") || strings.Count(spec2, "proj-12-2") != 1 {
+			t.Errorf("expected exactly one proj-12-2 line after re-run, got:\n%s", spec2)
+		}
+	})
+
+	t.Run("a shared-prefix sub id is not clobbered", func(t *testing.T) {
+		parent := addTask(t, store, slug, storage.TaskMeta{ID: "proj-13", Title: "Epic4", Status: storage.StatusDoing},
+			storage.SpecStart+"\n## Description\nx\n"+storage.SpecEnd)
+		_ = recordSubFeedback(store, parent, "proj-13-1", "blocked", []string{"one"})
+		reloaded, _ := store.FindTask(slug, "proj-13")
+		_ = recordSubFeedback(store, reloaded, "proj-13-12", "blocked", []string{"twelve"})
+		// refreshing proj-13-1 must leave proj-13-12 intact
+		reloaded2, _ := store.FindTask(slug, "proj-13")
+		_ = recordSubFeedback(store, reloaded2, "proj-13-1", "blocked", []string{"one-again"})
+		final, _ := store.FindTask(slug, "proj-13")
+		spec := storage.ExtractSpec(final.Body)
+		mustContain(t, spec, "[proj-13-1 · blocked] one-again")
+		mustContain(t, spec, "[proj-13-12 · blocked] twelve")
+	})
+
 	t.Run("falls back to Log when parent has no spec", func(t *testing.T) {
 		parent := addTask(t, store, slug, storage.TaskMeta{ID: "proj-11", Title: "Epic2", Status: storage.StatusDoing}, "plain body, no markers")
-		if err := recordCrossCutting(store, parent, "proj-11-1", []string{"finding x"}); err != nil {
-			t.Fatalf("recordCrossCutting: %v", err)
+		if err := recordSubFeedback(store, parent, "proj-11-1", "merged", []string{"finding x"}); err != nil {
+			t.Fatalf("recordSubFeedback: %v", err)
 		}
 		reloaded, _ := store.FindTask(slug, "proj-11")
 		if storage.ExtractSpec(reloaded.Body) != "" {
@@ -98,11 +136,24 @@ func TestRecordCrossCutting(t *testing.T) {
 	})
 }
 
+func TestParkedFindings(t *testing.T) {
+	if got := parkedFindings(&workerResult{Unresolved: []string{"q1", "q2"}}); strings.Join(got, ",") != "q1,q2" {
+		t.Errorf("unresolved should win: %v", got)
+	}
+	if got := parkedFindings(&workerResult{Summary: "tests red"}); strings.Join(got, ",") != "tests red" {
+		t.Errorf("summary fallback: %v", got)
+	}
+	if got := parkedFindings(&workerResult{}); strings.Join(got, ",") != "(no detail)" {
+		t.Errorf("empty fallback: %v", got)
+	}
+}
+
 func TestManagerNoteBlock(t *testing.T) {
-	got := managerNoteBlock("s-1", []string{"a", "b"})
-	want := "- [s-1] a\n- [s-1] b"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
+	if got := managerNoteBlock("s-1", "merged", []string{"a", "b"}); got != "- [s-1] a\n- [s-1] b" {
+		t.Errorf("merged tag: got %q", got)
+	}
+	if got := managerNoteBlock("s-1", "blocked", []string{"a"}); got != "- [s-1 · blocked] a" {
+		t.Errorf("blocked tag: got %q", got)
 	}
 }
 
