@@ -157,6 +157,65 @@ func TestManagerNoteBlock(t *testing.T) {
 	}
 }
 
+func TestUnmetDeps(t *testing.T) {
+	done := storage.TaskStatus("merged") // doneStatus for the epic flow
+	mk := func(id string, status storage.TaskStatus, deps ...string) *storage.Task {
+		return &storage.Task{Meta: storage.TaskMeta{ID: id, Status: status, DependsOn: deps}}
+	}
+	x1 := mk("x-1", "merged")
+	x1todo := mk("x-1", storage.StatusTodo)
+	x1done := mk("x-1", storage.StatusDone)
+	byID := func(subs ...*storage.Task) map[string]*storage.Task {
+		m := map[string]*storage.Task{}
+		for _, s := range subs {
+			m[s.Meta.ID] = s
+		}
+		return m
+	}
+
+	t.Run("no deps -> satisfied", func(t *testing.T) {
+		if r := unmetDeps(mk("x-3", storage.StatusTodo), byID(), done); r != "" {
+			t.Errorf("expected satisfied, got %q", r)
+		}
+	})
+	t.Run("dep merged -> satisfied", func(t *testing.T) {
+		sub := mk("x-3", storage.StatusTodo, "x-1")
+		if r := unmetDeps(sub, byID(x1), done); r != "" {
+			t.Errorf("merged dep should satisfy, got %q", r)
+		}
+	})
+	t.Run("dep done -> satisfied", func(t *testing.T) {
+		sub := mk("x-3", storage.StatusTodo, "x-1")
+		if r := unmetDeps(sub, byID(x1done), done); r != "" {
+			t.Errorf("done dep should satisfy, got %q", r)
+		}
+	})
+	t.Run("dep not satisfied -> reason names it + status", func(t *testing.T) {
+		sub := mk("x-3", storage.StatusTodo, "x-1")
+		r := unmetDeps(sub, byID(x1todo), done)
+		if !strings.Contains(r, "x-1") || !strings.Contains(r, "todo") {
+			t.Errorf("reason should name the unmet dep and its status, got %q", r)
+		}
+	})
+	t.Run("unknown dep -> unmet", func(t *testing.T) {
+		sub := mk("x-3", storage.StatusTodo, "x-9")
+		if r := unmetDeps(sub, byID(), done); !strings.Contains(r, "x-9") || !strings.Contains(r, "unknown") {
+			t.Errorf("unknown dep should be unmet, got %q", r)
+		}
+	})
+	t.Run("multiple deps, one unmet -> reported", func(t *testing.T) {
+		sub := mk("x-3", storage.StatusTodo, "x-1", "x-2")
+		x2 := mk("x-2", storage.StatusWaiting)
+		r := unmetDeps(sub, byID(x1, x2), done)
+		if strings.Contains(r, "x-1") {
+			t.Errorf("satisfied dep should not appear, got %q", r)
+		}
+		if !strings.Contains(r, "x-2") {
+			t.Errorf("unmet dep x-2 should be reported, got %q", r)
+		}
+	})
+}
+
 func TestAnyMerged(t *testing.T) {
 	if anyMerged([]subOutcome{{result: "blocked"}, {result: "skipped"}}) {
 		t.Error("anyMerged = true, want false")

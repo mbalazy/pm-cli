@@ -53,6 +53,10 @@ type TaskMeta struct {
 	AC       string            `yaml:"ac,omitempty"`
 	Order    int               `yaml:"order,omitempty"`
 	Sessions []string          `yaml:"sessions,omitempty"`
+	// DependsOn lists sub IDs that must be merged/done before this sub runs.
+	// Used by `pm run-epic`: an unsatisfied dependency parks the sub (skipped)
+	// instead of spawning a doomed worker. Empty = no gate (runs by Order).
+	DependsOn []string `yaml:"depends_on,omitempty"`
 }
 
 type Task struct {

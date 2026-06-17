@@ -29,19 +29,20 @@ type contextInput struct {
 }
 
 type addTaskInput struct {
-	Project  string            `json:"project" jsonschema:"Project slug or prefix"`
-	Title    string            `json:"title" jsonschema:"Task title"`
-	Status   string            `json:"status,omitempty" jsonschema:"Initial status (default: first project status)"`
-	Branch   string            `json:"branch,omitempty" jsonschema:"Git branch name"`
-	Parent   string            `json:"parent,omitempty" jsonschema:"Parent task ID for subtasks (e.g. atlas-39). Makes this a child of a tracker task."`
-	Tags     []string          `json:"tags,omitempty" jsonschema:"Tags"`
-	Links    map[string]string `json:"links,omitempty" jsonschema:"Links as key=url pairs (e.g. azure, pr, slack)"`
-	Body     string            `json:"body,omitempty" jsonschema:"Markdown body content. This is the append-only Log zone (session history)."`
-	Spec     string            `json:"spec,omitempty" jsonschema:"Initial Spec block (current-truth zone): what we're building, current decisions, still-open questions. Wrapped in spec markers at the top of the body; the body field becomes the append-only Log below it."`
-	ID       string            `json:"id,omitempty" jsonschema:"Task ID (auto-generated if omitted; when parent is set, auto-numbers as <parent>-<n>)"`
-	Brief    string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
-	AC       string            `json:"ac,omitempty" jsonschema:"Acceptance criteria (overwrites previous)"`
-	Sessions []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to attach"`
+	Project   string            `json:"project" jsonschema:"Project slug or prefix"`
+	Title     string            `json:"title" jsonschema:"Task title"`
+	Status    string            `json:"status,omitempty" jsonschema:"Initial status (default: first project status)"`
+	Branch    string            `json:"branch,omitempty" jsonschema:"Git branch name"`
+	Parent    string            `json:"parent,omitempty" jsonschema:"Parent task ID for subtasks (e.g. atlas-39). Makes this a child of a tracker task."`
+	DependsOn []string          `json:"depends_on,omitempty" jsonschema:"Sub IDs this subtask depends on (e.g. atlas-39-2). pm run-epic skips this sub (no worker spawned) until every listed dep is merged/done, then a re-run picks it up. Empty = runs by Order."`
+	Tags      []string          `json:"tags,omitempty" jsonschema:"Tags"`
+	Links     map[string]string `json:"links,omitempty" jsonschema:"Links as key=url pairs (e.g. azure, pr, slack)"`
+	Body      string            `json:"body,omitempty" jsonschema:"Markdown body content. This is the append-only Log zone (session history)."`
+	Spec      string            `json:"spec,omitempty" jsonschema:"Initial Spec block (current-truth zone): what we're building, current decisions, still-open questions. Wrapped in spec markers at the top of the body; the body field becomes the append-only Log below it."`
+	ID        string            `json:"id,omitempty" jsonschema:"Task ID (auto-generated if omitted; when parent is set, auto-numbers as <parent>-<n>)"`
+	Brief     string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
+	AC        string            `json:"ac,omitempty" jsonschema:"Acceptance criteria (overwrites previous)"`
+	Sessions  []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to attach"`
 }
 
 type updateTaskInput struct {
@@ -51,6 +52,7 @@ type updateTaskInput struct {
 	Title      string            `json:"title,omitempty" jsonschema:"New title"`
 	Branch     string            `json:"branch,omitempty" jsonschema:"Git branch name"`
 	Parent     string            `json:"parent,omitempty" jsonschema:"Parent task ID for subtasks (e.g. atlas-39). Set to make this a child of a tracker task."`
+	DependsOn  []string          `json:"depends_on,omitempty" jsonschema:"Replace the sub's depends_on list (sub IDs that must be merged/done before pm run-epic runs this sub). Omit to keep current; pass an empty array to clear."`
 	Tags       []string          `json:"tags,omitempty" jsonschema:"Replace tags (omit to keep current)"`
 	Links      map[string]string `json:"links,omitempty" jsonschema:"Links to merge (existing links are preserved)"`
 	BodyAppend string            `json:"body_append,omitempty" jsonschema:"Append to the Log zone of the body (append-only session history; never replaces existing content)"`
@@ -116,9 +118,10 @@ type taskSummary struct {
 
 type taskDetail struct {
 	taskSummary
-	Created  string   `json:"created"`
-	Body     string   `json:"body,omitempty"`
-	Sessions []string `json:"sessions,omitempty"`
+	Created   string   `json:"created"`
+	Body      string   `json:"body,omitempty"`
+	Sessions  []string `json:"sessions,omitempty"`
+	DependsOn []string `json:"depends_on,omitempty"`
 }
 
 func toSummary(t *storage.Task) taskSummary {
@@ -163,6 +166,7 @@ func toDetail(t *storage.Task) taskDetail {
 		Created:     t.Meta.Created,
 		Body:        t.Body,
 		Sessions:    t.Meta.Sessions,
+		DependsOn:   t.Meta.DependsOn,
 	}
 }
 
@@ -355,6 +359,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 
 		t.Meta.Branch = in.Branch
 		t.Meta.Parent = in.Parent
+		t.Meta.DependsOn = in.DependsOn
 		t.Meta.Tags = in.Tags
 		if len(in.Links) > 0 {
 			t.Meta.Links = in.Links
@@ -403,6 +408,9 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		}
 		if in.Parent != "" {
 			task.Meta.Parent = in.Parent
+		}
+		if in.DependsOn != nil {
+			task.Meta.DependsOn = in.DependsOn
 		}
 		if in.Tags != nil {
 			task.Meta.Tags = in.Tags

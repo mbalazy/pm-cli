@@ -119,6 +119,13 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			}
 			_ = storage.WriteRunState(stateDir, run)
 
+			// ID -> sub for the dependency gate. Pointers are shared with the loop,
+			// so statuses mutated by driveSub are visible to later subs' gates.
+			byID := make(map[string]*storage.Task, len(subs))
+			for _, s := range subs {
+				byID[s.Meta.ID] = s
+			}
+
 			var outcomes []subOutcome
 			for _, sub := range subs {
 				// Re-entrant: skip already-finished subs; only pick up ready ones.
@@ -134,6 +141,19 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 					outcomes = append(outcomes, oc)
 					updateSubRun(run, oc.id, oc.result, oc.note)
 					_ = storage.WriteRunState(stateDir, run)
+					continue
+				}
+				// Dependency gate: an unsatisfied depends_on parks the sub as
+				// skipped WITHOUT spawning a doomed worker. The sub stays on its
+				// ready status (not moved to waiting) - nothing is wrong with it,
+				// it's just not its turn - so a later re-run picks it up
+				// automatically once the dependency merges.
+				if reason := unmetDeps(sub, byID, doneStatus); reason != "" {
+					oc := subOutcome{sub.Meta.ID, "skipped", reason}
+					outcomes = append(outcomes, oc)
+					updateSubRun(run, oc.id, oc.result, oc.note)
+					_ = storage.WriteRunState(stateDir, run)
+					fmt.Fprintf(os.Stderr, "pm run-epic: %s skipped - %s\n", sub.Meta.ID, reason)
 					continue
 				}
 
@@ -176,6 +196,27 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the plan (subs, branches, readiness) without running anything")
 
 	return cmd
+}
+
+// unmetDeps returns a human reason if any of sub's depends_on entries is not yet
+// satisfied (merged into the integration branch = doneStatus, or done), else "".
+// An unknown dependency id is treated as unmet (likely a typo - surface it).
+func unmetDeps(sub *storage.Task, byID map[string]*storage.Task, doneStatus storage.TaskStatus) string {
+	var unmet []string
+	for _, dep := range sub.Meta.DependsOn {
+		d := byID[dep]
+		if d == nil {
+			unmet = append(unmet, dep+" (unknown)")
+			continue
+		}
+		if d.Meta.Status != doneStatus && d.Meta.Status != storage.StatusDone {
+			unmet = append(unmet, dep+" ("+string(d.Meta.Status)+")")
+		}
+	}
+	if len(unmet) > 0 {
+		return "waiting on " + strings.Join(unmet, ", ")
+	}
+	return ""
 }
 
 // readySubs returns the children of trackerID for project slug, sorted by Order
@@ -268,10 +309,10 @@ func driveSub(store storage.TaskStore, proj *storage.Project, slug string, track
 	_ = store.MoveTask(sub, doneStatus)
 	_ = gitDeleteBranch(dir, branch)
 
-	// Propagate cross-cutting findings to the parent SPEC so later subs see them.
-	if len(res.Unresolved) > 0 {
-		_ = recordSubFeedback(store, tracker, sub.Meta.ID, "merged", res.Unresolved)
-	}
+	// Refresh the parent's Manager Notes for this sub: record cross-cutting
+	// findings for later subs, and (with empty findings) clear any stale parked
+	// note now that the sub has merged.
+	_ = recordSubFeedback(store, tracker, sub.Meta.ID, "merged", res.Unresolved)
 	return subOutcome{sub.Meta.ID, "merged", briefReason(res)}
 }
 
@@ -322,13 +363,18 @@ func recordSubFeedback(store storage.TaskStore, parent *storage.Task, subID, out
 	spec := storage.ExtractSpec(parent.Body)
 	if spec == "" {
 		body := dropSubLines(parent.Body, subID)
-		parent.Body = appendLog(body, managerNotesHeading+"\n"+note)
+		if note != "" { // empty findings = just clear this sub's stale lines
+			body = appendLog(body, managerNotesHeading+"\n"+note)
+		}
+		parent.Body = body
 	} else {
 		spec = dropSubLines(spec, subID)
-		if strings.Contains(spec, managerNotesHeading) {
-			spec = strings.TrimRight(spec, "\n") + "\n" + note
-		} else {
-			spec = strings.TrimRight(spec, "\n") + "\n\n" + managerNotesHeading + "\n" + note
+		if note != "" {
+			if strings.Contains(spec, managerNotesHeading) {
+				spec = strings.TrimRight(spec, "\n") + "\n" + note
+			} else {
+				spec = strings.TrimRight(spec, "\n") + "\n\n" + managerNotesHeading + "\n" + note
+			}
 		}
 		parent.Body = storage.ApplySpec(parent.Body, spec)
 	}
@@ -408,7 +454,11 @@ func printEpicPlan(tracker *storage.Task, epicBranch, base string, startStatus, 
 		} else if s.Meta.Status == doneStatus || s.Meta.Status == storage.StatusDone {
 			ready = "done"
 		}
-		fmt.Printf("  [%-5s] %-14s %-8s order=%d  -> feat/%s\n", ready, s.Meta.ID, s.Meta.Status, s.Meta.Order, storage.Slugify(s.Meta.Title))
+		dep := ""
+		if len(s.Meta.DependsOn) > 0 {
+			dep = "  depends_on=" + strings.Join(s.Meta.DependsOn, ",")
+		}
+		fmt.Printf("  [%-5s] %-14s %-8s order=%d  -> feat/%s%s\n", ready, s.Meta.ID, s.Meta.Status, s.Meta.Order, storage.Slugify(s.Meta.Title), dep)
 	}
 }
 
