@@ -376,6 +376,7 @@ func (m Model) viewHelp() string {
 		{"V", "Toggle columns"},
 		{"i", "Project info"},
 		{"c", "Claude Code"},
+		{"X", "Run executor (pm work / run-epic)"},
 		{"o / Enter", "Task detail"},
 		{"/ ", "Search tasks"},
 		{";", "Zoom toggle"},
@@ -660,6 +661,11 @@ func (m Model) viewClaudeMenu() string {
 	titleText := "Launch LLM"
 	if m.projectScopeLaunch {
 		titleText = "Launch LLM (project)"
+	} else if m.launchAgent == launchAgentExecutor {
+		titleText = "Run task (pm work)"
+		if m.executorIsTracker {
+			titleText = "Run epic (pm run-epic)"
+		}
 	} else if m.launchAgent != launchAgentCodex && m.resumeOnly {
 		sid := m.resumeSessionID
 		if len(sid) > 8 {
@@ -691,8 +697,11 @@ func (m Model) viewClaudeMenu() string {
 		checkStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF6B6B"))
 	}
 	permsLabel := "skip permissions"
-	if m.launchAgent == launchAgentCodex {
+	switch m.launchAgent {
+	case launchAgentCodex:
 		permsLabel = "bypass sandbox"
+	case launchAgentExecutor:
+		permsLabel = "yolo (bypass autonomy envelope)"
 	}
 	lines = append(lines, "  "+keyStyle.Render("!")+checkStyle.Render(" "+check+" "+permsLabel))
 	lines = append(lines, "")
@@ -1262,7 +1271,7 @@ func (m Model) viewBoard() string {
 		}
 		startup := fmt.Sprintf("%dms", m.startupDuration.Milliseconds())
 		ver := helpStyle.Render("pm " + version.Version + " " + startup)
-		help := helpStyle.Render("m/M move  d done  a add  c claude  e edit  y/Y yank  L links  i info  C-a archived")
+		help := helpStyle.Render("m/M move  d done  a add  c claude  X exec  e edit  y/Y yank  L links  i info  C-a archived")
 		gap := m.width - lipgloss.Width(ver) - lipgloss.Width(help)
 		if gap < 1 {
 			gap = 1

@@ -476,7 +476,7 @@ func TestUpdateClaudeMenuSkipPerms(t *testing.T) {
 		}
 	})
 
-	t.Run("toggle agent with @", func(t *testing.T) {
+	t.Run("toggle agent with @ cycles claude->codex->executor->claude", func(t *testing.T) {
 		os.Unsetenv("TMUX")
 		m := Model{
 			claudeMenu:      true,
@@ -484,16 +484,34 @@ func TestUpdateClaudeMenuSkipPerms(t *testing.T) {
 			claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
 		}
 
+		want := []launchAgent{launchAgentCodex, launchAgentExecutor, launchAgentClaude}
+		for i, w := range want {
+			result, _ := m.updateClaudeMenu(keyMsg("@"))
+			m = result.(Model)
+			if m.launchAgent != w {
+				t.Errorf("after %d toggles: launchAgent = %q, want %q", i+1, m.launchAgent, w)
+			}
+		}
+	})
+
+	t.Run("toggle agent with @ in project scope stays claude<->codex", func(t *testing.T) {
+		os.Unsetenv("TMUX")
+		m := Model{
+			claudeMenu:         true,
+			launchAgent:        launchAgentClaude,
+			projectScopeLaunch: true,
+			claudeMenuItems:    []claudeMenuItem{{"Here", "here", "h"}},
+		}
+
 		result, _ := m.updateClaudeMenu(keyMsg("@"))
 		m = result.(Model)
 		if m.launchAgent != launchAgentCodex {
 			t.Errorf("launchAgent = %q, want %q", m.launchAgent, launchAgentCodex)
 		}
-
 		result, _ = m.updateClaudeMenu(keyMsg("@"))
 		m = result.(Model)
 		if m.launchAgent != launchAgentClaude {
-			t.Errorf("launchAgent = %q, want %q", m.launchAgent, launchAgentClaude)
+			t.Errorf("project scope must not reach executor: launchAgent = %q, want %q", m.launchAgent, launchAgentClaude)
 		}
 	})
 }
@@ -1133,6 +1151,93 @@ func TestFindSessionDirGlobal(t *testing.T) {
 		got := findSessionDirGlobal("nonexistent-session-id-12345", store)
 		if got != "" {
 			t.Errorf("expected empty for nonexistent session, got %q", got)
+		}
+	})
+}
+
+func TestExecutorPMArgs(t *testing.T) {
+	task := &storage.Task{Meta: storage.TaskMeta{ID: "atlas-64-3"}, Project: "atlas"}
+	tests := []struct {
+		name                    string
+		isTracker, yolo, dryRun bool
+		want                    []string
+	}{
+		{"leaf task", false, false, false, []string{"work", "atlas", "atlas-64-3"}},
+		{"tracker", true, false, false, []string{"run-epic", "atlas", "atlas-64-3"}},
+		{"leaf yolo", false, true, false, []string{"work", "atlas", "atlas-64-3", "--yolo"}},
+		{"leaf dry-run", false, false, true, []string{"work", "atlas", "atlas-64-3", "--dry-run"}},
+		{"tracker yolo dry-run", true, true, true, []string{"run-epic", "atlas", "atlas-64-3", "--yolo", "--dry-run"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := executorPMArgs(task, tt.isTracker, tt.yolo, tt.dryRun)
+			if strings.Join(got, " ") != strings.Join(tt.want, " ") {
+				t.Errorf("executorPMArgs = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPMShellCommand(t *testing.T) {
+	got := pmShellCommand("/repos/atlas app", []string{"work", "atlas", "atlas-64-3", "--yolo"})
+	want := "cd '/repos/atlas app' && pm 'work' 'atlas' 'atlas-64-3' '--yolo'"
+	if got != want {
+		t.Errorf("pmShellCommand = %q, want %q", got, want)
+	}
+}
+
+func TestOpenExecutorMenu(t *testing.T) {
+	parent := &storage.Task{Meta: storage.TaskMeta{ID: "epic-1", Title: "Epic"}, Project: "p"}
+	child := &storage.Task{Meta: storage.TaskMeta{ID: "epic-1-1", Title: "Sub", Parent: "epic-1"}, Project: "p"}
+	leaf := &storage.Task{Meta: storage.TaskMeta{ID: "solo-1", Title: "Solo"}, Project: "p"}
+
+	kinds := func(items []claudeMenuItem) []string {
+		out := make([]string, len(items))
+		for i, it := range items {
+			out[i] = it.kind
+		}
+		return out
+	}
+
+	t.Run("leaf task without tmux -> work, here+dry-run", func(t *testing.T) {
+		os.Unsetenv("TMUX")
+		m := Model{tasks: []*storage.Task{leaf}}
+		m.openExecutorMenu(leaf)
+		if !m.claudeMenu {
+			t.Error("claudeMenu should be true")
+		}
+		if m.launchAgent != launchAgentExecutor {
+			t.Errorf("launchAgent = %q, want executor", m.launchAgent)
+		}
+		if m.executorIsTracker {
+			t.Error("leaf task must not be flagged as tracker")
+		}
+		if got := kinds(m.claudeMenuItems); strings.Join(got, ",") != "here,dry-run" {
+			t.Errorf("items = %v, want [here dry-run]", got)
+		}
+	})
+
+	t.Run("tracker with tmux -> run-epic, here+tmux+dry-run, default tmux", func(t *testing.T) {
+		os.Setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+		defer os.Unsetenv("TMUX")
+		m := Model{tasks: []*storage.Task{parent, child}}
+		m.openExecutorMenu(parent)
+		if !m.executorIsTracker {
+			t.Error("parent with a child must be flagged as tracker")
+		}
+		if got := kinds(m.claudeMenuItems); strings.Join(got, ",") != "here,tmux,dry-run" {
+			t.Errorf("items = %v, want [here tmux dry-run]", got)
+		}
+		if m.claudeMenuItems[m.claudeMenuCursor].kind != "tmux" {
+			t.Errorf("default cursor at %q, want tmux", m.claudeMenuItems[m.claudeMenuCursor].kind)
+		}
+	})
+
+	t.Run("nil task is a no-op", func(t *testing.T) {
+		m := Model{}
+		m.openExecutorMenu(nil)
+		if m.claudeMenu {
+			t.Error("opening executor menu on nil task must not open the menu")
 		}
 	})
 }

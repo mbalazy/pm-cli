@@ -415,6 +415,13 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.openClaudeMenu(t)
 
+	case key.Matches(msg, common.Keys.Executor):
+		t := m.selectedTask()
+		if t == nil {
+			break
+		}
+		m.openExecutorMenu(t)
+
 	case key.Matches(msg, common.Keys.Focus):
 		if t := m.selectedTask(); t != nil {
 			m.focusPlan.Toggle(t.Meta.ID)
@@ -1310,6 +1317,11 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, common.Keys.Claude):
 		if t != nil {
 			m.openClaudeMenu(t)
+		}
+
+	case key.Matches(msg, common.Keys.Executor):
+		if t != nil {
+			m.openExecutorMenu(t)
 		}
 
 	case msg.String() == "s":
@@ -2230,6 +2242,35 @@ func (m *Model) openClaudeMenu(t *storage.Task) {
 	m.claudeMenu = true
 }
 
+// openExecutorMenu opens the launch overlay directly in executor mode for task t
+// (which may be a tracker -> run-epic, or a leaf task -> work). Reuses the same
+// overlay as the Claude/Codex launch menu.
+func (m *Model) openExecutorMenu(t *storage.Task) {
+	if t == nil {
+		return
+	}
+	m.claudeMenuItems = nil
+	m.claudeMenuCursor = 0
+	m.claudeMenuSkipPerms = false
+	m.launchAgent = launchAgentExecutor
+	m.resumeOnly = false
+	m.forkMode = false
+	m.projectScopeLaunch = false
+	m.projectScopeSlug = ""
+	m.rebuildClaudeMenuItems(t)
+	m.claudeMenu = true
+}
+
+// menuTask returns the task the launch overlay acts on: the detail task when in
+// the detail view (correct even after a relation jump), otherwise the
+// board-selected task.
+func (m Model) menuTask() *storage.Task {
+	if m.currentView == viewDetail && m.detailTask != nil {
+		return m.detailTask
+	}
+	return m.selectedTask()
+}
+
 func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 	inTmux := os.Getenv("TMUX") != ""
 	m.claudeMenuItems = nil
@@ -2240,6 +2281,27 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 		if inTmux {
 			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
 			m.claudeMenuCursor = 1
+		}
+		return
+	}
+
+	if m.launchAgent == launchAgentExecutor {
+		// Executor runs `pm work` (task) or `pm run-epic` (tracker). Long-running,
+		// so default to tmux when available. No worktree/resume/fork options.
+		m.executorIsTracker = len(m.taskChildren(t)) > 0
+		runLabel := "Run task here (pm work)"
+		tmuxLabel := "Run task in tmux (pm work)"
+		if m.executorIsTracker {
+			runLabel = "Run epic here (pm run-epic)"
+			tmuxLabel = "Run epic in tmux (pm run-epic)"
+		}
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{runLabel, "here", "h"})
+		if inTmux {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{tmuxLabel, "tmux", "t"})
+		}
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Dry-run preview", "dry-run", "d"})
+		if inTmux {
+			m.claudeMenuCursor = 1 // default to tmux for a long run
 		}
 		return
 	}
@@ -2331,12 +2393,25 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if typed == "@" {
-		if m.launchAgent == launchAgentCodex {
-			m.launchAgent = launchAgentClaude
+		if m.projectScopeLaunch {
+			// Project scope has no task: executor is not applicable, cycle claude<->codex.
+			if m.launchAgent == launchAgentCodex {
+				m.launchAgent = launchAgentClaude
+			} else {
+				m.launchAgent = launchAgentCodex
+			}
 		} else {
-			m.launchAgent = launchAgentCodex
+			// Task scope: cycle claude -> codex -> executor -> claude.
+			switch m.launchAgent {
+			case launchAgentClaude:
+				m.launchAgent = launchAgentCodex
+			case launchAgentCodex:
+				m.launchAgent = launchAgentExecutor
+			default:
+				m.launchAgent = launchAgentClaude
+			}
 		}
-		m.rebuildClaudeMenuItems(m.selectedTask())
+		m.rebuildClaudeMenuItems(m.menuTask())
 		return m, nil
 	}
 
@@ -2551,8 +2626,11 @@ func codexWindowName(id string) string {
 }
 
 func (m Model) launchLLM(kind string) (tea.Model, tea.Cmd) {
-	if m.launchAgent == launchAgentCodex {
+	switch m.launchAgent {
+	case launchAgentCodex:
 		return m.launchCodex(kind)
+	case launchAgentExecutor:
+		return m.launchExecutor(kind)
 	}
 	return m.launchClaude(kind)
 }
@@ -3018,6 +3096,126 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 			m.toastExpiry = time.Now().Add(15 * time.Second)
 		} else {
 			m.toastMsg = tmuxLaunchToast("Forked in tmux", winName, sess)
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+		}
+	}
+
+	return m, nil
+}
+
+// executorPMArgs builds the `pm` argv for the executor launch: `work` for a leaf
+// task, `run-epic` for a tracker, plus optional --yolo / --dry-run. Pure so it
+// can be unit-tested without spawning a process.
+func executorPMArgs(t *storage.Task, isTracker, yolo, dryRun bool) []string {
+	sub := "work"
+	if isTracker {
+		sub = "run-epic"
+	}
+	args := []string{sub, t.Project, t.Meta.ID}
+	if yolo {
+		args = append(args, "--yolo")
+	}
+	if dryRun {
+		args = append(args, "--dry-run")
+	}
+	return args
+}
+
+// pmShellCommand renders `cd <dir> && pm <args...>` with each token shell-quoted.
+func pmShellCommand(dir string, args []string) string {
+	parts := []string{"pm"}
+	for _, a := range args {
+		parts = append(parts, shellQuote(a))
+	}
+	return fmt.Sprintf("cd %s && %s", shellQuote(dir), strings.Join(parts, " "))
+}
+
+// Pause tails keep the terminal/tmux window readable after the executor exits.
+// execPauseOnError waits only on a non-zero exit (used for "here" runs that
+// return to the board); execPauseAlways always waits (tmux windows and dry-run
+// previews, where the output is the whole point).
+const execPauseOnError = "; status=$?; if [ $status -ne 0 ]; then printf '\\n[pm] executor exited with status %s. Press Enter to return to board...' \"$status\"; read _; fi; exit $status"
+const execPauseAlways = "; status=$?; printf '\\n[pm] executor exited (status %s). Press Enter to close...' \"$status\"; read _"
+
+// boardGitPreflight returns a human-readable reason the executor cannot run in
+// dir, or "" if the preconditions (git repo, clean tree) are satisfied.
+func boardGitPreflight(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "true" {
+		return "not a git repo: " + dir
+	}
+	st, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+	if err == nil && strings.TrimSpace(string(st)) != "" {
+		return "working tree dirty - commit or stash first"
+	}
+	return ""
+}
+
+// launchExecutor runs `pm work`/`pm run-epic` for the menu task. kind is one of
+// "here", "tmux", "dry-run". Reuses the launch overlay's skip-perms toggle as
+// --yolo. Long runs default to tmux; the board reflects the resulting
+// status/brief on reload (launchResultMsg triggers m.reload()).
+func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
+	t := m.menuTask()
+	if t == nil {
+		return m, nil
+	}
+
+	// Resolve project working directory.
+	var projDir string
+	if proj, err := m.store.GetProject(t.Project); err == nil && proj.Path != "" {
+		if info, err := os.Stat(proj.Path); err == nil && info.IsDir() {
+			projDir = proj.Path
+		}
+	}
+	if projDir == "" {
+		m.toastMsg = "executor: project has no valid path - set it in project.yaml"
+		m.toastExpiry = time.Now().Add(15 * time.Second)
+		return m, nil
+	}
+
+	isTracker := len(m.taskChildren(t)) > 0
+	dryRun := kind == "dry-run"
+	args := executorPMArgs(t, isTracker, m.claudeMenuSkipPerms, dryRun)
+	winName := "pm:" + args[0] + ":" + t.Meta.ID
+
+	// Real runs (here/tmux) require a clean git repo; dry-run is side-effect-free.
+	if !dryRun {
+		if reason := boardGitPreflight(projDir); reason != "" {
+			m.toastMsg = "executor: " + reason
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+			return m, nil
+		}
+	}
+
+	switch kind {
+	case "here":
+		c := exec.Command("sh", "-c", pmShellCommand(projDir, args)+execPauseOnError)
+		c.Dir = projDir
+		origWin := tmuxGetWindowName()
+		tmuxRenameWindow(winName)
+		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			tmuxRenameWindow(origWin)
+			return launchResultMsg{agent: launchAgentExecutor, kind: "here", err: err}
+		})
+
+	case "dry-run":
+		c := exec.Command("sh", "-c", pmShellCommand(projDir, args)+execPauseAlways)
+		c.Dir = projDir
+		origWin := tmuxGetWindowName()
+		tmuxRenameWindow(winName + ":dry")
+		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+			tmuxRenameWindow(origWin)
+			return launchResultMsg{agent: launchAgentExecutor, kind: "dry-run", err: err}
+		})
+
+	case "tmux":
+		sess, err := tmuxNewWindow(winName, pmShellCommand(projDir, args)+execPauseAlways)
+		if err != nil {
+			m.toastMsg = "executor tmux failed: " + err.Error()
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+		} else {
+			m.toastMsg = tmuxLaunchToast("Launched "+args[0]+" in tmux", winName, sess)
 			m.toastExpiry = time.Now().Add(3 * time.Second)
 		}
 	}

@@ -50,14 +50,17 @@ type claudeMenuItem struct {
 type launchAgent string
 
 const (
-	launchAgentClaude launchAgent = "claude"
-	launchAgentCodex  launchAgent = "codex"
+	launchAgentClaude   launchAgent = "claude"
+	launchAgentCodex    launchAgent = "codex"
+	launchAgentExecutor launchAgent = "executor"
 )
 
 func (a launchAgent) label() string {
 	switch a {
 	case launchAgentCodex:
 		return "Codex"
+	case launchAgentExecutor:
+		return "Executor (pm work/run-epic)"
 	default:
 		return "Claude Code"
 	}
@@ -189,6 +192,7 @@ type Model struct {
 	claudeMenuCursor    int
 	claudeMenuSkipPerms bool
 	launchAgent         launchAgent
+	executorIsTracker   bool // when launchAgent==executor: run-epic vs work (for menu title)
 
 	// project-scope claude launch (no task)
 	projectScopeLaunch bool
