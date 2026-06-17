@@ -6,7 +6,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mbalazy/pm/internal/storage"
@@ -1183,6 +1185,95 @@ func TestPMShellCommand(t *testing.T) {
 	want := "cd '/repos/atlas app' && pm 'work' 'atlas' 'atlas-64-3' '--yolo'"
 	if got != want {
 		t.Errorf("pmShellCommand = %q, want %q", got, want)
+	}
+}
+
+func TestRunForTask(t *testing.T) {
+	running := &storage.RunState{TaskID: "epic-1", Status: storage.RunStatusRunning, PID: os.Getpid()}
+	m := Model{runStates: map[string]*storage.RunState{"epic-1": running}}
+
+	child := &storage.Task{Meta: storage.TaskMeta{ID: "epic-1-1", Parent: "epic-1"}, Project: "p"}
+	if got := m.runForTask(child); got != running {
+		t.Error("a child should resolve to its parent tracker's run")
+	}
+	own := &storage.Task{Meta: storage.TaskMeta{ID: "epic-1"}, Project: "p"}
+	if got := m.runForTask(own); got != running {
+		t.Error("a task with its own run should resolve to it")
+	}
+	orphan := &storage.Task{Meta: storage.TaskMeta{ID: "solo"}, Project: "p"}
+	if got := m.runForTask(orphan); got != nil {
+		t.Error("a task with no run (and no parent run) should resolve to nil")
+	}
+	if m.runForTask(nil) != nil {
+		t.Error("nil task -> nil run")
+	}
+}
+
+func TestKillRunStampsAndParks(t *testing.T) {
+	root := t.TempDir()
+	store := &storage.Store{Root: root}
+	if err := store.CreateProject("p", &storage.Project{Name: "P"}); err != nil {
+		t.Fatal(err)
+	}
+	// In-flight sub on disk, status doing.
+	sub := &storage.Task{Meta: storage.TaskMeta{ID: "p-1-1", Title: "Sub", Status: storage.StatusDoing, Parent: "p-1"}}
+	if err := store.AddTask("p", sub); err != nil {
+		t.Fatal(err)
+	}
+
+	// A detached child stands in for the manager process (own process group).
+	c := exec.Command("sleep", "30")
+	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := c.Process.Pid
+	defer func() { _ = c.Process.Kill() }()
+	waited := make(chan struct{})
+	go func() { _, _ = c.Process.Wait(); close(waited) }() // reap so a terminated child isn't a zombie
+
+	st := &storage.RunState{
+		TaskID: "p-1", Project: "p", Kind: "run-epic", Status: storage.RunStatusRunning,
+		PID: pid, RepoPath: root, CurrentSub: "p-1-1",
+		Subs: []storage.SubRun{{ID: "p-1-1", Status: storage.RunStatusRunning, Session: "s"}},
+	}
+	if err := storage.WriteRunState(store.ProjectDir("p"), st); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &Model{store: store, runStates: map[string]*storage.RunState{}, projects: []string{"all", "p"}, activeProject: 1}
+	cmd := m.killRun(st)
+	if cmd == nil {
+		t.Error("killRun should return an escalation tick command")
+	}
+
+	// Run-state stamped failed; in-flight sub marked blocked.
+	got, err := storage.ReadRunState(store.ProjectDir("p"), "p-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != storage.RunStatusFailed {
+		t.Errorf("run status = %q, want failed", got.Status)
+	}
+	if got.Subs[0].Status != "blocked" {
+		t.Errorf("in-flight sub status = %q, want blocked", got.Subs[0].Status)
+	}
+
+	// The in-flight task is parked on waiting.
+	parked, err := store.FindTask("p", "p-1-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parked.Meta.Status != storage.StatusWaiting {
+		t.Errorf("parked task status = %q, want waiting", parked.Meta.Status)
+	}
+
+	// The process group dies (SIGTERM to a plain sleep terminates it); the
+	// reaper goroutine then closes `waited`.
+	select {
+	case <-waited:
+	case <-time.After(2 * time.Second):
+		t.Error("manager process should be dead after killRun")
 	}
 }
 

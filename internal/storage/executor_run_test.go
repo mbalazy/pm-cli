@@ -2,7 +2,10 @@ package storage
 
 import (
 	"os"
+	"os/exec"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestRunStateRoundTrip(t *testing.T) {
@@ -62,6 +65,36 @@ func TestRunStateIsLive(t *testing.T) {
 	}
 	if (&RunState{}).IsLive() {
 		t.Error("zero-value run is not live")
+	}
+}
+
+func TestRunStateKill(t *testing.T) {
+	// No pid -> error, no panic.
+	if err := (&RunState{}).Kill(syscall.SIGTERM); err == nil {
+		t.Error("Kill with no pid should error")
+	}
+
+	// Spawn a detached child (its own process group, like a bg run) and kill it.
+	c := exec.Command("sleep", "30")
+	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := c.Start(); err != nil {
+		t.Fatalf("start sleep: %v", err)
+	}
+	pid := c.Process.Pid
+	if !ProcessAlive(pid) {
+		t.Fatal("child should be alive right after start")
+	}
+	st := &RunState{Status: RunStatusRunning, PID: pid}
+	if err := st.Kill(syscall.SIGKILL); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	_, _ = c.Process.Wait() // reap so the pid isn't a zombie that reads as alive
+	// Give the kernel a beat, then confirm it's gone.
+	for i := 0; i < 50 && ProcessAlive(pid); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if ProcessAlive(pid) {
+		t.Error("child should be dead after Kill(SIGKILL)")
 	}
 }
 

@@ -351,6 +351,9 @@ func (m Model) viewDetail() string {
 		if m.confirmAction == "archive" {
 			help = "press A again to archive  " + pct
 		}
+		if m.confirmAction == "kill-run" {
+			help = "press K again to stop the executor run  " + pct
+		}
 		sb.WriteString(helpStyle.Render(help))
 	}
 	return m.applyToast(sb.String())
@@ -386,6 +389,7 @@ func (m Model) viewHelp() string {
 		{"c", "Claude Code"},
 		{"X", "Run executor (pm work / run-epic)"},
 		{"W", "Watch executor run (live agent-view)"},
+		{"K", "Kill a live executor run (confirm)"},
 		{"o / Enter", "Task detail"},
 		{"/ ", "Search tasks"},
 		{";", "Zoom toggle"},
@@ -1268,6 +1272,8 @@ func (m Model) viewBoard() string {
 			prompt = "  press q again to quit"
 		case "delete-selected":
 			prompt = fmt.Sprintf("  press x again to delete %d tasks", len(m.selected))
+		case "kill-run":
+			prompt = "  press K again to stop the executor run"
 		}
 		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#FF0000", Dark: "#FF6666"}).Render(prompt))
 	}

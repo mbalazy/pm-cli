@@ -43,6 +43,7 @@ type KeyMap struct {
 	Claude        key.Binding
 	Executor      key.Binding
 	WatchExecutor key.Binding
+	KillRun       key.Binding
 	ProjectPicker key.Binding
 	Focus         key.Binding
 	FocusView     key.Binding
@@ -89,6 +90,7 @@ var Keys = KeyMap{
 	Claude:        key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "claude code")),
 	Executor:      key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "run executor")),
 	WatchExecutor: key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "watch executor run")),
+	KillRun:       key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "kill executor run")),
 	ProjectPicker: key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "project picker")),
 	Focus:         key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "focus")),
 	FocusView:     key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "focus view")),

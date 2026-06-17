@@ -64,6 +64,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, doTick()
 
+	case execKillCheckMsg:
+		// The group didn't die on SIGTERM - escalate to SIGKILL (group, then pid).
+		if storage.ProcessAlive(msg.pid) {
+			_ = syscall.Kill(-msg.pid, syscall.SIGKILL)
+			_ = syscall.Kill(msg.pid, syscall.SIGKILL)
+		}
+		m.refreshRunStates()
+		return m, nil
+
 	case reloadMsg:
 		m.reload()
 		return m, doTick()
@@ -166,6 +175,8 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			isConfirmKey = key.Matches(msg, common.Keys.Archive)
 		case "quit":
 			isConfirmKey = key.Matches(msg, common.Keys.Quit)
+		case "kill-run":
+			isConfirmKey = key.Matches(msg, common.Keys.KillRun)
 		}
 		if !isConfirmKey {
 			m.confirmAction = ""
@@ -458,6 +469,25 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toastMsg = "no executor run for this task (launch with X)"
 			m.toastExpiry = time.Now().Add(3 * time.Second)
 		}
+
+	case key.Matches(msg, common.Keys.KillRun):
+		t := m.selectedTask()
+		if t == nil {
+			break
+		}
+		st := m.runForTask(t)
+		if st == nil || !st.IsLive() {
+			m.toastMsg = "no live executor run to stop"
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+			break
+		}
+		if m.confirmAction == "kill-run" && m.confirmTaskID == st.TaskID {
+			m.confirmAction = ""
+			m.confirmTaskID = ""
+			return m, m.killRun(st)
+		}
+		m.confirmAction = "kill-run"
+		m.confirmTaskID = st.TaskID
 
 	case key.Matches(msg, common.Keys.Focus):
 		if t := m.selectedTask(); t != nil {
@@ -1365,6 +1395,23 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil && !m.openExecutorView(t) {
 			m.toastMsg = "no executor run for this task (launch with X)"
 			m.toastExpiry = time.Now().Add(3 * time.Second)
+		}
+
+	case key.Matches(msg, common.Keys.KillRun):
+		if t != nil {
+			st := m.runForTask(t)
+			if st == nil || !st.IsLive() {
+				m.toastMsg = "no live executor run to stop"
+				m.toastExpiry = time.Now().Add(3 * time.Second)
+				break
+			}
+			if m.confirmAction == "kill-run" && m.confirmTaskID == st.TaskID {
+				m.confirmAction = ""
+				m.confirmTaskID = ""
+				return m, m.killRun(st)
+			}
+			m.confirmAction = "kill-run"
+			m.confirmTaskID = st.TaskID
 		}
 
 	case msg.String() == "s":
@@ -2330,6 +2377,81 @@ func (m *Model) refreshRunStates() {
 		}
 	}
 	m.runStates = states
+}
+
+// runForTask returns the executor run-state to act on for task t: its own run,
+// else its parent tracker's run. nil when there is none.
+func (m Model) runForTask(t *storage.Task) *storage.RunState {
+	if t == nil {
+		return nil
+	}
+	if st := m.runStates[t.Meta.ID]; st != nil {
+		return st
+	}
+	if t.Meta.Parent != "" {
+		return m.runStates[t.Meta.Parent]
+	}
+	return nil
+}
+
+// execKillCheckMsg fires a short while after a kill so we can escalate to
+// SIGKILL if the process group survived the SIGTERM.
+type execKillCheckMsg struct {
+	pid     int
+	project string
+	taskID  string
+}
+
+// killRun stops the executor run st: SIGTERM to its process group, then stamps
+// the run-state stopped and parks the in-flight worker on `waiting` (the manager
+// dies before it can write its own end-state). Returns a tea.Cmd that escalates
+// to SIGKILL if the group is still alive a couple of seconds later.
+func (m *Model) killRun(st *storage.RunState) tea.Cmd {
+	if st == nil {
+		return nil
+	}
+	stateDir := m.store.ProjectDir(st.Project)
+	pid := st.PID
+	taskID := st.TaskID
+	proj := st.Project
+	_ = st.Kill(syscall.SIGTERM)
+
+	// Re-read the freshest run-state (the manager may have advanced it), then
+	// stamp it stopped + park the in-flight sub.
+	if fresh, err := storage.ReadRunState(stateDir, taskID); err == nil {
+		st = fresh
+	}
+	st.Status = storage.RunStatusFailed
+	if st.Error == "" {
+		st.Error = "stopped by user"
+	}
+	inFlight := st.CurrentSub
+	if inFlight == "" {
+		inFlight = st.TaskID // `pm work`: the task itself is the worker
+	}
+	for i := range st.Subs {
+		if st.Subs[i].ID == inFlight && (st.Subs[i].Status == storage.RunStatusRunning || st.Subs[i].Status == "pending") {
+			st.Subs[i].Status = "blocked"
+			if st.Subs[i].Note == "" {
+				st.Subs[i].Note = "stopped by user"
+			}
+		}
+	}
+	_ = storage.WriteRunState(stateDir, st)
+
+	// Park the in-flight task on `waiting` so the board reflects the stop.
+	if inFlight != "" {
+		if t, err := m.store.FindTask(proj, inFlight); err == nil && t.Meta.Status != storage.StatusWaiting {
+			m.store.MoveTask(t, storage.StatusWaiting)
+		}
+	}
+	m.reload()
+	m.refreshRunStates()
+	m.toastMsg = "Stopped executor run " + taskID + " (parked " + inFlight + " on waiting)"
+	m.toastExpiry = time.Now().Add(5 * time.Second)
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return execKillCheckMsg{pid: pid, project: proj, taskID: taskID}
+	})
 }
 
 // runBadge returns a compact card badge for an executor run on taskID, or "".

@@ -139,6 +139,23 @@ func (st *RunState) IsLive() bool {
 	return ProcessAlive(st.PID)
 }
 
+// Kill signals the run's whole process group, falling back to the bare pid.
+// Background runs are started detached (Setsid), so the manager leads its own
+// process group; signalling -pgid takes the manager AND its `claude -p` worker
+// down together (killing the manager alone would orphan the worker). Returns an
+// error when there is no pid to signal.
+func (st *RunState) Kill(sig syscall.Signal) error {
+	if st == nil || st.PID <= 0 {
+		return fmt.Errorf("no pid to signal")
+	}
+	// Negative pid targets the process group (pgid == manager pid for a detached
+	// run). Fall back to the bare pid if the process isn't a group leader.
+	if err := syscall.Kill(-st.PID, sig); err == nil {
+		return nil
+	}
+	return syscall.Kill(st.PID, sig)
+}
+
 // ProcessAlive reports whether pid refers to a live process (Unix: signal 0).
 func ProcessAlive(pid int) bool {
 	if pid <= 0 {

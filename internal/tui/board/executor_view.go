@@ -148,10 +148,34 @@ func (m *Model) renderExecutorContent() {
 }
 
 func (m Model) updateExecutorView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Kill confirmation: any key other than K cancels the pending kill.
+	if m.confirmAction == "kill-run" && !key.Matches(msg, common.Keys.KillRun) {
+		m.confirmAction = ""
+		m.confirmTaskID = ""
+	}
+
 	switch {
 	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit), key.Matches(msg, common.Keys.Open):
 		m.currentView = m.executorPrevView
 		m.reload()
+		return m, nil
+
+	case key.Matches(msg, common.Keys.KillRun):
+		st := m.executorRun
+		if st == nil || !st.IsLive() {
+			m.toastMsg = "no live run to stop"
+			m.toastExpiry = time.Now().Add(2 * time.Second)
+			return m, nil
+		}
+		if m.confirmAction == "kill-run" && m.confirmTaskID == st.TaskID {
+			m.confirmAction = ""
+			m.confirmTaskID = ""
+			cmd := m.killRun(st)
+			m.refreshExecutorView()
+			return m, cmd
+		}
+		m.confirmAction = "kill-run"
+		m.confirmTaskID = st.TaskID
 		return m, nil
 
 	case msg.String() == "v":
@@ -258,7 +282,16 @@ func (m Model) viewExecutor() string {
 	if n := len(m.executorSessions); n > 1 {
 		worker = fmt.Sprintf("worker %d/%d · tab switch · ", m.executorSessionIdx+1, n)
 	}
-	footer := helpStyle.Render(worker + "v " + mode + " · f follow:" + follow + " · j/k C-j/k scroll · r · esc")
+	killHint := ""
+	if run != nil && run.IsLive() {
+		killHint = " · K kill"
+	}
+	var footer string
+	if m.confirmAction == "kill-run" {
+		footer = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F7768E")).Render("press K again to STOP this run (parks the worker on waiting) · any other key cancels")
+	} else {
+		footer = helpStyle.Render(worker + "v " + mode + " · f follow:" + follow + " · j/k C-j/k scroll · r" + killHint + " · esc")
+	}
 
 	return m.applyToast(strings.Join([]string{header, tabs, m.executorViewport.View(), footer}, "\n"))
 }
