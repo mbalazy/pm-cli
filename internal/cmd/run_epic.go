@@ -97,15 +97,18 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			opts := workOptions{standalone: false, model: model, maxTurns: maxTurns, yolo: yolo, allowDirty: true, timeout: timeout}
 
 			// Run-state for observability: the manager owns the epic-level file;
-			// driveSub fills in each sub's worker session as it goes.
+			// driveSub fills in each sub's worker session as it goes. It lives in
+			// the pm data dir (where the TUI reads it), NOT the git repo.
+			stateDir := store.ProjectDir(slug)
 			run := &storage.RunState{
-				TaskID:  tracker.Meta.ID,
-				Project: slug,
-				Kind:    "run-epic",
-				Status:  storage.RunStatusRunning,
-				PID:     os.Getpid(),
-				Started: time.Now().UTC().Format(time.RFC3339),
-				LogPath: storage.ExecutorLogPath(proj.Path, tracker.Meta.ID),
+				TaskID:   tracker.Meta.ID,
+				Project:  slug,
+				Kind:     "run-epic",
+				Status:   storage.RunStatusRunning,
+				PID:      os.Getpid(),
+				RepoPath: proj.Path,
+				Started:  time.Now().UTC().Format(time.RFC3339),
+				LogPath:  storage.ExecutorLogPath(stateDir, tracker.Meta.ID),
 			}
 			for _, s := range subs {
 				init := "pending"
@@ -114,7 +117,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				}
 				run.Subs = append(run.Subs, storage.SubRun{ID: s.Meta.ID, Status: init})
 			}
-			_ = storage.WriteRunState(proj.Path, run)
+			_ = storage.WriteRunState(stateDir, run)
 
 			var outcomes []subOutcome
 			for _, sub := range subs {
@@ -123,20 +126,20 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 					oc := subOutcome{sub.Meta.ID, "skipped", "already " + string(sub.Meta.Status)}
 					outcomes = append(outcomes, oc)
 					updateSubRun(run, oc.id, oc.result, oc.note)
-					_ = storage.WriteRunState(proj.Path, run)
+					_ = storage.WriteRunState(stateDir, run)
 					continue
 				}
 				if sub.Meta.Status != startStatus {
 					oc := subOutcome{sub.Meta.ID, "skipped", "not ready (status " + string(sub.Meta.Status) + ")"}
 					outcomes = append(outcomes, oc)
 					updateSubRun(run, oc.id, oc.result, oc.note)
-					_ = storage.WriteRunState(proj.Path, run)
+					_ = storage.WriteRunState(stateDir, run)
 					continue
 				}
 
 				run.CurrentSub = sub.Meta.ID
 				updateSubRun(run, sub.Meta.ID, storage.RunStatusRunning, "")
-				_ = storage.WriteRunState(proj.Path, run)
+				_ = storage.WriteRunState(stateDir, run)
 
 				oc := driveSub(store, proj, slug, tracker, sub, epicBranch, doneStatus, opts, run)
 				outcomes = append(outcomes, oc)
@@ -144,11 +147,11 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				run.CurrentSub = ""
 				run.CurrentSession = ""
 				updateSubRun(run, oc.id, oc.result, oc.note)
-				_ = storage.WriteRunState(proj.Path, run)
+				_ = storage.WriteRunState(stateDir, run)
 			}
 
 			run.Status = storage.RunStatusDone
-			_ = storage.WriteRunState(proj.Path, run)
+			_ = storage.WriteRunState(stateDir, run)
 
 			// Leave the user on the integration branch with the accumulated work.
 			_ = gitEnsureBranch(proj.Path, epicBranch, "")
@@ -229,7 +232,7 @@ func driveSub(store storage.TaskStore, proj *storage.Project, slug string, track
 			run.Subs[i].Session = plan.sessionID
 		}
 	}
-	_ = storage.WriteRunState(dir, run)
+	_ = storage.WriteRunState(store.ProjectDir(slug), run)
 
 	res, err := executeWork(store, sub, plan, opts)
 	if err != nil {

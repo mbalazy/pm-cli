@@ -42,6 +42,7 @@ type KeyMap struct {
 	ReorderDown   key.Binding
 	Claude        key.Binding
 	Executor      key.Binding
+	WatchExecutor key.Binding
 	ProjectPicker key.Binding
 	Focus         key.Binding
 	FocusView     key.Binding
@@ -87,6 +88,7 @@ var Keys = KeyMap{
 	ReorderDown:   key.NewBinding(key.WithKeys("ctrl+j"), key.WithHelp("C-j", "reorder down")),
 	Claude:        key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "claude code")),
 	Executor:      key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "run executor")),
+	WatchExecutor: key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "watch executor run")),
 	ProjectPicker: key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "project picker")),
 	Focus:         key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "focus")),
 	FocusView:     key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "focus view")),

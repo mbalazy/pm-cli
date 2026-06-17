@@ -236,7 +236,9 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	}
 
 	// Run-state for observability (standalone only; in epic mode the manager
-	// owns the epic-level run-state and updates the per-sub entry).
+	// owns the epic-level run-state and updates the per-sub entry). The run-state
+	// lives in the pm data dir (where the TUI reads it), NOT the git repo.
+	stateDir := store.ProjectDir(task.Project)
 	var run *storage.RunState
 	if opts.standalone {
 		run = &storage.RunState{
@@ -245,14 +247,15 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			Kind:           "work",
 			Status:         storage.RunStatusRunning,
 			PID:            os.Getpid(),
+			RepoPath:       plan.proj.Path,
 			Started:        time.Now().UTC().Format(time.RFC3339),
-			LogPath:        storage.ExecutorLogPath(plan.proj.Path, task.Meta.ID),
+			LogPath:        storage.ExecutorLogPath(stateDir, task.Meta.ID),
 			CurrentSub:     task.Meta.ID,
 			CurrentSession: plan.sessionID,
 			Phase:          "running",
 			Subs:           []storage.SubRun{{ID: task.Meta.ID, Status: storage.RunStatusRunning, Session: plan.sessionID}},
 		}
-		_ = storage.WriteRunState(plan.proj.Path, run)
+		_ = storage.WriteRunState(stateDir, run)
 	}
 
 	fmt.Fprintf(os.Stderr, "pm work: launching headless worker for %s on %s (%s)...\n", task.Meta.ID, plan.branch, modeLabel(opts.standalone))
@@ -267,7 +270,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 				run.Subs[0].Status = storage.RunStatusFailed
 				run.Subs[0].Note = err.Error()
 			}
-			_ = storage.WriteRunState(plan.proj.Path, run)
+			_ = storage.WriteRunState(stateDir, run)
 		}
 		return nil, err
 	}
@@ -284,7 +287,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			run.Subs[0].Note = strings.TrimSpace(res.Summary)
 			run.Subs[0].Commits = res.Commits
 		}
-		_ = storage.WriteRunState(plan.proj.Path, run)
+		_ = storage.WriteRunState(stateDir, run)
 	}
 	return res, nil
 }

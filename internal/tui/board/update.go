@@ -34,6 +34,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.detailViewport.Width = msg.Width
 		m.detailViewport.Height = msg.Height - 2
+		m.executorViewport.Width = msg.Width
+		m.executorViewport.Height = executorBodyHeight(msg.Height)
 		return m, nil
 
 	case tickMsg:
@@ -41,6 +43,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// tick keeps the render loop alive (toasts expire) and refreshes the
 		// cheap executor run-states so live runs show up without a manual reload.
 		m.refreshRunStates()
+		if m.currentView == viewExecutor {
+			m.refreshExecutorView()
+		}
 		return m, doTick()
 
 	case reloadMsg:
@@ -66,6 +71,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.currentView == viewExecutor {
+			return m.updateExecutorView(msg)
+		}
 		if m.currentView == viewDetail || m.currentView == viewProjectInfo {
 			return m.updateDetail(msg)
 		}
@@ -424,6 +432,16 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.openExecutorMenu(t)
+
+	case key.Matches(msg, common.Keys.WatchExecutor):
+		t := m.selectedTask()
+		if t == nil {
+			break
+		}
+		if !m.openExecutorView(t) {
+			m.toastMsg = "no executor run for this task (launch with X)"
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+		}
 
 	case key.Matches(msg, common.Keys.Focus):
 		if t := m.selectedTask(); t != nil {
@@ -1325,6 +1343,12 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, common.Keys.Executor):
 		if t != nil {
 			m.openExecutorMenu(t)
+		}
+
+	case key.Matches(msg, common.Keys.WatchExecutor):
+		if t != nil && !m.openExecutorView(t) {
+			m.toastMsg = "no executor run for this task (launch with X)"
+			m.toastExpiry = time.Now().Add(3 * time.Second)
 		}
 
 	case msg.String() == "s":
@@ -3234,7 +3258,10 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 	case "bg":
 		// Detached background run, output to a log file, observable natively in
 		// pm (run-state + agent-view). Does not take over the terminal or need tmux.
-		logPath := storage.ExecutorLogPath(projDir, t.Meta.ID)
+		// Run-state + log live in the pm data dir (where the board reads them);
+		// the worker still runs in the git repo (c.Dir = projDir).
+		stateDir := m.store.ProjectDir(t.Project)
+		logPath := storage.ExecutorLogPath(stateDir, t.Meta.ID)
 		if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 			m.toastMsg = "executor: " + err.Error()
 			m.toastExpiry = time.Now().Add(15 * time.Second)
@@ -3260,14 +3287,15 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 		}
 		// Seed run-state so the board reflects the run immediately; the executor
 		// process overwrites it with richer progress (subs/phase/session) as it goes.
-		_ = storage.WriteRunState(projDir, &storage.RunState{
-			TaskID:  t.Meta.ID,
-			Project: t.Project,
-			Kind:    args[0],
-			Status:  storage.RunStatusRunning,
-			PID:     c.Process.Pid,
-			LogPath: logPath,
-			Started: time.Now().UTC().Format(time.RFC3339),
+		_ = storage.WriteRunState(stateDir, &storage.RunState{
+			TaskID:   t.Meta.ID,
+			Project:  t.Project,
+			Kind:     args[0],
+			Status:   storage.RunStatusRunning,
+			PID:      c.Process.Pid,
+			RepoPath: projDir,
+			LogPath:  logPath,
+			Started:  time.Now().UTC().Format(time.RFC3339),
 		})
 		m.refreshRunStates()
 		m.toastMsg = fmt.Sprintf("Started %s %s in background (▶ on the board)", args[0], t.Meta.ID)

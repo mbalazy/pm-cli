@@ -25,14 +25,15 @@ const (
 // under the project's `.executor/` dir. The executor owns the file; the TUI
 // only reads it.
 type RunState struct {
-	TaskID  string `json:"task_id"` // task (work) or tracker (run-epic) id
-	Project string `json:"project"`
-	Kind    string `json:"kind"`   // "work" | "run-epic"
-	Status  string `json:"status"` // running | done | failed
-	PID     int    `json:"pid"`
-	LogPath string `json:"log_path,omitempty"`
-	Started string `json:"started"` // RFC3339
-	Updated string `json:"updated"` // RFC3339
+	TaskID   string `json:"task_id"` // task (work) or tracker (run-epic) id
+	Project  string `json:"project"`
+	Kind     string `json:"kind"`   // "work" | "run-epic"
+	Status   string `json:"status"` // running | done | failed
+	PID      int    `json:"pid"`
+	RepoPath string `json:"repo_path,omitempty"` // git repo (worker cwd) - to resolve transcript .jsonl
+	LogPath  string `json:"log_path,omitempty"`
+	Started  string `json:"started"` // RFC3339
+	Updated  string `json:"updated"` // RFC3339
 
 	// The worker being driven right now: the sub (epic) or the task itself.
 	CurrentSub     string `json:"current_sub,omitempty"`

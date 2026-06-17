@@ -24,6 +24,7 @@ const (
 	viewArchive
 	viewProjectInfo
 	viewFocus
+	viewExecutor
 )
 
 type yankItem struct {
@@ -197,6 +198,17 @@ type Model struct {
 	// executor run-states (live background runs), keyed by task/tracker id;
 	// refreshed on tick from <project>/.executor/*.json
 	runStates map[string]*storage.RunState
+
+	// executor agent-view (18-7): live transcript of the running worker
+	executorViewport   viewport.Model
+	executorRunTaskID  string            // task/tracker id whose run we're watching
+	executorRunProj    string            // project slug of that run
+	executorRun        *storage.RunState // latest run-state for the header
+	executorSessions   []execSession     // sub entries that have a worker session, in order
+	executorSessionIdx int               // which session is shown
+	executorFollow     bool              // auto-scroll to the latest activity
+	executorVerbose    bool              // full conversation (untruncated) vs compact feed
+	executorPrevView   view              // where to return on esc (kept separate from previousView)
 
 	// project-scope claude launch (no task)
 	projectScopeLaunch bool

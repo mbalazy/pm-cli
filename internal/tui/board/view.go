@@ -299,6 +299,9 @@ func (m Model) View() string {
 	if m.currentView == viewFocus {
 		return m.viewFocus()
 	}
+	if m.currentView == viewExecutor {
+		return m.viewExecutor()
+	}
 	return m.viewBoard()
 }
 
@@ -377,6 +380,7 @@ func (m Model) viewHelp() string {
 		{"i", "Project info"},
 		{"c", "Claude Code"},
 		{"X", "Run executor (pm work / run-epic)"},
+		{"W", "Watch executor run (live agent-view)"},
 		{"o / Enter", "Task detail"},
 		{"/ ", "Search tasks"},
 		{";", "Zoom toggle"},
@@ -1278,7 +1282,7 @@ func (m Model) viewBoard() string {
 		}
 		startup := fmt.Sprintf("%dms", m.startupDuration.Milliseconds())
 		ver := helpStyle.Render("pm " + version.Version + " " + startup)
-		help := helpStyle.Render("m/M move  d done  a add  c claude  X exec  e edit  y/Y yank  L links  i info  C-a archived")
+		help := helpStyle.Render("m/M move  d done  a add  c claude  X exec  W watch  e edit  y/Y yank  L links  i info  C-a archived")
 		gap := m.width - lipgloss.Width(ver) - lipgloss.Width(help)
 		if gap < 1 {
 			gap = 1
