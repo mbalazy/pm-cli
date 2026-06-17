@@ -75,6 +75,11 @@ func (m Model) renderTaskDetail(t *storage.Task) string {
 		out.WriteString(renderSubtaskTable(kids, contentWidth))
 		out.WriteString("\n")
 	}
+	// Executor run dashboard (live or last run), for a tracker or standalone task.
+	if run := m.runStates[t.Meta.ID]; run != nil {
+		out.WriteString(renderExecutorDashboard(run, contentWidth))
+		out.WriteString("\n\n")
+	}
 	out.WriteString(glamourRender(rest.String(), contentWidth))
 
 	pad := (termWidth - contentWidth) / 2

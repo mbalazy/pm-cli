@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mbalazy/pm/internal/storage"
 )
 
 func TestDecodeTranscript(t *testing.T) {
@@ -55,6 +57,26 @@ func TestDecodeTranscript(t *testing.T) {
 func TestDecodeTranscriptMissingFile(t *testing.T) {
 	if got := decodeTranscript(filepath.Join(t.TempDir(), "nope.jsonl"), 80, false); got != "" {
 		t.Errorf("missing file should decode to empty, got %q", got)
+	}
+}
+
+func TestRenderExecutorDashboard(t *testing.T) {
+	run := &storage.RunState{
+		TaskID: "p-1", Kind: "run-epic", Status: storage.RunStatusDone,
+		Started: "2026-06-17T10:00:00Z", Updated: "2026-06-17T10:05:00Z",
+		Subs: []storage.SubRun{
+			{ID: "p-1-1", Status: "merged", Note: "built the thing"},
+			{ID: "p-1-2", Status: "blocked", Note: "needs backend field"},
+		},
+	}
+	out := stripANSI(renderExecutorDashboard(run, 100))
+	for _, want := range []string{"Executor run", "✓ done", "p-1-1", "merged", "p-1-2", "blocked", "needs backend field", "press W to watch"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dashboard missing %q\n---\n%s", want, out)
+		}
+	}
+	if renderExecutorDashboard(nil, 100) != "" {
+		t.Error("nil run should render empty")
 	}
 }
 

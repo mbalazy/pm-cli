@@ -46,6 +46,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentView == viewExecutor {
 			m.refreshExecutorView()
 		}
+		// Live-refresh the task-detail dashboard while a run for it is active.
+		if m.currentView == viewDetail && m.detailTask != nil {
+			if run := m.runStates[m.detailTask.Meta.ID]; run != nil && run.IsLive() {
+				off := m.detailViewport.YOffset
+				content := m.renderTaskDetail(m.detailTask)
+				m.detailViewport.SetContent(content)
+				m.detailPlainContent = stripANSI(content)
+				m.detailViewport.SetYOffset(off)
+			}
+		}
 		return m, doTick()
 
 	case reloadMsg:

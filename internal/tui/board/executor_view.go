@@ -263,6 +263,51 @@ func (m Model) viewExecutor() string {
 	return m.applyToast(strings.Join([]string{header, tabs, m.executorViewport.View(), footer}, "\n"))
 }
 
+// renderExecutorDashboard renders a run's live/last state for the task-detail
+// view: a status chip + per-sub progress (running sub marked), driven by the
+// run-state file (which persists after the run, so this doubles as the summary).
+func renderExecutorDashboard(run *storage.RunState, width int) string {
+	if run == nil {
+		return ""
+	}
+	var chip string
+	switch {
+	case run.IsLive():
+		chip = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#9ECE6A")).Render("▶ running")
+	case run.Status == storage.RunStatusFailed:
+		chip = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F7768E")).Render("✗ failed")
+	case run.Status == storage.RunStatusDone:
+		chip = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7AA2F7")).Render("✓ done")
+	default:
+		chip = lipgloss.NewStyle().Foreground(lipgloss.Color("#888")).Render("▷ " + run.Status)
+	}
+	hdr := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render("Executor run") + "  " + chip
+	if run.Started != "" {
+		hdr += helpStyle.Render("  ⏱ " + execElapsed(run.Started, run))
+	}
+
+	var b strings.Builder
+	b.WriteString(hdr + "\n")
+	for _, s := range run.Subs {
+		glyph := execSubGlyph(s.Status)
+		row := fmt.Sprintf("  %s  %-22s %-9s", glyph, s.ID, s.Status)
+		if s.ID == run.CurrentSub && run.IsLive() {
+			row += " ←"
+		}
+		if s.Note != "" {
+			row += "  " + truncate(s.Note, max(20, width-44))
+		}
+		if s.Status == storage.RunStatusRunning {
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#9ECE6A")).Render(row))
+		} else {
+			b.WriteString(execAssistantStyle.Render(row))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(helpStyle.Render("  press W to watch the live transcript"))
+	return b.String()
+}
+
 func execSubGlyph(status string) string {
 	switch status {
 	case storage.RunStatusRunning:
