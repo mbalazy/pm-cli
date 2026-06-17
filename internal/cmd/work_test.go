@@ -175,23 +175,48 @@ func TestBuildWorkerSystemPrompt(t *testing.T) {
 
 func TestBuildClaudeArgs(t *testing.T) {
 	t.Run("curated allowlist by default", func(t *testing.T) {
-		args := buildClaudeArgs("p", "sp", "opus", 100, false)
+		args := buildClaudeArgs("p", "sp", "sess-1", "opus", 100, false)
 		joined := strings.Join(args, " ")
 		mustContain(t, joined, "--permission-mode acceptEdits")
 		mustContain(t, joined, "--allowedTools")
 		mustContain(t, joined, "--json-schema")
+		mustContain(t, joined, "--session-id sess-1")
 		if strings.Contains(joined, "--dangerously-skip-permissions") {
 			t.Error("default run must not bypass permissions")
 		}
 	})
 	t.Run("yolo bypasses permissions", func(t *testing.T) {
-		args := buildClaudeArgs("p", "sp", "opus", 100, true)
+		args := buildClaudeArgs("p", "sp", "sess-1", "opus", 100, true)
 		joined := strings.Join(args, " ")
 		mustContain(t, joined, "--dangerously-skip-permissions")
 		if strings.Contains(joined, "acceptEdits") {
 			t.Error("yolo run should not also set acceptEdits")
 		}
 	})
+}
+
+func TestWorkerEnvStripsAPIKey(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "tok-secret")
+	t.Setenv("PATH", "/usr/bin") // a var that must survive
+	env := workerEnv()
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "ANTHROPIC_API_KEY=") {
+			t.Error("workerEnv must strip ANTHROPIC_API_KEY (forces API billing instead of subscription)")
+		}
+		if strings.HasPrefix(kv, "ANTHROPIC_AUTH_TOKEN=") {
+			t.Error("workerEnv must strip ANTHROPIC_AUTH_TOKEN")
+		}
+	}
+	var keptPath bool
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			keptPath = true
+		}
+	}
+	if !keptPath {
+		t.Error("workerEnv must preserve unrelated env vars like PATH")
+	}
 }
 
 func TestWorkerBriefAndLog(t *testing.T) {

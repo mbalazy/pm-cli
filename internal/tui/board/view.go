@@ -1184,6 +1184,13 @@ func (m Model) viewBoard() string {
 				selectMark = "● "
 			}
 			badge := badges[tasks[j].Meta.ID]
+			if rb := m.runBadge(tasks[j].Meta.ID); rb != "" {
+				if badge != "" {
+					badge += " " + rb
+				} else {
+					badge = rb
+				}
+			}
 			var card string
 			if m.zoomed {
 				card = renderZoomCard(tasks[j], colWidth-6, isSelected, selectMark, badge)

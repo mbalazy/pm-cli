@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -36,8 +37,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		// No periodic reload - the board refreshes on demand via `r` (board and
-		// detail). The tick only keeps the render loop alive so toasts expire.
+		// No periodic task reload - the board refreshes on demand via `r`. The
+		// tick keeps the render loop alive (toasts expire) and refreshes the
+		// cheap executor run-states so live runs show up without a manual reload.
+		m.refreshRunStates()
 		return m, doTick()
 
 	case reloadMsg:
@@ -2271,6 +2274,43 @@ func (m Model) menuTask() *storage.Task {
 	return m.selectedTask()
 }
 
+// refreshRunStates reloads executor run-states for the visible project(s) into
+// m.runStates. Cheap (a small dir of small JSON files) so it runs on every tick.
+func (m *Model) refreshRunStates() {
+	states := map[string]*storage.RunState{}
+	var slugs []string
+	if m.activeProject == 0 {
+		slugs = append(slugs, m.projects[1:]...) // "all": every project (skip the "all" pseudo-entry)
+	} else if m.activeProject < len(m.projects) {
+		slugs = append(slugs, m.projects[m.activeProject])
+	}
+	for _, slug := range slugs {
+		for id, st := range storage.ReadRunStates(m.store.ProjectDir(slug)) {
+			states[id] = st
+		}
+	}
+	m.runStates = states
+}
+
+// runBadge returns a compact card badge for an executor run on taskID, or "".
+// A finished (done) run is intentionally not badged - the task's own status
+// already moved; only active/attention-worthy runs are surfaced.
+func (m Model) runBadge(taskID string) string {
+	st := m.runStates[taskID]
+	if st == nil {
+		return ""
+	}
+	switch {
+	case st.IsLive():
+		return "▶ running"
+	case st.Status == storage.RunStatusRunning: // marked running but the process is gone
+		return "▷ stopped"
+	case st.Status == storage.RunStatusFailed:
+		return "✗ run failed"
+	}
+	return ""
+}
+
 func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 	inTmux := os.Getenv("TMUX") != ""
 	m.claudeMenuItems = nil
@@ -2289,20 +2329,22 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 		// Executor runs `pm work` (task) or `pm run-epic` (tracker). Long-running,
 		// so default to tmux when available. No worktree/resume/fork options.
 		m.executorIsTracker = len(m.taskChildren(t)) > 0
+		bgLabel := "Run task in background (watch in pm)"
 		runLabel := "Run task here (pm work)"
 		tmuxLabel := "Run task in tmux (pm work)"
 		if m.executorIsTracker {
+			bgLabel = "Run epic in background (watch in pm)"
 			runLabel = "Run epic here (pm run-epic)"
 			tmuxLabel = "Run epic in tmux (pm run-epic)"
 		}
+		// Background is the default: non-blocking, observable natively in pm.
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{bgLabel, "bg", "b"})
 		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{runLabel, "here", "h"})
 		if inTmux {
 			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{tmuxLabel, "tmux", "t"})
 		}
 		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Dry-run preview", "dry-run", "d"})
-		if inTmux {
-			m.claudeMenuCursor = 1 // default to tmux for a long run
-		}
+		m.claudeMenuCursor = 0 // default to background
 		return
 	}
 
@@ -3189,6 +3231,49 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 	}
 
 	switch kind {
+	case "bg":
+		// Detached background run, output to a log file, observable natively in
+		// pm (run-state + agent-view). Does not take over the terminal or need tmux.
+		logPath := storage.ExecutorLogPath(projDir, t.Meta.ID)
+		if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+			m.toastMsg = "executor: " + err.Error()
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+			return m, nil
+		}
+		logf, err := os.Create(logPath)
+		if err != nil {
+			m.toastMsg = "executor: cannot open log: " + err.Error()
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+			return m, nil
+		}
+		c := exec.Command("pm", args...)
+		c.Dir = projDir
+		c.Stdout = logf
+		c.Stderr = logf
+		c.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // detach: survive board exit, no controlling tty
+		err = c.Start()
+		logf.Close() // the child keeps its own dup'd fd
+		if err != nil {
+			m.toastMsg = "executor: failed to start: " + err.Error()
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+			return m, nil
+		}
+		// Seed run-state so the board reflects the run immediately; the executor
+		// process overwrites it with richer progress (subs/phase/session) as it goes.
+		_ = storage.WriteRunState(projDir, &storage.RunState{
+			TaskID:  t.Meta.ID,
+			Project: t.Project,
+			Kind:    args[0],
+			Status:  storage.RunStatusRunning,
+			PID:     c.Process.Pid,
+			LogPath: logPath,
+			Started: time.Now().UTC().Format(time.RFC3339),
+		})
+		m.refreshRunStates()
+		m.toastMsg = fmt.Sprintf("Started %s %s in background (▶ on the board)", args[0], t.Meta.ID)
+		m.toastExpiry = time.Now().Add(4 * time.Second)
+		return m, nil
+
 	case "here":
 		c := exec.Command("sh", "-c", pmShellCommand(projDir, args)+execPauseOnError)
 		c.Dir = projDir

@@ -194,6 +194,10 @@ type Model struct {
 	launchAgent         launchAgent
 	executorIsTracker   bool // when launchAgent==executor: run-epic vs work (for menu title)
 
+	// executor run-states (live background runs), keyed by task/tracker id;
+	// refreshed on tick from <project>/.executor/*.json
+	runStates map[string]*storage.RunState
+
 	// project-scope claude launch (no task)
 	projectScopeLaunch bool
 	projectScopeSlug   string

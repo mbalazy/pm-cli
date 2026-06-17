@@ -96,20 +96,59 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 
 			opts := workOptions{standalone: false, model: model, maxTurns: maxTurns, yolo: yolo, allowDirty: true, timeout: timeout}
 
+			// Run-state for observability: the manager owns the epic-level file;
+			// driveSub fills in each sub's worker session as it goes.
+			run := &storage.RunState{
+				TaskID:  tracker.Meta.ID,
+				Project: slug,
+				Kind:    "run-epic",
+				Status:  storage.RunStatusRunning,
+				PID:     os.Getpid(),
+				Started: time.Now().UTC().Format(time.RFC3339),
+				LogPath: storage.ExecutorLogPath(proj.Path, tracker.Meta.ID),
+			}
+			for _, s := range subs {
+				init := "pending"
+				if s.Meta.Status == doneStatus || s.Meta.Status == storage.StatusDone {
+					init = "skipped"
+				}
+				run.Subs = append(run.Subs, storage.SubRun{ID: s.Meta.ID, Status: init})
+			}
+			_ = storage.WriteRunState(proj.Path, run)
+
 			var outcomes []subOutcome
 			for _, sub := range subs {
 				// Re-entrant: skip already-finished subs; only pick up ready ones.
 				if sub.Meta.Status == doneStatus || sub.Meta.Status == storage.StatusDone {
-					outcomes = append(outcomes, subOutcome{sub.Meta.ID, "skipped", "already " + string(sub.Meta.Status)})
+					oc := subOutcome{sub.Meta.ID, "skipped", "already " + string(sub.Meta.Status)}
+					outcomes = append(outcomes, oc)
+					updateSubRun(run, oc.id, oc.result, oc.note)
+					_ = storage.WriteRunState(proj.Path, run)
 					continue
 				}
 				if sub.Meta.Status != startStatus {
-					outcomes = append(outcomes, subOutcome{sub.Meta.ID, "skipped", "not ready (status " + string(sub.Meta.Status) + ")"})
+					oc := subOutcome{sub.Meta.ID, "skipped", "not ready (status " + string(sub.Meta.Status) + ")"}
+					outcomes = append(outcomes, oc)
+					updateSubRun(run, oc.id, oc.result, oc.note)
+					_ = storage.WriteRunState(proj.Path, run)
 					continue
 				}
 
-				outcomes = append(outcomes, driveSub(store, proj, slug, tracker, sub, epicBranch, doneStatus, opts))
+				run.CurrentSub = sub.Meta.ID
+				updateSubRun(run, sub.Meta.ID, storage.RunStatusRunning, "")
+				_ = storage.WriteRunState(proj.Path, run)
+
+				oc := driveSub(store, proj, slug, tracker, sub, epicBranch, doneStatus, opts, run)
+				outcomes = append(outcomes, oc)
+
+				run.CurrentSub = ""
+				run.CurrentSession = ""
+				updateSubRun(run, oc.id, oc.result, oc.note)
+				_ = storage.WriteRunState(proj.Path, run)
 			}
+
+			run.Status = storage.RunStatusDone
+			_ = storage.WriteRunState(proj.Path, run)
 
 			// Leave the user on the integration branch with the accumulated work.
 			_ = gitEnsureBranch(proj.Path, epicBranch, "")
@@ -161,7 +200,7 @@ func readySubs(store storage.TaskStore, slug, trackerID string) ([]*storage.Task
 // driveSub runs one ready sub: branch off the integration branch, run the
 // worker, and on verify-green merge back -> done status. Blocked/failed/conflict
 // subs are parked (status + reason in pm) and the manager moves on.
-func driveSub(store storage.TaskStore, proj *storage.Project, slug string, tracker, sub *storage.Task, epicBranch string, doneStatus storage.TaskStatus, opts workOptions) subOutcome {
+func driveSub(store storage.TaskStore, proj *storage.Project, slug string, tracker, sub *storage.Task, epicBranch string, doneStatus storage.TaskStatus, opts workOptions, run *storage.RunState) subOutcome {
 	dir := proj.Path
 	branch := resolveWorkBranch(sub)
 
@@ -181,6 +220,17 @@ func driveSub(store storage.TaskStore, proj *storage.Project, slug string, track
 		_ = store.MoveTask(sub, storage.StatusWaiting)
 		return subOutcome{sub.Meta.ID, "failed", err.Error()}
 	}
+
+	// Surface the worker's session up front so the live agent-view knows which
+	// transcript to tail (claude --session-id pins it before any output).
+	run.CurrentSession = plan.sessionID
+	for i := range run.Subs {
+		if run.Subs[i].ID == sub.Meta.ID {
+			run.Subs[i].Session = plan.sessionID
+		}
+	}
+	_ = storage.WriteRunState(dir, run)
+
 	res, err := executeWork(store, sub, plan, opts)
 	if err != nil {
 		_ = store.MoveTask(sub, storage.StatusWaiting)
@@ -215,6 +265,19 @@ func driveSub(store storage.TaskStore, proj *storage.Project, slug string, track
 		_ = recordCrossCutting(store, tracker, sub.Meta.ID, res.Unresolved)
 	}
 	return subOutcome{sub.Meta.ID, "merged", briefReason(res)}
+}
+
+// updateSubRun sets the status (and note) of sub id in the run-state, appending
+// an entry if it is not present yet.
+func updateSubRun(run *storage.RunState, id, status, note string) {
+	for i := range run.Subs {
+		if run.Subs[i].ID == id {
+			run.Subs[i].Status = status
+			run.Subs[i].Note = note
+			return
+		}
+	}
+	run.Subs = append(run.Subs, storage.SubRun{ID: id, Status: status, Note: note})
 }
 
 func briefReason(res *workerResult) string {

@@ -178,6 +178,7 @@ type workOptions struct {
 type workPlan struct {
 	proj      *storage.Project
 	branch    string
+	sessionID string // pinned via `claude --session-id` so the transcript path is known up front
 	prompt    string
 	sysPrompt string
 	cmdArgs   []string
@@ -211,11 +212,12 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 	}
 
 	branch := resolveWorkBranch(task)
+	sessionID := storage.NewSessionID()
 	prompt := buildWorkerPrompt(task, parent, proj, slug, exec, branch, opts.standalone)
 	sysPrompt := buildWorkerSystemPrompt(exec, opts.standalone)
-	cmdArgs := buildClaudeArgs(prompt, sysPrompt, opts.model, opts.maxTurns, opts.yolo)
+	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo)
 
-	return &workPlan{proj: proj, branch: branch, prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs}, nil
+	return &workPlan{proj: proj, branch: branch, sessionID: sessionID, prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs}, nil
 }
 
 // executeWork runs a planned worker and records the result into pm. In
@@ -233,14 +235,56 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		}
 	}
 
+	// Run-state for observability (standalone only; in epic mode the manager
+	// owns the epic-level run-state and updates the per-sub entry).
+	var run *storage.RunState
+	if opts.standalone {
+		run = &storage.RunState{
+			TaskID:         task.Meta.ID,
+			Project:        task.Project,
+			Kind:           "work",
+			Status:         storage.RunStatusRunning,
+			PID:            os.Getpid(),
+			Started:        time.Now().UTC().Format(time.RFC3339),
+			LogPath:        storage.ExecutorLogPath(plan.proj.Path, task.Meta.ID),
+			CurrentSub:     task.Meta.ID,
+			CurrentSession: plan.sessionID,
+			Phase:          "running",
+			Subs:           []storage.SubRun{{ID: task.Meta.ID, Status: storage.RunStatusRunning, Session: plan.sessionID}},
+		}
+		_ = storage.WriteRunState(plan.proj.Path, run)
+	}
+
 	fmt.Fprintf(os.Stderr, "pm work: launching headless worker for %s on %s (%s)...\n", task.Meta.ID, plan.branch, modeLabel(opts.standalone))
 
 	res, sessionID, err := runWorker(plan.proj.Path, plan.cmdArgs, opts.timeout)
 	if err != nil {
+		if run != nil {
+			run.Status = storage.RunStatusFailed
+			run.Phase = ""
+			run.Error = err.Error()
+			if len(run.Subs) > 0 {
+				run.Subs[0].Status = storage.RunStatusFailed
+				run.Subs[0].Note = err.Error()
+			}
+			_ = storage.WriteRunState(plan.proj.Path, run)
+		}
 		return nil, err
 	}
 	if err := applyWorkerResult(store, task, plan.branch, sessionID, res, opts.standalone); err != nil {
 		return nil, err
+	}
+	if run != nil {
+		run.Status = storage.RunStatusDone
+		run.Phase = ""
+		run.CurrentSub = ""
+		run.CurrentSession = ""
+		if len(run.Subs) > 0 {
+			run.Subs[0].Status = res.Status
+			run.Subs[0].Note = strings.TrimSpace(res.Summary)
+			run.Subs[0].Commits = res.Commits
+		}
+		_ = storage.WriteRunState(plan.proj.Path, run)
 	}
 	return res, nil
 }
@@ -253,7 +297,7 @@ func modeLabel(standalone bool) string {
 }
 
 // buildClaudeArgs assembles the `claude -p` argv for a worker run.
-func buildClaudeArgs(prompt, sysPrompt, model string, maxTurns int, yolo bool) []string {
+func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, yolo bool) []string {
 	args := []string{
 		"-p", prompt,
 		"--append-system-prompt", sysPrompt,
@@ -261,6 +305,9 @@ func buildClaudeArgs(prompt, sysPrompt, model string, maxTurns int, yolo bool) [
 		"--json-schema", workerResultSchema,
 		"--model", model,
 		"--max-turns", fmt.Sprintf("%d", maxTurns),
+	}
+	if sessionID != "" {
+		args = append(args, "--session-id", sessionID)
 	}
 	if yolo {
 		args = append(args, "--dangerously-skip-permissions")
@@ -296,6 +343,7 @@ func runWorker(dir string, args []string, timeout time.Duration) (*workerResult,
 
 	c := exec.CommandContext(ctx, "claude", args...)
 	c.Dir = dir
+	c.Env = workerEnv()
 	c.Stderr = os.Stderr
 	out, err := c.Output()
 	if ctx.Err() == context.DeadlineExceeded {
@@ -305,6 +353,27 @@ func runWorker(dir string, args []string, timeout time.Duration) (*workerResult,
 		return nil, "", fmt.Errorf("claude worker failed: %w", err)
 	}
 	return parseClaudeResult(out)
+}
+
+// workerEnv returns the worker's environment with ANTHROPIC_API_KEY /
+// ANTHROPIC_AUTH_TOKEN stripped, so the headless `claude -p` worker authenticates
+// with the Claude subscription (keychain) instead of the pay-per-token API.
+//
+// The executor is built to spawn MANY headless workers. With ANTHROPIC_API_KEY
+// set, every worker bills the API (opus headless ~ $15/$75 per Mtok), and a
+// drained/disabled API balance fails every worker with exit 1. claude -p on the
+// subscription is supported within plan limits, which is the whole economic
+// premise of the executor.
+func workerEnv() []string {
+	src := os.Environ()
+	out := make([]string, 0, len(src))
+	for _, kv := range src {
+		if strings.HasPrefix(kv, "ANTHROPIC_API_KEY=") || strings.HasPrefix(kv, "ANTHROPIC_AUTH_TOKEN=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // parseClaudeResult extracts the worker result + session id from a

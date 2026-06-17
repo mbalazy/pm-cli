@@ -1199,7 +1199,7 @@ func TestOpenExecutorMenu(t *testing.T) {
 		return out
 	}
 
-	t.Run("leaf task without tmux -> work, here+dry-run", func(t *testing.T) {
+	t.Run("leaf task without tmux -> work, bg+here+dry-run, default bg", func(t *testing.T) {
 		os.Unsetenv("TMUX")
 		m := Model{tasks: []*storage.Task{leaf}}
 		m.openExecutorMenu(leaf)
@@ -1212,12 +1212,15 @@ func TestOpenExecutorMenu(t *testing.T) {
 		if m.executorIsTracker {
 			t.Error("leaf task must not be flagged as tracker")
 		}
-		if got := kinds(m.claudeMenuItems); strings.Join(got, ",") != "here,dry-run" {
-			t.Errorf("items = %v, want [here dry-run]", got)
+		if got := kinds(m.claudeMenuItems); strings.Join(got, ",") != "bg,here,dry-run" {
+			t.Errorf("items = %v, want [bg here dry-run]", got)
+		}
+		if m.claudeMenuItems[m.claudeMenuCursor].kind != "bg" {
+			t.Errorf("default cursor at %q, want bg", m.claudeMenuItems[m.claudeMenuCursor].kind)
 		}
 	})
 
-	t.Run("tracker with tmux -> run-epic, here+tmux+dry-run, default tmux", func(t *testing.T) {
+	t.Run("tracker with tmux -> run-epic, bg+here+tmux+dry-run, default bg", func(t *testing.T) {
 		os.Setenv("TMUX", "/tmp/tmux-1000/default,1,0")
 		defer os.Unsetenv("TMUX")
 		m := Model{tasks: []*storage.Task{parent, child}}
@@ -1225,11 +1228,11 @@ func TestOpenExecutorMenu(t *testing.T) {
 		if !m.executorIsTracker {
 			t.Error("parent with a child must be flagged as tracker")
 		}
-		if got := kinds(m.claudeMenuItems); strings.Join(got, ",") != "here,tmux,dry-run" {
-			t.Errorf("items = %v, want [here tmux dry-run]", got)
+		if got := kinds(m.claudeMenuItems); strings.Join(got, ",") != "bg,here,tmux,dry-run" {
+			t.Errorf("items = %v, want [bg here tmux dry-run]", got)
 		}
-		if m.claudeMenuItems[m.claudeMenuCursor].kind != "tmux" {
-			t.Errorf("default cursor at %q, want tmux", m.claudeMenuItems[m.claudeMenuCursor].kind)
+		if m.claudeMenuItems[m.claudeMenuCursor].kind != "bg" {
+			t.Errorf("default cursor at %q, want bg", m.claudeMenuItems[m.claudeMenuCursor].kind)
 		}
 	})
 
