@@ -106,3 +106,19 @@ func (m *Model) doReorder(direction int) {
 	m.cursors[m.activeCol] = target
 	m.reload()
 }
+
+func snapshotTask(t *storage.Task) *storage.Task {
+	cp := *t
+	cp.Meta = t.Meta
+	if t.Meta.Links != nil {
+		cp.Meta.Links = make(map[string]string)
+		for k, v := range t.Meta.Links {
+			cp.Meta.Links[k] = v
+		}
+	}
+	if t.Meta.Tags != nil {
+		cp.Meta.Tags = make([]string, len(t.Meta.Tags))
+		copy(cp.Meta.Tags, t.Meta.Tags)
+	}
+	return &cp
+}
