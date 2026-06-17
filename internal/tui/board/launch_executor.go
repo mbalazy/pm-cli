@@ -132,6 +132,7 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 		}
 		// Seed run-state so the board reflects the run immediately; the executor
 		// process overwrites it with richer progress (subs/phase/session) as it goes.
+		// Best-effort: a failed seed just delays the first dashboard refresh.
 		_ = storage.WriteRunState(stateDir, &storage.RunState{
 			TaskID:   t.Meta.ID,
 			Project:  t.Project,

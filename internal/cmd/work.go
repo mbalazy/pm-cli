@@ -237,7 +237,9 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 
 	// Run-state for observability (standalone only; in epic mode the manager
 	// owns the epic-level run-state and updates the per-sub entry). The run-state
-	// lives in the pm data dir (where the TUI reads it), NOT the git repo.
+	// lives in the pm data dir (where the TUI reads it), NOT the git repo. Every
+	// WriteRunState below is best-effort: a failed write only costs a stale
+	// dashboard, never correctness, so the error is dropped.
 	stateDir := store.ProjectDir(task.Project)
 	var run *storage.RunState
 	if opts.standalone {

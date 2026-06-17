@@ -61,6 +61,10 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 	pid := st.PID
 	taskID := st.TaskID
 	proj := st.Project
+	// Errors here are intentionally dropped: this is a TUI (bubbletea owns the
+	// screen, so stderr would corrupt the render), and the SIGTERM may legitimately
+	// fail because the process is already gone - the execKillCheckMsg follow-up
+	// re-checks liveness and escalates to SIGKILL if needed.
 	_ = st.Kill(syscall.SIGTERM)
 
 	// Re-read the freshest run-state (the manager may have advanced it), then
@@ -84,7 +88,7 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 			}
 		}
 	}
-	_ = storage.WriteRunState(stateDir, st)
+	_ = storage.WriteRunState(stateDir, st) // best-effort observability (see above)
 
 	// Park the in-flight task on `waiting` so the board reflects the stop.
 	if inFlight != "" {

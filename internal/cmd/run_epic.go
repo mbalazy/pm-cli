@@ -98,7 +98,9 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 
 			// Run-state for observability: the manager owns the epic-level file;
 			// driveSub fills in each sub's worker session as it goes. It lives in
-			// the pm data dir (where the TUI reads it), NOT the git repo.
+			// the pm data dir (where the TUI reads it), NOT the git repo. Every
+			// WriteRunState below is best-effort observability: a failed write only
+			// costs a stale dashboard, never correctness, so the error is dropped.
 			stateDir := store.ProjectDir(slug)
 			run := &storage.RunState{
 				TaskID:   tracker.Meta.ID,
@@ -174,6 +176,9 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			_ = storage.WriteRunState(stateDir, run)
 
 			// Leave the user on the integration branch with the accumulated work.
+			// Best-effort: the branch already exists (created above) and any real
+			// checkout failure surfaced earlier; a stray here only affects which
+			// branch is checked out at exit.
 			_ = gitEnsureBranch(proj.Path, epicBranch, "")
 
 			printEpicSummary(tracker, epicBranch, outcomes)
@@ -241,6 +246,16 @@ func readySubs(store storage.TaskStore, slug, trackerID string) ([]*storage.Task
 	return subs, nil
 }
 
+// logIfErr surfaces a non-fatal executor bookkeeping failure (a status move,
+// a parent-feedback write) on stderr without aborting the run. These rarely
+// fail (local file writes in a dir we own), but a silent failure here would
+// desync a sub's board status from reality - so make it visible.
+func logIfErr(context string, err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pm run-epic: %s: %v\n", context, err)
+	}
+}
+
 // driveSub runs one ready sub: branch off the integration branch, run the
 // worker, and on verify-green merge back -> done status. Blocked/failed/conflict
 // subs are parked (status + reason in pm) and the manager moves on.
@@ -257,11 +272,11 @@ func driveSub(store storage.TaskStore, proj *storage.Project, slug string, track
 		return subOutcome{sub.Meta.ID, "failed", "create branch: " + err.Error()}
 	}
 
-	_ = store.MoveTask(sub, storage.StatusDoing)
+	logIfErr("move "+sub.Meta.ID+" to doing", store.MoveTask(sub, storage.StatusDoing))
 
 	plan, err := planWork(store, sub, slug, opts)
 	if err != nil {
-		_ = store.MoveTask(sub, storage.StatusWaiting)
+		logIfErr("park "+sub.Meta.ID, store.MoveTask(sub, storage.StatusWaiting))
 		return subOutcome{sub.Meta.ID, "failed", err.Error()}
 	}
 
@@ -277,7 +292,7 @@ func driveSub(store storage.TaskStore, proj *storage.Project, slug string, track
 
 	res, err := executeWork(store, sub, plan, opts)
 	if err != nil {
-		_ = store.MoveTask(sub, storage.StatusWaiting)
+		logIfErr("park "+sub.Meta.ID, store.MoveTask(sub, storage.StatusWaiting))
 		return subOutcome{sub.Meta.ID, "failed", err.Error()}
 	}
 
@@ -285,34 +300,34 @@ func driveSub(store storage.TaskStore, proj *storage.Project, slug string, track
 		// applyWorkerResult already parked a blocked sub on waiting; make sure a
 		// failed sub is parked too (not left dangling on doing).
 		if sub.Meta.Status != storage.StatusWaiting {
-			_ = store.MoveTask(sub, storage.StatusWaiting)
+			logIfErr("park "+sub.Meta.ID, store.MoveTask(sub, storage.StatusWaiting))
 		}
 		// Bubble the parked sub's reason + open questions up to the parent so the
 		// human sees, in one place (the epic), why a sub stalled - without opening
 		// each child. Status itself stays in the child + generated rollup; this is
 		// open-questions content, not a status table.
-		_ = recordSubFeedback(store, tracker, sub.Meta.ID, res.Status, parkedFindings(res))
+		logIfErr("record feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, res.Status, parkedFindings(res)))
 		return subOutcome{sub.Meta.ID, res.Status, briefReason(res)}
 	}
 
 	// Verify-green: merge the sub back into the integration branch.
 	if err := gitEnsureBranch(dir, epicBranch, ""); err != nil {
-		_ = store.MoveTask(sub, storage.StatusWaiting)
+		logIfErr("park "+sub.Meta.ID, store.MoveTask(sub, storage.StatusWaiting))
 		return subOutcome{sub.Meta.ID, "failed", "checkout integration to merge: " + err.Error()}
 	}
 	msg := fmt.Sprintf("Merge %s (%s) into %s", branch, sub.Meta.ID, epicBranch)
 	if err := gitMergeNoFF(dir, branch, msg); err != nil {
 		// A seam the ordering did not resolve - escalate to a human.
-		_ = store.MoveTask(sub, storage.StatusWaiting)
+		logIfErr("park "+sub.Meta.ID, store.MoveTask(sub, storage.StatusWaiting))
 		return subOutcome{sub.Meta.ID, "conflict", err.Error()}
 	}
-	_ = store.MoveTask(sub, doneStatus)
-	_ = gitDeleteBranch(dir, branch)
+	logIfErr("mark "+sub.Meta.ID+" "+string(doneStatus), store.MoveTask(sub, doneStatus))
+	_ = gitDeleteBranch(dir, branch) // best-effort cleanup; the merge already landed
 
 	// Refresh the parent's Manager Notes for this sub: record cross-cutting
 	// findings for later subs, and (with empty findings) clear any stale parked
 	// note now that the sub has merged.
-	_ = recordSubFeedback(store, tracker, sub.Meta.ID, "merged", res.Unresolved)
+	logIfErr("refresh feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, "merged", res.Unresolved))
 	return subOutcome{sub.Meta.ID, "merged", briefReason(res)}
 }
 

@@ -58,6 +58,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case execKillCheckMsg:
 		// The group didn't die on SIGTERM - escalate to SIGKILL (group, then pid).
+		// Errors are dropped: the process may have exited in the gap (the next
+		// refreshRunStates reflects reality), and this is a TUI so stderr is unusable.
 		if storage.ProcessAlive(msg.pid) {
 			_ = syscall.Kill(-msg.pid, syscall.SIGKILL)
 			_ = syscall.Kill(msg.pid, syscall.SIGKILL)

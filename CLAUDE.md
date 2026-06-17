@@ -10,7 +10,7 @@ make check                # go vet + go test
 make install VERSION=X.Y.Z  # override version
 ```
 
-IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.9.0**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN).
+IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.17.0**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN).
 
 ## Tests
 

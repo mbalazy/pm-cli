@@ -65,6 +65,7 @@ func gitEnsureBranch(dir, branch, base string) error {
 func gitMergeNoFF(dir, branch, message string) error {
 	c := exec.Command("git", "-C", dir, "merge", "--no-ff", "-m", message, branch)
 	if out, err := c.CombinedOutput(); err != nil {
+		// best-effort cleanup: leave the tree clean; the merge error is what matters
 		_ = exec.Command("git", "-C", dir, "merge", "--abort").Run()
 		return fmt.Errorf("merge %s failed (aborted): %s", branch, strings.TrimSpace(string(out)))
 	}

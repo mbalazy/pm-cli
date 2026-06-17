@@ -1,12 +1,41 @@
 package cmd
 
 import (
+	"errors"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/mbalazy/pm/internal/storage"
 )
+
+// captureStderr swaps os.Stderr for a pipe, runs fn, and returns what it wrote.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = w
+	fn()
+	w.Close()
+	os.Stderr = old
+	out, _ := io.ReadAll(r)
+	return string(out)
+}
+
+func TestLogIfErr(t *testing.T) {
+	if got := captureStderr(t, func() { logIfErr("move x-1 to doing", nil) }); got != "" {
+		t.Errorf("nil err should print nothing, got %q", got)
+	}
+	got := captureStderr(t, func() { logIfErr("move x-1 to doing", errors.New("disk full")) })
+	if !strings.Contains(got, "move x-1 to doing") || !strings.Contains(got, "disk full") {
+		t.Errorf("expected context + error in output, got %q", got)
+	}
+}
 
 // tempStore creates an isolated store with one project ("proj") whose path is a
 // temp dir, and returns the store + slug.
