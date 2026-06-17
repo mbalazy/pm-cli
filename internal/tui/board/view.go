@@ -9,73 +9,205 @@ import (
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/mbalazy/pm/internal/version"
 )
 
-func renderTaskDetail(t *storage.Task, termWidth int) string {
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "# %s", t.Meta.Title)
-	if t.Meta.ID != "" {
-		fmt.Fprintf(&sb, " (#%s)", t.Meta.ID)
+func (m Model) renderTaskDetail(t *storage.Task) string {
+	termWidth := m.width
+	contentWidth := termWidth - 4
+	if contentWidth > 100 {
+		contentWidth = 100
 	}
-	fmt.Fprintln(&sb)
-	fmt.Fprintf(&sb, "\n**Status:** %s | **Project:** %s | **Updated:** %s\n", t.Meta.Status, t.Project, t.Meta.Updated)
+
+	// Head: title + status + parent link (rendered via glamour).
+	var head strings.Builder
+	fmt.Fprintf(&head, "# %s", t.Meta.Title)
+	if t.Meta.ID != "" {
+		fmt.Fprintf(&head, " (#%s)", t.Meta.ID)
+	}
+	fmt.Fprintln(&head)
+	fmt.Fprintf(&head, "\n**Status:** %s | **Project:** %s | **Updated:** %s\n", t.Meta.Status, t.Project, t.Meta.Updated)
+	if p := m.taskParent(t); p != nil {
+		fmt.Fprintf(&head, "\n**Parent:** %s `#%s` %s  _(press p)_\n", statusGlyph(p.Meta.Status), p.Meta.ID, p.Meta.Title)
+	}
+
+	// Rest: branch, links, tags, sessions, ac, brief, body (rendered via glamour).
+	var rest strings.Builder
 	if t.Meta.Branch != "" {
-		fmt.Fprintf(&sb, "\n**Branch:** `%s`\n", t.Meta.Branch)
+		fmt.Fprintf(&rest, "\n**Branch:** `%s`\n", t.Meta.Branch)
 	}
 	if len(t.Meta.Links) > 0 {
 		var parts []string
 		for name, url := range t.Meta.Links {
 			parts = append(parts, fmt.Sprintf("[%s](%s)", name, url))
 		}
-		fmt.Fprintf(&sb, "\n**Links:** %s\n", strings.Join(parts, " | "))
+		fmt.Fprintf(&rest, "\n**Links:** %s\n", strings.Join(parts, " | "))
 	}
 	if len(t.Meta.Tags) > 0 {
-		fmt.Fprintf(&sb, "\n**Tags:** %s\n", strings.Join(t.Meta.Tags, ", "))
+		fmt.Fprintf(&rest, "\n**Tags:** %s\n", strings.Join(t.Meta.Tags, ", "))
 	}
 	if len(t.Meta.Sessions) > 0 {
-		fmt.Fprintf(&sb, "\n**Sessions:** (%d)\n", len(t.Meta.Sessions))
+		fmt.Fprintf(&rest, "\n**Sessions:** (%d)\n", len(t.Meta.Sessions))
 		for i, s := range t.Meta.Sessions {
-			fmt.Fprintf(&sb, "- `%s`", s)
+			fmt.Fprintf(&rest, "- `%s`", s)
 			if i == len(t.Meta.Sessions)-1 {
-				fmt.Fprint(&sb, " *(latest)*")
+				fmt.Fprint(&rest, " *(latest)*")
 			}
-			fmt.Fprintln(&sb)
+			fmt.Fprintln(&rest)
 		}
 	}
 	if t.Meta.AC != "" {
-		fmt.Fprintf(&sb, "\n**Acceptance Criteria:**\n%s\n", t.Meta.AC)
+		fmt.Fprintf(&rest, "\n**Acceptance Criteria:**\n%s\n", t.Meta.AC)
 	}
 	if t.Meta.Brief != "" {
-		fmt.Fprintf(&sb, "\n**Brief:**\n%s\n", t.Meta.Brief)
+		fmt.Fprintf(&rest, "\n**Brief:**\n%s\n", t.Meta.Brief)
 	}
 	if t.Body != "" {
-		fmt.Fprintf(&sb, "\n---\n\n%s\n", t.Body)
+		fmt.Fprintf(&rest, "\n---\n\n%s\n", bodyToDisplayMarkdown(t.Body))
 	}
 
-	contentWidth := termWidth - 4
-	if contentWidth > 100 {
-		contentWidth = 100
+	var out strings.Builder
+	out.WriteString(glamourRender(head.String(), contentWidth))
+	// Subtask table (tracker -> children): real bordered rows, press p to pick.
+	if kids := m.taskChildren(t); len(kids) > 0 {
+		out.WriteString(renderSubtaskTable(kids, contentWidth))
+		out.WriteString("\n")
 	}
-	r, err := glamour.NewTermRenderer(
-		glamour.WithStylePath("dark"),
-		glamour.WithWordWrap(contentWidth),
-	)
-	if err != nil {
-		return sb.String()
-	}
-	rendered, err := r.Render(sb.String())
-	if err != nil {
-		return sb.String()
-	}
+	out.WriteString(glamourRender(rest.String(), contentWidth))
 
 	pad := (termWidth - contentWidth) / 2
 	if pad < 0 {
 		pad = 0
 	}
-	style := lipgloss.NewStyle().PaddingLeft(pad)
-	return style.Render(rendered)
+	return lipgloss.NewStyle().PaddingLeft(pad).Render(out.String())
+}
+
+// bodyToDisplayMarkdown turns the raw body into display markdown with visible
+// zone headers: the Spec block (current truth) and the Log (append-only
+// history). Bodies without spec markers pass through unchanged.
+func bodyToDisplayMarkdown(body string) string {
+	spec := storage.ExtractSpec(body)
+	if spec == "" {
+		return body
+	}
+	start := strings.Index(body, storage.SpecStart)
+	end := strings.Index(body, storage.SpecEnd) + len(storage.SpecEnd)
+	before := strings.TrimSpace(body[:start])
+	after := strings.TrimSpace(body[end:])
+	log := strings.TrimSpace(before + "\n\n" + after)
+
+	var b strings.Builder
+	b.WriteString("## Spec (current truth)\n\n")
+	b.WriteString(spec)
+	if log != "" {
+		b.WriteString("\n\n## Log (history, append-only)\n\n")
+		b.WriteString(log)
+	}
+	return b.String()
+}
+
+// glamourRender renders markdown to ANSI at the given wrap width, falling back
+// to the raw markdown on error.
+func glamourRender(md string, contentWidth int) string {
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStylePath("dark"),
+		glamour.WithWordWrap(contentWidth),
+	)
+	if err != nil {
+		return md
+	}
+	out, err := r.Render(md)
+	if err != nil {
+		return md
+	}
+	return out
+}
+
+// renderSubtaskTable renders a tracker's children as a bordered table with a
+// horizontal rule between every row and titles wrapped to at most two lines.
+func renderSubtaskTable(kids []*storage.Task, width int) string {
+	done := 0
+	for _, k := range kids {
+		if k.Meta.Status == storage.StatusDone || k.Meta.Status == "merged" {
+			done++
+		}
+	}
+	header := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render(fmt.Sprintf("Subtasks (%d/%d)  ", done, len(kids))) +
+		helpStyle.Render("(press p to pick & open)")
+
+	titleW := width - 30
+	if titleW < 18 {
+		titleW = 18
+	}
+	tbl := table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderRow(true).
+		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#555555"})).
+		Width(width).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			return lipgloss.NewStyle().Padding(0, 1)
+		}).
+		Headers("STATUS", "ID", "TITLE")
+	for _, k := range kids {
+		tbl.Row(
+			statusGlyph(k.Meta.Status)+" "+string(k.Meta.Status),
+			"#"+k.Meta.ID,
+			truncLines(k.Meta.Title, titleW, 2),
+		)
+	}
+	return header + "\n" + tbl.String()
+}
+
+// truncLines word-wraps s to at most maxLines lines of the given rune width,
+// appending an ellipsis to the last line if content was dropped.
+func truncLines(s string, width, maxLines int) string {
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return ""
+	}
+	var lines []string
+	cur := ""
+	i := 0
+	for ; i < len(words); i++ {
+		w := words[i]
+		cand := w
+		if cur != "" {
+			cand = cur + " " + w
+		}
+		if len([]rune(cand)) <= width {
+			cur = cand
+			continue
+		}
+		if cur == "" {
+			// single word wider than the column: hard-truncate onto its own line
+			r := []rune(w)
+			if len(r) > width {
+				r = r[:width]
+			}
+			cur = string(r)
+			continue
+		}
+		lines = append(lines, cur)
+		cur = w
+		if len(lines) == maxLines {
+			cur = ""
+			break
+		}
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+		i = len(words)
+	}
+	if i < len(words) && len(lines) > 0 {
+		last := []rune(lines[len(lines)-1])
+		if len(last) > width-1 {
+			last = last[:width-1]
+		}
+		lines[len(lines)-1] = string(last) + "…"
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderProjectInfo(proj *storage.Project, slug string, termWidth int) string {
@@ -164,13 +296,16 @@ func (m Model) View() string {
 	if m.currentView == viewArchive {
 		return m.viewArchive()
 	}
-	if m.currentView == viewDaily {
-		return m.viewDaily()
+	if m.currentView == viewFocus {
+		return m.viewFocus()
 	}
 	return m.viewBoard()
 }
 
 func (m Model) viewDetail() string {
+	if m.subtaskPicker {
+		return m.viewSubtaskPicker()
+	}
 	if m.yankMenu {
 		return m.viewYankMenu()
 	}
@@ -244,8 +379,8 @@ func (m Model) viewHelp() string {
 		{"o / Enter", "Task detail"},
 		{"/ ", "Search tasks"},
 		{";", "Zoom toggle"},
-		{"t", "Toggle today"},
-		{"T", "Daily plan view"},
+		{"t", "Toggle focus"},
+		{"T", "Focus view"},
 		{"Ctrl+a", "Archive view"},
 		{"P", "Project picker"},
 		{"1-9", "Jump to project"},
@@ -332,6 +467,52 @@ func (m Model) viewYankMenu() string {
 	}
 	lines = append(lines, "")
 	lines = append(lines, helpStyle.Render("enter copy  esc back"))
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(highlight).
+		Padding(1, 3).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+func (m Model) viewSubtaskPicker() string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render(
+		fmt.Sprintf("Subtasks (%d)", len(m.subtaskItems)))
+
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
+
+	boxW := m.width - 12
+	if boxW > 96 {
+		boxW = 96
+	}
+	if boxW < 44 {
+		boxW = 44
+	}
+	leftW := 24 // glyph + status + id
+	titleW := boxW - leftW - 4
+	if titleW < 18 {
+		titleW = 18
+	}
+
+	var lines []string
+	lines = append(lines, title)
+	lines = append(lines, "")
+	for i, k := range m.subtaskItems {
+		prefix := "  "
+		style := dimStyle
+		if i == m.subtaskCursor {
+			prefix = "> "
+			style = lipgloss.NewStyle().Bold(true).Foreground(special)
+		}
+		left := style.Width(leftW).Render(fmt.Sprintf("%s %-7s #%s", statusGlyph(k.Meta.Status), string(k.Meta.Status), k.Meta.ID))
+		titleBlock := style.Width(titleW).Render(truncLines(k.Meta.Title, titleW, 2))
+		row := lipgloss.JoinHorizontal(lipgloss.Top, style.Render(prefix), left, titleBlock)
+		lines = append(lines, row)
+	}
+	lines = append(lines, "")
+	lines = append(lines, helpStyle.Render("↑/↓ select  enter open  esc back"))
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -566,7 +747,7 @@ func (m Model) viewArchive() string {
 				break
 			}
 			isSelected := i == m.archiveCursor
-			card := renderCard(t, cardWidth, isSelected, "")
+			card := renderCard(t, cardWidth, isSelected, "", "")
 			sb.WriteString(lipgloss.NewStyle().PaddingLeft(2).Render(card))
 			sb.WriteString("\n")
 		}
@@ -587,22 +768,22 @@ func (m Model) viewArchive() string {
 	return sb.String()
 }
 
-func (m Model) viewDaily() string {
+func (m Model) viewFocus() string {
 	var sb strings.Builder
 
-	sb.WriteString(titleStyle.Render("pm today"))
+	sb.WriteString(titleStyle.Render("pm focus"))
 	sb.WriteString("\n")
 
-	dateLabel := m.dailyPlan.Date
+	dateLabel := m.focusPlan.Date
 	if dateLabel == "" {
 		dateLabel = storage.Today()
 	}
 	sb.WriteString(helpStyle.Render("  " + dateLabel))
 	sb.WriteString("\n\n")
 
-	tasks := m.dailyTasks()
+	tasks := m.focusTasks()
 	if len(tasks) == 0 {
-		sb.WriteString(helpStyle.Render("  No tasks planned for today."))
+		sb.WriteString(helpStyle.Render("  No focused tasks."))
 		sb.WriteString("\n")
 		sb.WriteString(helpStyle.Render("  Press t on any task in the board to add it."))
 		sb.WriteString("\n")
@@ -619,12 +800,12 @@ func (m Model) viewDaily() string {
 			if i >= listHeight {
 				break
 			}
-			isSelected := i == m.dailyCursor
+			isSelected := i == m.focusCursor
 			var card string
 			if m.zoomed {
-				card = renderZoomCard(t, cardWidth, isSelected, "")
+				card = renderZoomCard(t, cardWidth, isSelected, "", "")
 			} else {
-				card = renderCard(t, cardWidth, isSelected, "")
+				card = renderCard(t, cardWidth, isSelected, "", "")
 			}
 			sb.WriteString(lipgloss.NewStyle().PaddingLeft(2).Render(card))
 			sb.WriteString("\n")
@@ -633,7 +814,7 @@ func (m Model) viewDaily() string {
 
 	sb.WriteString("\n")
 	help := helpStyle.Render(fmt.Sprintf(
-		"today: %d  ↑/↓ navigate  t/x remove  C-j/C-k reorder  m move  d done  o detail  ; zoom  esc back",
+		"focus: %d  ↑/↓ navigate  t/x remove  C-j/C-k reorder  m move  d done  o detail  ; zoom  esc back",
 		len(tasks)))
 	sb.WriteString(help)
 
@@ -902,6 +1083,8 @@ func (m Model) renderTabs(showCounts bool) string {
 func (m Model) viewBoard() string {
 	var sb strings.Builder
 
+	badges := m.trackerBadges()
+
 	// title
 	sb.WriteString(titleStyle.Render("pm board"))
 	sb.WriteString("\n")
@@ -988,14 +1171,15 @@ func (m Model) viewBoard() string {
 				} else {
 					selectMark = "[ ] "
 				}
-			} else if m.dailySet[tasks[j].Meta.ID] {
+			} else if m.focusSet[tasks[j].Meta.ID] {
 				selectMark = "● "
 			}
+			badge := badges[tasks[j].Meta.ID]
 			var card string
 			if m.zoomed {
-				card = renderZoomCard(tasks[j], colWidth-6, isSelected, selectMark)
+				card = renderZoomCard(tasks[j], colWidth-6, isSelected, selectMark, badge)
 			} else {
-				card = renderCard(tasks[j], colWidth-6, isSelected, selectMark)
+				card = renderCard(tasks[j], colWidth-6, isSelected, selectMark, badge)
 			}
 			actualH := strings.Count(card, "\n") + 1
 			if usedH+actualH > cardBudget && rendered > 0 {
@@ -1123,7 +1307,42 @@ func (m Model) applyToast(result string) string {
 	return result
 }
 
-func renderCard(t *storage.Task, width int, selected bool, selectMark string) string {
+// statusGlyph maps a task status to a compact glyph for detail/rollup display.
+func statusGlyph(status storage.TaskStatus) string {
+	switch status {
+	case storage.StatusDone:
+		return "✅"
+	case "merged":
+		return "🔀"
+	case storage.StatusDoing:
+		return "🔨"
+	case storage.StatusWaiting:
+		return "⏳"
+	case storage.StatusArchived:
+		return "🗄"
+	default:
+		return "○"
+	}
+}
+
+// cardIDLine builds a card's secondary line: "#id" (or project), prefixed with
+// "↳" when the task is a subtask (has a parent), and suffixed with a tracker
+// progress badge when the task is a parent tracker.
+func cardIDLine(t *storage.Task, badge string) string {
+	id := t.Project
+	if t.Meta.ID != "" {
+		id = "#" + t.Meta.ID
+	}
+	if t.Meta.Parent != "" {
+		id = "↳ " + id
+	}
+	if badge != "" {
+		id += "  " + badge
+	}
+	return id
+}
+
+func renderCard(t *storage.Task, width int, selected bool, selectMark, badge string) string {
 	style := cardStyle
 	if selected {
 		style = activeCardStyle
@@ -1140,11 +1359,7 @@ func renderCard(t *storage.Task, width int, selected bool, selectMark string) st
 		title = title[:width-5] + "..."
 	}
 	lines = append(lines, cardTitleStyle.Render(title))
-	if t.Meta.ID != "" {
-		lines = append(lines, cardProjectStyle.Render("#"+t.Meta.ID))
-	} else {
-		lines = append(lines, cardProjectStyle.Render(t.Project))
-	}
+	lines = append(lines, cardProjectStyle.Render(cardIDLine(t, badge)))
 
 	if len(t.Meta.Tags) > 0 {
 		lines = append(lines, cardTagStyle.Render(strings.Join(t.Meta.Tags, ", ")))
@@ -1153,7 +1368,7 @@ func renderCard(t *storage.Task, width int, selected bool, selectMark string) st
 	return style.Render(strings.Join(lines, "\n"))
 }
 
-func renderZoomCard(t *storage.Task, width int, selected bool, selectMark string) string {
+func renderZoomCard(t *storage.Task, width int, selected bool, selectMark, badge string) string {
 	style := cardStyle
 	if selected {
 		style = activeCardStyle
@@ -1169,13 +1384,8 @@ func renderZoomCard(t *storage.Task, width int, selected bool, selectMark string
 	}
 	lines = append(lines, cardTitleStyle.Render(title))
 
-	// ID + updated date
-	meta := ""
-	if t.Meta.ID != "" {
-		meta = "#" + t.Meta.ID
-	} else {
-		meta = t.Project
-	}
+	// ID (+ subtask marker / tracker badge) + updated date
+	meta := cardIDLine(t, badge)
 	if t.Meta.Updated != "" {
 		meta += "  " + helpStyle.Render(t.Meta.Updated)
 	}

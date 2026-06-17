@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -164,6 +165,58 @@ func TestUpdateTaskBodyOnlyAppends(t *testing.T) {
 		reloaded, _ := store.FindTask("test", "t-1")
 		if reloaded.Body != "## Description\n\nOriginal body" {
 			t.Errorf("body changed unexpectedly: %q", reloaded.Body)
+		}
+	})
+}
+
+func TestUpdateTaskSpecReplacesAndLogAppends(t *testing.T) {
+	t.Run("first spec prepends block, existing body becomes Log", func(t *testing.T) {
+		store, _ := setupMCPTestStore(t)
+		task, _ := store.FindTask("test", "t-1") // body: "## Description\n\nOriginal body"
+
+		task.Body = storage.ApplySpec(task.Body, "We build X. Decision: use Y.")
+		storage.WriteTask(task)
+
+		reloaded, _ := store.FindTask("test", "t-1")
+		if got := storage.ExtractSpec(reloaded.Body); got != "We build X. Decision: use Y." {
+			t.Errorf("spec = %q", got)
+		}
+		// The original body must survive below the spec block (the Log).
+		if !strings.Contains(reloaded.Body, "## Description\n\nOriginal body") {
+			t.Errorf("original body lost from Log:\n%s", reloaded.Body)
+		}
+	})
+
+	t.Run("spec replaces in place while body_append grows the Log", func(t *testing.T) {
+		store, _ := setupMCPTestStore(t)
+		task, _ := store.FindTask("test", "t-1")
+
+		// First update: set spec.
+		task.Body = storage.ApplySpec(task.Body, "spec v1")
+		storage.WriteTask(task)
+
+		// Second update: rewrite spec AND append a Log pointer (the canonical flow).
+		task, _ = store.FindTask("test", "t-1")
+		task.Body = storage.ApplySpec(task.Body, "spec v2")
+		task.Body = task.Body + "\n\n" + "Session 2: Q3 resolved -> see Spec."
+		storage.WriteTask(task)
+
+		reloaded, _ := store.FindTask("test", "t-1")
+		if got := storage.ExtractSpec(reloaded.Body); got != "spec v2" {
+			t.Errorf("spec = %q, want spec v2", got)
+		}
+		if strings.Contains(reloaded.Body, "spec v1") {
+			t.Errorf("old spec v1 not replaced:\n%s", reloaded.Body)
+		}
+		if !strings.Contains(reloaded.Body, "Session 2: Q3 resolved -> see Spec.") {
+			t.Errorf("log pointer not appended:\n%s", reloaded.Body)
+		}
+		if !strings.Contains(reloaded.Body, "Original body") {
+			t.Errorf("original Log content lost:\n%s", reloaded.Body)
+		}
+		// Exactly one spec block.
+		if c := strings.Count(reloaded.Body, storage.SpecStart); c != 1 {
+			t.Errorf("expected 1 spec block, got %d", c)
 		}
 	})
 }
@@ -644,9 +697,9 @@ func TestUpdateProjectArchived(t *testing.T) {
 	})
 }
 
-func TestCrossProjectContextWrapsProjectsAndDailyTasks(t *testing.T) {
+func TestCrossProjectContextWrapsProjectsAndFocusTasks(t *testing.T) {
 	store, task := setupMCPTestStore(t)
-	storage.WriteDailyPlan(store.RootDir(), storage.DailyPlan{
+	storage.WriteFocusPlan(store.RootDir(), storage.FocusPlan{
 		Date:  storage.Today(),
 		Tasks: []string{task.Meta.ID},
 	})
@@ -665,7 +718,7 @@ func TestCrossProjectContextWrapsProjectsAndDailyTasks(t *testing.T) {
 
 	var payload struct {
 		Projects   []map[string]any `json:"projects"`
-		DailyTasks []taskSummary    `json:"daily_tasks"`
+		FocusTasks []taskSummary    `json:"focus_tasks"`
 	}
 	if err := json.Unmarshal([]byte(text.Text), &payload); err != nil {
 		t.Fatalf("invalid json: %v", err)
@@ -673,10 +726,135 @@ func TestCrossProjectContextWrapsProjectsAndDailyTasks(t *testing.T) {
 	if len(payload.Projects) != 1 {
 		t.Fatalf("projects len = %d, want 1", len(payload.Projects))
 	}
-	if len(payload.DailyTasks) != 1 {
-		t.Fatalf("daily_tasks len = %d, want 1", len(payload.DailyTasks))
+	if len(payload.FocusTasks) != 1 {
+		t.Fatalf("focus_tasks len = %d, want 1", len(payload.FocusTasks))
 	}
-	if payload.DailyTasks[0].ID != task.Meta.ID {
-		t.Errorf("daily task ID = %q, want %q", payload.DailyTasks[0].ID, task.Meta.ID)
+	if payload.FocusTasks[0].ID != task.Meta.ID {
+		t.Errorf("focus task ID = %q, want %q", payload.FocusTasks[0].ID, task.Meta.ID)
 	}
+}
+
+func mkTask(id, title string, status storage.TaskStatus, parent, branch, brief string) *storage.Task {
+	return &storage.Task{
+		Meta: storage.TaskMeta{
+			ID: id, Title: title, Status: status,
+			Parent: parent, Branch: branch, Brief: brief,
+		},
+		Project: "test",
+	}
+}
+
+func TestBuildTrackers(t *testing.T) {
+	tasks := []*storage.Task{
+		mkTask("p-1", "Parent tracker", storage.StatusTodo, "", "", "epic brief"),
+		mkTask("p-1-2", "Child two", storage.StatusDoing, "p-1", "feat/two", "**Goal**: build two\nmore detail"),
+		mkTask("p-1-1", "Child one", storage.StatusDone, "p-1", "feat/one", "done and merged"),
+		mkTask("p-1-3", "Child three", "merged", "p-1", "feat/three", "code merged, QA pending"),
+		mkTask("p-9", "Standalone doing", storage.StatusDoing, "", "feat/solo", "solo work"),
+	}
+
+	trackers, suppressed := storage.BuildTrackers(tasks)
+
+	t.Run("one tracker identified", func(t *testing.T) {
+		if len(trackers) != 1 {
+			t.Fatalf("trackers = %d, want 1", len(trackers))
+		}
+		if trackers[0].ID != "p-1" {
+			t.Errorf("tracker ID = %q, want p-1", trackers[0].ID)
+		}
+	})
+
+	t.Run("progress and total reflect children", func(t *testing.T) {
+		tr := trackers[0]
+		if tr.Total != 3 {
+			t.Errorf("total = %d, want 3", tr.Total)
+		}
+		want := map[string]int{"done": 1, "doing": 1, "merged": 1}
+		for k, v := range want {
+			if tr.Progress[k] != v {
+				t.Errorf("progress[%s] = %d, want %d", k, tr.Progress[k], v)
+			}
+		}
+	})
+
+	t.Run("children sorted by ID", func(t *testing.T) {
+		ids := []string{trackers[0].Children[0].ID, trackers[0].Children[1].ID, trackers[0].Children[2].ID}
+		want := []string{"p-1-1", "p-1-2", "p-1-3"}
+		for i := range want {
+			if ids[i] != want[i] {
+				t.Errorf("children[%d] = %q, want %q", i, ids[i], want[i])
+			}
+		}
+	})
+
+	t.Run("brief_line strips bold and takes first line", func(t *testing.T) {
+		// p-1-2 is children[1] after sort
+		if got := trackers[0].Children[1].BriefLine; got != "Goal: build two" {
+			t.Errorf("brief_line = %q, want %q", got, "Goal: build two")
+		}
+	})
+
+	t.Run("children and tracker suppressed, standalone not", func(t *testing.T) {
+		for _, id := range []string{"p-1", "p-1-1", "p-1-2", "p-1-3"} {
+			if !suppressed[id] {
+				t.Errorf("%q should be suppressed", id)
+			}
+		}
+		if suppressed["p-9"] {
+			t.Error("standalone p-9 should NOT be suppressed")
+		}
+	})
+}
+
+func TestBuildTrackersArchivedTrackerSkipped(t *testing.T) {
+	tasks := []*storage.Task{
+		mkTask("p-1", "Archived parent", storage.StatusArchived, "", "", ""),
+		mkTask("p-1-1", "Child", storage.StatusTodo, "p-1", "", ""),
+	}
+	trackers, suppressed := storage.BuildTrackers(tasks)
+	if len(trackers) != 0 {
+		t.Errorf("trackers = %d, want 0 (archived tracker not rendered)", len(trackers))
+	}
+	// but child + parent still suppressed from flat lists
+	if !suppressed["p-1"] || !suppressed["p-1-1"] {
+		t.Error("archived tracker and its child should still be suppressed")
+	}
+}
+
+func TestBuildTrackersNoParents(t *testing.T) {
+	tasks := []*storage.Task{
+		mkTask("a-1", "Flat one", storage.StatusDoing, "", "", ""),
+		mkTask("a-2", "Flat two", storage.StatusTodo, "", "", ""),
+	}
+	trackers, suppressed := storage.BuildTrackers(tasks)
+	if len(trackers) != 0 {
+		t.Errorf("trackers = %d, want 0", len(trackers))
+	}
+	if len(suppressed) != 0 {
+		t.Errorf("suppressed = %d, want 0", len(suppressed))
+	}
+}
+
+func TestBriefLine(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"empty", "", ""},
+		{"strips bold", "**Goal**: ship it", "Goal: ship it"},
+		{"first non-empty line", "\n\n  first real line  \nsecond", "first real line"},
+		{"truncates long", string(make([]rune, 0)) + repeatRune('x', 130), repeatRune('x', 120) + "…"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := storage.BriefLine(c.in); got != c.want {
+				t.Errorf("storage.BriefLine(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+func repeatRune(r rune, n int) string {
+	out := make([]rune, n)
+	for i := range out {
+		out[i] = r
+	}
+	return string(out)
 }

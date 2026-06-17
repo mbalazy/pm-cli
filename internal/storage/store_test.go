@@ -43,6 +43,44 @@ func setupTestStore(t *testing.T) (*Store, string) {
 	return store, dir
 }
 
+func TestNextChildID(t *testing.T) {
+	store, dir := setupTestStore(t)
+	alphaDir := filepath.Join(dir, "alpha")
+
+	t.Run("first child when none exist", func(t *testing.T) {
+		if got := store.NextChildID("alpha", "a-2"); got != "a-2-1" {
+			t.Errorf("NextChildID = %q, want %q", got, "a-2-1")
+		}
+	})
+
+	t.Run("sequential after existing children", func(t *testing.T) {
+		for _, id := range []string{"a-2-1", "a-2-2"} {
+			WriteTask(&Task{
+				Meta:     TaskMeta{ID: id, Title: id, Status: StatusTodo, Parent: "a-2", Created: "2025-01-04", Updated: "2025-01-04"},
+				FilePath: filepath.Join(alphaDir, id+"-child.md"),
+			})
+		}
+		if got := store.NextChildID("alpha", "a-2"); got != "a-2-3" {
+			t.Errorf("NextChildID = %q, want %q", got, "a-2-3")
+		}
+	})
+
+	t.Run("ignores grandchildren and other parents", func(t *testing.T) {
+		// a-2-1-1 (grandchild) and a-3-1 (other parent) must not affect a-2's count
+		WriteTask(&Task{
+			Meta:     TaskMeta{ID: "a-2-1-1", Title: "grandchild", Status: StatusTodo, Parent: "a-2-1", Created: "2025-01-05", Updated: "2025-01-05"},
+			FilePath: filepath.Join(alphaDir, "a-2-1-1-gc.md"),
+		})
+		WriteTask(&Task{
+			Meta:     TaskMeta{ID: "a-3-1", Title: "other", Status: StatusTodo, Parent: "a-3", Created: "2025-01-05", Updated: "2025-01-05"},
+			FilePath: filepath.Join(alphaDir, "a-3-1-other.md"),
+		})
+		if got := store.NextChildID("alpha", "a-2"); got != "a-2-3" {
+			t.Errorf("NextChildID = %q, want %q (grandchild/other-parent leaked)", got, "a-2-3")
+		}
+	})
+}
+
 func TestNextTaskID(t *testing.T) {
 	store, dir := setupTestStore(t)
 

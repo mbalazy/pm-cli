@@ -1118,3 +1118,21 @@ func TestCopyWorktreeFiles(t *testing.T) {
 		}
 	})
 }
+
+func TestFindSessionDirGlobal(t *testing.T) {
+	store := &storage.Store{Root: t.TempDir()}
+
+	t.Run("empty session ID", func(t *testing.T) {
+		got := findSessionDirGlobal("", store)
+		if got != "" {
+			t.Errorf("expected empty for empty sessionID, got %q", got)
+		}
+	})
+
+	t.Run("nonexistent session", func(t *testing.T) {
+		got := findSessionDirGlobal("nonexistent-session-id-12345", store)
+		if got != "" {
+			t.Errorf("expected empty for nonexistent session, got %q", got)
+		}
+	})
+}

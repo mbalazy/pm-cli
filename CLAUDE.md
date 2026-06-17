@@ -10,7 +10,7 @@ make check                # go vet + go test
 make install VERSION=X.Y.Z  # override version
 ```
 
-IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.7.4**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN).
+IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.9.0**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN).
 
 ## Tests
 
@@ -25,7 +25,7 @@ Always add tests when implementing new features or fixing bugs. Conventions:
 - `t.TempDir()` for I/O tests (auto-cleanup)
 - Same package tests (access to unexported functions)
 - `setupTestStore(t)` helper in `store_test.go` for tests needing a Store with project + tasks
-- Invariant tests (links merge, body append, brief lifecycle) live in `tools_test.go`
+- Invariant tests (links merge, Log append, Spec rewrite, brief lifecycle) live in `tools_test.go`; the `ApplySpec`/`ExtractSpec` unit tests live in `internal/storage/spec_test.go`
 
 ## Verification
 
@@ -36,9 +36,11 @@ Always add tests when implementing new features or fixing bugs. Conventions:
 
 ## Key patterns
 
-- **Frontmatter tasks**: `.md` file with YAML frontmatter (id, title, status, created, updated, links, branch, tags, brief, ac, order, sessions) + markdown body
+- **Frontmatter tasks**: `.md` file with YAML frontmatter (id, title, status, created, updated, links, branch, parent, tags, brief, ac, order, sessions) + markdown body
+- **Parent/subtask rollup**: `parent` in frontmatter holds a parent task ID (e.g. `atlas-39`), making the task a child of a tracker. Link is one-way (child→parent); a task is a "tracker" iff some other task names it as parent (derived, never stored on the parent). `storage.BuildTrackers(tasks)` (in `internal/storage/tracker.go`) groups tasks by parent and returns `[]Tracker` (parent + progress map + child rollup with `brief_line`) plus a `suppressed` set (children + trackers, excluded from flat doing lists). Used by `pm_context` (MCP, `trackers` section) and `pm context` (CLI). The generated rollup replaces hand-maintained board tables in the parent body. Subtask lifecycle: `todo → doing → merged → done` (add `merged` to the project's `statuses`).
 - **Brief field**: `brief` in frontmatter stores short session context ("where we left off"). Overwrites on each update (not append). Preserved on all status transitions (including done/archived - useful for summaries/reverts). Returned by `pm_context` for doing tasks.
 - **AC field**: `ac` in frontmatter stores acceptance criteria. Overwrites on each update (same as brief). Preserved on all status transitions. Returned in `pm_context` and `pm_list_tasks` summaries. When executing a task, constrain work to AC - don't add unrequested features or deviate from stated criteria.
+- **Spec / Log body zones**: the body splits into two zones with opposite write rules, solving append-only-rot on long-lived tasks. The **Spec** zone (delimited by `<!-- spec:start -->`/`<!-- spec:end -->` markers, written via the `spec` param) is the current-truth document - rewritten wholesale in place via `storage.ApplySpec(body, spec)` (`internal/storage/spec.go`). Everything outside the markers is the append-only **Log** (written via `body_append`). `storage.ExtractSpec(body)` returns the Spec content. The TUI detail view renders the markers as visible `## Spec (current truth)` / `## Log (history, append-only)` headers (`bodyToDisplayMarkdown` in `view.go`). Markers default to the top of the body (Spec first, Log below); if absent when `spec` is first set, a block is prepended and the existing body becomes the Log. Canonical flow: rewrite Spec + append a one-line pointer to the Log.
 - **Project config**: `~/.claude/pm/<slug>/project.yaml` — name, path, repo, stack, notes, links, tags, statuses
 - **Statuses are per-project** — read via `Store.GetProjectStatuses(slug)`. Default: `[todo, doing, waiting, done]`. Override in `project.yaml`. "ALL" view merges all projects' statuses.
 - **Archive is system-level** — `StatusArchived` is NOT a project status. Never add to `DefaultStatuses` or `project.yaml`. `filteredTasks()` excludes archived. `Ctrl+a` toggles archive view.
@@ -95,10 +97,11 @@ The `maxCardHeight` is computed dynamically: `m.height - overhead` where overhea
 
 Stdio MCP server for Claude Code. Registered as user-scope MCP: `claude mcp add --transport stdio --scope user pm -- ~/.local/share/go/bin/pm mcp`.
 
-- **Package**: `internal/mcpserver/` — `server.go` (setup + Run), `tools.go` (8 tools), `resources.go` (3 resources)
+- **Package**: `internal/mcpserver/` — `server.go` (setup + Run), `tools.go` (10 tools), `resources.go` (3 resources)
 - **Subcommand**: `internal/cmd/mcp.go` — `pm mcp` cobra command
 - **SDK**: `github.com/modelcontextprotocol/go-sdk/mcp` — typed `AddTool[In, Out]` for auto schema generation
 - **Tools**: `pm_context`, `pm_list_tasks`, `pm_get_task`, `pm_list_projects`, `pm_add_task`, `pm_update_task`, `pm_update_project`, `pm_create_project`, `pm_move_task`, `pm_delete_task`
 - **Resources**: `pm://projects`, `pm://tasks/{project}/{status}`, `pm://project/{slug}`
 - **CWD auto-detection**: `pm_context` with `cwd` param matches against project.yaml `path` fields
-- **Invariants**: links merge (never remove), body appends (never replace), brief overwrites, ac overwrites, tags replace if provided
+- **Trackers rollup**: `pm_context` returns a `trackers` section (parent+subtask rollup) when any task has children. Children/trackers are suppressed from the flat `doing_tasks` list. `pm_add_task`/`pm_update_task` accept a `parent` param. Same rollup is available offline via the `pm context [project]` CLI command (`internal/cmd/context.go`) - useful when the running MCP holds a stale binary.
+- **Invariants**: links merge (never remove), body_append appends to the Log (never replaces), spec rewrites the Spec block in place, brief overwrites, ac overwrites, tags replace if provided, parent overwrites if provided

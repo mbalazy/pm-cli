@@ -234,6 +234,27 @@ func (s *Store) NextTaskID(slug string) string {
 	return fmt.Sprintf("%s-%d", prefix, maxN+1)
 }
 
+// NextChildID returns the next sequential subtask ID under a parent
+// (e.g. parent "atlas-39" -> "atlas-39-3"). Only direct children count -
+// IDs whose remainder after the parent prefix is a plain integer.
+func (s *Store) NextChildID(slug, parentID string) string {
+	tasks, err := s.GetTasks(slug)
+	if err != nil {
+		return parentID + "-1"
+	}
+	prefix := parentID + "-"
+	maxN := 0
+	for _, t := range tasks {
+		if !strings.HasPrefix(t.Meta.ID, prefix) {
+			continue
+		}
+		if n, err := strconv.Atoi(strings.TrimPrefix(t.Meta.ID, prefix)); err == nil && n > maxN {
+			maxN = n
+		}
+	}
+	return fmt.Sprintf("%s-%d", parentID, maxN+1)
+}
+
 // ResolveProject finds a project slug by prefix match.
 func (s *Store) ResolveProject(input string) (string, error) {
 	input = strings.ToLower(input)

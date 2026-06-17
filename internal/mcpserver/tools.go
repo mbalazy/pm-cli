@@ -33,10 +33,12 @@ type addTaskInput struct {
 	Title    string            `json:"title" jsonschema:"Task title"`
 	Status   string            `json:"status,omitempty" jsonschema:"Initial status (default: first project status)"`
 	Branch   string            `json:"branch,omitempty" jsonschema:"Git branch name"`
+	Parent   string            `json:"parent,omitempty" jsonschema:"Parent task ID for subtasks (e.g. atlas-39). Makes this a child of a tracker task."`
 	Tags     []string          `json:"tags,omitempty" jsonschema:"Tags"`
 	Links    map[string]string `json:"links,omitempty" jsonschema:"Links as key=url pairs (e.g. azure, pr, slack)"`
-	Body     string            `json:"body,omitempty" jsonschema:"Markdown body content"`
-	ID       string            `json:"id,omitempty" jsonschema:"Task ID (auto-generated if omitted)"`
+	Body     string            `json:"body,omitempty" jsonschema:"Markdown body content. This is the append-only Log zone (session history)."`
+	Spec     string            `json:"spec,omitempty" jsonschema:"Initial Spec block (current-truth zone): what we're building, current decisions, still-open questions. Wrapped in spec markers at the top of the body; the body field becomes the append-only Log below it."`
+	ID       string            `json:"id,omitempty" jsonschema:"Task ID (auto-generated if omitted; when parent is set, auto-numbers as <parent>-<n>)"`
 	Brief    string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
 	AC       string            `json:"ac,omitempty" jsonschema:"Acceptance criteria (overwrites previous)"`
 	Sessions []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to attach"`
@@ -48,9 +50,11 @@ type updateTaskInput struct {
 	Status     string            `json:"status,omitempty" jsonschema:"New status"`
 	Title      string            `json:"title,omitempty" jsonschema:"New title"`
 	Branch     string            `json:"branch,omitempty" jsonschema:"Git branch name"`
+	Parent     string            `json:"parent,omitempty" jsonschema:"Parent task ID for subtasks (e.g. atlas-39). Set to make this a child of a tracker task."`
 	Tags       []string          `json:"tags,omitempty" jsonschema:"Replace tags (omit to keep current)"`
 	Links      map[string]string `json:"links,omitempty" jsonschema:"Links to merge (existing links are preserved)"`
-	BodyAppend string            `json:"body_append,omitempty" jsonschema:"Text to append to body (never replaces existing content)"`
+	BodyAppend string            `json:"body_append,omitempty" jsonschema:"Append to the Log zone of the body (append-only session history; never replaces existing content)"`
+	Spec       string            `json:"spec,omitempty" jsonschema:"Replace the current-truth Spec block (between <!-- spec:start --> / <!-- spec:end --> markers): what we're building, current decisions, still-open questions. Editable in place; created at the top of the body if absent. When a decision changes, rewrite the Spec to read as current truth AND append a one-line pointer to the Log via body_append (e.g. 'Q3 resolved -> see Spec'). Nothing is lost; the Spec never rots."`
 	Brief      string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
 	AC         string            `json:"ac,omitempty" jsonschema:"Acceptance criteria (overwrites previous)"`
 	Sessions   []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to append (never removes existing)"`
@@ -102,6 +106,7 @@ type taskSummary struct {
 	Project      string            `json:"project"`
 	Updated      string            `json:"updated"`
 	Branch       string            `json:"branch,omitempty"`
+	Parent       string            `json:"parent,omitempty"`
 	Tags         []string          `json:"tags,omitempty"`
 	Links        map[string]string `json:"links,omitempty"`
 	Brief        string            `json:"brief,omitempty"`
@@ -124,6 +129,7 @@ func toSummary(t *storage.Task) taskSummary {
 		Project:      t.Project,
 		Updated:      t.Meta.Updated,
 		Branch:       t.Meta.Branch,
+		Parent:       t.Meta.Parent,
 		Tags:         t.Meta.Tags,
 		Links:        t.Meta.Links,
 		Brief:        t.Meta.Brief,
@@ -132,9 +138,9 @@ func toSummary(t *storage.Task) taskSummary {
 	}
 }
 
-func dailyTaskSummaries(store storage.TaskStore) []taskSummary {
-	dp := storage.ReadDailyPlan(store.RootDir())
-	if dp.Date != storage.Today() || len(dp.Tasks) == 0 {
+func focusTaskSummaries(store storage.TaskStore) []taskSummary {
+	fp := storage.ReadFocusPlan(store.RootDir())
+	if fp.Date != storage.Today() || len(fp.Tasks) == 0 {
 		return nil
 	}
 	allTasks, _ := store.GetAllTasks()
@@ -143,7 +149,7 @@ func dailyTaskSummaries(store storage.TaskStore) []taskSummary {
 		lookup[t.Meta.ID] = t
 	}
 	var result []taskSummary
-	for _, id := range dp.Tasks {
+	for _, id := range fp.Tasks {
 		if t, ok := lookup[id]; ok && t.Meta.Status != storage.StatusDone && t.Meta.Status != storage.StatusArchived {
 			result = append(result, toSummary(t))
 		}
@@ -312,7 +318,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	// pm_add_task
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_add_task",
-		Description: "Create a new task in a project. Body must contain ONLY verified facts from the conversation - never include speculative implementation details, architecture suggestions, or technical approaches that were not explicitly discussed.",
+		Description: "Create a new task in a project. Body must contain ONLY verified facts from the conversation - never include speculative implementation details, architecture suggestions, or technical approaches that were not explicitly discussed. The body splits into a Spec zone (current-truth, editable - pass via spec) and a Log zone (append-only history - pass via body).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in addTaskInput) (*mcp.CallToolResult, any, error) {
 		slug, err := store.ResolveProject(in.Project)
 		if err != nil {
@@ -322,7 +328,11 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 
 		id := in.ID
 		if id == "" {
-			id = store.NextTaskID(slug)
+			if in.Parent != "" {
+				id = store.NextChildID(slug, in.Parent)
+			} else {
+				id = store.NextTaskID(slug)
+			}
 		}
 
 		t := storage.NewTask(id, in.Title, slug)
@@ -344,11 +354,15 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		}
 
 		t.Meta.Branch = in.Branch
+		t.Meta.Parent = in.Parent
 		t.Meta.Tags = in.Tags
 		if len(in.Links) > 0 {
 			t.Meta.Links = in.Links
 		}
 		t.Body = in.Body
+		if in.Spec != "" {
+			t.Body = storage.ApplySpec(t.Body, in.Spec)
+		}
 		t.Meta.Brief = in.Brief
 		t.Meta.AC = in.AC
 		t.Meta.Sessions = in.Sessions
@@ -365,7 +379,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	// pm_update_task
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_update_task",
-		Description: "Update an existing task. Links merge (never removed). Body appends (never replaces). Tags replace if provided.",
+		Description: "Update an existing task. Links merge (never removed). body_append appends to the Log zone (never replaces); spec rewrites the current-truth Spec block in place. Brief and ac overwrite. Tags replace if provided.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateTaskInput) (*mcp.CallToolResult, any, error) {
 		slug, err := store.ResolveProject(in.Project)
 		if err != nil {
@@ -387,6 +401,9 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		if in.Branch != "" {
 			task.Meta.Branch = in.Branch
 		}
+		if in.Parent != "" {
+			task.Meta.Parent = in.Parent
+		}
 		if in.Tags != nil {
 			task.Meta.Tags = in.Tags
 		}
@@ -401,7 +418,13 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			}
 		}
 
-		// Body: append, never replace
+		// Spec: replace the current-truth Spec block in place (the Log zone,
+		// everything outside the markers, is left untouched).
+		if in.Spec != "" {
+			task.Body = storage.ApplySpec(task.Body, in.Spec)
+		}
+
+		// Body: append to the Log, never replace
 		if in.BodyAppend != "" {
 			if task.Body != "" {
 				task.Body = task.Body + "\n\n" + in.BodyAppend
@@ -710,11 +733,12 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 	}
 
 	tasks, _ := store.GetTasks(slug)
+	trackers, suppressed := storage.BuildTrackers(tasks)
 	counts := make(map[string]int)
 	var doing []taskDetail
 	for _, t := range tasks {
 		counts[string(t.Meta.Status)]++
-		if t.Meta.Status == storage.StatusDoing {
+		if t.Meta.Status == storage.StatusDoing && !suppressed[t.Meta.ID] {
 			doing = append(doing, toDetail(t))
 		}
 	}
@@ -729,8 +753,12 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 		"task_counts": counts,
 	}
 
-	if daily := dailyTaskSummaries(store); len(daily) > 0 {
-		result["daily_tasks"] = daily
+	if len(trackers) > 0 {
+		result["trackers"] = trackers
+	}
+
+	if focus := focusTaskSummaries(store); len(focus) > 0 {
+		result["focus_tasks"] = focus
 	}
 
 	r, err := jsonText(result)
@@ -741,11 +769,12 @@ func crossProjectContext(store storage.TaskStore) (*mcp.CallToolResult, any, err
 	projects, _ := store.ListActiveProjects()
 
 	type projectSummary struct {
-		Slug       string         `json:"slug"`
-		Name       string         `json:"name"`
-		Repo       string         `json:"repo,omitempty"`
-		TaskCounts map[string]int `json:"task_counts"`
-		DoingTasks []taskSummary  `json:"doing_tasks,omitempty"`
+		Slug       string            `json:"slug"`
+		Name       string            `json:"name"`
+		Repo       string            `json:"repo,omitempty"`
+		TaskCounts map[string]int    `json:"task_counts"`
+		DoingTasks []taskSummary     `json:"doing_tasks,omitempty"`
+		Trackers   []storage.Tracker `json:"trackers,omitempty"`
 	}
 
 	var result []projectSummary
@@ -760,9 +789,11 @@ func crossProjectContext(store storage.TaskStore) (*mcp.CallToolResult, any, err
 			ps.Repo = proj.Repo
 		}
 		tasks, _ := store.GetTasks(slug)
+		trackers, suppressed := storage.BuildTrackers(tasks)
+		ps.Trackers = trackers
 		for _, t := range tasks {
 			ps.TaskCounts[string(t.Meta.Status)]++
-			if t.Meta.Status == storage.StatusDoing {
+			if t.Meta.Status == storage.StatusDoing && !suppressed[t.Meta.ID] {
 				ps.DoingTasks = append(ps.DoingTasks, toSummary(t))
 			}
 		}
@@ -775,8 +806,8 @@ func crossProjectContext(store storage.TaskStore) (*mcp.CallToolResult, any, err
 	output := map[string]any{
 		"projects": result,
 	}
-	if daily := dailyTaskSummaries(store); len(daily) > 0 {
-		output["daily_tasks"] = daily
+	if focus := focusTaskSummaries(store); len(focus) > 0 {
+		output["focus_tasks"] = focus
 	}
 
 	r, err := jsonText(output)

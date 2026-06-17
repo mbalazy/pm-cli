@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,13 +36,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		m.reload()
-		if m.currentView == viewArchive {
-			m.fixArchiveCursor()
-		}
-		if m.currentView == viewDaily {
-			m.fixDailyCursor()
-		}
+		// No periodic reload - the board refreshes on demand via `r` (board and
+		// detail). The tick only keeps the render loop alive so toasts expire.
 		return m, doTick()
 
 	case reloadMsg:
@@ -88,8 +84,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentView == viewArchive {
 			return m.updateArchive(msg)
 		}
-		if m.currentView == viewDaily {
-			return m.updateDaily(msg)
+		if m.currentView == viewFocus {
+			return m.updateFocus(msg)
 		}
 		if m.showHelp {
 			if m.helpSearch {
@@ -233,15 +229,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			m.previousView = viewBoard
 			m.currentView = viewDetail
-			m.detailTask = t
-			m.detailViewport = viewport.New(m.width, m.height-2)
-			content := renderTaskDetail(t, m.width)
-			m.detailViewport.SetContent(content)
-			m.detailPlainContent = stripANSI(content)
-			m.detailSearchQuery = ""
-			m.detailSearchMatches = nil
-			m.detailSearchIdx = 0
-			m.detailSearching = false
+			m.openDetailTask(t)
 		}
 
 	case key.Matches(msg, common.Keys.Edit):
@@ -427,23 +415,23 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.openClaudeMenu(t)
 
-	case key.Matches(msg, common.Keys.Today):
+	case key.Matches(msg, common.Keys.Focus):
 		if t := m.selectedTask(); t != nil {
-			m.dailyPlan.Toggle(t.Meta.ID)
-			if m.dailyPlan.Contains(t.Meta.ID) {
-				m.toastMsg = "Added to today"
+			m.focusPlan.Toggle(t.Meta.ID)
+			if m.focusPlan.Contains(t.Meta.ID) {
+				m.toastMsg = "Added to focus"
 			} else {
-				m.toastMsg = "Removed from today"
+				m.toastMsg = "Removed from focus"
 			}
-			m.dailyPlan.Date = storage.Today()
-			m.saveDailyPlan()
-			m.rebuildDailySet()
+			m.focusPlan.Date = storage.Today()
+			m.saveFocusPlan()
+			m.rebuildFocusSet()
 			m.toastExpiry = time.Now().Add(2 * time.Second)
 		}
 
-	case key.Matches(msg, common.Keys.ToggleDaily):
-		m.currentView = viewDaily
-		m.dailyCursor = 0
+	case key.Matches(msg, common.Keys.FocusView):
+		m.currentView = viewFocus
+		m.focusCursor = 0
 
 	case key.Matches(msg, common.Keys.Help):
 		m.showHelp = true
@@ -1090,6 +1078,9 @@ func (m Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Overlay menus intercept input first
+	if m.subtaskPicker {
+		return m.updateSubtaskPicker(msg)
+	}
 	if m.claudeMenu {
 		return m.updateClaudeMenu(msg)
 	}
@@ -1168,7 +1159,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detailSearchMatches = nil
 			// Restore original content (remove highlights)
 			if t != nil {
-				content := renderTaskDetail(t, m.width)
+				content := m.renderTaskDetail(t)
 				m.detailViewport.SetContent(content)
 			}
 			return m, nil
@@ -1201,6 +1192,15 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detailSearchIdx = (m.detailSearchIdx - 1 + len(m.detailSearchMatches)) % len(m.detailSearchMatches)
 			m.applySearchHighlights()
 			m.detailViewport.SetYOffset(m.detailSearchMatches[m.detailSearchIdx])
+		}
+		return m, nil
+
+	case t != nil && msg.String() == "p":
+		// context-aware relation jump: subtask -> parent; tracker -> subtask picker
+		if parent := m.taskParent(t); parent != nil {
+			m.openDetailTask(parent)
+		} else if kids := m.taskChildren(t); len(kids) > 0 {
+			m.openSubtaskPicker(kids)
 		}
 		return m, nil
 
@@ -1319,12 +1319,18 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case msg.String() == "r":
 		if t != nil {
+			// reload the whole task set first so the subtask table (rendered from
+			// m.tasks via taskChildren) reflects fresh child statuses, not just the
+			// parent's own fields.
+			m.reload()
 			reloaded, err := m.store.FindTask(t.Project, t.Meta.ID)
 			if err == nil {
+				off := m.detailViewport.YOffset
 				m.detailTask = reloaded
-				content := renderTaskDetail(reloaded, m.width)
+				content := m.renderTaskDetail(reloaded)
 				m.detailViewport.SetContent(content)
 				m.detailPlainContent = stripANSI(content)
+				m.detailViewport.SetYOffset(off)
 				m.toastMsg = "Refreshed"
 				m.toastExpiry = time.Now().Add(2 * time.Second)
 			}
@@ -1357,7 +1363,7 @@ func (m Model) updateDetailSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.detailSearchInput.Blur()
 		// Restore original content (remove highlights)
 		if m.detailTask != nil {
-			content := renderTaskDetail(m.detailTask, m.width)
+			content := m.renderTaskDetail(m.detailTask)
 			m.detailViewport.SetContent(content)
 		}
 	default:
@@ -1375,7 +1381,7 @@ func (m *Model) computeDetailSearchMatches() {
 	if q == "" {
 		// Restore original content (remove highlights)
 		if m.detailTask != nil {
-			content := renderTaskDetail(m.detailTask, m.width)
+			content := m.renderTaskDetail(m.detailTask)
 			m.detailViewport.SetContent(content)
 		}
 		return
@@ -1397,7 +1403,7 @@ func (m *Model) applySearchHighlights() {
 	if m.detailTask == nil || m.detailSearchQuery == "" {
 		return
 	}
-	original := renderTaskDetail(m.detailTask, m.width)
+	original := m.renderTaskDetail(m.detailTask)
 	renderedLines := strings.Split(original, "\n")
 	q := strings.ToLower(m.detailSearchQuery)
 
@@ -1564,7 +1570,7 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.currentView = viewDetail
 			m.detailTask = t
 			m.detailViewport = viewport.New(m.width, m.height-2)
-			content := renderTaskDetail(t, m.width)
+			content := m.renderTaskDetail(t)
 			m.detailViewport.SetContent(content)
 			m.detailPlainContent = stripANSI(content)
 			m.detailSearchQuery = ""
@@ -1596,9 +1602,9 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) updateDaily(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) updateFocus(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.ToggleDaily):
+	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.FocusView):
 		m.currentView = viewBoard
 		return m, nil
 
@@ -1607,33 +1613,33 @@ func (m Model) updateDaily(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, common.Keys.Up):
-		if m.dailyCursor > 0 {
-			m.dailyCursor--
+		if m.focusCursor > 0 {
+			m.focusCursor--
 		}
 
 	case key.Matches(msg, common.Keys.Down):
-		tasks := m.dailyTasks()
-		if m.dailyCursor < len(tasks)-1 {
-			m.dailyCursor++
+		tasks := m.focusTasks()
+		if m.focusCursor < len(tasks)-1 {
+			m.focusCursor++
 		}
 
 	case key.Matches(msg, common.Keys.JumpTop):
-		m.dailyCursor = 0
+		m.focusCursor = 0
 
 	case key.Matches(msg, common.Keys.JumpBottom):
-		tasks := m.dailyTasks()
+		tasks := m.focusTasks()
 		if len(tasks) > 0 {
-			m.dailyCursor = len(tasks) - 1
+			m.focusCursor = len(tasks) - 1
 		}
 
 	case key.Matches(msg, common.Keys.Enter), key.Matches(msg, common.Keys.Open), key.Matches(msg, common.Keys.Space):
-		t := m.selectedDailyTask()
+		t := m.selectedFocusTask()
 		if t != nil {
-			m.previousView = viewDaily
+			m.previousView = viewFocus
 			m.currentView = viewDetail
 			m.detailTask = t
 			m.detailViewport = viewport.New(m.width, m.height-2)
-			content := renderTaskDetail(t, m.width)
+			content := m.renderTaskDetail(t)
 			m.detailViewport.SetContent(content)
 			m.detailPlainContent = stripANSI(content)
 			m.detailSearchQuery = ""
@@ -1642,77 +1648,77 @@ func (m Model) updateDaily(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detailSearching = false
 		}
 
-	case key.Matches(msg, common.Keys.Today), key.Matches(msg, common.Keys.Delete):
-		t := m.selectedDailyTask()
+	case key.Matches(msg, common.Keys.Focus), key.Matches(msg, common.Keys.Delete):
+		t := m.selectedFocusTask()
 		if t != nil {
-			m.dailyPlan.Remove(t.Meta.ID)
-			m.dailyPlan.Date = storage.Today()
-			m.saveDailyPlan()
-			m.rebuildDailySet()
-			m.fixDailyCursor()
-			m.toastMsg = "Removed from today"
+			m.focusPlan.Remove(t.Meta.ID)
+			m.focusPlan.Date = storage.Today()
+			m.saveFocusPlan()
+			m.rebuildFocusSet()
+			m.fixFocusCursor()
+			m.toastMsg = "Removed from focus"
 			m.toastExpiry = time.Now().Add(2 * time.Second)
 		}
 
 	case key.Matches(msg, common.Keys.ReorderDown):
-		tasks := m.dailyTasks()
-		if m.dailyCursor < len(tasks)-1 {
-			m.dailyPlan.Swap(m.dailyCursor, m.dailyCursor+1)
-			m.dailyCursor++
-			m.saveDailyPlan()
+		tasks := m.focusTasks()
+		if m.focusCursor < len(tasks)-1 {
+			m.focusPlan.Swap(m.focusCursor, m.focusCursor+1)
+			m.focusCursor++
+			m.saveFocusPlan()
 		}
 
 	case key.Matches(msg, common.Keys.ReorderUp):
-		tasks := m.dailyTasks()
-		if len(tasks) > 0 && m.dailyCursor > 0 {
-			m.dailyPlan.Swap(m.dailyCursor, m.dailyCursor-1)
-			m.dailyCursor--
-			m.saveDailyPlan()
+		tasks := m.focusTasks()
+		if len(tasks) > 0 && m.focusCursor > 0 {
+			m.focusPlan.Swap(m.focusCursor, m.focusCursor-1)
+			m.focusCursor--
+			m.saveFocusPlan()
 		}
 
 	case key.Matches(msg, common.Keys.Move):
-		if t := m.selectedDailyTask(); t != nil {
+		if t := m.selectedFocusTask(); t != nil {
 			m.doMoveForward(t)
-			m.fixDailyCursor()
+			m.fixFocusCursor()
 		}
 
 	case key.Matches(msg, common.Keys.MoveBack):
-		if t := m.selectedDailyTask(); t != nil {
+		if t := m.selectedFocusTask(); t != nil {
 			m.doMoveBack(t)
-			m.fixDailyCursor()
+			m.fixFocusCursor()
 		}
 
 	case key.Matches(msg, common.Keys.Done):
-		if t := m.selectedDailyTask(); t != nil {
+		if t := m.selectedFocusTask(); t != nil {
 			m.doDone(t)
-			m.dailyPlan.Remove(t.Meta.ID)
-			m.saveDailyPlan()
-			m.rebuildDailySet()
-			m.fixDailyCursor()
+			m.focusPlan.Remove(t.Meta.ID)
+			m.saveFocusPlan()
+			m.rebuildFocusSet()
+			m.fixFocusCursor()
 		}
 
 	case key.Matches(msg, common.Keys.Waiting):
-		if t := m.selectedDailyTask(); t != nil {
+		if t := m.selectedFocusTask(); t != nil {
 			m.doWaiting(t)
-			m.fixDailyCursor()
+			m.fixFocusCursor()
 		}
 
 	case key.Matches(msg, common.Keys.Undo):
 		m.doUndo()
-		m.fixDailyCursor()
+		m.fixFocusCursor()
 
 	case key.Matches(msg, common.Keys.Claude):
-		if t := m.selectedDailyTask(); t != nil {
+		if t := m.selectedFocusTask(); t != nil {
 			m.openClaudeMenu(t)
 		}
 
 	case key.Matches(msg, common.Keys.Yank):
-		if t := m.selectedDailyTask(); t != nil && t.Meta.ID != "" {
+		if t := m.selectedFocusTask(); t != nil && t.Meta.ID != "" {
 			m.copyToClipboard(t.Meta.ID)
 		}
 
 	case key.Matches(msg, common.Keys.YankMenu):
-		t := m.selectedDailyTask()
+		t := m.selectedFocusTask()
 		if t != nil {
 			m.yankItems = nil
 			m.yankCursor = 0
@@ -1931,7 +1937,7 @@ func (m Model) updateSessionMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.toastMsg = "Deleted session " + sid[:8] + "..."
 			m.toastExpiry = time.Now().Add(2 * time.Second)
-			content := renderTaskDetail(t, m.width)
+			content := m.renderTaskDetail(t)
 			m.detailViewport.SetContent(content)
 			m.detailPlainContent = stripANSI(content)
 		} else {
@@ -2056,11 +2062,13 @@ func (m *Model) fixScrollOffsets() {
 		}
 
 		measure := func(j int) int {
+			// badge/marker live on the existing ID line, so they don't change
+			// the line count - pass empty for measurement.
 			var card string
 			if m.zoomed {
-				card = renderZoomCard(tasks[j], cardW, false, "")
+				card = renderZoomCard(tasks[j], cardW, false, "", "")
 			} else {
-				card = renderCard(tasks[j], cardW, false, "")
+				card = renderCard(tasks[j], cardW, false, "", "")
 			}
 			return strings.Count(card, "\n") + 1
 		}
@@ -2401,6 +2409,78 @@ func tmuxRenameWindow(name string) {
 	}
 }
 
+// tmuxSessionForProc walks the process tree up from the current pid and
+// returns the session name of the tmux pane whose pane_pid matches an
+// ancestor. This is more reliable than $TMUX, which becomes stale when a
+// window is moved between sessions after the shell started. Returns "" if
+// the process is not inside any detectable tmux pane.
+func tmuxSessionForProc() string {
+	out, err := exec.Command("tmux", "list-panes", "-a", "-F", "#{pane_pid} #{session_name}").Output()
+	if err != nil {
+		return ""
+	}
+	panes := map[int]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), " ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if pid, err := strconv.Atoi(parts[0]); err == nil {
+			panes[pid] = parts[1]
+		}
+	}
+	pid := os.Getpid()
+	for i := 0; i < 32 && pid > 1; i++ {
+		if sess, ok := panes[pid]; ok {
+			return sess
+		}
+		ppid, err := tmuxParentPID(pid)
+		if err != nil || ppid == 0 || ppid == pid {
+			return ""
+		}
+		pid = ppid
+	}
+	return ""
+}
+
+func tmuxParentPID(pid int) (int, error) {
+	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(out)))
+}
+
+// tmuxNewWindow creates a new tmux window running shellCmd via sh -c.
+// Targets the detected session explicitly so the window appears where
+// the user can see it (not where $TMUX env happens to point). Returns
+// the target session name and any error from tmux (with stderr content
+// surfaced in the error message).
+func tmuxNewWindow(name, shellCmd string) (string, error) {
+	sess := tmuxSessionForProc()
+	args := []string{"new-window", "-n", name}
+	if sess != "" {
+		args = append(args, "-t", sess+":")
+	}
+	args = append(args, "sh", "-c", shellCmd)
+	out, err := exec.Command("tmux", args...).CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return sess, fmt.Errorf("%s", msg)
+	}
+	return sess, nil
+}
+
+func tmuxLaunchToast(label, winName, sess string) string {
+	if sess != "" {
+		return fmt.Sprintf("%s [%s]: %s", label, sess, winName)
+	}
+	return label + ": " + winName
+}
+
 // copyWorktreeFiles pre-creates a git worktree (if needed) and copies all
 // untracked files from the main repo into the worktree.
 func copyWorktreeFiles(projDir, wtName string) {
@@ -2515,11 +2595,12 @@ func (m Model) launchProjectCodex(kind string) (tea.Model, tea.Cmd) {
 			shellCmd = fmt.Sprintf("cd %s && %s", shellQuote(projDir), shellCmd)
 		}
 		winName := codexWindowName(slug)
-		if err := exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start(); err != nil {
+		sess, err := tmuxNewWindow(winName, shellCmd)
+		if err != nil {
 			m.toastMsg = "Codex tmux failed: " + err.Error()
 			m.toastExpiry = time.Now().Add(15 * time.Second)
 		} else {
-			m.toastMsg = "Launched Codex in tmux: " + winName
+			m.toastMsg = tmuxLaunchToast("Launched Codex in tmux", winName, sess)
 			m.toastExpiry = time.Now().Add(3 * time.Second)
 		}
 	}
@@ -2598,11 +2679,12 @@ func (m Model) launchCodex(kind string) (tea.Model, tea.Cmd) {
 	case "tmux":
 		shellCmd := withCd(codexInteractiveShellCommand(prompt, m.claudeMenuSkipPerms))
 		winName := codexWindowName(t.Meta.ID)
-		if err := exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start(); err != nil {
+		sess, err := tmuxNewWindow(winName, shellCmd)
+		if err != nil {
 			m.toastMsg = "Codex tmux failed: " + err.Error()
 			m.toastExpiry = time.Now().Add(15 * time.Second)
 		} else {
-			m.toastMsg = "Launched Codex in tmux: " + winName
+			m.toastMsg = tmuxLaunchToast("Launched Codex in tmux", winName, sess)
 			m.toastExpiry = time.Now().Add(3 * time.Second)
 		}
 
@@ -2624,11 +2706,12 @@ func (m Model) launchCodex(kind string) (tea.Model, tea.Cmd) {
 	case "worktree-tmux":
 		shellCmd := withWorktreeCd(codexInteractiveShellCommand(prompt, m.claudeMenuSkipPerms))
 		winName := codexWindowName(t.Meta.ID)
-		if err := exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start(); err != nil {
+		sess, err := tmuxNewWindow(winName, shellCmd)
+		if err != nil {
 			m.toastMsg = "Codex worktree tmux failed: " + err.Error()
 			m.toastExpiry = time.Now().Add(15 * time.Second)
 		} else {
-			m.toastMsg = "Launched Codex worktree in tmux: " + winName
+			m.toastMsg = tmuxLaunchToast("Launched Codex worktree in tmux", winName, sess)
 			m.toastExpiry = time.Now().Add(3 * time.Second)
 		}
 	}
@@ -2688,9 +2771,14 @@ func (m Model) launchProjectClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 		shellCmd := withCd(fmt.Sprintf("claude --session-id %s %s %s", sessionID, skipFlag, shellQuote(prompt)))
 		winName := fmt.Sprintf("cc:%s:%s", sessionID[:4], slug)
-		exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start()
-		m.toastMsg = "Launched in tmux: " + winName
-		m.toastExpiry = time.Now().Add(3 * time.Second)
+		sess, err := tmuxNewWindow(winName, shellCmd)
+		if err != nil {
+			m.toastMsg = "tmux failed: " + err.Error()
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+		} else {
+			m.toastMsg = tmuxLaunchToast("Launched in tmux", winName, sess)
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+		}
 	}
 
 	return m, nil
@@ -2725,12 +2813,20 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	// When a session was created inside a worktree, we need to resume from that
 	// worktree dir so CC finds the conversation.
 	var worktreeDir string
-	if projDir != "" && (kind == "resume" || kind == "resume-tmux") {
+	var sessionDir string // fallback: global scan for session file
+	if kind == "resume" || kind == "resume-tmux" || kind == "fork" || kind == "fork-tmux" {
 		sessionID := m.resumeSessionID
 		if sessionID == "" {
 			sessionID = lastSession(t)
 		}
-		worktreeDir = findWorktreeForSession(projDir, sessionID)
+		if projDir != "" {
+			worktreeDir = findWorktreeForSession(projDir, sessionID)
+		}
+		// Fallback: if session not found via projDir (or projDir is empty),
+		// scan all CC project dirs globally.
+		if worktreeDir == "" && resolveSessionPath(projDir, sessionID) == "" {
+			sessionDir = findSessionDirGlobal(sessionID, m.store)
+		}
 	}
 
 	setDir := func(c *exec.Cmd) {
@@ -2739,11 +2835,22 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	setResumeDir := func(c *exec.Cmd) {
+	resumeDir := func() string {
 		if worktreeDir != "" {
-			c.Dir = worktreeDir
-		} else if projDir != "" {
-			c.Dir = projDir
+			return worktreeDir
+		}
+		if projDir != "" && sessionDir == "" {
+			return projDir
+		}
+		if sessionDir != "" {
+			return sessionDir
+		}
+		return ""
+	}
+
+	setResumeDir := func(c *exec.Cmd) {
+		if d := resumeDir(); d != "" {
+			c.Dir = d
 		}
 	}
 
@@ -2755,10 +2862,10 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	}
 
 	withResumeCd := func(cmd string) string {
-		if worktreeDir != "" {
-			return fmt.Sprintf("cd %s && %s", shellQuote(worktreeDir), cmd)
+		if d := resumeDir(); d != "" {
+			return fmt.Sprintf("cd %s && %s", shellQuote(d), cmd)
 		}
-		return withCd(cmd)
+		return cmd
 	}
 
 	switch kind {
@@ -2788,9 +2895,14 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		m.saveSession(t, sessionID)
 		shellCmd := withCd(fmt.Sprintf("claude --session-id %s %s %s", sessionID, skipFlag, shellQuote(prompt)))
 		winName := tmuxWindowName("cc", t.Meta.ID, sessionID)
-		exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start()
-		m.toastMsg = "Launched in tmux: " + winName
-		m.toastExpiry = time.Now().Add(3 * time.Second)
+		sess, err := tmuxNewWindow(winName, shellCmd)
+		if err != nil {
+			m.toastMsg = "tmux failed: " + err.Error()
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+		} else {
+			m.toastMsg = tmuxLaunchToast("Launched in tmux", winName, sess)
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+		}
 
 	case "worktree":
 		sessionID := generateSessionID()
@@ -2822,9 +2934,14 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 		shellCmd := withCd(fmt.Sprintf("claude -w %s --session-id %s %s %s", shellQuote(wtName), sessionID, skipFlag, shellQuote(prompt)))
 		winName := tmuxWindowName("wt", t.Meta.ID, sessionID)
-		exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start()
-		m.toastMsg = "Launched worktree in tmux: " + winName
-		m.toastExpiry = time.Now().Add(3 * time.Second)
+		sess, err := tmuxNewWindow(winName, shellCmd)
+		if err != nil {
+			m.toastMsg = "tmux failed: " + err.Error()
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+		} else {
+			m.toastMsg = tmuxLaunchToast("Launched worktree in tmux", winName, sess)
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+		}
 
 	case "resume":
 		sessionID := m.resumeSessionID
@@ -2853,9 +2970,14 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		m.resumeSessionID = ""
 		shellCmd := withResumeCd(fmt.Sprintf("claude --resume %s %s", sessionID, skipFlag))
 		winName := tmuxWindowName("cc", t.Meta.ID, sessionID)
-		exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start()
-		m.toastMsg = "Resumed in tmux: " + winName
-		m.toastExpiry = time.Now().Add(3 * time.Second)
+		sess, err := tmuxNewWindow(winName, shellCmd)
+		if err != nil {
+			m.toastMsg = "tmux failed: " + err.Error()
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+		} else {
+			m.toastMsg = tmuxLaunchToast("Resumed in tmux", winName, sess)
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+		}
 
 	case "fork":
 		parentID := m.resumeSessionID
@@ -2890,9 +3012,14 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		m.saveSession(t, newID)
 		shellCmd := withResumeCd(fmt.Sprintf("claude --resume %s --fork-session --session-id %s %s", parentID, newID, skipFlag))
 		winName := tmuxWindowName("cc", t.Meta.ID, newID)
-		exec.Command("tmux", "new-window", "-n", winName, "sh", "-c", shellCmd).Start()
-		m.toastMsg = "Forked in tmux: " + winName
-		m.toastExpiry = time.Now().Add(3 * time.Second)
+		sess, err := tmuxNewWindow(winName, shellCmd)
+		if err != nil {
+			m.toastMsg = "tmux failed: " + err.Error()
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+		} else {
+			m.toastMsg = tmuxLaunchToast("Forked in tmux", winName, sess)
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+		}
 	}
 
 	return m, nil
@@ -3133,6 +3260,72 @@ func findWorktreeForSession(projDir, sessionID string) string {
 	return ""
 }
 
+// findSessionDirGlobal scans all CC project directories (~/.claude/projects/*)
+// for a session JSONL file. Returns the filesystem path that CC would need as
+// cwd to find the session, or empty string if not found.
+// Uses forward-matching: encodes candidate paths and compares against the CC dir
+// name (decoding is ambiguous because pathToCCProject is lossy).
+func findSessionDirGlobal(sessionID string, store storage.TaskStore) string {
+	if sessionID == "" {
+		return ""
+	}
+	homeDir, _ := os.UserHomeDir()
+	ccProjectsDir := filepath.Join(homeDir, ".claude", "projects")
+
+	// Find which CC project dir has the session file
+	var ccDirName string
+	entries, err := os.ReadDir(ccProjectsDir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(ccProjectsDir, e.Name(), sessionID+".jsonl")
+		if _, err := os.Stat(p); err == nil {
+			ccDirName = e.Name()
+			break
+		}
+	}
+	if ccDirName == "" {
+		return ""
+	}
+
+	// Build candidate paths and check which one encodes to ccDirName.
+	// 1. PM project paths
+	if slugs, err := store.ListActiveProjects(); err == nil {
+		for _, slug := range slugs {
+			if proj, err := store.GetProject(slug); err == nil && proj.Path != "" {
+				if abs, err := filepath.Abs(proj.Path); err == nil {
+					if pathToCCProject(abs) == ccDirName {
+						return abs
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Common directories: ~, ~/*, ~/.claude/*
+	for _, parent := range []string{homeDir, filepath.Join(homeDir, ".claude")} {
+		if pathToCCProject(parent) == ccDirName {
+			return parent
+		}
+		if children, err := os.ReadDir(parent); err == nil {
+			for _, c := range children {
+				if c.IsDir() {
+					candidate := filepath.Join(parent, c.Name())
+					if pathToCCProject(candidate) == ccDirName {
+						return candidate
+					}
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
 // pathToCCProject converts an absolute path to the Claude Code project
 // directory name format: replace "/" and "." with "-".
 func pathToCCProject(absPath string) string {
@@ -3154,4 +3347,49 @@ func openEditor(path string) tea.Cmd {
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		return reloadMsg{}
 	})
+}
+
+// openSubtaskPicker opens the overlay listing a tracker's children for
+// arrow-key selection (used when pressing p on a parent task in the detail view).
+func (m *Model) openSubtaskPicker(kids []*storage.Task) {
+	m.subtaskItems = kids
+	m.subtaskCursor = 0
+	m.subtaskPicker = true
+}
+
+func (m Model) updateSubtaskPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, common.Keys.Escape), key.Matches(msg, common.Keys.Quit), key.Matches(msg, common.Keys.Left):
+		m.subtaskPicker = false
+	case key.Matches(msg, common.Keys.Up):
+		if m.subtaskCursor > 0 {
+			m.subtaskCursor--
+		}
+	case key.Matches(msg, common.Keys.Down):
+		if m.subtaskCursor < len(m.subtaskItems)-1 {
+			m.subtaskCursor++
+		}
+	case key.Matches(msg, common.Keys.Enter), key.Matches(msg, common.Keys.Open), key.Matches(msg, common.Keys.Right):
+		if m.subtaskCursor < len(m.subtaskItems) {
+			target := m.subtaskItems[m.subtaskCursor]
+			m.subtaskPicker = false
+			m.openDetailTask(target)
+		}
+	}
+	return m, nil
+}
+
+// openDetailTask loads a task into the detail viewport (used by Enter and by
+// parent<->subtask navigation). Leaves previousView untouched so Esc returns to
+// wherever the detail flow started.
+func (m *Model) openDetailTask(t *storage.Task) {
+	m.detailTask = t
+	m.detailViewport = viewport.New(m.width, m.height-2)
+	content := m.renderTaskDetail(t)
+	m.detailViewport.SetContent(content)
+	m.detailPlainContent = stripANSI(content)
+	m.detailSearchQuery = ""
+	m.detailSearchMatches = nil
+	m.detailSearchIdx = 0
+	m.detailSearching = false
 }

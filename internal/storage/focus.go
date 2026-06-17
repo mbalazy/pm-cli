@@ -7,38 +7,52 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// DailyPlan holds a cross-project ordered list of task IDs planned for a given day.
-type DailyPlan struct {
+// FocusPlan holds a cross-project ordered list of task IDs the user wants to focus on.
+type FocusPlan struct {
 	Date  string   `yaml:"date"`
 	Tasks []string `yaml:"tasks,omitempty"`
 }
 
-func dailyPlanPath(rootDir string) string {
-	return filepath.Join(rootDir, "daily.yaml")
+func focusPlanPath(rootDir string) string {
+	return filepath.Join(rootDir, "focus.yaml")
 }
 
-func ReadDailyPlan(rootDir string) DailyPlan {
-	data, err := os.ReadFile(dailyPlanPath(rootDir))
+func ReadFocusPlan(rootDir string) FocusPlan {
+	path := focusPlanPath(rootDir)
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return DailyPlan{}
+		// Migration: try legacy daily.yaml
+		data, err = os.ReadFile(filepath.Join(rootDir, "daily.yaml"))
+		if err != nil {
+			return FocusPlan{}
+		}
 	}
-	var dp DailyPlan
-	if err := yaml.Unmarshal(data, &dp); err != nil {
-		return DailyPlan{}
+	var fp FocusPlan
+	if err := yaml.Unmarshal(data, &fp); err != nil {
+		return FocusPlan{}
 	}
-	return dp
+	return fp
 }
 
-func WriteDailyPlan(rootDir string, plan DailyPlan) error {
+func WriteFocusPlan(rootDir string, plan FocusPlan) error {
 	data, err := yaml.Marshal(&plan)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dailyPlanPath(rootDir), data, 0644)
+	path := focusPlanPath(rootDir)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return err
+	}
+	// Migration: remove legacy daily.yaml after successful write
+	legacy := filepath.Join(rootDir, "daily.yaml")
+	if _, err := os.Stat(legacy); err == nil {
+		os.Remove(legacy)
+	}
+	return nil
 }
 
-func (dp *DailyPlan) Contains(id string) bool {
-	for _, t := range dp.Tasks {
+func (fp *FocusPlan) Contains(id string) bool {
+	for _, t := range fp.Tasks {
 		if t == id {
 			return true
 		}
@@ -46,43 +60,43 @@ func (dp *DailyPlan) Contains(id string) bool {
 	return false
 }
 
-func (dp *DailyPlan) Toggle(id string) {
-	if dp.Contains(id) {
-		dp.Remove(id)
+func (fp *FocusPlan) Toggle(id string) {
+	if fp.Contains(id) {
+		fp.Remove(id)
 	} else {
-		dp.Tasks = append(dp.Tasks, id)
+		fp.Tasks = append(fp.Tasks, id)
 	}
 }
 
-func (dp *DailyPlan) Remove(id string) {
-	for i, t := range dp.Tasks {
+func (fp *FocusPlan) Remove(id string) {
+	for i, t := range fp.Tasks {
 		if t == id {
-			dp.Tasks = append(dp.Tasks[:i], dp.Tasks[i+1:]...)
+			fp.Tasks = append(fp.Tasks[:i], fp.Tasks[i+1:]...)
 			return
 		}
 	}
 }
 
-func (dp *DailyPlan) Swap(i, j int) {
-	if i < 0 || j < 0 || i >= len(dp.Tasks) || j >= len(dp.Tasks) {
+func (fp *FocusPlan) Swap(i, j int) {
+	if i < 0 || j < 0 || i >= len(fp.Tasks) || j >= len(fp.Tasks) {
 		return
 	}
-	dp.Tasks[i], dp.Tasks[j] = dp.Tasks[j], dp.Tasks[i]
+	fp.Tasks[i], fp.Tasks[j] = fp.Tasks[j], fp.Tasks[i]
 }
 
-func (dp *DailyPlan) IsStale() bool {
-	return dp.Date != "" && dp.Date != Today()
+func (fp *FocusPlan) IsStale() bool {
+	return fp.Date != "" && fp.Date != Today()
 }
 
 // Cleanup removes task IDs that are not found in allTasks or have status done/archived.
 // Returns true if any tasks were removed.
-func (dp *DailyPlan) Cleanup(allTasks []*Task) bool {
+func (fp *FocusPlan) Cleanup(allTasks []*Task) bool {
 	lookup := make(map[string]*Task, len(allTasks))
 	for _, t := range allTasks {
 		lookup[t.Meta.ID] = t
 	}
 	var kept []string
-	for _, id := range dp.Tasks {
+	for _, id := range fp.Tasks {
 		t, ok := lookup[id]
 		if !ok {
 			continue
@@ -92,7 +106,7 @@ func (dp *DailyPlan) Cleanup(allTasks []*Task) bool {
 		}
 		kept = append(kept, id)
 	}
-	changed := len(kept) != len(dp.Tasks)
-	dp.Tasks = kept
+	changed := len(kept) != len(fp.Tasks)
+	fp.Tasks = kept
 	return changed
 }

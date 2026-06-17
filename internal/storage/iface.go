@@ -26,6 +26,7 @@ type TaskStore interface {
 	GetTasks(projectSlug string) ([]*Task, error)
 	GetAllTasks() ([]*Task, error)
 	NextTaskID(slug string) string
+	NextChildID(slug, parentID string) string
 	FindTask(projectSlug, query string) (*Task, error)
 
 	// Tasks - write

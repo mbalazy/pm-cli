@@ -40,14 +40,15 @@ func ParseStatus(s string) TaskStatus {
 }
 
 type TaskMeta struct {
-	ID      string            `yaml:"id"`
-	Title   string            `yaml:"title"`
-	Status  TaskStatus        `yaml:"status"`
-	Created string            `yaml:"created"`
-	Updated string            `yaml:"updated"`
-	Links   map[string]string `yaml:"links,omitempty"`
-	Branch  string            `yaml:"branch,omitempty"`
-	Tags    []string          `yaml:"tags,omitempty"`
+	ID       string            `yaml:"id"`
+	Title    string            `yaml:"title"`
+	Status   TaskStatus        `yaml:"status"`
+	Created  string            `yaml:"created"`
+	Updated  string            `yaml:"updated"`
+	Links    map[string]string `yaml:"links,omitempty"`
+	Branch   string            `yaml:"branch,omitempty"`
+	Parent   string            `yaml:"parent,omitempty"`
+	Tags     []string          `yaml:"tags,omitempty"`
 	Brief    string            `yaml:"brief,omitempty"`
 	AC       string            `yaml:"ac,omitempty"`
 	Order    int               `yaml:"order,omitempty"`

@@ -23,7 +23,7 @@ const (
 	viewDetail
 	viewArchive
 	viewProjectInfo
-	viewDaily
+	viewFocus
 )
 
 type yankItem struct {
@@ -212,10 +212,10 @@ type Model struct {
 
 	startupDuration time.Duration
 
-	// daily plan
-	dailyCursor int
-	dailyPlan   storage.DailyPlan
-	dailySet    map[string]bool // O(1) lookup for card rendering
+	// focus plan
+	focusCursor int
+	focusPlan   storage.FocusPlan
+	focusSet    map[string]bool // O(1) lookup for card rendering
 
 	// hidden projects (not shown in tab bar)
 	hiddenProjects map[string]bool
@@ -226,6 +226,11 @@ type Model struct {
 	pickerCursor  int
 	pickerInput   textinput.Model
 	pickerFilter  string
+
+	// subtask picker overlay (parent -> child navigation in detail view)
+	subtaskPicker bool
+	subtaskItems  []*storage.Task
+	subtaskCursor int
 }
 
 func New(store storage.TaskStore, filterProject string) Model {
@@ -237,7 +242,7 @@ func New(store storage.TaskStore, filterProject string) Model {
 		hiddenStatuses: make(map[storage.TaskStatus]bool),
 		hiddenProjects: make(map[string]bool),
 		selected:       make(map[string]bool),
-		dailySet:       make(map[string]bool),
+		focusSet:       make(map[string]bool),
 	}
 
 	// load hidden projects from config
@@ -259,7 +264,7 @@ func New(store storage.TaskStore, filterProject string) Model {
 	}
 
 	m.reload()
-	m.loadDailyPlan()
+	m.loadFocusPlan()
 	m.handleStalePlan()
 
 	ti := textinput.New()
@@ -395,11 +400,11 @@ func (m *Model) reload() {
 	m.loadProjectCounts()
 	m.fixCursors()
 
-	// refresh daily plan: remove done/archived/deleted tasks
-	m.loadDailyPlan()
+	// refresh focus plan: remove done/archived/deleted tasks
+	m.loadFocusPlan()
 	allTasks, _ := m.store.GetAllTasks()
-	if m.dailyPlan.Cleanup(allTasks) {
-		m.saveDailyPlan()
+	if m.focusPlan.Cleanup(allTasks) {
+		m.saveFocusPlan()
 	}
 }
 
@@ -554,6 +559,54 @@ func (m Model) selectedTask() *storage.Task {
 	return tasks[idx]
 }
 
+// trackerBadges returns a "▸done+merged/total" progress badge keyed by tracker
+// task ID (a parent that has children). Used to mark parent cards on the board.
+func (m Model) trackerBadges() map[string]string {
+	trackers, _ := storage.BuildTrackers(m.tasks)
+	out := make(map[string]string, len(trackers))
+	for _, tr := range trackers {
+		complete := tr.Progress[string(storage.StatusDone)] + tr.Progress["merged"]
+		out[tr.ID] = fmt.Sprintf("▸%d/%d", complete, tr.Total)
+	}
+	return out
+}
+
+// taskChildren returns the subtasks of t (tasks whose parent is t.ID), sorted by
+// numeric ID. Empty if t is not a tracker.
+func (m Model) taskChildren(t *storage.Task) []*storage.Task {
+	if t == nil || t.Meta.ID == "" {
+		return nil
+	}
+	var kids []*storage.Task
+	for _, c := range m.tasks {
+		if c.Meta.Parent == t.Meta.ID {
+			kids = append(kids, c)
+		}
+	}
+	sort.Slice(kids, func(i, j int) bool {
+		ni, nj := taskIDNum(kids[i].Meta.ID), taskIDNum(kids[j].Meta.ID)
+		if ni != nj {
+			return ni < nj
+		}
+		return kids[i].Meta.ID < kids[j].Meta.ID
+	})
+	return kids
+}
+
+// taskParent returns the parent task of t, or nil if t has no parent (or the
+// parent isn't in the loaded set).
+func (m Model) taskParent(t *storage.Task) *storage.Task {
+	if t == nil || t.Meta.Parent == "" {
+		return nil
+	}
+	for _, p := range m.tasks {
+		if p.Meta.ID == t.Meta.Parent {
+			return p
+		}
+	}
+	return nil
+}
+
 // markedTasks returns all tasks currently in the selection set.
 func (m Model) markedTasks() []*storage.Task {
 	var result []*storage.Task
@@ -565,48 +618,48 @@ func (m Model) markedTasks() []*storage.Task {
 	return result
 }
 
-// --- daily plan helpers ---
+// --- focus plan helpers ---
 
-func (m *Model) rebuildDailySet() {
-	m.dailySet = make(map[string]bool, len(m.dailyPlan.Tasks))
-	for _, id := range m.dailyPlan.Tasks {
-		m.dailySet[id] = true
+func (m *Model) rebuildFocusSet() {
+	m.focusSet = make(map[string]bool, len(m.focusPlan.Tasks))
+	for _, id := range m.focusPlan.Tasks {
+		m.focusSet[id] = true
 	}
 }
 
-func (m *Model) loadDailyPlan() {
-	m.dailyPlan = storage.ReadDailyPlan(m.store.RootDir())
-	m.rebuildDailySet()
+func (m *Model) loadFocusPlan() {
+	m.focusPlan = storage.ReadFocusPlan(m.store.RootDir())
+	m.rebuildFocusSet()
 }
 
-func (m *Model) saveDailyPlan() {
-	storage.WriteDailyPlan(m.store.RootDir(), m.dailyPlan)
+func (m *Model) saveFocusPlan() {
+	storage.WriteFocusPlan(m.store.RootDir(), m.focusPlan)
 }
 
 func (m *Model) handleStalePlan() {
-	if !m.dailyPlan.IsStale() {
+	if !m.focusPlan.IsStale() {
 		return
 	}
 	allTasks, _ := m.store.GetAllTasks()
-	m.dailyPlan.Cleanup(allTasks)
-	n := len(m.dailyPlan.Tasks)
-	m.dailyPlan.Date = storage.Today()
-	m.saveDailyPlan()
-	m.rebuildDailySet()
+	m.focusPlan.Cleanup(allTasks)
+	n := len(m.focusPlan.Tasks)
+	m.focusPlan.Date = storage.Today()
+	m.saveFocusPlan()
+	m.rebuildFocusSet()
 	if n > 0 {
-		m.toastMsg = fmt.Sprintf("Yesterday's plan carried over (%d tasks)", n)
+		m.toastMsg = fmt.Sprintf("Focus carried over from yesterday (%d tasks)", n)
 		m.toastExpiry = time.Now().Add(4 * time.Second)
 	}
 }
 
-func (m *Model) dailyTasks() []*storage.Task {
+func (m *Model) focusTasks() []*storage.Task {
 	allTasks, _ := m.store.GetAllTasks()
 	lookup := make(map[string]*storage.Task, len(allTasks))
 	for _, t := range allTasks {
 		lookup[t.Meta.ID] = t
 	}
 	var result []*storage.Task
-	for _, id := range m.dailyPlan.Tasks {
+	for _, id := range m.focusPlan.Tasks {
 		if t, ok := lookup[id]; ok {
 			result = append(result, t)
 		}
@@ -614,25 +667,25 @@ func (m *Model) dailyTasks() []*storage.Task {
 	return result
 }
 
-func (m Model) selectedDailyTask() *storage.Task {
-	tasks := m.dailyTasks()
+func (m Model) selectedFocusTask() *storage.Task {
+	tasks := m.focusTasks()
 	if len(tasks) == 0 {
 		return nil
 	}
-	idx := m.dailyCursor
+	idx := m.focusCursor
 	if idx >= len(tasks) {
 		idx = len(tasks) - 1
 	}
 	return tasks[idx]
 }
 
-func (m *Model) fixDailyCursor() {
-	tasks := m.dailyTasks()
-	if m.dailyCursor >= len(tasks) && len(tasks) > 0 {
-		m.dailyCursor = len(tasks) - 1
+func (m *Model) fixFocusCursor() {
+	tasks := m.focusTasks()
+	if m.focusCursor >= len(tasks) && len(tasks) > 0 {
+		m.focusCursor = len(tasks) - 1
 	}
 	if len(tasks) == 0 {
-		m.dailyCursor = 0
+		m.focusCursor = 0
 	}
 }
 

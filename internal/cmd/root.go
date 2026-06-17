@@ -30,6 +30,7 @@ func NewRootCmd() *cobra.Command {
 		newProjectsCmd(store),
 		newAddCmd(store),
 		newListCmd(store),
+		newContextCmd(store),
 		newShowCmd(store),
 		newMvCmd(store),
 		newDoneCmd(store),
