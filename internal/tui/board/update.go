@@ -46,9 +46,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentView == viewExecutor {
 			m.refreshExecutorView()
 		}
-		// Live-refresh the task-detail dashboard while a run for it is active.
+		// Live-refresh the task-detail view while a run for it is active: reload
+		// tasks (so the subtask table + parent rollup reflect fresh sub statuses)
+		// and re-render the dashboard, preserving scroll.
 		if m.currentView == viewDetail && m.detailTask != nil {
 			if run := m.runStates[m.detailTask.Meta.ID]; run != nil && run.IsLive() {
+				m.reload()
+				if rt, err := m.store.FindTask(m.detailTask.Project, m.detailTask.Meta.ID); err == nil {
+					m.detailTask = rt
+				}
 				off := m.detailViewport.YOffset
 				content := m.renderTaskDetail(m.detailTask)
 				m.detailViewport.SetContent(content)
