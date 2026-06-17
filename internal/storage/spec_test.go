@@ -72,6 +72,42 @@ func TestExtractSpec(t *testing.T) {
 	})
 }
 
+func TestExtractSection(t *testing.T) {
+	md := "intro\n\n" +
+		"## Description\nwhat we build\nmore desc\n\n" +
+		"## Acceptance Criteria\n- must work offline\n- loads under 2s\n\n" +
+		"## Open Questions\n- q1"
+
+	t.Run("found, stops at next heading", func(t *testing.T) {
+		got := ExtractSection(md, "acceptance criteria")
+		want := "- must work offline\n- loads under 2s"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("case-insensitive heading match", func(t *testing.T) {
+		if got := ExtractSection(md, "DESCRIPTION"); got != "what we build\nmore desc" {
+			t.Errorf("got %q", got)
+		}
+	})
+	t.Run("last section runs to EOF", func(t *testing.T) {
+		if got := ExtractSection(md, "Open Questions"); got != "- q1" {
+			t.Errorf("got %q", got)
+		}
+	})
+	t.Run("not found returns empty", func(t *testing.T) {
+		if got := ExtractSection(md, "Nonexistent"); got != "" {
+			t.Errorf("got %q, want empty", got)
+		}
+	})
+	t.Run("does not match deeper headings", func(t *testing.T) {
+		body := "### Acceptance Criteria\nnope"
+		if got := ExtractSection(body, "acceptance criteria"); got != "" {
+			t.Errorf("got %q, want empty (### should not match)", got)
+		}
+	})
+}
+
 func countOccurrences(s, sub string) int {
 	n := 0
 	for i := 0; i+len(sub) <= len(s); i++ {

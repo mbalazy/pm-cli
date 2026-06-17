@@ -28,7 +28,14 @@ func buildWorkerPrompt(t *storage.Task, parent *storage.Task, proj *storage.Proj
 	}
 
 	sb.WriteString("\n## Acceptance Criteria (HARD-BOUND - your work must satisfy these and NOT exceed them)\n")
-	if ac := strings.TrimSpace(t.Meta.AC); ac != "" {
+	ac := strings.TrimSpace(t.Meta.AC)
+	if ac == "" {
+		// Many tasks keep AC in the spec body ("## Acceptance criteria") rather
+		// than the frontmatter `ac` field - fall back to that so the guardrail
+		// is never empty when criteria exist.
+		ac = storage.ExtractSection(specOrBody(t), "acceptance criteria")
+	}
+	if ac != "" {
 		sb.WriteString(ac + "\n")
 	} else {
 		sb.WriteString("(none stated - infer the minimal scope from the spec; do not add unrequested features)\n")

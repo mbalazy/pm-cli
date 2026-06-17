@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/spf13/cobra"
@@ -53,6 +55,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 		maxTurns   int
 		yolo       bool
 		allowDirty bool
+		timeout    time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -88,6 +91,9 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 			}
 
 			exec := proj.GetExecutor()
+			if !exec.Enabled {
+				return fmt.Errorf("executor disabled for project %s (executor.enabled: false)", slug)
+			}
 			standalone := !epic
 			branch := resolveWorkBranch(task)
 
@@ -119,7 +125,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 
 			fmt.Fprintf(os.Stderr, "pm work: launching headless worker for %s on %s (%s)...\n", task.Meta.ID, branch, modeLabel(standalone))
 
-			res, sessionID, err := runWorker(proj.Path, cmdArgs)
+			res, sessionID, err := runWorker(proj.Path, cmdArgs, timeout)
 			if err != nil {
 				return err
 			}
@@ -140,6 +146,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 120, "max agent turns for the worker")
 	cmd.Flags().BoolVar(&yolo, "yolo", false, "bypass all permission checks instead of the curated allowlist")
 	cmd.Flags().BoolVar(&allowDirty, "allow-dirty", false, "skip the clean-working-tree precondition (standalone)")
+	cmd.Flags().DurationVar(&timeout, "timeout", 45*time.Minute, "max wall-clock time for the worker before it is killed")
 
 	return cmd
 }
@@ -231,13 +238,20 @@ const workerAllowedTools = "Edit Write Read Grep Glob Task TodoWrite " +
 const workerDisallowedTools = "Bash(git push --force:*) Bash(git push -f:*) Bash(git push --force-with-lease:*) " +
 	"Bash(git reset --hard:*) Bash(gh pr merge:*) Bash(git merge:*)"
 
-// runWorker invokes claude headless in dir, parses the result envelope, and
-// returns the worker result + the session id.
-func runWorker(dir string, args []string) (*workerResult, string, error) {
-	c := exec.Command("claude", args...)
+// runWorker invokes claude headless in dir under a wall-clock deadline, parses
+// the result envelope, and returns the worker result + the session id. A hung
+// claude is killed when the timeout elapses rather than blocking pm forever.
+func runWorker(dir string, args []string, timeout time.Duration) (*workerResult, string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	c := exec.CommandContext(ctx, "claude", args...)
 	c.Dir = dir
 	c.Stderr = os.Stderr
 	out, err := c.Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return nil, "", fmt.Errorf("worker timed out after %s (raise --timeout if the task legitimately needs longer)", timeout)
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("claude worker failed: %w", err)
 	}
@@ -292,9 +306,19 @@ func statusAllowed(s storage.TaskStatus, allowed []storage.TaskStatus) bool {
 	return false
 }
 
+// displayStatus renders the worker status for human-facing brief/log text. In
+// standalone mode nothing is actually merged (the worker opens a draft PR), so
+// "merged" reads as "ready (draft PR)". The JSON contract enum is unchanged.
+func displayStatus(status string, standalone bool) string {
+	if standalone && status == "merged" {
+		return "ready (draft PR)"
+	}
+	return status
+}
+
 func workerBrief(res *workerResult, branch string, standalone bool) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Worker %s on %s (%s). %s", res.Status, branch, modeLabel(standalone), strings.TrimSpace(res.Summary))
+	fmt.Fprintf(&sb, "Worker %s on %s (%s). %s", displayStatus(res.Status, standalone), branch, modeLabel(standalone), strings.TrimSpace(res.Summary))
 	if len(res.Unresolved) > 0 {
 		fmt.Fprintf(&sb, " Unresolved: %s.", strings.Join(res.Unresolved, "; "))
 	}
@@ -306,7 +330,7 @@ func workerBrief(res *workerResult, branch string, standalone bool) string {
 
 func workerLogEntry(res *workerResult, branch string, standalone bool) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "**Worker run (%s, %s)** - status: %s, branch: %s.\n", storage.Today(), modeLabel(standalone), res.Status, branch)
+	fmt.Fprintf(&sb, "**Worker run (%s, %s)** - status: %s, branch: %s.\n", storage.Today(), modeLabel(standalone), displayStatus(res.Status, standalone), branch)
 	if s := strings.TrimSpace(res.Summary); s != "" {
 		fmt.Fprintf(&sb, "%s\n", s)
 	}

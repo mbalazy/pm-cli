@@ -89,6 +89,13 @@ func Slugify(s string) string {
 	s = strings.Trim(s, "-")
 	if len(s) > 60 {
 		s = s[:60]
+		// Back up to the last word boundary so we don't cut mid-word
+		// (e.g. "...7day-t" -> "...7day"). Keep the hard cut if the first
+		// 60 chars are a single dashless word.
+		if i := strings.LastIndex(s, "-"); i > 0 {
+			s = s[:i]
+		}
+		s = strings.Trim(s, "-")
 	}
 	return s
 }

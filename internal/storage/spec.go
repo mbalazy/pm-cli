@@ -54,3 +54,28 @@ func ExtractSpec(body string) string {
 	}
 	return strings.TrimSpace(body[start+len(SpecStart) : end])
 }
+
+// ExtractSection returns the trimmed content of the first markdown section whose
+// "## " heading matches heading (case-insensitive), from the line after the
+// heading up to the next "## " heading or EOF. Returns "" when not found.
+func ExtractSection(md, heading string) string {
+	want := strings.ToLower(strings.TrimSpace(heading))
+	lines := strings.Split(md, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "## ") {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "## "))) != want {
+			continue
+		}
+		var body []string
+		for _, next := range lines[i+1:] {
+			if strings.HasPrefix(next, "## ") {
+				break
+			}
+			body = append(body, next)
+		}
+		return strings.TrimSpace(strings.Join(body, "\n"))
+	}
+	return ""
+}

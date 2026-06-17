@@ -123,6 +123,35 @@ func TestBuildWorkerPrompt(t *testing.T) {
 			t.Error("no parent -> should not render parent spec section")
 		}
 	})
+
+	t.Run("falls back to AC section in spec body when frontmatter ac empty", func(t *testing.T) {
+		bodyAC := &storage.Task{Meta: storage.TaskMeta{ID: "x-2", Title: "T"},
+			Body: "<!-- spec:start -->\n## Description\nbuild it\n\n## Acceptance criteria\n- works offline\n- under 2s\n<!-- spec:end -->"}
+		got := buildWorkerPrompt(bodyAC, nil, proj, "atlas", exec, "feat/t", true)
+		mustContain(t, got, "- works offline")
+		mustContain(t, got, "- under 2s")
+		if strings.Contains(got, "(none stated") {
+			t.Error("AC present in spec body should not render the none-stated fallback")
+		}
+	})
+}
+
+func TestDisplayStatus(t *testing.T) {
+	tests := []struct {
+		status     string
+		standalone bool
+		want       string
+	}{
+		{"merged", true, "ready (draft PR)"},
+		{"merged", false, "merged"},
+		{"blocked", true, "blocked"},
+		{"failed", true, "failed"},
+	}
+	for _, tt := range tests {
+		if got := displayStatus(tt.status, tt.standalone); got != tt.want {
+			t.Errorf("displayStatus(%q, %v) = %q, want %q", tt.status, tt.standalone, got, tt.want)
+		}
+	}
 }
 
 func TestBuildWorkerSystemPrompt(t *testing.T) {

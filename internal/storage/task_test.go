@@ -26,6 +26,7 @@ func TestSlugify(t *testing.T) {
 		{"mixed case", "CamelCaseTitle", "camelcasetitle"},
 		{"numbers", "task 123 done", "task-123-done"},
 		{"long title truncated", strings.Repeat("a", 100), strings.Repeat("a", 60)},
+		{"long title cut at word boundary", "enable analytics tracking for the seven day streak retention flow now", "enable-analytics-tracking-for-the-seven-day-streak"},
 	}
 
 	for _, tt := range tests {
