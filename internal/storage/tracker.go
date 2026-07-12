@@ -2,6 +2,7 @@ package storage
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -10,8 +11,36 @@ type TrackerChild struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Status    string `json:"status"`
+	Order     int    `json:"order"`
 	Branch    string `json:"branch,omitempty"`
 	BriefLine string `json:"brief_line,omitempty"`
+}
+
+// taskIDNum extracts the trailing integer from a task ID (e.g. "atlas-26" -> 26).
+// Returns 0 when the ID has no numeric suffix.
+func taskIDNum(id string) int {
+	if i := strings.LastIndex(id, "-"); i >= 0 {
+		if n, err := strconv.Atoi(id[i+1:]); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+// LessByOrder reports whether task a sorts before task b. It is the canonical
+// subtask/task ordering shared by the board columns (filteredTasks), the parent
+// rollup (BuildTrackers), and the TUI tracker child list (taskChildren) so the
+// three never disagree: Order asc (0 = unset sorts first), then numeric ID asc,
+// then most-recently-updated first.
+func LessByOrder(a, b *Task) bool {
+	if a.Meta.Order != b.Meta.Order {
+		return a.Meta.Order < b.Meta.Order
+	}
+	na, nb := taskIDNum(a.Meta.ID), taskIDNum(b.Meta.ID)
+	if na != nb {
+		return na < nb
+	}
+	return a.Meta.Updated > b.Meta.Updated
 }
 
 // Tracker is a parent task plus a computed rollup of its children.
@@ -71,6 +100,7 @@ func BuildTrackers(tasks []*Task) ([]Tracker, map[string]bool) {
 			continue
 		}
 
+		sort.Slice(kids, func(i, j int) bool { return LessByOrder(kids[i], kids[j]) })
 		progress := make(map[string]int)
 		children := make([]TrackerChild, 0, len(kids))
 		for _, k := range kids {
@@ -79,11 +109,11 @@ func BuildTrackers(tasks []*Task) ([]Tracker, map[string]bool) {
 				ID:        k.Meta.ID,
 				Title:     k.Meta.Title,
 				Status:    string(k.Meta.Status),
+				Order:     k.Meta.Order,
 				Branch:    k.Meta.Branch,
 				BriefLine: BriefLine(k.Meta.Brief),
 			})
 		}
-		sort.Slice(children, func(i, j int) bool { return children[i].ID < children[j].ID })
 
 		trackers = append(trackers, Tracker{
 			ID:       t.Meta.ID,

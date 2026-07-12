@@ -3,7 +3,6 @@ package board
 import (
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -226,17 +225,7 @@ func (m Model) filteredTasks(status storage.TaskStatus) []*storage.Task {
 		}
 		result = append(result, t)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Meta.Order != result[j].Meta.Order {
-			return result[i].Meta.Order < result[j].Meta.Order
-		}
-		ni := taskIDNum(result[i].Meta.ID)
-		nj := taskIDNum(result[j].Meta.ID)
-		if ni != nj {
-			return ni < nj
-		}
-		return result[i].Meta.Updated > result[j].Meta.Updated
-	})
+	sort.Slice(result, func(i, j int) bool { return storage.LessByOrder(result[i], result[j]) })
 	return result
 }
 
@@ -277,16 +266,6 @@ func matchesQuery(t *storage.Task, q string) bool {
 		}
 	}
 	return false
-}
-
-// taskIDNum extracts the trailing number from a task ID (e.g. "proj-10" -> 10).
-func taskIDNum(id string) int {
-	if idx := strings.LastIndex(id, "-"); idx >= 0 {
-		if n, err := strconv.Atoi(id[idx+1:]); err == nil {
-			return n
-		}
-	}
-	return 0
 }
 
 func (m Model) archivedTasks() []*storage.Task {
@@ -351,7 +330,7 @@ func (m Model) trackerBadges() map[string]string {
 }
 
 // taskChildren returns the subtasks of t (tasks whose parent is t.ID), sorted by
-// numeric ID. Empty if t is not a tracker.
+// Order (matching the board columns and parent rollup). Empty if t is not a tracker.
 func (m Model) taskChildren(t *storage.Task) []*storage.Task {
 	if t == nil || t.Meta.ID == "" {
 		return nil
@@ -362,13 +341,7 @@ func (m Model) taskChildren(t *storage.Task) []*storage.Task {
 			kids = append(kids, c)
 		}
 	}
-	sort.Slice(kids, func(i, j int) bool {
-		ni, nj := taskIDNum(kids[i].Meta.ID), taskIDNum(kids[j].Meta.ID)
-		if ni != nj {
-			return ni < nj
-		}
-		return kids[i].Meta.ID < kids[j].Meta.ID
-	})
+	sort.Slice(kids, func(i, j int) bool { return storage.LessByOrder(kids[i], kids[j]) })
 	return kids
 }
 

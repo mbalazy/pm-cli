@@ -52,7 +52,7 @@ func newContextCmd(store storage.TaskStore) *cobra.Command {
 					fmt.Printf("   %s\n", tr.Title)
 					for _, c := range tr.Children {
 						mark := statusMark(c.Status)
-						line := fmt.Sprintf("   %s %-13s %-7s", mark, c.ID, c.Status)
+						line := fmt.Sprintf("   %s %-13s %-7s o:%-4d", mark, c.ID, c.Status, c.Order)
 						if c.Branch != "" {
 							line += "  " + c.Branch
 						}
