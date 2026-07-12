@@ -24,7 +24,7 @@ func TestResolveWorkBranch(t *testing.T) {
 
 func TestParseClaudeResult(t *testing.T) {
 	t.Run("success with structured output", func(t *testing.T) {
-		data := []byte(`{"type":"result","subtype":"success","is_error":false,"result":"Done.","session_id":"abc-123","structured_output":{"status":"merged","summary":"did the thing","branch":"feat/x","commits":["a1b2c3"],"unresolved":[]}}`)
+		data := []byte(`{"type":"result","subtype":"success","is_error":false,"result":"Done.","session_id":"abc-123","num_turns":42,"total_cost_usd":1.25,"structured_output":{"status":"merged","summary":"did the thing","branch":"feat/x","commits":["a1b2c3"],"unresolved":[]}}`)
 		res, sid, err := parseClaudeResult(data)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -37,6 +37,9 @@ func TestParseClaudeResult(t *testing.T) {
 		}
 		if len(res.Commits) != 1 || res.Commits[0] != "a1b2c3" {
 			t.Errorf("commits = %v, want [a1b2c3]", res.Commits)
+		}
+		if res.Turns != 42 || res.CostUSD != 1.25 {
+			t.Errorf("envelope stats not lifted: turns=%d cost=%v, want 42/1.25", res.Turns, res.CostUSD)
 		}
 	})
 

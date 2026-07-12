@@ -21,6 +21,12 @@ type workerResult struct {
 	Branch     string   `json:"branch"`
 	Commits    []string `json:"commits"`
 	Unresolved []string `json:"unresolved"`
+	// Run stats lifted off the claude envelope by parseClaudeResult - NOT part
+	// of the worker's structured-output contract (the model never emits them,
+	// so they stay out of workerResultSchema). They feed the run-state +
+	// journal so retros can weigh outcomes by effort/cost.
+	Turns   int     `json:"turns,omitempty"`
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }
 
 // claudeEnvelope is the `claude -p --output-format json` result envelope. The
@@ -31,6 +37,8 @@ type claudeEnvelope struct {
 	IsError          bool          `json:"is_error"`
 	Result           string        `json:"result"`
 	SessionID        string        `json:"session_id"`
+	NumTurns         int           `json:"num_turns"`
+	TotalCostUSD     float64       `json:"total_cost_usd"`
 	StructuredOutput *workerResult `json:"structured_output"`
 }
 
@@ -381,13 +389,15 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			run.Subs[0].Status = res.Status
 			run.Subs[0].Note = strings.TrimSpace(res.Summary)
 			run.Subs[0].Commits = res.Commits
+			run.Subs[0].Turns = res.Turns
+			run.Subs[0].CostUSD = res.CostUSD
 		}
 		_ = storage.WriteRunState(stateDir, run)
 		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
 			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
 			Status: storage.RunStatusDone, DurationS: int(time.Since(workStart).Seconds()),
-			Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: res.Status, Note: strings.TrimSpace(res.Summary), DurationS: int(time.Since(workStart).Seconds()), Session: sessionID}},
+			Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: res.Status, Note: strings.TrimSpace(res.Summary), DurationS: int(time.Since(workStart).Seconds()), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD}},
 		})
 	}
 	return res, nil
@@ -503,6 +513,10 @@ func parseClaudeResult(data []byte) (*workerResult, string, error) {
 	if env.StructuredOutput == nil {
 		return nil, env.SessionID, fmt.Errorf("worker returned no structured result (is_error=%v): %s", env.IsError, strings.TrimSpace(env.Result))
 	}
+	// Lift the envelope's run stats onto the result (the model's structured
+	// output can't carry them - only the harness knows turns/cost).
+	env.StructuredOutput.Turns = env.NumTurns
+	env.StructuredOutput.CostUSD = env.TotalCostUSD
 	return env.StructuredOutput, env.SessionID, nil
 }
 

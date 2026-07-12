@@ -378,6 +378,15 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 		return subOutcome{sub.Meta.ID, "failed", err.Error()}
 	}
 
+	// Stamp the worker's envelope stats onto the sub's run-state entry so the
+	// dashboard and the journal (journalSubs) can weigh the outcome by effort.
+	for i := range run.Subs {
+		if run.Subs[i].ID == sub.Meta.ID {
+			run.Subs[i].Turns = res.Turns
+			run.Subs[i].CostUSD = res.CostUSD
+		}
+	}
+
 	if res.Status != "merged" {
 		// applyWorkerResult already parked a blocked sub on waiting; make sure a
 		// failed sub is parked too (not left dangling on doing).
@@ -427,18 +436,20 @@ func updateSubRun(run *storage.RunState, id, status, note string) {
 }
 
 // journalSubs converts the manager's outcomes into journal sub records,
-// attaching each sub's driveSub wall-clock and worker session (from the
-// run-state, which driveSub filled in as it went).
+// attaching each sub's driveSub wall-clock plus the worker session and
+// envelope stats (from the run-state, which driveSub filled in as it went).
 func journalSubs(outcomes []subOutcome, durations map[string]int, run *storage.RunState) []storage.JournalSub {
-	sessions := make(map[string]string, len(run.Subs))
+	byID := make(map[string]storage.SubRun, len(run.Subs))
 	for _, s := range run.Subs {
-		sessions[s.ID] = s.Session
+		byID[s.ID] = s
 	}
 	out := make([]storage.JournalSub, 0, len(outcomes))
 	for _, o := range outcomes {
+		sr := byID[o.id]
 		out = append(out, storage.JournalSub{
 			ID: o.id, Result: o.result, Note: o.note,
-			DurationS: durations[o.id], Session: sessions[o.id],
+			DurationS: durations[o.id], Session: sr.Session,
+			Turns: sr.Turns, CostUSD: sr.CostUSD,
 		})
 	}
 	return out

@@ -24,7 +24,7 @@ func TestJournalAppendRead(t *testing.T) {
 		Event: JournalEventEnd, Kind: "run-epic", Project: "proj", TaskID: "proj-1",
 		Status: "done", DurationS: 123,
 		Subs: []JournalSub{
-			{ID: "proj-1-1", Result: "merged", DurationS: 100, Session: "abc"},
+			{ID: "proj-1-1", Result: "merged", DurationS: 100, Session: "abc", Turns: 42, CostUSD: 1.25},
 			{ID: "proj-1-2", Result: "manual", Note: "manual sub"},
 		},
 	}
@@ -44,6 +44,9 @@ func TestJournalAppendRead(t *testing.T) {
 	}
 	if got[1].Subs[1].Result != "manual" {
 		t.Errorf("sub result did not round-trip: %+v", got[1].Subs)
+	}
+	if got[1].Subs[0].Turns != 42 || got[1].Subs[0].CostUSD != 1.25 {
+		t.Errorf("turns/cost did not round-trip: %+v", got[1].Subs[0])
 	}
 }
 

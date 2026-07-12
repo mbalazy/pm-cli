@@ -51,6 +51,9 @@ type SubRun struct {
 	Session string   `json:"session,omitempty"`
 	Note    string   `json:"note,omitempty"`
 	Commits []string `json:"commits,omitempty"`
+	// Worker run stats from the claude envelope (0 for skips/manual).
+	Turns   int     `json:"turns,omitempty"`
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }
 
 func executorRunDir(projectDir string) string {

@@ -32,11 +32,13 @@ const (
 // JournalSub is one sub's outcome inside an "end" event (a single entry for
 // `pm work`; one per sub for `pm run-epic`).
 type JournalSub struct {
-	ID        string `json:"id"`
-	Result    string `json:"result"` // merged | blocked | failed | conflict | skipped | manual
-	Note      string `json:"note,omitempty"`
-	DurationS int    `json:"duration_s,omitempty"` // wall-clock of the driveSub/worker, 0 for skips
-	Session   string `json:"session,omitempty"`    // worker session id -> transcript .jsonl
+	ID        string  `json:"id"`
+	Result    string  `json:"result"` // merged | blocked | failed | conflict | skipped | manual
+	Note      string  `json:"note,omitempty"`
+	DurationS int     `json:"duration_s,omitempty"` // wall-clock of the driveSub/worker, 0 for skips
+	Session   string  `json:"session,omitempty"`    // worker session id -> transcript .jsonl
+	Turns     int     `json:"turns,omitempty"`      // claude envelope num_turns (0 for skips)
+	CostUSD   float64 `json:"cost_usd,omitempty"`   // claude envelope total_cost_usd
 }
 
 // JournalEntry is one line in the executor journal.
