@@ -245,6 +245,119 @@ func TestUnmetDeps(t *testing.T) {
 	})
 }
 
+func TestClassifySub(t *testing.T) {
+	const start, done = storage.TaskStatus("todo"), storage.TaskStatus("merged")
+	mk := func(id string, status storage.TaskStatus, mode string, deps ...string) *storage.Task {
+		return &storage.Task{Meta: storage.TaskMeta{ID: id, Status: status, Mode: mode, DependsOn: deps}}
+	}
+	byID := func(subs ...*storage.Task) map[string]*storage.Task {
+		m := map[string]*storage.Task{}
+		for _, s := range subs {
+			m[s.Meta.ID] = s
+		}
+		return m
+	}
+
+	t.Run("ready auto sub is driven", func(t *testing.T) {
+		_, drive, _ := classifySub(mk("x-1", start, ""), byID(), start, done)
+		if !drive {
+			t.Error("ready auto sub should be driven")
+		}
+	})
+
+	t.Run("manual sub is never driven even when otherwise ready", func(t *testing.T) {
+		// status == start, no unmet deps -> would be READY if it were auto.
+		sub := mk("x-1", start, "manual")
+		oc, drive, announce := classifySub(sub, byID(), start, done)
+		if drive {
+			t.Fatal("manual sub must NOT be driven (no worker)")
+		}
+		if oc.result != "manual" {
+			t.Errorf("manual outcome should be %q, not %q (distinct from skipped)", "manual", oc.result)
+		}
+		if !strings.Contains(announce, "manual") {
+			t.Errorf("expected a manual stderr announcement, got %q", announce)
+		}
+		// classifySub is pure: the sub's status must be untouched.
+		if sub.Meta.Status != start {
+			t.Errorf("manual sub status changed to %q - must stay untouched", sub.Meta.Status)
+		}
+	})
+
+	t.Run("manual sub with satisfied deps is still not driven", func(t *testing.T) {
+		dep := mk("x-1", done, "")
+		sub := mk("x-2", start, "manual", "x-1")
+		oc, drive, _ := classifySub(sub, byID(dep), start, done)
+		if drive || oc.result != "manual" {
+			t.Errorf("manual sub with met deps: drive=%v result=%q, want drive=false result=manual", drive, oc.result)
+		}
+	})
+
+	t.Run("manual sub already at done reports as skipped/done, not manual", func(t *testing.T) {
+		oc, drive, _ := classifySub(mk("x-1", done, "manual"), byID(), start, done)
+		if drive {
+			t.Error("done sub should not be driven")
+		}
+		if oc.result != "skipped" {
+			t.Errorf("a completed manual sub should report %q (done handling wins), got %q", "skipped", oc.result)
+		}
+	})
+
+	t.Run("downstream auto sub stays blocked until the manual dep is moved to done", func(t *testing.T) {
+		manual := mk("x-1", start, "manual") // human hasn't done it yet
+		downstream := mk("x-2", start, "", "x-1")
+		m := byID(manual, downstream)
+
+		// While the manual sub is not done, the downstream sub is gated (unmet dep)
+		// and not driven.
+		oc, drive, _ := classifySub(downstream, m, start, done)
+		if drive {
+			t.Fatal("downstream sub must stay blocked while the manual dep is unmet")
+		}
+		if oc.result != "skipped" || !strings.Contains(oc.note, "x-1") {
+			t.Errorf("downstream should be skipped waiting on x-1, got result=%q note=%q", oc.result, oc.note)
+		}
+
+		// Human does the work and moves the manual sub to done externally.
+		manual.Meta.Status = done
+		if _, drive, _ := classifySub(downstream, m, start, done); !drive {
+			t.Error("downstream sub should be driven once the manual dep is done")
+		}
+	})
+}
+
+func TestValidateModeRejectedOnWrite(t *testing.T) {
+	store, slug := tempStore(t)
+	err := store.AddTask(slug, &storage.Task{
+		Meta: storage.TaskMeta{ID: "proj-1", Title: "bad mode", Status: storage.StatusTodo, Mode: "sometimes"},
+	})
+	if err == nil {
+		t.Fatal("expected AddTask to reject an invalid mode")
+	}
+	if !strings.Contains(err.Error(), "mode") {
+		t.Errorf("error should mention mode, got %q", err.Error())
+	}
+	// valid values (and empty) round-trip.
+	for _, m := range []string{"", "auto", "manual"} {
+		id := "proj-ok-" + m
+		if m == "" {
+			id = "proj-ok-empty"
+		}
+		if err := store.AddTask(slug, &storage.Task{
+			Meta: storage.TaskMeta{ID: id, Title: id, Status: storage.StatusTodo, Mode: m},
+		}); err != nil {
+			t.Errorf("mode %q should be valid, got %v", m, err)
+		}
+	}
+	reloaded, err := store.FindTask(slug, "proj-ok-manual")
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if reloaded.Meta.Mode != "manual" {
+		t.Errorf("mode did not round-trip, got %q", reloaded.Meta.Mode)
+	}
+}
+
 func TestAnyMerged(t *testing.T) {
 	if anyMerged([]subOutcome{{result: "blocked"}, {result: "skipped"}}) {
 		t.Error("anyMerged = true, want false")

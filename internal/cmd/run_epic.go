@@ -16,7 +16,7 @@ import (
 // end-of-run summary.
 type subOutcome struct {
 	id     string
-	result string // merged | blocked | failed | skipped | conflict
+	result string // merged | blocked | failed | skipped | conflict | manual
 	note   string
 }
 
@@ -30,6 +30,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 		noPR       bool
 		allowDirty bool
 		dryRun     bool
+		additional bool
 	)
 
 	cmd := &cobra.Command{
@@ -60,6 +61,12 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			if !exc.Enabled {
 				return fmt.Errorf("executor disabled for project %s (executor.enabled: false)", slug)
 			}
+			// --additional is opt-in PER RUN; the default is the main checkout
+			// (unchanged pre-worktree behaviour). It requires the project to have the
+			// additional worktree configured.
+			if additional && !exc.AdditionalWorktree {
+				return fmt.Errorf("--additional requested but project %s has no additional worktree configured - set `executor.additional_worktree: true` (+ worktree_path/base_branch/env) in project.yaml", slug)
+			}
 
 			subs, err := readySubs(store, slug, tracker.Meta.ID)
 			if err != nil {
@@ -72,9 +79,22 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			startStatus := storage.TaskStatus(exc.StartStatus)
 			doneStatus := storage.TaskStatus(exc.DoneStatus)
 			epicBranch := "epic/" + tracker.Meta.ID
+			// Base precedence for the integration branch: --base > (only with
+			// --additional) executor.base_branch > "main". In default mode base_branch
+			// is not consulted, so behaviour matches pre-worktree run-epic.
+			execBase := ""
+			if additional {
+				execBase = exc.BaseBranch
+			}
+			baseBranch := resolveWorktreeBase(base, execBase, "main")
+
+			workDir := proj.Path
+			if additional {
+				workDir = resolveWorktreePath(proj, exc)
+			}
 
 			if dryRun {
-				printEpicPlan(tracker, epicBranch, base, startStatus, doneStatus, subs)
+				printEpicPlan(tracker, epicBranch, baseBranch, startStatus, doneStatus, subs, additional, workDir)
 				return nil
 			}
 
@@ -82,19 +102,40 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				fmt.Fprintf(os.Stderr, "warning: done status %q is not in project %s statuses - add it to project.yaml so merged subs show on the board\n", doneStatus, slug)
 			}
 
-			// Precondition: clean working tree (the manager switches branches in place).
-			if !allowDirty {
-				if dirty, _ := gitDirty(proj.Path); dirty {
-					return fmt.Errorf("working tree at %s is dirty - commit/stash first or pass --allow-dirty", proj.Path)
+			// Additional mode: the whole epic runs in the single "additional"
+			// worktree (workDir), leaving the user's main checkout untouched. Ensure
+			// + seed + lock it ONCE for the run; the deferred release frees the lock
+			// on every normal exit (a kill is handled by the board, see killRun).
+			if additional {
+				release, err := prepareWorktree(proj, workDir, tracker.Meta.ID, "run-epic")
+				if err != nil {
+					return err
+				}
+				defer release()
+				// Wipe any leftovers from a previous (possibly killed) run before
+				// touching the integration branch, so half-done work never bleeds in.
+				// Preserves the integration branch's COMMITTED history (re-entrancy)
+				// and ignored deps/configs - it only drops the dirty working tree.
+				if err := gitCleanWorktree(workDir); err != nil {
+					return fmt.Errorf("reset worktree %s to a clean state: %w", workDir, err)
 				}
 			}
 
-			if err := gitEnsureBranch(proj.Path, epicBranch, base); err != nil {
+			// Precondition: clean working tree (the manager switches branches in
+			// place). Skipped in additional mode - the worktree is executor-managed
+			// and the user's main checkout is intentionally left alone.
+			if !allowDirty && !additional {
+				if dirty, _ := gitDirty(workDir); dirty {
+					return fmt.Errorf("working tree at %s is dirty - commit/stash first or pass --allow-dirty", workDir)
+				}
+			}
+
+			if err := gitEnsureBranch(workDir, epicBranch, baseBranch); err != nil {
 				return fmt.Errorf("create integration branch %s: %w", epicBranch, err)
 			}
 			fmt.Fprintf(os.Stderr, "pm run-epic: %s on %s (%d sub(s))\n", tracker.Meta.ID, epicBranch, len(subs))
 
-			opts := workOptions{standalone: false, model: model, maxTurns: maxTurns, yolo: yolo, allowDirty: true, timeout: timeout}
+			opts := workOptions{standalone: false, model: model, maxTurns: maxTurns, yolo: yolo, allowDirty: true, timeout: timeout, additional: additional}
 
 			// Run-state for observability: the manager owns the epic-level file;
 			// driveSub fills in each sub's worker session as it goes. It lives in
@@ -108,7 +149,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				Kind:     "run-epic",
 				Status:   storage.RunStatusRunning,
 				PID:      os.Getpid(),
-				RepoPath: proj.Path,
+				RepoPath: workDir,
 				Started:  time.Now().UTC().Format(time.RFC3339),
 				LogPath:  storage.ExecutorLogPath(stateDir, tracker.Meta.ID),
 			}
@@ -121,6 +162,15 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			}
 			_ = storage.WriteRunState(stateDir, run)
 
+			// Journal: durable cross-run history (retro feedstock). Start line now;
+			// end line with per-sub outcomes after the loop. Best-effort like the
+			// run-state writes above.
+			epicStart := time.Now()
+			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
+				Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID,
+				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Branch: epicBranch,
+			})
+
 			// ID -> sub for the dependency gate. Pointers are shared with the loop,
 			// so statuses mutated by driveSub are visible to later subs' gates.
 			byID := make(map[string]*storage.Task, len(subs))
@@ -129,33 +179,19 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			}
 
 			var outcomes []subOutcome
+			subDurations := map[string]int{} // sub id -> driveSub wall-clock seconds
 			for _, sub := range subs {
-				// Re-entrant: skip already-finished subs; only pick up ready ones.
-				if sub.Meta.Status == doneStatus || sub.Meta.Status == storage.StatusDone {
-					oc := subOutcome{sub.Meta.ID, "skipped", "already " + string(sub.Meta.Status)}
+				// Decide, without spending a worker, whether this sub runs. Covers
+				// the re-entrant done skip, the manual gate, the not-ready skip, and
+				// the depends_on gate (see classifySub).
+				oc, drive, announce := classifySub(sub, byID, startStatus, doneStatus)
+				if !drive {
 					outcomes = append(outcomes, oc)
 					updateSubRun(run, oc.id, oc.result, oc.note)
 					_ = storage.WriteRunState(stateDir, run)
-					continue
-				}
-				if sub.Meta.Status != startStatus {
-					oc := subOutcome{sub.Meta.ID, "skipped", "not ready (status " + string(sub.Meta.Status) + ")"}
-					outcomes = append(outcomes, oc)
-					updateSubRun(run, oc.id, oc.result, oc.note)
-					_ = storage.WriteRunState(stateDir, run)
-					continue
-				}
-				// Dependency gate: an unsatisfied depends_on parks the sub as
-				// skipped WITHOUT spawning a doomed worker. The sub stays on its
-				// ready status (not moved to waiting) - nothing is wrong with it,
-				// it's just not its turn - so a later re-run picks it up
-				// automatically once the dependency merges.
-				if reason := unmetDeps(sub, byID, doneStatus); reason != "" {
-					oc := subOutcome{sub.Meta.ID, "skipped", reason}
-					outcomes = append(outcomes, oc)
-					updateSubRun(run, oc.id, oc.result, oc.note)
-					_ = storage.WriteRunState(stateDir, run)
-					fmt.Fprintf(os.Stderr, "pm run-epic: %s skipped - %s\n", sub.Meta.ID, reason)
+					if announce != "" {
+						fmt.Fprintf(os.Stderr, "pm run-epic: %s\n", announce)
+					}
 					continue
 				}
 
@@ -163,7 +199,9 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				updateSubRun(run, sub.Meta.ID, storage.RunStatusRunning, "")
 				_ = storage.WriteRunState(stateDir, run)
 
-				oc := driveSub(store, proj, slug, tracker, sub, epicBranch, doneStatus, opts, run)
+				subStart := time.Now()
+				oc = driveSub(store, workDir, slug, tracker, sub, epicBranch, doneStatus, opts, run, additional)
+				subDurations[oc.id] = int(time.Since(subStart).Seconds())
 				outcomes = append(outcomes, oc)
 
 				run.CurrentSub = ""
@@ -175,16 +213,24 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			run.Status = storage.RunStatusDone
 			_ = storage.WriteRunState(stateDir, run)
 
-			// Leave the user on the integration branch with the accumulated work.
-			// Best-effort: the branch already exists (created above) and any real
-			// checkout failure surfaced earlier; a stray here only affects which
-			// branch is checked out at exit.
-			_ = gitEnsureBranch(proj.Path, epicBranch, "")
+			// Journal end line: the run's durable record (outcome + duration per sub).
+			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
+				Event: storage.JournalEventEnd, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID,
+				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Branch: epicBranch,
+				Status: storage.RunStatusDone, DurationS: int(time.Since(epicStart).Seconds()),
+				Subs: journalSubs(outcomes, subDurations, run),
+			})
+
+			// Leave the worktree (or main checkout) on the integration branch with
+			// the accumulated work. Best-effort: the branch already exists (created
+			// above) and any real checkout failure surfaced earlier; a stray here
+			// only affects which branch is checked out at exit.
+			_ = gitEnsureBranch(workDir, epicBranch, "")
 
 			printEpicSummary(tracker, epicBranch, outcomes)
 
 			if !noPR && anyMerged(outcomes) {
-				openEpicPR(proj.Path, epicBranch, tracker)
+				openEpicPR(workDir, epicBranch, tracker)
 			}
 			fmt.Fprintf(os.Stderr, "\nThe epic->main PR and closing %s stay human-gated - review the integration branch when convenient.\n", tracker.Meta.ID)
 			return nil
@@ -195,12 +241,40 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 120, "max agent turns per worker")
 	cmd.Flags().BoolVar(&yolo, "yolo", false, "bypass all permission checks in the workers")
 	cmd.Flags().DurationVar(&timeout, "timeout", 45*time.Minute, "max wall-clock time per worker")
-	cmd.Flags().StringVar(&base, "base", "main", "base branch the integration branch is created from")
+	cmd.Flags().StringVar(&base, "base", "", "base branch the integration branch forks from (default: with --additional executor.base_branch, else main)")
 	cmd.Flags().BoolVar(&noPR, "no-pr", false, "do not open the final epic->main draft PR")
 	cmd.Flags().BoolVar(&allowDirty, "allow-dirty", false, "skip the clean-working-tree precondition")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the plan (subs, branches, readiness) without running anything")
+	cmd.Flags().BoolVar(&additional, "additional", false, "run the whole epic in the isolated 'additional' worktree instead of the main checkout; requires executor.additional_worktree in project.yaml")
 
 	return cmd
+}
+
+// classifySub decides what happens to a sub BEFORE any worker is spawned. It is
+// pure (never mutates the sub) so both the manager loop and tests can rely on
+// it. It returns the recorded outcome, drive=true only when the sub should be
+// handed to driveSub, and an optional stderr line to announce a skip.
+//
+// Precedence: a finished sub is a re-entrant skip; a manual sub is a PERMANENT
+// human-only gate (no worker, status untouched, re-skipped forever until the
+// human moves it to done - distinct "manual" outcome, not "skipped"); a
+// non-ready sub is skipped quietly; an unmet depends_on parks the sub without a
+// worker but leaves it on its ready status so a later re-run picks it up.
+func classifySub(sub *storage.Task, byID map[string]*storage.Task, startStatus, doneStatus storage.TaskStatus) (oc subOutcome, drive bool, announce string) {
+	if sub.Meta.Status == doneStatus || sub.Meta.Status == storage.StatusDone {
+		return subOutcome{sub.Meta.ID, "skipped", "already " + string(sub.Meta.Status)}, false, ""
+	}
+	if sub.Meta.Mode == "manual" {
+		return subOutcome{sub.Meta.ID, "manual", "manual sub - run by hand, move to " + string(doneStatus) + " when done"},
+			false, sub.Meta.ID + " skipped - manual sub (human-only)"
+	}
+	if sub.Meta.Status != startStatus {
+		return subOutcome{sub.Meta.ID, "skipped", "not ready (status " + string(sub.Meta.Status) + ")"}, false, ""
+	}
+	if reason := unmetDeps(sub, byID, doneStatus); reason != "" {
+		return subOutcome{sub.Meta.ID, "skipped", reason}, false, sub.Meta.ID + " skipped - " + reason
+	}
+	return subOutcome{id: sub.Meta.ID}, true, ""
 }
 
 // unmetDeps returns a human reason if any of sub's depends_on entries is not yet
@@ -259,8 +333,8 @@ func logIfErr(context string, err error) {
 // driveSub runs one ready sub: branch off the integration branch, run the
 // worker, and on verify-green merge back -> done status. Blocked/failed/conflict
 // subs are parked (status + reason in pm) and the manager moves on.
-func driveSub(store storage.TaskStore, proj *storage.Project, slug string, tracker, sub *storage.Task, epicBranch string, doneStatus storage.TaskStatus, opts workOptions, run *storage.RunState) subOutcome {
-	dir := proj.Path
+func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *storage.Task, epicBranch string, doneStatus storage.TaskStatus, opts workOptions, run *storage.RunState, worktree bool) subOutcome {
+	dir := workDir // worktree in worktree mode, else the main checkout
 	branch := resolveWorkBranch(sub)
 
 	// Branch the sub off the current integration branch (which already carries
@@ -268,7 +342,15 @@ func driveSub(store storage.TaskStore, proj *storage.Project, slug string, track
 	if err := gitEnsureBranch(dir, epicBranch, ""); err != nil {
 		return subOutcome{sub.Meta.ID, "failed", "checkout integration: " + err.Error()}
 	}
-	if err := gitEnsureBranch(dir, branch, epicBranch); err != nil {
+	// On the reused "additional" worktree, force a FRESH feat branch from the
+	// integration tip (wiping any leftovers), so a re-run after a kill doesn't
+	// resurrect the previous partial branch. On the main checkout keep the
+	// create-or-continue behaviour.
+	newBranch := gitEnsureBranch
+	if worktree {
+		newBranch = gitFreshBranch
+	}
+	if err := newBranch(dir, branch, epicBranch); err != nil {
 		return subOutcome{sub.Meta.ID, "failed", "create branch: " + err.Error()}
 	}
 
@@ -342,6 +424,24 @@ func updateSubRun(run *storage.RunState, id, status, note string) {
 		}
 	}
 	run.Subs = append(run.Subs, storage.SubRun{ID: id, Status: status, Note: note})
+}
+
+// journalSubs converts the manager's outcomes into journal sub records,
+// attaching each sub's driveSub wall-clock and worker session (from the
+// run-state, which driveSub filled in as it went).
+func journalSubs(outcomes []subOutcome, durations map[string]int, run *storage.RunState) []storage.JournalSub {
+	sessions := make(map[string]string, len(run.Subs))
+	for _, s := range run.Subs {
+		sessions[s.ID] = s.Session
+	}
+	out := make([]storage.JournalSub, 0, len(outcomes))
+	for _, o := range outcomes {
+		out = append(out, storage.JournalSub{
+			ID: o.id, Result: o.result, Note: o.note,
+			DurationS: durations[o.id], Session: sessions[o.id],
+		})
+	}
+	return out
 }
 
 func briefReason(res *workerResult) string {
@@ -459,21 +559,27 @@ func openEpicPR(dir, epicBranch string, tracker *storage.Task) {
 	}
 }
 
-func printEpicPlan(tracker *storage.Task, epicBranch, base string, startStatus, doneStatus storage.TaskStatus, subs []*storage.Task) {
-	fmt.Printf("# pm run-epic (dry-run)\ntracker: %s  %s\nintegration branch: %s (off %s)\nready status: %s -> done status: %s\n\nsubs (in Order):\n",
-		tracker.Meta.ID, tracker.Meta.Title, epicBranch, base, startStatus, doneStatus)
+func printEpicPlan(tracker *storage.Task, epicBranch, base string, startStatus, doneStatus storage.TaskStatus, subs []*storage.Task, additional bool, workDir string) {
+	runLine := "run: DEFAULT (main checkout, clean-tree required)"
+	if additional {
+		runLine = "run: ADDITIONAL worktree " + workDir + " (isolated branch/port/sim; main checkout untouched)"
+	}
+	fmt.Printf("# pm run-epic (dry-run)\ntracker: %s  %s\n%s\nintegration branch: %s (off %s)\nready status: %s -> done status: %s\n\nsubs (in Order):\n",
+		tracker.Meta.ID, tracker.Meta.Title, runLine, epicBranch, base, startStatus, doneStatus)
 	for _, s := range subs {
 		ready := "skip"
-		if s.Meta.Status == startStatus {
-			ready = "READY"
-		} else if s.Meta.Status == doneStatus || s.Meta.Status == storage.StatusDone {
+		if s.Meta.Status == doneStatus || s.Meta.Status == storage.StatusDone {
 			ready = "done"
+		} else if s.Meta.Mode == "manual" {
+			ready = "MANUAL"
+		} else if s.Meta.Status == startStatus {
+			ready = "READY"
 		}
 		dep := ""
 		if len(s.Meta.DependsOn) > 0 {
 			dep = "  depends_on=" + strings.Join(s.Meta.DependsOn, ",")
 		}
-		fmt.Printf("  [%-5s] %-14s %-8s order=%d  -> feat/%s%s\n", ready, s.Meta.ID, s.Meta.Status, s.Meta.Order, storage.Slugify(s.Meta.Title), dep)
+		fmt.Printf("  [%-6s] %-14s %-8s order=%d  -> feat/%s%s\n", ready, s.Meta.ID, s.Meta.Status, s.Meta.Order, storage.Slugify(s.Meta.Title), dep)
 	}
 }
 
