@@ -126,10 +126,12 @@ func (m *Model) renderExecutorContent() {
 	cur := m.executorSessions[m.executorSessionIdx]
 	// Transcripts are keyed by the worker cwd (the git repo), not the pm data dir.
 	repoDir := ""
+	configDir := ""
 	if m.executorRun != nil {
 		repoDir = m.executorRun.RepoPath
+		configDir = m.claudeConfigDir(m.executorRun.Project)
 	}
-	path := resolveSessionPath(repoDir, cur.session)
+	path := resolveSessionPath(repoDir, cur.session, configDir)
 	if path == "" {
 		m.executorViewport.SetContent(helpStyle.Render("\n  Waiting for the worker transcript...\n  session " + cur.session))
 		return

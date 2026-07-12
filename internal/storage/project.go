@@ -2,6 +2,8 @@ package storage
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -20,6 +22,36 @@ type Project struct {
 	Notes    string            `yaml:"notes,omitempty"`
 	Archived bool              `yaml:"archived,omitempty"`
 	Executor *Executor         `yaml:"executor,omitempty"`
+	// ClaudeConfigDir overrides the Claude Code config dir for this project
+	// (the dir CLAUDE_CONFIG_DIR points at - holds projects/, credentials, MCP).
+	// Empty = the default ~/.claude. Set it when a project runs claude under a
+	// separate account/config (e.g. a company Team account in ~/.claude-alt).
+	// "~" is expanded. See ResolveClaudeConfigDir.
+	ClaudeConfigDir string `yaml:"claude_config_dir,omitempty"`
+}
+
+// DefaultClaudeConfigDir returns the default Claude Code config dir (~/.claude),
+// honoring the CLAUDE_CONFIG_DIR env var if set.
+func DefaultClaudeConfigDir() string {
+	if env := os.Getenv("CLAUDE_CONFIG_DIR"); env != "" {
+		return env
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude")
+}
+
+// ResolveClaudeConfigDir returns the absolute Claude config dir for this project:
+// the explicit claude_config_dir (with "~" expanded) if set, else the default.
+func (p *Project) ResolveClaudeConfigDir() string {
+	if p == nil || p.ClaudeConfigDir == "" {
+		return DefaultClaudeConfigDir()
+	}
+	dir := p.ClaudeConfigDir
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, strings.TrimPrefix(dir, "~"))
+	}
+	return dir
 }
 
 func (p *Project) GetStatuses() []TaskStatus {

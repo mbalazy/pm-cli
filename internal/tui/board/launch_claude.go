@@ -35,6 +35,7 @@ func (m Model) launchProjectClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	configDir := proj.ResolveClaudeConfigDir()
 	sessionID := generateSessionID()
 
 	switch kind {
@@ -48,6 +49,9 @@ func (m Model) launchProjectClaude(kind string) (tea.Model, tea.Cmd) {
 		if projDir != "" {
 			c.Dir = projDir
 		}
+		if env := claudeLaunchEnv(configDir); env != nil {
+			c.Env = env
+		}
 		origWin := tmuxGetWindowName()
 		tmuxRenameWindow(tmuxWindowName("cc", slug, sessionID))
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
@@ -57,6 +61,7 @@ func (m Model) launchProjectClaude(kind string) (tea.Model, tea.Cmd) {
 
 	case "tmux":
 		withCd := func(cmd string) string {
+			cmd = claudeEnvPrefix(configDir) + cmd
 			if projDir != "" {
 				return fmt.Sprintf("cd %s && %s", shellQuote(projDir), cmd)
 			}
@@ -82,7 +87,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		return m.launchProjectClaude(kind)
 	}
 
-	t := m.selectedTask()
+	t := m.menuTask()
 	if t == nil {
 		return m, nil
 	}
@@ -101,8 +106,12 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Resolve the Claude config dir for this project (default ~/.claude unless the
+	// project sets claude_config_dir, e.g. a company account in ~/.claude-alt).
+	configDir := m.claudeConfigDir(t.Project)
+
 	// Check if the session lives in a worktree. Claude Code stores conversations
-	// in ~/.claude/projects/<path-hash>/ where path-hash is derived from cwd.
+	// in <config-dir>/projects/<path-hash>/ where path-hash is derived from cwd.
 	// When a session was created inside a worktree, we need to resume from that
 	// worktree dir so CC finds the conversation.
 	var worktreeDir string
@@ -113,18 +122,21 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 			sessionID = lastSession(t)
 		}
 		if projDir != "" {
-			worktreeDir = findWorktreeForSession(projDir, sessionID)
+			worktreeDir = findWorktreeForSession(projDir, sessionID, configDir)
 		}
 		// Fallback: if session not found via projDir (or projDir is empty),
 		// scan all CC project dirs globally.
-		if worktreeDir == "" && resolveSessionPath(projDir, sessionID) == "" {
-			sessionDir = findSessionDirGlobal(sessionID, m.store)
+		if worktreeDir == "" && resolveSessionPath(projDir, sessionID, configDir) == "" {
+			sessionDir = findSessionDirGlobal(sessionID, m.store, configDir)
 		}
 	}
 
 	setDir := func(c *exec.Cmd) {
 		if projDir != "" {
 			c.Dir = projDir
+		}
+		if env := claudeLaunchEnv(configDir); env != nil {
+			c.Env = env
 		}
 	}
 
@@ -145,9 +157,13 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		if d := resumeDir(); d != "" {
 			c.Dir = d
 		}
+		if env := claudeLaunchEnv(configDir); env != nil {
+			c.Env = env
+		}
 	}
 
 	withCd := func(cmd string) string {
+		cmd = claudeEnvPrefix(configDir) + cmd
 		if projDir != "" {
 			return fmt.Sprintf("cd %s && %s", shellQuote(projDir), cmd)
 		}
@@ -155,6 +171,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	}
 
 	withResumeCd := func(cmd string) string {
+		cmd = claudeEnvPrefix(configDir) + cmd
 		if d := resumeDir(); d != "" {
 			return fmt.Sprintf("cd %s && %s", shellQuote(d), cmd)
 		}

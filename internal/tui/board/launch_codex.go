@@ -102,7 +102,7 @@ func (m Model) launchCodex(kind string) (tea.Model, tea.Cmd) {
 		return m.launchProjectCodex(kind)
 	}
 
-	t := m.selectedTask()
+	t := m.menuTask()
 	if t == nil {
 		return m, nil
 	}

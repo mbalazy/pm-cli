@@ -11,6 +11,9 @@ func TestEncodeProjectPath(t *testing.T) {
 		{"/Users/alice/.config/nvim", "-Users-mart--config-nvim"},
 		{"/Users/alice/repos/atlas", "-Users-mart-repos-atlas"},
 		{"/Users/alice/repos/atlas/atlas-app", "-Users-mart-repos-atlas-atlas-app"},
+		// Dot in a path segment must map to "-" too (CC's real encoding).
+		{"/Users/alice/repos/orbit/app.orbit", "-Users-mart-repos-orbit-app-orbit"},
+		{"/Users/alice/.claude/pm-cli/sub.dir", "-Users-mart--claude-pm-cli-sub-dir"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
@@ -19,6 +22,17 @@ func TestEncodeProjectPath(t *testing.T) {
 				t.Errorf("encodeProjectPath(%q) = %q, want %q", tt.path, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDetectSessionPrefersEnv(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "env-authoritative-uuid")
+	got, err := detectSession()
+	if err != nil {
+		t.Fatalf("detectSession returned error: %v", err)
+	}
+	if got != "env-authoritative-uuid" {
+		t.Errorf("detectSession() = %q, want env-authoritative-uuid", got)
 	}
 }
 

@@ -54,21 +54,65 @@ type sessionsIndex struct {
 	Entries []sessionIndexEntry `json:"entries"`
 }
 
-// ccProjectDirs returns CC project directories to search for session data.
-// Includes main project dir and all worktree dirs.
-func ccProjectDirs(projDir string) []string {
-	homeDir, _ := os.UserHomeDir()
-	ccProjectsDir := filepath.Join(homeDir, ".claude", "projects")
+// claudeConfigDirs returns the Claude config dirs to search, project-configured
+// first then the default ~/.claude (deduped). An empty configDir means "default
+// only" - so passing "" is always safe and never regresses default projects.
+func claudeConfigDirs(configDir string) []string {
+	def := storage.DefaultClaudeConfigDir()
+	if configDir == "" || configDir == def {
+		return []string{def}
+	}
+	return []string{configDir, def}
+}
 
-	var dirs []string
-	dirs = append(dirs, filepath.Join(ccProjectsDir, pathToCCProject(projDir)))
+// claudeConfigDir resolves the Claude config dir for a pm project slug, falling
+// back to the default when the project is unknown or has no override.
+func (m *Model) claudeConfigDir(projectSlug string) string {
+	if proj, err := m.store.GetProject(projectSlug); err == nil && proj != nil {
+		return proj.ResolveClaudeConfigDir()
+	}
+	return storage.DefaultClaudeConfigDir()
+}
+
+// claudeLaunchEnv returns the environment for a spawned claude process,
+// injecting CLAUDE_CONFIG_DIR when the project uses a non-default config dir.
+// Returns nil (= inherit parent env unchanged) for the default config dir, so
+// default projects are spawned exactly as before.
+func claudeLaunchEnv(configDir string) []string {
+	if configDir == "" || configDir == storage.DefaultClaudeConfigDir() {
+		return nil
+	}
+	return append(os.Environ(), "CLAUDE_CONFIG_DIR="+configDir)
+}
+
+// claudeEnvPrefix returns a shell prefix ("CLAUDE_CONFIG_DIR=<dir> ") for tmux /
+// shell-string launches, or "" for the default config dir.
+func claudeEnvPrefix(configDir string) string {
+	if configDir == "" || configDir == storage.DefaultClaudeConfigDir() {
+		return ""
+	}
+	return "CLAUDE_CONFIG_DIR=" + shellQuote(configDir) + " "
+}
+
+// ccProjectDirs returns CC project directories to search for session data.
+// Includes main project dir and all worktree dirs, across each candidate config
+// dir (project-configured + default).
+func ccProjectDirs(projDir, configDir string) []string {
+	repoPaths := []string{projDir}
 	wtBase := filepath.Join(projDir, ".claude", "worktrees")
 	if entries, err := os.ReadDir(wtBase); err == nil {
 		for _, e := range entries {
 			if e.IsDir() {
-				wtPath := filepath.Join(wtBase, e.Name())
-				dirs = append(dirs, filepath.Join(ccProjectsDir, pathToCCProject(wtPath)))
+				repoPaths = append(repoPaths, filepath.Join(wtBase, e.Name()))
 			}
+		}
+	}
+
+	var dirs []string
+	for _, cfg := range claudeConfigDirs(configDir) {
+		ccProjectsDir := filepath.Join(cfg, "projects")
+		for _, rp := range repoPaths {
+			dirs = append(dirs, filepath.Join(ccProjectsDir, pathToCCProject(rp)))
 		}
 	}
 	return dirs
@@ -76,11 +120,11 @@ func ccProjectDirs(projDir string) []string {
 
 // resolveSessionPath returns the absolute path to the session JSONL file,
 // or empty string if the file cannot be found.
-func resolveSessionPath(projDir, sessionID string) string {
+func resolveSessionPath(projDir, sessionID, configDir string) string {
 	if projDir == "" || sessionID == "" {
 		return ""
 	}
-	for _, dir := range ccProjectDirs(projDir) {
+	for _, dir := range ccProjectDirs(projDir, configDir) {
 		p := filepath.Join(dir, sessionID+".jsonl")
 		if _, err := os.Stat(p); err == nil {
 			return p
@@ -91,12 +135,12 @@ func resolveSessionPath(projDir, sessionID string) string {
 
 // loadSessionMeta looks up session metadata from Claude Code's sessions-index.json.
 // Falls back to parsing the JSONL file directly if not found in index.
-func loadSessionMeta(projDir, sessionID string) *sessionIndexEntry {
+func loadSessionMeta(projDir, sessionID, configDir string) *sessionIndexEntry {
 	if projDir == "" || sessionID == "" {
 		return nil
 	}
 
-	ccDirs := ccProjectDirs(projDir)
+	ccDirs := ccProjectDirs(projDir, configDir)
 
 	// Try sessions-index.json first (fast path)
 	for _, dir := range ccDirs {
@@ -161,7 +205,7 @@ func loadSessionMeta(projDir, sessionID string) *sessionIndexEntry {
 // if Claude Code has a conversation file for the given session ID stored
 // under a project directory corresponding to that worktree path.
 // Returns the worktree absolute path if found, empty string otherwise.
-func findWorktreeForSession(projDir, sessionID string) string {
+func findWorktreeForSession(projDir, sessionID, configDir string) string {
 	if sessionID == "" {
 		return ""
 	}
@@ -170,19 +214,20 @@ func findWorktreeForSession(projDir, sessionID string) string {
 	if err != nil {
 		return ""
 	}
-	homeDir, _ := os.UserHomeDir()
-	ccProjectsDir := filepath.Join(homeDir, ".claude", "projects")
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		wtPath := filepath.Join(wtBase, e.Name())
-		// Claude Code maps absolute path to project dir name by replacing
-		// "/" with "-" and stripping "." from directory names.
-		ccDirName := pathToCCProject(wtPath)
-		sessionFile := filepath.Join(ccProjectsDir, ccDirName, sessionID+".jsonl")
-		if _, err := os.Stat(sessionFile); err == nil {
-			return wtPath
+	for _, cfg := range claudeConfigDirs(configDir) {
+		ccProjectsDir := filepath.Join(cfg, "projects")
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			wtPath := filepath.Join(wtBase, e.Name())
+			// Claude Code maps absolute path to project dir name by replacing
+			// "/" with "-" and stripping "." from directory names.
+			ccDirName := pathToCCProject(wtPath)
+			sessionFile := filepath.Join(ccProjectsDir, ccDirName, sessionID+".jsonl")
+			if _, err := os.Stat(sessionFile); err == nil {
+				return wtPath
+			}
 		}
 	}
 	return ""
@@ -193,26 +238,31 @@ func findWorktreeForSession(projDir, sessionID string) string {
 // cwd to find the session, or empty string if not found.
 // Uses forward-matching: encodes candidate paths and compares against the CC dir
 // name (decoding is ambiguous because pathToCCProject is lossy).
-func findSessionDirGlobal(sessionID string, store storage.TaskStore) string {
+func findSessionDirGlobal(sessionID string, store storage.TaskStore, configDir string) string {
 	if sessionID == "" {
 		return ""
 	}
 	homeDir, _ := os.UserHomeDir()
-	ccProjectsDir := filepath.Join(homeDir, ".claude", "projects")
 
-	// Find which CC project dir has the session file
+	// Find which CC project dir (across candidate config dirs) has the session file.
 	var ccDirName string
-	entries, err := os.ReadDir(ccProjectsDir)
-	if err != nil {
-		return ""
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
+	for _, cfg := range claudeConfigDirs(configDir) {
+		ccProjectsDir := filepath.Join(cfg, "projects")
+		entries, err := os.ReadDir(ccProjectsDir)
+		if err != nil {
 			continue
 		}
-		p := filepath.Join(ccProjectsDir, e.Name(), sessionID+".jsonl")
-		if _, err := os.Stat(p); err == nil {
-			ccDirName = e.Name()
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			p := filepath.Join(ccProjectsDir, e.Name(), sessionID+".jsonl")
+			if _, err := os.Stat(p); err == nil {
+				ccDirName = e.Name()
+				break
+			}
+		}
+		if ccDirName != "" {
 			break
 		}
 	}

@@ -1,9 +1,53 @@
 package storage
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestResolveClaudeConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "") // ignore any ambient override
+	home, _ := os.UserHomeDir()
+	def := filepath.Join(home, ".claude")
+
+	t.Run("empty -> default ~/.claude", func(t *testing.T) {
+		p := &Project{}
+		if got := p.ResolveClaudeConfigDir(); got != def {
+			t.Errorf("got %q, want %q", got, def)
+		}
+	})
+
+	t.Run("nil project -> default", func(t *testing.T) {
+		var p *Project
+		if got := p.ResolveClaudeConfigDir(); got != def {
+			t.Errorf("got %q, want %q", got, def)
+		}
+	})
+
+	t.Run("explicit absolute path", func(t *testing.T) {
+		p := &Project{ClaudeConfigDir: "/opt/claude-alt"}
+		if got := p.ResolveClaudeConfigDir(); got != "/opt/claude-alt" {
+			t.Errorf("got %q, want /opt/claude-alt", got)
+		}
+	})
+
+	t.Run("tilde expansion", func(t *testing.T) {
+		p := &Project{ClaudeConfigDir: "~/.claude-alt"}
+		want := filepath.Join(home, ".claude-alt")
+		if got := p.ResolveClaudeConfigDir(); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("CLAUDE_CONFIG_DIR env drives default", func(t *testing.T) {
+		t.Setenv("CLAUDE_CONFIG_DIR", "/env/cfg")
+		p := &Project{}
+		if got := p.ResolveClaudeConfigDir(); got != "/env/cfg" {
+			t.Errorf("got %q, want /env/cfg", got)
+		}
+	})
+}
 
 func TestProjectGetStatuses(t *testing.T) {
 	t.Run("custom statuses", func(t *testing.T) {

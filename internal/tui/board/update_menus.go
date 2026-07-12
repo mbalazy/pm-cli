@@ -130,15 +130,16 @@ func (m *Model) openSessionMenu(t *storage.Task) {
 	m.sessionMenuItems = nil
 	m.sessionCursor = 0
 
-	// Resolve project dir for CC metadata lookup
+	// Resolve project dir + config dir for CC metadata lookup
 	var projDir string
 	if proj, err := m.store.GetProject(t.Project); err == nil && proj.Path != "" {
 		projDir = proj.Path
 	}
+	configDir := m.claudeConfigDir(t.Project)
 
 	enrichItem := func(sid string, isLatest bool) sessionMenuItem {
 		item := sessionMenuItem{sessionID: sid, isLatest: isLatest}
-		if meta := loadSessionMeta(projDir, sid); meta != nil {
+		if meta := loadSessionMeta(projDir, sid, configDir); meta != nil {
 			item.summary = meta.Summary
 			item.msgCount = meta.MessageCount
 			item.branch = meta.GitBranch
@@ -228,7 +229,7 @@ func (m Model) updateSessionMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if proj, err := m.store.GetProject(t.Project); err == nil && proj.Path != "" {
 					projDir = proj.Path
 				}
-				if p := resolveSessionPath(projDir, sid); p != "" {
+				if p := resolveSessionPath(projDir, sid, m.claudeConfigDir(t.Project)); p != "" {
 					m.yankItems = append(m.yankItems, yankItem{"path", p})
 				}
 			}
