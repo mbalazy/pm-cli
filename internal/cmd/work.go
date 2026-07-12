@@ -56,6 +56,8 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 		yolo       bool
 		allowDirty bool
 		timeout    time.Duration
+		base       string
+		additional bool
 	)
 
 	cmd := &cobra.Command{
@@ -79,6 +81,8 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 				yolo:       yolo,
 				allowDirty: allowDirty,
 				timeout:    timeout,
+				base:       base,
+				additional: additional,
 			}
 
 			plan, err := planWork(store, task, slug, opts)
@@ -87,11 +91,31 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 			}
 
 			if dryRun {
-				fmt.Printf("# pm work (dry-run)\nproject: %s\ntask: %s\nbranch: %s\nmode: %s\ncwd: %s\n\n",
-					slug, task.Meta.ID, plan.branch, modeLabel(opts.standalone), plan.proj.Path)
-				fmt.Printf("$ claude %s\n\n", strings.Join(quoteArgs(plan.cmdArgs), " "))
+				fmt.Printf("# pm work (dry-run)\nproject: %s\ntask: %s\nbranch: %s\nmode: %s\ncwd: %s\n",
+					slug, task.Meta.ID, plan.branch, modeLabel(opts.standalone), plan.workDir)
+				if plan.worktree {
+					fmt.Printf("run: ADDITIONAL worktree %s (reused if present; lock: %s)\nfresh branch base: %s\n",
+						plan.workDir, ".pm-executor.lock", plan.base)
+					if len(plan.env) > 0 {
+						fmt.Printf("inject env: %s\n", strings.Join(plan.env, " "))
+					}
+				} else {
+					fmt.Printf("run: DEFAULT (main checkout, clean-tree required)\n")
+				}
+				fmt.Printf("\n$ claude %s\n\n", strings.Join(quoteArgs(plan.cmdArgs), " "))
 				fmt.Printf("=== SYSTEM PROMPT ===\n%s\n\n=== PROMPT ===\n%s\n", plan.sysPrompt, plan.prompt)
 				return nil
+			}
+
+			// Worktree mode: ensure + seed + lock the single "additional" worktree.
+			// A busy worktree refuses here with a clear message; the lock is released
+			// by the deferred closure on every exit path (success, fail, panic).
+			if plan.worktree {
+				release, err := prepareWorktree(plan.proj, plan.workDir, task.Meta.ID, "work")
+				if err != nil {
+					return err
+				}
+				defer release()
 			}
 
 			res, err := executeWork(store, task, plan, opts)
@@ -112,6 +136,8 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 	cmd.Flags().BoolVar(&yolo, "yolo", false, "bypass all permission checks instead of the curated allowlist")
 	cmd.Flags().BoolVar(&allowDirty, "allow-dirty", false, "skip the clean-working-tree precondition (standalone)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 45*time.Minute, "max wall-clock time for the worker before it is killed")
+	cmd.Flags().StringVar(&base, "base", "", "with --additional: base the fresh task branch forks from (default: executor.base_branch, else the main checkout's current branch)")
+	cmd.Flags().BoolVar(&additional, "additional", false, "run in the isolated 'additional' worktree (own branch/port/sim) instead of the main checkout; requires executor.additional_worktree in project.yaml")
 
 	return cmd
 }
@@ -171,6 +197,8 @@ type workOptions struct {
 	yolo       bool
 	allowDirty bool
 	timeout    time.Duration
+	base       string // with additional: base branch the fresh task branch forks from
+	additional bool   // opt in to the isolated "additional" worktree for THIS run
 }
 
 // workPlan is the resolved, ready-to-run worker invocation: the project, the
@@ -182,6 +210,18 @@ type workPlan struct {
 	prompt    string
 	sysPrompt string
 	cmdArgs   []string
+
+	// Worktree fields (populated only when THIS run opted in via --additional).
+	// worktree = this run uses the isolated "additional" worktree. workDir is the
+	// dir the worker runs in AND all git ops target: the "additional" worktree
+	// when opted in, else proj.Path (the main checkout). base is the resolved
+	// branch the fresh task branch forks from (precedence: --base >
+	// executor.base_branch > main checkout's current branch). env is the extra
+	// KEY=VALUE pairs injected into the worker.
+	workDir  string
+	worktree bool
+	base     string
+	env      []string
 }
 
 // planWork validates preconditions and assembles everything needed to invoke a
@@ -217,21 +257,61 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 	sysPrompt := buildWorkerSystemPrompt(exec, opts.standalone)
 	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo)
 
-	return &workPlan{proj: proj, branch: branch, sessionID: sessionID, prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs}, nil
+	// The isolated "additional" worktree is opt-in PER RUN via --additional; the
+	// default is the main checkout (unchanged pre-worktree behaviour). No side
+	// effects here - the worktree is created + locked in prepareWorktree at run
+	// time (not on the dry-run path).
+	workDir := proj.Path
+	base := ""
+	env := []string(nil)
+	if opts.additional {
+		if !exec.AdditionalWorktree {
+			return nil, fmt.Errorf("--additional requested but project %s has no additional worktree configured - set `executor.additional_worktree: true` (+ worktree_path/base_branch/env) in project.yaml", slug)
+		}
+		workDir = resolveWorktreePath(proj, exec)
+		// Base precedence: --base > executor.base_branch > main checkout's current
+		// branch. Resolved here (a read, no side effect) so --dry-run shows it too.
+		cur, _ := gitCurrentBranch(proj.Path)
+		base = resolveWorktreeBase(opts.base, exec.BaseBranch, cur)
+		env = executorEnvSlice(exec)
+	}
+
+	return &workPlan{
+		proj: proj, branch: branch, sessionID: sessionID,
+		prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs,
+		workDir: workDir, worktree: opts.additional, base: base, env: env,
+	}, nil
 }
 
 // executeWork runs a planned worker and records the result into pm. In
 // standalone mode it owns the branch (clean-tree precondition + checkout); in
 // epic mode the manager has already checked out the branch.
 func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, opts workOptions) (*workerResult, error) {
+	// dir is the worker cwd and the target of every git op: the "additional"
+	// worktree in worktree mode, else the main checkout.
+	dir := plan.workDir
 	if opts.standalone {
-		if !opts.allowDirty {
-			if dirty, _ := gitDirty(plan.proj.Path); dirty {
-				return nil, fmt.Errorf("working tree at %s is dirty - commit/stash first or pass --allow-dirty", plan.proj.Path)
+		if plan.worktree {
+			// The "additional" worktree is reused across tasks. Give this task a
+			// FRESH branch forked from the resolved base branch's current tip, first
+			// wiping any leftovers (uncommitted or partially-committed work from a
+			// prior, possibly killed, run) so nothing bleeds into it. Ignored
+			// deps/configs survive. Base was resolved in planWork (--base >
+			// executor.base_branch > main checkout's current branch).
+			if err := gitFreshBranch(dir, plan.branch, plan.base); err != nil {
+				return nil, fmt.Errorf("prepare fresh branch %s (base %s): %w", plan.branch, plan.base, err)
 			}
-		}
-		if err := gitCheckoutBranch(plan.proj.Path, plan.branch); err != nil {
-			return nil, fmt.Errorf("prepare branch %s: %w", plan.branch, err)
+		} else {
+			// Non-worktree: the user's own checkout. Enforce the clean-tree
+			// precondition and continue/create the branch in place.
+			if !opts.allowDirty {
+				if dirty, _ := gitDirty(dir); dirty {
+					return nil, fmt.Errorf("working tree at %s is dirty - commit/stash first or pass --allow-dirty", dir)
+				}
+			}
+			if err := gitCheckoutBranch(dir, plan.branch); err != nil {
+				return nil, fmt.Errorf("prepare branch %s: %w", plan.branch, err)
+			}
 		}
 	}
 
@@ -249,7 +329,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			Kind:           "work",
 			Status:         storage.RunStatusRunning,
 			PID:            os.Getpid(),
-			RepoPath:       plan.proj.Path,
+			RepoPath:       dir,
 			Started:        time.Now().UTC().Format(time.RFC3339),
 			LogPath:        storage.ExecutorLogPath(stateDir, task.Meta.ID),
 			CurrentSub:     task.Meta.ID,
@@ -258,11 +338,18 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			Subs:           []storage.SubRun{{ID: task.Meta.ID, Status: storage.RunStatusRunning, Session: plan.sessionID}},
 		}
 		_ = storage.WriteRunState(stateDir, run)
+		// Journal start line (durable cross-run history; epic subs are journaled
+		// by the manager instead). Best-effort like the run-state writes.
+		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
+			Event: storage.JournalEventStart, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
+			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
+		})
 	}
 
 	fmt.Fprintf(os.Stderr, "pm work: launching headless worker for %s on %s (%s)...\n", task.Meta.ID, plan.branch, modeLabel(opts.standalone))
 
-	res, sessionID, err := runWorker(plan.proj.Path, plan.cmdArgs, opts.timeout)
+	workStart := time.Now()
+	res, sessionID, err := runWorker(dir, plan.cmdArgs, opts.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env)
 	if err != nil {
 		if run != nil {
 			run.Status = storage.RunStatusFailed
@@ -273,6 +360,12 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 				run.Subs[0].Note = err.Error()
 			}
 			_ = storage.WriteRunState(stateDir, run)
+			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
+				Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
+				PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
+				Status: storage.RunStatusFailed, DurationS: int(time.Since(workStart).Seconds()), Error: err.Error(),
+				Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: "failed", Note: err.Error(), DurationS: int(time.Since(workStart).Seconds()), Session: plan.sessionID}},
+			})
 		}
 		return nil, err
 	}
@@ -290,6 +383,12 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			run.Subs[0].Commits = res.Commits
 		}
 		_ = storage.WriteRunState(stateDir, run)
+		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
+			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
+			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
+			Status: storage.RunStatusDone, DurationS: int(time.Since(workStart).Seconds()),
+			Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: res.Status, Note: strings.TrimSpace(res.Summary), DurationS: int(time.Since(workStart).Seconds()), Session: sessionID}},
+		})
 	}
 	return res, nil
 }
@@ -342,13 +441,15 @@ const workerDisallowedTools = "Bash(git push --force:*) Bash(git push -f:*) Bash
 // runWorker invokes claude headless in dir under a wall-clock deadline, parses
 // the result envelope, and returns the worker result + the session id. A hung
 // claude is killed when the timeout elapses rather than blocking pm forever.
-func runWorker(dir string, args []string, timeout time.Duration) (*workerResult, string, error) {
+func runWorker(dir string, args []string, timeout time.Duration, configDir string, extraEnv []string) (*workerResult, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	c := exec.CommandContext(ctx, "claude", args...)
 	c.Dir = dir
-	c.Env = workerEnv()
+	// Project-defined env (e.g. Metro port, simulator UDID) is appended last so
+	// it wins over any inherited value. pm passes these through opaquely.
+	c.Env = append(workerEnv(configDir), extraEnv...)
 	c.Stderr = os.Stderr
 	out, err := c.Output()
 	if ctx.Err() == context.DeadlineExceeded {
@@ -369,14 +470,25 @@ func runWorker(dir string, args []string, timeout time.Duration) (*workerResult,
 // drained/disabled API balance fails every worker with exit 1. claude -p on the
 // subscription is supported within plan limits, which is the whole economic
 // premise of the executor.
-func workerEnv() []string {
+// workerEnv strips ANTHROPIC keys and, when the project uses a non-default
+// Claude config dir (configDir != ~/.claude), pins CLAUDE_CONFIG_DIR so the
+// worker authenticates with that project's account/config (e.g. a company Team
+// account in ~/.claude-alt) instead of the personal default.
+func workerEnv(configDir string) []string {
 	src := os.Environ()
-	out := make([]string, 0, len(src))
+	out := make([]string, 0, len(src)+1)
+	pinConfig := configDir != "" && configDir != storage.DefaultClaudeConfigDir()
 	for _, kv := range src {
 		if strings.HasPrefix(kv, "ANTHROPIC_API_KEY=") || strings.HasPrefix(kv, "ANTHROPIC_AUTH_TOKEN=") {
 			continue
 		}
+		if pinConfig && strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {
+			continue // replaced below
+		}
 		out = append(out, kv)
+	}
+	if pinConfig {
+		out = append(out, "CLAUDE_CONFIG_DIR="+configDir)
 	}
 	return out
 }

@@ -17,7 +17,7 @@ import (
 // executorPMArgs builds the `pm` argv for the executor launch: `work` for a leaf
 // task, `run-epic` for a tracker, plus optional --yolo / --dry-run. Pure so it
 // can be unit-tested without spawning a process.
-func executorPMArgs(t *storage.Task, isTracker, yolo, dryRun bool) []string {
+func executorPMArgs(t *storage.Task, isTracker, yolo, dryRun, additional bool) []string {
 	sub := "work"
 	if isTracker {
 		sub = "run-epic"
@@ -25,6 +25,9 @@ func executorPMArgs(t *storage.Task, isTracker, yolo, dryRun bool) []string {
 	args := []string{sub, t.Project, t.Meta.ID}
 	if yolo {
 		args = append(args, "--yolo")
+	}
+	if additional {
+		args = append(args, "--additional")
 	}
 	if dryRun {
 		args = append(args, "--dry-run")
@@ -49,15 +52,20 @@ const execPauseOnError = "; status=$?; if [ $status -ne 0 ]; then printf '\\n[pm
 const execPauseAlways = "; status=$?; printf '\\n[pm] executor exited (status %s). Press Enter to close...' \"$status\"; read _"
 
 // boardGitPreflight returns a human-readable reason the executor cannot run in
-// dir, or "" if the preconditions (git repo, clean tree) are satisfied.
-func boardGitPreflight(dir string) string {
+// dir, or "" if the preconditions are satisfied. dir must be a git repo; the
+// clean-tree check is only enforced when requireClean is true. In worktree mode
+// the executor runs in a separate "additional" worktree, so the user's main
+// checkout is allowed to be dirty (requireClean=false).
+func boardGitPreflight(dir string, requireClean bool) string {
 	out, err := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree").Output()
 	if err != nil || strings.TrimSpace(string(out)) != "true" {
 		return "not a git repo: " + dir
 	}
-	st, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
-	if err == nil && strings.TrimSpace(string(st)) != "" {
-		return "working tree dirty - commit or stash first"
+	if requireClean {
+		st, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+		if err == nil && strings.TrimSpace(string(st)) != "" {
+			return "working tree dirty - commit or stash first"
+		}
 	}
 	return ""
 }
@@ -87,12 +95,18 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 
 	isTracker := len(m.taskChildren(t)) > 0
 	dryRun := kind == "dry-run"
-	args := executorPMArgs(t, isTracker, m.claudeMenuSkipPerms, dryRun)
+	// The additional-worktree choice is per launch and only valid when the project
+	// has it configured (executorAdditionalAvail, set while building the menu).
+	additional := m.claudeMenuAdditional && m.executorAdditionalAvail
+	args := executorPMArgs(t, isTracker, m.claudeMenuSkipPerms, dryRun, additional)
 	winName := "pm:" + args[0] + ":" + t.Meta.ID
 
-	// Real runs (here/tmux) require a clean git repo; dry-run is side-effect-free.
+	// Real runs (here/tmux) require a git repo; a clean tree is only required in
+	// DEFAULT mode (the executor runs in the main checkout, old behaviour). With
+	// --additional the work is isolated in the worktree, so the main checkout may
+	// be dirty. Dry-run is side-effect-free.
 	if !dryRun {
-		if reason := boardGitPreflight(projDir); reason != "" {
+		if reason := boardGitPreflight(projDir, !additional); reason != "" {
 			m.toastMsg = "executor: " + reason
 			m.toastExpiry = time.Now().Add(15 * time.Second)
 			return m, nil

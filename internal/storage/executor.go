@@ -12,11 +12,30 @@ import (
 //
 // A project with NO executor block resolves to all-generic defaults (see
 // defaultExecutor): every phase falls back to the engine's built-in generic,
-// worktree is off, statuses are todo/doing/merged, fix_rounds is 3, gates are
+// additional_worktree is off, statuses are todo/doing/merged, fix_rounds is 3, gates are
 // human. The block is the ONLY project-specific piece of the engine.
 type Executor struct {
-	Enabled     bool                    `yaml:"enabled"`
-	Worktree    bool                    `yaml:"worktree"`               // DEFAULT false; opt-in for shared-cache toolchains
+	Enabled bool `yaml:"enabled"`
+	// AdditionalWorktree = the isolated "additional" worktree is CONFIGURED for
+	// this project (makes worktree_path/base_branch/env meaningful). It is a
+	// capability gate, NOT "always use it": a run only uses the worktree when it
+	// opts in per-run via --additional. DEFAULT false.
+	AdditionalWorktree bool `yaml:"additional_worktree"`
+	// WorktreePath is where the single "additional" worktree lives. Relative
+	// paths resolve against the repo dir (`../foo-additional` -> a sibling); "~"
+	// is expanded; empty defaults to "<repo>-additional". Only consulted when
+	// AdditionalWorktree is true. There is exactly ONE such worktree (not N slots).
+	WorktreePath string `yaml:"worktree_path,omitempty"`
+	// BaseBranch is the fixed branch each fresh task/epic branch forks from in
+	// additional-worktree mode, so a run never depends on whatever the user's main checkout
+	// happens to have checked out. Precedence: explicit --base flag > this >
+	// (pm work) the main checkout's current branch / (pm run-epic) "main".
+	BaseBranch string `yaml:"base_branch,omitempty"`
+	// Env is an opaque string->string map injected verbatim into the worker's
+	// environment when running in the worktree. pm does NOT interpret these -
+	// they carry project-specific knowledge (e.g. a Metro port, a simulator
+	// UDID) that stays out of pm and lives in project.yaml.
+	Env         map[string]string       `yaml:"env,omitempty"`
 	StartStatus string                  `yaml:"start_status,omitempty"` // sub status meaning "ready to pick up"
 	WipStatus   string                  `yaml:"wip_status,omitempty"`
 	DoneStatus  string                  `yaml:"done_status,omitempty"` // where a verified sub lands
@@ -139,19 +158,19 @@ func (b *PhaseBinding) UnmarshalYAML(node *yaml.Node) error {
 // executor block, and the baseline that an explicit block is overlaid onto.
 func defaultExecutor() Executor {
 	return Executor{
-		Enabled:     true,
-		Worktree:    false,
-		StartStatus: "todo",
-		WipStatus:   "doing",
-		DoneStatus:  "merged",
-		FixRounds:   3,
-		Gate:        Gate{PR: GateHuman, Merge: GateHuman},
+		Enabled:            true,
+		AdditionalWorktree: false,
+		StartStatus:        "todo",
+		WipStatus:          "doing",
+		DoneStatus:         "merged",
+		FixRounds:          3,
+		Gate:               Gate{PR: GateHuman, Merge: GateHuman},
 	}
 }
 
 // UnmarshalYAML overlays the YAML block onto defaultExecutor so that omitted
 // fields keep their defaults (e.g. fix_rounds stays 3, gates stay human,
-// worktree stays false) while present fields override. Phases stay as parsed;
+// additional_worktree stays false) while present fields override. Phases stay as parsed;
 // missing phases resolve to generic via Phase().
 func (e *Executor) UnmarshalYAML(node *yaml.Node) error {
 	type rawExecutor Executor

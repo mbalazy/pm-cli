@@ -29,6 +29,7 @@ func (m *Model) openExecutorMenu(t *storage.Task) {
 	m.claudeMenuCursor = 0
 	m.claudeMenuSkipPerms = false
 	m.launchAgent = launchAgentExecutor
+	m.claudeMenuAdditional = false
 	m.resumeOnly = false
 	m.forkMode = false
 	m.projectScopeLaunch = false
@@ -65,6 +66,18 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 		// Executor runs `pm work` (task) or `pm run-epic` (tracker). Long-running,
 		// so default to tmux when available. No worktree/resume/fork options.
 		m.executorIsTracker = len(m.taskChildren(t)) > 0
+		// The isolated "additional" worktree is only offered when the project has
+		// it configured (executor.additional_worktree). The user picks default vs
+		// additional per launch via the `#` toggle (never inferred).
+		m.executorAdditionalAvail = false
+		if t != nil && m.store != nil {
+			if proj, err := m.store.GetProject(t.Project); err == nil {
+				m.executorAdditionalAvail = proj.GetExecutor().AdditionalWorktree
+			}
+		}
+		if !m.executorAdditionalAvail {
+			m.claudeMenuAdditional = false
+		}
 		bgLabel := "Run task in background (watch in pm)"
 		runLabel := "Run task here (pm work)"
 		tmuxLabel := "Run task in tmux (pm work)"
@@ -168,6 +181,13 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	typed := msg.String()
 	if typed == "!" {
 		m.claudeMenuSkipPerms = !m.claudeMenuSkipPerms
+		return m, nil
+	}
+	// Toggle the isolated "additional" worktree (executor only, project-configured).
+	if typed == "#" {
+		if m.launchAgent == launchAgentExecutor && m.executorAdditionalAvail {
+			m.claudeMenuAdditional = !m.claudeMenuAdditional
+		}
 		return m, nil
 	}
 	if typed == "@" {

@@ -84,7 +84,7 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 // draftExecutor scans a project dir for skills/commands + stack and returns a
 // drafted executor profile plus human-readable detection notes.
 func draftExecutor(projectPath string) (*storage.Executor, []string) {
-	// Start from the engine defaults (enabled, worktree off, todo/doing/merged,
+	// Start from the engine defaults (enabled, additional_worktree off, todo/doing/merged,
 	// fix_rounds 3, human gates) so the drafted block is explicit and editable.
 	e := (&storage.Project{}).GetExecutor()
 	var notes []string

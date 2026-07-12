@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/mbalazy/pm/internal/storage"
 )
@@ -19,7 +18,8 @@ func worktreeName(t *storage.Task) string {
 }
 
 // copyWorktreeFiles pre-creates a git worktree (if needed) and copies all
-// untracked files from the main repo into the worktree.
+// untracked files from the main repo into the worktree. The copy itself is
+// shared with the executor via storage.CopyUntrackedFiles.
 func copyWorktreeFiles(projDir, wtName string) {
 	wtPath := filepath.Join(projDir, ".claude", "worktrees", wtName)
 
@@ -32,32 +32,5 @@ func copyWorktreeFiles(projDir, wtName string) {
 		}
 	}
 
-	// Find all untracked files (both ignored and non-ignored)
-	cmd := exec.Command("git", "ls-files", "--others")
-	cmd.Dir = projDir
-	out, err := cmd.Output()
-	if err != nil {
-		return
-	}
-
-	for _, rel := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if rel == "" {
-			continue
-		}
-		src := filepath.Join(projDir, rel)
-		dst := filepath.Join(wtPath, rel)
-
-		// Skip if destination already exists
-		if _, err := os.Stat(dst); err == nil {
-			continue
-		}
-
-		data, err := os.ReadFile(src)
-		if err != nil {
-			continue
-		}
-		info, _ := os.Stat(src)
-		os.MkdirAll(filepath.Dir(dst), 0755)
-		os.WriteFile(dst, data, info.Mode())
-	}
+	_ = storage.CopyUntrackedFiles(projDir, wtPath)
 }

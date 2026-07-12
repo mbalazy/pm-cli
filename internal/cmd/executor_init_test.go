@@ -76,8 +76,8 @@ func TestDetectVerifyCmd(t *testing.T) {
 func TestDraftExecutor(t *testing.T) {
 	t.Run("bare project -> all generic, no phases", func(t *testing.T) {
 		e, _ := draftExecutor(t.TempDir())
-		if !e.Enabled || e.Worktree {
-			t.Errorf("enabled/worktree = %v/%v, want true/false", e.Enabled, e.Worktree)
+		if !e.Enabled || e.AdditionalWorktree {
+			t.Errorf("enabled/additional_worktree = %v/%v, want true/false", e.Enabled, e.AdditionalWorktree)
 		}
 		if e.FixRounds != 3 || e.DoneStatus != "merged" {
 			t.Errorf("defaults wrong: fix_rounds=%d done=%q", e.FixRounds, e.DoneStatus)

@@ -199,7 +199,7 @@ func TestWorkerEnvStripsAPIKey(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "tok-secret")
 	t.Setenv("PATH", "/usr/bin") // a var that must survive
-	env := workerEnv()
+	env := workerEnv("")
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "ANTHROPIC_API_KEY=") {
 			t.Error("workerEnv must strip ANTHROPIC_API_KEY (forces API billing instead of subscription)")
@@ -216,6 +216,36 @@ func TestWorkerEnvStripsAPIKey(t *testing.T) {
 	}
 	if !keptPath {
 		t.Error("workerEnv must preserve unrelated env vars like PATH")
+	}
+}
+
+func TestWorkerEnvPinsConfigDir(t *testing.T) {
+	// Inherit a config dir from the parent env; treat it as the resolved default.
+	t.Setenv("CLAUDE_CONFIG_DIR", "/inherited/dir")
+
+	// Non-default config dir -> pinned exactly once, replacing the inherited one.
+	custom := "/Users/test/.claude-alt"
+	var got []string
+	for _, kv := range workerEnv(custom) {
+		if strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {
+			got = append(got, kv)
+		}
+	}
+	if len(got) != 1 || got[0] != "CLAUDE_CONFIG_DIR="+custom {
+		t.Errorf("expected exactly one CLAUDE_CONFIG_DIR=%s, got %v", custom, got)
+	}
+
+	// Passing the resolved default dir must NOT add an extra pin: the single
+	// inherited value passes through untouched (no duplicate).
+	def := storage.DefaultClaudeConfigDir() // == "/inherited/dir" here
+	count := 0
+	for _, kv := range workerEnv(def) {
+		if strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("default config dir should leave exactly the one inherited CLAUDE_CONFIG_DIR, got %d", count)
 	}
 }
 

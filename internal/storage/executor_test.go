@@ -18,8 +18,8 @@ func TestGetExecutorMissingBlock(t *testing.T) {
 	if !e.Enabled {
 		t.Error("Enabled = false, want true by default")
 	}
-	if e.Worktree {
-		t.Error("Worktree = true, want false by default")
+	if e.AdditionalWorktree {
+		t.Error("AdditionalWorktree = true, want false by default")
 	}
 	if e.StartStatus != "todo" || e.WipStatus != "doing" || e.DoneStatus != "merged" {
 		t.Errorf("statuses = %q/%q/%q, want todo/doing/merged", e.StartStatus, e.WipStatus, e.DoneStatus)
@@ -43,7 +43,7 @@ func TestExecutorParseFullBlock(t *testing.T) {
 name: Atlas
 executor:
   enabled: true
-  worktree: true
+  additional_worktree: true
   start_status: todo
   wip_status: doing
   done_status: merged
@@ -70,8 +70,8 @@ executor:
 	}
 	e := p.GetExecutor()
 
-	if !e.Enabled || !e.Worktree {
-		t.Errorf("Enabled/Worktree = %v/%v, want true/true", e.Enabled, e.Worktree)
+	if !e.Enabled || !e.AdditionalWorktree {
+		t.Errorf("Enabled/AdditionalWorktree = %v/%v, want true/true", e.Enabled, e.AdditionalWorktree)
 	}
 	if e.FixRounds != 5 {
 		t.Errorf("FixRounds = %d, want 5", e.FixRounds)
@@ -156,8 +156,8 @@ executor:
 			t.Fatalf("Unmarshal: %v", err)
 		}
 		e := p.GetExecutor()
-		if e.Worktree {
-			t.Error("Worktree = true, want false when unset")
+		if e.AdditionalWorktree {
+			t.Error("AdditionalWorktree = true, want false when unset")
 		}
 		if e.FixRounds != 3 {
 			t.Errorf("FixRounds = %d, want default 3", e.FixRounds)

@@ -173,6 +173,11 @@ type Model struct {
 	claudeMenuSkipPerms bool
 	launchAgent         launchAgent
 	executorIsTracker   bool // when launchAgent==executor: run-epic vs work (for menu title)
+	// executor "additional" worktree choice, made per launch (like skip-perms).
+	// claudeMenuAdditional = user picked the isolated worktree for THIS launch;
+	// executorAdditionalAvail = the project has it configured (executor.additional_worktree).
+	claudeMenuAdditional    bool
+	executorAdditionalAvail bool
 
 	// executor run-states (live background runs), keyed by task/tracker id;
 	// refreshed on tick from <project>/.executor/*.json

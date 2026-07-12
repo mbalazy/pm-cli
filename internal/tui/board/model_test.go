@@ -1160,19 +1160,22 @@ func TestFindSessionDirGlobal(t *testing.T) {
 func TestExecutorPMArgs(t *testing.T) {
 	task := &storage.Task{Meta: storage.TaskMeta{ID: "atlas-64-3"}, Project: "atlas"}
 	tests := []struct {
-		name                    string
-		isTracker, yolo, dryRun bool
-		want                    []string
+		name                                string
+		isTracker, yolo, dryRun, additional bool
+		want                                []string
 	}{
-		{"leaf task", false, false, false, []string{"work", "atlas", "atlas-64-3"}},
-		{"tracker", true, false, false, []string{"run-epic", "atlas", "atlas-64-3"}},
-		{"leaf yolo", false, true, false, []string{"work", "atlas", "atlas-64-3", "--yolo"}},
-		{"leaf dry-run", false, false, true, []string{"work", "atlas", "atlas-64-3", "--dry-run"}},
-		{"tracker yolo dry-run", true, true, true, []string{"run-epic", "atlas", "atlas-64-3", "--yolo", "--dry-run"}},
+		{"leaf task default", false, false, false, false, []string{"work", "atlas", "atlas-64-3"}},
+		{"tracker default", true, false, false, false, []string{"run-epic", "atlas", "atlas-64-3"}},
+		{"leaf yolo", false, true, false, false, []string{"work", "atlas", "atlas-64-3", "--yolo"}},
+		{"leaf dry-run", false, false, true, false, []string{"work", "atlas", "atlas-64-3", "--dry-run"}},
+		{"leaf additional", false, false, false, true, []string{"work", "atlas", "atlas-64-3", "--additional"}},
+		{"tracker additional", true, false, false, true, []string{"run-epic", "atlas", "atlas-64-3", "--additional"}},
+		{"leaf yolo additional dry-run", false, true, true, true, []string{"work", "atlas", "atlas-64-3", "--yolo", "--additional", "--dry-run"}},
+		{"tracker yolo dry-run", true, true, true, false, []string{"run-epic", "atlas", "atlas-64-3", "--yolo", "--dry-run"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := executorPMArgs(task, tt.isTracker, tt.yolo, tt.dryRun)
+			got := executorPMArgs(task, tt.isTracker, tt.yolo, tt.dryRun, tt.additional)
 			if strings.Join(got, " ") != strings.Join(tt.want, " ") {
 				t.Errorf("executorPMArgs = %v, want %v", got, tt.want)
 			}

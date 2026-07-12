@@ -365,6 +365,18 @@ func (m Model) viewClaudeMenu() string {
 		permsLabel = "yolo (bypass autonomy envelope)"
 	}
 	lines = append(lines, "  "+keyStyle.Render("!")+checkStyle.Render(" "+check+" "+permsLabel))
+
+	// Executor-only: choose default (main checkout) vs the isolated "additional"
+	// worktree for THIS launch. Shown only when the project has it configured.
+	if m.launchAgent == launchAgentExecutor && m.executorAdditionalAvail {
+		addCheck := "[ ]"
+		addStyle := dimStyle
+		if m.claudeMenuAdditional {
+			addCheck = "[x]"
+			addStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
+		}
+		lines = append(lines, "  "+keyStyle.Render("#")+addStyle.Render(" "+addCheck+" additional worktree (isolated branch/port/sim)"))
+	}
 	lines = append(lines, "")
 
 	for i, item := range m.claudeMenuItems {
@@ -378,7 +390,11 @@ func (m Model) viewClaudeMenu() string {
 		lines = append(lines, prefix+shortcut+" "+labelStyle.Render(item.label))
 	}
 	lines = append(lines, "")
-	lines = append(lines, helpStyle.Render("press key or enter  @ toggle agent  ! toggle perms  esc back"))
+	help := "press key or enter  @ toggle agent  ! toggle perms  esc back"
+	if m.launchAgent == launchAgentExecutor && m.executorAdditionalAvail {
+		help = "press key or enter  @ agent  ! perms  # additional  esc back"
+	}
+	lines = append(lines, helpStyle.Render(help))
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

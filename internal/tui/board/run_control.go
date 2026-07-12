@@ -90,6 +90,25 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 	}
 	_ = storage.WriteRunState(stateDir, st) // best-effort observability (see above)
 
+	// Journal the kill on the dead manager's behalf - its own "end" line never
+	// runs (the defer died with the process). With this, a "start" line with
+	// no "end"/"killed" line means an untracked crash, which the retro flow
+	// can surface separately from deliberate stops. Per-sub outcomes so far
+	// live in the re-read run-state subs.
+	_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
+		Event: storage.JournalEventKilled, Kind: st.Kind, Project: proj, TaskID: taskID,
+		PID: pid, Status: storage.RunStatusFailed, Error: "stopped by user",
+	})
+
+	// Release the worktree lock the killed manager held. The SIGTERM'd process
+	// dies before its own deferred release runs, so free "additional" here on its
+	// behalf (PID-matched, so we only drop a lock this run actually owned). A
+	// non-worktree run has no lock at RepoPath -> no-op. Belt-and-suspenders with
+	// stale-lock recovery on the next run.
+	if st.RepoPath != "" {
+		_ = storage.ReleaseWorktreeLock(st.RepoPath, pid)
+	}
+
 	// Park the in-flight task on `waiting` so the board reflects the stop.
 	if inFlight != "" {
 		if t, err := m.store.FindTask(proj, inFlight); err == nil && t.Meta.Status != storage.StatusWaiting {
