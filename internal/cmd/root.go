@@ -33,6 +33,7 @@ func NewRootCmd() *cobra.Command {
 		newContextCmd(store),
 		newShowCmd(store),
 		newMvCmd(store),
+		newReorderCmd(store),
 		newDoneCmd(store),
 		newEditCmd(store),
 		newBoardCmd(store),

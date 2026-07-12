@@ -11,6 +11,7 @@ func newAddCmd(store storage.TaskStore) *cobra.Command {
 	var status, branch string
 	var links map[string]string
 	var tags []string
+	var order int
 
 	cmd := &cobra.Command{
 		Use:   "add <project> <title>",
@@ -46,6 +47,7 @@ func newAddCmd(store storage.TaskStore) *cobra.Command {
 			}
 			t.Meta.Branch = branch
 			t.Meta.Tags = tags
+			t.Meta.Order = order
 
 			if err := store.AddTask(projectSlug, t); err != nil {
 				return err
@@ -61,6 +63,7 @@ func newAddCmd(store storage.TaskStore) *cobra.Command {
 	cmd.Flags().StringToStringVarP(&links, "link", "l", nil, "Links (key=url, repeatable: -l azure=https://...)")
 	cmd.Flags().StringVar(&branch, "branch", "", "Git branch name")
 	cmd.Flags().StringSliceVar(&tags, "tag", nil, "Tags")
+	cmd.Flags().IntVar(&order, "order", 0, "Sort order within column/rollup (lower first; convention 10, 20, 30...)")
 
 	return cmd
 }
