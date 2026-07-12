@@ -34,7 +34,9 @@ type addTaskInput struct {
 	Status    string            `json:"status,omitempty" jsonschema:"Initial status (default: first project status)"`
 	Branch    string            `json:"branch,omitempty" jsonschema:"Git branch name"`
 	Parent    string            `json:"parent,omitempty" jsonschema:"Parent task ID for subtasks (e.g. atlas-39). Makes this a child of a tracker task."`
+	Order     int               `json:"order,omitempty" jsonschema:"Sort order within a column / parent rollup (lower runs first; convention: 10, 20, 30...). 0 = unset (sorts before ordered siblings, then by ID). Used by pm run-epic for sub execution order."`
 	DependsOn []string          `json:"depends_on,omitempty" jsonschema:"Sub IDs this subtask depends on (e.g. atlas-39-2). pm run-epic skips this sub (no worker spawned) until every listed dep is merged/done, then a re-run picks it up. Empty = runs by Order."`
+	Mode      string            `json:"mode,omitempty" jsonschema:"Execution mode for a subtask under pm run-epic. 'auto' (default, empty) runs autonomously via a headless worker. 'manual' marks it human-only: pm run-epic skips it entirely (no worker spawned, status untouched) as a PERMANENT gate on every run until you do the work and move it to the done status yourself. Use for subs needing interactive/visual work (simulator verification, design/visual checks)."`
 	Tags      []string          `json:"tags,omitempty" jsonschema:"Tags"`
 	Links     map[string]string `json:"links,omitempty" jsonschema:"Links as key=url pairs (e.g. azure, pr, slack)"`
 	Body      string            `json:"body,omitempty" jsonschema:"Markdown body content. This is the append-only Log zone (session history)."`
@@ -52,7 +54,9 @@ type updateTaskInput struct {
 	Title      string            `json:"title,omitempty" jsonschema:"New title"`
 	Branch     string            `json:"branch,omitempty" jsonschema:"Git branch name"`
 	Parent     string            `json:"parent,omitempty" jsonschema:"Parent task ID for subtasks (e.g. atlas-39). Set to make this a child of a tracker task."`
+	Order      *int              `json:"order,omitempty" jsonschema:"Set sort order within a column / parent rollup (lower runs first; convention: 10, 20, 30...). Omit to keep current; pass 0 to clear. Changes only the order - the rest of the task is untouched."`
 	DependsOn  []string          `json:"depends_on,omitempty" jsonschema:"Replace the sub's depends_on list (sub IDs that must be merged/done before pm run-epic runs this sub). Omit to keep current; pass an empty array to clear."`
+	Mode       *string           `json:"mode,omitempty" jsonschema:"Set the execution mode for pm run-epic. 'auto' runs the sub autonomously via a headless worker; 'manual' makes pm run-epic skip this sub (no worker spawned, status untouched) as a permanent gate until you do the work and move it to the done status yourself. Omit to keep current."`
 	Tags       []string          `json:"tags,omitempty" jsonschema:"Replace tags (omit to keep current)"`
 	Links      map[string]string `json:"links,omitempty" jsonschema:"Links to merge (existing links are preserved)"`
 	BodyAppend string            `json:"body_append,omitempty" jsonschema:"Append to the Log zone of the body (append-only session history; never replaces existing content)"`
@@ -109,6 +113,7 @@ type taskSummary struct {
 	Updated      string            `json:"updated"`
 	Branch       string            `json:"branch,omitempty"`
 	Parent       string            `json:"parent,omitempty"`
+	Order        int               `json:"order,omitempty"`
 	Tags         []string          `json:"tags,omitempty"`
 	Links        map[string]string `json:"links,omitempty"`
 	Brief        string            `json:"brief,omitempty"`
@@ -122,6 +127,7 @@ type taskDetail struct {
 	Body      string   `json:"body,omitempty"`
 	Sessions  []string `json:"sessions,omitempty"`
 	DependsOn []string `json:"depends_on,omitempty"`
+	Mode      string   `json:"mode,omitempty"`
 }
 
 func toSummary(t *storage.Task) taskSummary {
@@ -133,6 +139,7 @@ func toSummary(t *storage.Task) taskSummary {
 		Updated:      t.Meta.Updated,
 		Branch:       t.Meta.Branch,
 		Parent:       t.Meta.Parent,
+		Order:        t.Meta.Order,
 		Tags:         t.Meta.Tags,
 		Links:        t.Meta.Links,
 		Brief:        t.Meta.Brief,
@@ -167,6 +174,7 @@ func toDetail(t *storage.Task) taskDetail {
 		Body:        t.Body,
 		Sessions:    t.Meta.Sessions,
 		DependsOn:   t.Meta.DependsOn,
+		Mode:        t.Meta.Mode,
 	}
 }
 
@@ -357,9 +365,17 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			return r, nil, nil
 		}
 
+		// Validate mode (writeTask also validates, but fail early with a clear MCP error)
+		if err := storage.ValidateMode(in.Mode); err != nil {
+			r, _ := toolError(err.Error())
+			return r, nil, nil
+		}
+
 		t.Meta.Branch = in.Branch
 		t.Meta.Parent = in.Parent
+		t.Meta.Order = in.Order
 		t.Meta.DependsOn = in.DependsOn
+		t.Meta.Mode = in.Mode
 		t.Meta.Tags = in.Tags
 		if len(in.Links) > 0 {
 			t.Meta.Links = in.Links
@@ -409,8 +425,18 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		if in.Parent != "" {
 			task.Meta.Parent = in.Parent
 		}
+		if in.Order != nil {
+			task.Meta.Order = *in.Order
+		}
 		if in.DependsOn != nil {
 			task.Meta.DependsOn = in.DependsOn
+		}
+		if in.Mode != nil {
+			if err := storage.ValidateMode(*in.Mode); err != nil {
+				r, _ := toolError(err.Error())
+				return r, nil, nil
+			}
+			task.Meta.Mode = *in.Mode
 		}
 		if in.Tags != nil {
 			task.Meta.Tags = in.Tags

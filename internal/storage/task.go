@@ -57,6 +57,22 @@ type TaskMeta struct {
 	// Used by `pm run-epic`: an unsatisfied dependency parks the sub (skipped)
 	// instead of spawning a doomed worker. Empty = no gate (runs by Order).
 	DependsOn []string `yaml:"depends_on,omitempty"`
+	// Mode marks a sub as autonomous ("auto"/empty) or human-only ("manual").
+	// A "manual" sub is a permanent gate for `pm run-epic`: the manager skips it
+	// entirely (no worker spawned, status untouched) on every run until a human
+	// does the work and moves it to the done status themselves. Empty = "auto"
+	// (backward compatible - existing subs run exactly as before).
+	Mode string `yaml:"mode,omitempty"`
+}
+
+// ValidateMode checks a task's mode field. Empty means "auto" (default,
+// backward compatible). Only "auto" and "manual" are valid (lowercase).
+func ValidateMode(m string) error {
+	switch m {
+	case "", "auto", "manual":
+		return nil
+	}
+	return fmt.Errorf("invalid mode %q (valid: auto, manual)", m)
 }
 
 type Task struct {
@@ -131,6 +147,9 @@ func WriteTask(t *Task) error {
 }
 
 func writeTask(t *Task) error {
+	if err := ValidateMode(t.Meta.Mode); err != nil {
+		return err
+	}
 	metaBytes, err := yaml.Marshal(t.Meta)
 	if err != nil {
 		return err
