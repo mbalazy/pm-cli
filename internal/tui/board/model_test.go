@@ -1271,6 +1271,19 @@ func TestKillRunStampsAndParks(t *testing.T) {
 		t.Errorf("parked task status = %q, want waiting", parked.Meta.Status)
 	}
 
+	// A "killed" journal line is appended on the dead manager's behalf, so the
+	// cross-run history distinguishes deliberate stops from untracked crashes.
+	entries, err := storage.ReadJournal(store.ProjectDir("p"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 journal entry after kill, got %d", len(entries))
+	}
+	if e := entries[0]; e.Event != storage.JournalEventKilled || e.TaskID != "p-1" || e.Kind != "run-epic" || e.Status != storage.RunStatusFailed {
+		t.Errorf("unexpected killed journal entry: %+v", e)
+	}
+
 	// The process group dies (SIGTERM to a plain sleep terminates it); the
 	// reaper goroutine then closes `waited`.
 	select {

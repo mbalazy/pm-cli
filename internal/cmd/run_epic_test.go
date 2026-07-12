@@ -358,6 +358,93 @@ func TestValidateModeRejectedOnWrite(t *testing.T) {
 	}
 }
 
+// captureStdout swaps os.Stdout for a pipe, runs fn, and returns what it wrote.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	fn()
+	w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+	return string(out)
+}
+
+func TestPrintEpicPlanLabels(t *testing.T) {
+	tracker := &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "Epic"}}
+	subs := []*storage.Task{
+		{Meta: storage.TaskMeta{ID: "p-1-1", Title: "ready auto", Status: storage.StatusTodo, Order: 10}},
+		{Meta: storage.TaskMeta{ID: "p-1-2", Title: "manual sub", Status: storage.StatusTodo, Order: 20, Mode: "manual"}},
+		{Meta: storage.TaskMeta{ID: "p-1-3", Title: "already merged", Status: storage.TaskStatus("merged"), Order: 30}},
+		{Meta: storage.TaskMeta{ID: "p-1-4", Title: "parked", Status: storage.StatusWaiting, Order: 40}},
+		// a manual sub already at done must report done, not MANUAL
+		{Meta: storage.TaskMeta{ID: "p-1-5", Title: "manual done", Status: storage.StatusDone, Order: 50, Mode: "manual"}},
+	}
+	out := captureStdout(t, func() {
+		printEpicPlan(tracker, "epic/p-1", "main", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo")
+	})
+	for _, want := range []string{
+		"[READY ] p-1-1",
+		"[MANUAL] p-1-2",
+		"[done  ] p-1-3",
+		"[skip  ] p-1-4",
+		"[done  ] p-1-5",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("plan output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestJournalSubs(t *testing.T) {
+	outcomes := []subOutcome{
+		{"p-1-1", "merged", "ok"},
+		{"p-1-2", "manual", "manual sub"},
+		{"p-1-3", "skipped", "waiting on p-1-2"},
+	}
+	durations := map[string]int{"p-1-1": 90}
+	run := &storage.RunState{Subs: []storage.SubRun{
+		{ID: "p-1-1", Status: "merged", Session: "sess-1", Turns: 42, CostUSD: 1.25},
+		{ID: "p-1-2", Status: "manual"},
+		{ID: "p-1-3", Status: "skipped"},
+	}}
+
+	got := journalSubs(outcomes, durations, run)
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+	first := got[0]
+	if first.Session != "sess-1" || first.Turns != 42 || first.CostUSD != 1.25 || first.DurationS != 90 {
+		t.Errorf("driven sub stats not attached: %+v", first)
+	}
+	if got[1].Result != "manual" || got[1].Turns != 0 || got[1].CostUSD != 0 || got[1].DurationS != 0 {
+		t.Errorf("manual sub should carry no worker stats: %+v", got[1])
+	}
+	if got[2].Result != "skipped" || got[2].Session != "" {
+		t.Errorf("skipped sub should have no session: %+v", got[2])
+	}
+}
+
+// updateSubRun stamps result+note on an existing entry after driveSub; it must
+// not wipe the envelope stats driveSub stamped onto the same entry.
+func TestUpdateSubRunPreservesStats(t *testing.T) {
+	run := &storage.RunState{Subs: []storage.SubRun{
+		{ID: "p-1-1", Status: "running", Session: "sess-1", Turns: 42, CostUSD: 1.25, Commits: []string{"abc"}},
+	}}
+	updateSubRun(run, "p-1-1", "merged", "all green")
+	s := run.Subs[0]
+	if s.Status != "merged" || s.Note != "all green" {
+		t.Errorf("status/note not updated: %+v", s)
+	}
+	if s.Turns != 42 || s.CostUSD != 1.25 || s.Session != "sess-1" || len(s.Commits) != 1 {
+		t.Errorf("updateSubRun wiped stats: %+v", s)
+	}
+}
+
 func TestAnyMerged(t *testing.T) {
 	if anyMerged([]subOutcome{{result: "blocked"}, {result: "skipped"}}) {
 		t.Error("anyMerged = true, want false")

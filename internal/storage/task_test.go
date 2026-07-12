@@ -60,6 +60,19 @@ func TestParseStatus(t *testing.T) {
 	}
 }
 
+func TestValidateMode(t *testing.T) {
+	for _, ok := range []string{"", "auto", "manual"} {
+		if err := ValidateMode(ok); err != nil {
+			t.Errorf("ValidateMode(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"Manual", "AUTO", "sometimes", " manual"} {
+		if err := ValidateMode(bad); err == nil {
+			t.Errorf("ValidateMode(%q) = nil, want error (case-sensitive lowercase only)", bad)
+		}
+	}
+}
+
 func TestValidateStatus(t *testing.T) {
 	allowed := []TaskStatus{StatusTodo, StatusDoing, StatusDone}
 

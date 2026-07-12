@@ -592,6 +592,60 @@ func TestToDetailIncludesSessions(t *testing.T) {
 	}
 }
 
+func TestModeInvariants(t *testing.T) {
+	t.Run("mode round-trips through write and reload", func(t *testing.T) {
+		store, _ := setupMCPTestStore(t)
+		task, _ := store.FindTask("test", "t-1")
+
+		task.Meta.Mode = "manual"
+		if err := storage.WriteTask(task); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		reloaded, _ := store.FindTask("test", "t-1")
+		if reloaded.Meta.Mode != "manual" {
+			t.Errorf("mode = %q, want manual", reloaded.Meta.Mode)
+		}
+	})
+
+	t.Run("invalid mode rejected at write", func(t *testing.T) {
+		store, _ := setupMCPTestStore(t)
+		task, _ := store.FindTask("test", "t-1")
+
+		task.Meta.Mode = "sometimes"
+		if err := storage.WriteTask(task); err == nil {
+			t.Fatal("expected write to reject invalid mode")
+		}
+		// on-disk task must be untouched
+		reloaded, _ := store.FindTask("test", "t-1")
+		if reloaded.Meta.Mode != "" {
+			t.Errorf("on-disk mode = %q, want empty (write must not go through)", reloaded.Meta.Mode)
+		}
+	})
+
+	t.Run("mode preserved on status transitions", func(t *testing.T) {
+		store, _ := setupMCPTestStore(t)
+		task, _ := store.FindTask("test", "t-1")
+		task.Meta.Mode = "manual"
+		storage.WriteTask(task)
+
+		task, _ = store.FindTask("test", "t-1")
+		if err := store.MoveTask(task, storage.StatusDone); err != nil {
+			t.Fatalf("move: %v", err)
+		}
+		reloaded, _ := store.FindTask("test", "t-1")
+		if reloaded.Meta.Mode != "manual" {
+			t.Errorf("mode lost on status transition, got %q", reloaded.Meta.Mode)
+		}
+	})
+
+	t.Run("toDetail includes mode", func(t *testing.T) {
+		task := &storage.Task{Meta: storage.TaskMeta{ID: "t-9", Mode: "manual"}, Project: "test"}
+		if d := toDetail(task); d.Mode != "manual" {
+			t.Errorf("detail mode = %q, want manual", d.Mode)
+		}
+	})
+}
+
 func TestResolveProjectFromCwd(t *testing.T) {
 	dir := t.TempDir()
 	store := &storage.Store{Root: dir}
