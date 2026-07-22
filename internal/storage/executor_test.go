@@ -127,6 +127,36 @@ executor:
 	}
 }
 
+func TestExecutorContextRepos(t *testing.T) {
+	const data = `
+name: LE
+executor:
+  enabled: true
+  context_repos:
+    backend: ../platform.orbit
+    infra: ~/repos/infra
+`
+	var p Project
+	if err := yaml.Unmarshal([]byte(data), &p); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	e := p.GetExecutor()
+	if got := e.ContextRepos["backend"]; got != "../platform.orbit" {
+		t.Errorf("ContextRepos[backend] = %q, want ../platform.orbit", got)
+	}
+	if got := e.ContextRepos["infra"]; got != "~/repos/infra" {
+		t.Errorf("ContextRepos[infra] = %q, want ~/repos/infra", got)
+	}
+
+	var bare Project
+	if err := yaml.Unmarshal([]byte("name: X\nexecutor:\n  enabled: true\n"), &bare); err != nil {
+		t.Fatalf("Unmarshal bare: %v", err)
+	}
+	if len(bare.GetExecutor().ContextRepos) != 0 {
+		t.Error("missing context_repos should resolve to an empty map")
+	}
+}
+
 func TestPhaseBindingStates(t *testing.T) {
 	tests := []struct {
 		name     string

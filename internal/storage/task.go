@@ -63,6 +63,28 @@ type TaskMeta struct {
 	// does the work and moves it to the done status themselves. Empty = "auto"
 	// (backward compatible - existing subs run exactly as before).
 	Mode string `yaml:"mode,omitempty"`
+	// EpicMode (meaningful on a PARENT tracker only) selects how `pm run-epic`
+	// drives the subs. "" (default) = integration mode: subs branch off and merge
+	// back into a shared epic/<tracker> branch, ending in one epic PR.
+	// "independent" = batch mode for UNRELATED tasks: each sub gets its own
+	// fresh branch off the base branch, is pushed to origin when it carries
+	// commits, and nothing is merged - no integration branch, no epic PR; a
+	// human finishes each task on its own branch later.
+	EpicMode string `yaml:"epic_mode,omitempty"`
+}
+
+// EpicModeIndependent is the epic_mode value that switches `pm run-epic` to
+// independent (batch) mode. Empty = the default integration mode.
+const EpicModeIndependent = "independent"
+
+// ValidateEpicMode checks a tracker's epic_mode field. Empty means integration
+// mode (default, backward compatible).
+func ValidateEpicMode(m string) error {
+	switch m {
+	case "", EpicModeIndependent:
+		return nil
+	}
+	return fmt.Errorf("invalid epic_mode %q (valid: independent, or empty for integration mode)", m)
 }
 
 // ValidateMode checks a task's mode field. Empty means "auto" (default,

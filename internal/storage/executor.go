@@ -41,14 +41,19 @@ type Executor struct {
 	// whatever the consuming project reads (e.g. SIM_UDID). Pairs are appended
 	// LAST so they win over inherited values - which also means a
 	// CLAUDE_CONFIG_DIR key here would override the config-dir pinning.
-	Env         map[string]string       `yaml:"env,omitempty"`
-	StartStatus string                  `yaml:"start_status,omitempty"` // sub status meaning "ready to pick up"
-	WipStatus   string                  `yaml:"wip_status,omitempty"`
-	DoneStatus  string                  `yaml:"done_status,omitempty"` // where a verified sub lands
-	FixRounds   int                     `yaml:"fix_rounds,omitempty"`  // review->fix loop cap before escalating
-	Gate        Gate                    `yaml:"gate,omitempty"`
-	Phases      map[string]PhaseBinding `yaml:"phases,omitempty"`
-	Notes       string                  `yaml:"notes,omitempty"`
+	Env map[string]string `yaml:"env,omitempty"`
+	// ContextRepos maps a short name to a local repo path the worker may READ
+	// for cross-repo context (e.g. backend: ../platform.orbit to check an
+	// endpoint's real shape). Listed in the worker prompt as read-only reference
+	// repos; pm itself never touches them.
+	ContextRepos map[string]string       `yaml:"context_repos,omitempty"`
+	StartStatus  string                  `yaml:"start_status,omitempty"` // sub status meaning "ready to pick up"
+	WipStatus    string                  `yaml:"wip_status,omitempty"`
+	DoneStatus   string                  `yaml:"done_status,omitempty"` // where a verified sub lands
+	FixRounds    int                     `yaml:"fix_rounds,omitempty"`  // review->fix loop cap before escalating
+	Gate         Gate                    `yaml:"gate,omitempty"`
+	Phases       map[string]PhaseBinding `yaml:"phases,omitempty"`
+	Notes        string                  `yaml:"notes,omitempty"`
 }
 
 // GateMode controls whether a side-effecting step (pr, merge) is human-gated or

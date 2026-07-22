@@ -73,6 +73,19 @@ func TestValidateMode(t *testing.T) {
 	}
 }
 
+func TestValidateEpicMode(t *testing.T) {
+	for _, ok := range []string{"", EpicModeIndependent} {
+		if err := ValidateEpicMode(ok); err != nil {
+			t.Errorf("ValidateEpicMode(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"Independent", "INDEPENDENT", "integration", "batch", " independent"} {
+		if err := ValidateEpicMode(bad); err == nil {
+			t.Errorf("ValidateEpicMode(%q) = nil, want error (case-sensitive lowercase only)", bad)
+		}
+	}
+}
+
 func TestValidateStatus(t *testing.T) {
 	allowed := []TaskStatus{StatusTodo, StatusDoing, StatusDone}
 
@@ -173,15 +186,16 @@ func TestWriteTaskReadTaskRoundtrip(t *testing.T) {
 			"full task with all fields",
 			Task{
 				Meta: TaskMeta{
-					ID:      "t-2",
-					Title:   "Full Task",
-					Status:  StatusDoing,
-					Created: "2025-01-01",
-					Updated: "2025-06-15",
-					Links:   map[string]string{"pr": "https://github.com/pr/1", "jira": "SCRUM-42"},
-					Branch:  "feat/auth",
-					Tags:    []string{"backend", "urgent"},
-					Brief:   "Working on auth flow",
+					ID:       "t-2",
+					Title:    "Full Task",
+					Status:   StatusDoing,
+					Created:  "2025-01-01",
+					Updated:  "2025-06-15",
+					Links:    map[string]string{"pr": "https://github.com/pr/1", "jira": "SCRUM-42"},
+					Branch:   "feat/auth",
+					Tags:     []string{"backend", "urgent"},
+					Brief:    "Working on auth flow",
+					EpicMode: EpicModeIndependent,
 				},
 				Body: "## Description\n\nSome body content\n\n## Notes\n\n- Note 1",
 			},
@@ -254,6 +268,9 @@ func TestWriteTaskReadTaskRoundtrip(t *testing.T) {
 			}
 			if got.Meta.Brief != tt.task.Meta.Brief {
 				t.Errorf("Brief: got %q, want %q", got.Meta.Brief, tt.task.Meta.Brief)
+			}
+			if got.Meta.EpicMode != tt.task.Meta.EpicMode {
+				t.Errorf("EpicMode: got %q, want %q", got.Meta.EpicMode, tt.task.Meta.EpicMode)
 			}
 			if got.Body != tt.task.Body {
 				t.Errorf("Body: got %q, want %q", got.Body, tt.task.Body)
