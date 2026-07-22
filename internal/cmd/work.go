@@ -207,6 +207,11 @@ type workOptions struct {
 	timeout    time.Duration
 	base       string // with additional: base branch the fresh task branch forks from
 	additional bool   // opt in to the isolated "additional" worktree for THIS run
+	// independent = the sub belongs to an independent (batch) epic: the worker
+	// runs best-effort (never gives up early, records assumptions + handoff in
+	// unresolved) and a non-green result does NOT park the task on waiting - a
+	// human returns to every task in the batch anyway.
+	independent bool
 }
 
 // workPlan is the resolved, ready-to-run worker invocation: the project, the
@@ -262,7 +267,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 	branch := resolveWorkBranch(task)
 	sessionID := storage.NewSessionID()
 	prompt := buildWorkerPrompt(task, parent, proj, slug, exec, branch, opts.standalone)
-	sysPrompt := buildWorkerSystemPrompt(exec, opts.standalone)
+	sysPrompt := buildWorkerSystemPrompt(exec, opts.standalone, opts.independent)
 	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo)
 
 	// The isolated "additional" worktree is opt-in PER RUN via --additional; the
@@ -377,7 +382,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		}
 		return nil, err
 	}
-	if err := applyWorkerResult(store, task, plan.branch, sessionID, res, opts.standalone); err != nil {
+	if err := applyWorkerResult(store, task, plan.branch, sessionID, res, opts.standalone, opts.independent); err != nil {
 		return nil, err
 	}
 	if run != nil {
@@ -522,7 +527,9 @@ func parseClaudeResult(data []byte) (*workerResult, string, error) {
 
 // applyWorkerResult records the worker outcome into pm: session, brief, log,
 // and a conservative status move (only blocked -> waiting; never auto-done).
-func applyWorkerResult(store storage.TaskStore, t *storage.Task, branch, sessionID string, res *workerResult, standalone bool) error {
+// In independent (batch) mode nothing is parked - every task in the batch gets
+// a human follow-up regardless, so waiting would only add noise.
+func applyWorkerResult(store storage.TaskStore, t *storage.Task, branch, sessionID string, res *workerResult, standalone, independent bool) error {
 	if sessionID != "" {
 		t.Meta.Sessions = append(t.Meta.Sessions, sessionID)
 	}
@@ -536,7 +543,7 @@ func applyWorkerResult(store storage.TaskStore, t *storage.Task, branch, session
 	// Autonomy envelope: pm work never moves a task to done/merged on its own.
 	// A blocked worker parks the task on `waiting` (human attention) if that
 	// status exists for the project; otherwise the status is left untouched.
-	if res.Status == "blocked" {
+	if res.Status == "blocked" && !independent {
 		statuses := store.GetProjectStatuses(t.Project)
 		if statusAllowed(storage.StatusWaiting, statuses) {
 			return store.MoveTask(t, storage.StatusWaiting)

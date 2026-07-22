@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -113,6 +114,21 @@ func gitMergeNoFF(dir, branch, message string) error {
 // gitDeleteBranch deletes a fully-merged branch.
 func gitDeleteBranch(dir, branch string) error {
 	return exec.Command("git", "-C", dir, "branch", "-d", branch).Run()
+}
+
+// gitAheadCount returns how many commits branch carries that base does not
+// (0 on any git error). Independent mode uses it to decide whether a sub's
+// branch is worth pushing.
+func gitAheadCount(dir, branch, base string) int {
+	out, err := exec.Command("git", "-C", dir, "rev-list", "--count", base+".."+branch).Output()
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // gitHasRemote reports whether the repo has at least one configured remote.

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -25,6 +26,19 @@ func buildWorkerPrompt(t *storage.Task, parent *storage.Task, proj *storage.Proj
 	fmt.Fprintf(&sb, "Review->fix rounds before escalating: %d\n", exec.FixRounds)
 	if proj.Notes != "" {
 		fmt.Fprintf(&sb, "Project notes: %s\n", proj.Notes)
+	}
+
+	if len(exec.ContextRepos) > 0 {
+		sb.WriteString("\n## Reference repos (READ-ONLY)\n")
+		names := make([]string, 0, len(exec.ContextRepos))
+		for name := range exec.ContextRepos {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Fprintf(&sb, "- %s: %s\n", name, exec.ContextRepos[name])
+		}
+		sb.WriteString("You may READ these repos for cross-repo context (endpoint shapes, API behavior, contracts). NEVER modify, commit, or run write operations in them.\n")
 	}
 
 	sb.WriteString("\n## Acceptance Criteria (HARD-BOUND - your work must satisfy these and NOT exceed them)\n")
@@ -93,7 +107,9 @@ func phaseDirective(phase string, b storage.PhaseBinding) string {
 // buildWorkerSystemPrompt is appended to the worker's system prompt. It defines
 // the autonomy envelope, the inner loop, the built-in generics, and the result
 // contract. It is project-agnostic; project specifics live in the user prompt.
-func buildWorkerSystemPrompt(exec storage.Executor, standalone bool) string {
+// independent switches on the best-effort protocol for independent (batch)
+// epics: deliver maximum verified work, record assumptions, hand off the rest.
+func buildWorkerSystemPrompt(exec storage.Executor, standalone, independent bool) string {
 	var sb strings.Builder
 
 	sb.WriteString(`You are an autonomous implementation WORKER invoked by pm (a task tracker) to execute ONE task end-to-end in this repository. You run in a fresh, isolated process; when you finish you return a single JSON result and exit. The project's own skills, commands, CLAUDE.md and MCP are loaded by the working directory.
@@ -135,6 +151,17 @@ Run these phases in order. The user prompt gives the BINDING for each phase (ski
 		sb.WriteString("\nStandalone mode: after a green verify, run the `pr` phase to open a DRAFT pull request for this branch. Leave it as a draft - a human reviews and merges.\n")
 	} else {
 		sb.WriteString("\nEpic mode: do NOT open a pull request. Commit on the current branch and stop; the manager integrates your branch.\n")
+	}
+
+	if independent {
+		sb.WriteString(`
+## Independent batch mode (BEST-EFFORT)
+This task is one of several UNRELATED tasks in a batch. A human returns to every task afterwards to finish and verify it - your job is to hand them the maximum amount of verified, committed work.
+- NEVER stop early or abandon the task as a whole. Partial verified progress always beats a clean refusal.
+- When information is missing or a decision is ambiguous, make the most reasonable assumption, proceed, and RECORD it in ` + "`unresolved`" + ` prefixed "ASSUMPTION: " - the human validates these first when finishing the task.
+- Everything you could not finish or verify (needs a simulator/visual check, a design or product decision, an answer from a human) goes into ` + "`unresolved`" + ` as a concrete, actionable handoff item prefixed "TODO: ".
+- Status semantics in this mode: "merged" = verify is green (open handoff items in unresolved are fine and expected); "failed" = verify stays red despite best effort; "blocked" ONLY when no meaningful progress was possible at all.
+`)
 	}
 
 	return sb.String()

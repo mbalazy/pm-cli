@@ -22,15 +22,16 @@ type subOutcome struct {
 
 func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 	var (
-		model      string
-		maxTurns   int
-		yolo       bool
-		timeout    time.Duration
-		base       string
-		noPR       bool
-		allowDirty bool
-		dryRun     bool
-		additional bool
+		model       string
+		maxTurns    int
+		yolo        bool
+		timeout     time.Duration
+		base        string
+		noPR        bool
+		allowDirty  bool
+		dryRun      bool
+		additional  bool
+		independent bool
 	)
 
 	cmd := &cobra.Command{
@@ -40,7 +41,12 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			"(by Order) branches `feat/<slug>` off it, runs `pm work` (the worker) there, and merges back on " +
 			"verify-green -> status merged. Async: a blocked/failed sub is parked (status + reason in pm) and " +
 			"the manager continues. Re-entrant: re-running skips merged/done subs. Ends by opening ONE draft " +
-			"epic->main PR for human review. Never auto-merges to main, force-pushes, or closes the parent.",
+			"epic->main PR for human review. Never auto-merges to main, force-pushes, or closes the parent.\n\n" +
+			"Independent (batch) mode - `epic_mode: independent` on the tracker, or --independent: for a batch " +
+			"of UNRELATED tasks. Each sub gets its own fresh branch off the base branch, the worker runs " +
+			"best-effort (records assumptions + handoff instead of parking), and the branch is pushed to origin " +
+			"when it carries commits. No integration branch, no merging, no epic PR - a human finishes each " +
+			"task on its own branch later.",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tracker, slug, err := resolveWorkTask(store, args)
@@ -76,14 +82,24 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				return fmt.Errorf("%s is not a tracker - no subtasks have parent: %s", tracker.Meta.ID, tracker.Meta.ID)
 			}
 
+			// Independent (batch) mode: the tracker declares it in frontmatter
+			// (epic_mode: independent) so board launches need no extra flag;
+			// --independent is the CLI override for a tracker without it.
+			if err := storage.ValidateEpicMode(tracker.Meta.EpicMode); err != nil {
+				return fmt.Errorf("tracker %s: %w", tracker.Meta.ID, err)
+			}
+			independentMode := independent || tracker.Meta.EpicMode == storage.EpicModeIndependent
+
 			startStatus := storage.TaskStatus(exc.StartStatus)
 			doneStatus := storage.TaskStatus(exc.DoneStatus)
 			epicBranch := "epic/" + tracker.Meta.ID
 			// Base precedence for the integration branch: --base > (only with
 			// --additional) executor.base_branch > "main". In default mode base_branch
 			// is not consulted, so behaviour matches pre-worktree run-epic.
+			// Independent mode is new (no compat concern) and every sub forks from
+			// the base directly, so executor.base_branch always applies there.
 			execBase := ""
-			if additional {
+			if additional || independentMode {
 				execBase = exc.BaseBranch
 			}
 			baseBranch := resolveWorktreeBase(base, execBase, "main")
@@ -94,7 +110,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			}
 
 			if dryRun {
-				printEpicPlan(tracker, epicBranch, baseBranch, startStatus, doneStatus, subs, additional, workDir)
+				printEpicPlan(tracker, epicBranch, baseBranch, startStatus, doneStatus, subs, additional, workDir, independentMode)
 				return nil
 			}
 
@@ -130,12 +146,19 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				}
 			}
 
-			if err := gitEnsureBranch(workDir, epicBranch, baseBranch); err != nil {
-				return fmt.Errorf("create integration branch %s: %w", epicBranch, err)
+			if independentMode {
+				if !branchExists(workDir, baseBranch) {
+					return fmt.Errorf("independent mode: base branch %q does not exist at %s", baseBranch, workDir)
+				}
+				fmt.Fprintf(os.Stderr, "pm run-epic: %s INDEPENDENT - each sub on its own branch off %s (%d sub(s))\n", tracker.Meta.ID, baseBranch, len(subs))
+			} else {
+				if err := gitEnsureBranch(workDir, epicBranch, baseBranch); err != nil {
+					return fmt.Errorf("create integration branch %s: %w", epicBranch, err)
+				}
+				fmt.Fprintf(os.Stderr, "pm run-epic: %s on %s (%d sub(s))\n", tracker.Meta.ID, epicBranch, len(subs))
 			}
-			fmt.Fprintf(os.Stderr, "pm run-epic: %s on %s (%d sub(s))\n", tracker.Meta.ID, epicBranch, len(subs))
 
-			opts := workOptions{standalone: false, model: model, maxTurns: maxTurns, yolo: yolo, allowDirty: true, timeout: timeout, additional: additional}
+			opts := workOptions{standalone: false, model: model, maxTurns: maxTurns, yolo: yolo, allowDirty: true, timeout: timeout, additional: additional, independent: independentMode}
 
 			// Run-state for observability: the manager owns the epic-level file;
 			// driveSub fills in each sub's worker session as it goes. It lives in
@@ -164,11 +187,16 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 
 			// Journal: durable cross-run history (retro feedstock). Start line now;
 			// end line with per-sub outcomes after the loop. Best-effort like the
-			// run-state writes above.
+			// run-state writes above. Independent mode has no integration branch,
+			// so the journal records the fork base instead.
+			journalBranch := epicBranch
+			if independentMode {
+				journalBranch = "independent:" + baseBranch
+			}
 			epicStart := time.Now()
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 				Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID,
-				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Branch: epicBranch,
+				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Branch: journalBranch,
 			})
 
 			// ID -> sub for the dependency gate. Pointers are shared with the loop,
@@ -200,7 +228,11 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				_ = storage.WriteRunState(stateDir, run)
 
 				subStart := time.Now()
-				oc = driveSub(store, workDir, slug, tracker, sub, epicBranch, doneStatus, opts, run, additional)
+				if independentMode {
+					oc = driveSubIndependent(store, workDir, slug, tracker, sub, baseBranch, doneStatus, opts, run, additional)
+				} else {
+					oc = driveSub(store, workDir, slug, tracker, sub, epicBranch, doneStatus, opts, run, additional)
+				}
 				subDurations[oc.id] = int(time.Since(subStart).Seconds())
 				outcomes = append(outcomes, oc)
 
@@ -216,10 +248,16 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			// Journal end line: the run's durable record (outcome + duration per sub).
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 				Event: storage.JournalEventEnd, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID,
-				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Branch: epicBranch,
+				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Branch: journalBranch,
 				Status: storage.RunStatusDone, DurationS: int(time.Since(epicStart).Seconds()),
 				Subs: journalSubs(outcomes, subDurations, run),
 			})
+
+			if independentMode {
+				printEpicSummary(tracker, "independent, off "+baseBranch, outcomes)
+				fmt.Fprintf(os.Stderr, "\nEach sub lives on its own branch (pushed to origin when it carried commits). Finish + verify every task by hand, then open per-task PRs - nothing was merged anywhere.\n")
+				return nil
+			}
 
 			// Leave the worktree (or main checkout) on the integration branch with
 			// the accumulated work. Best-effort: the branch already exists (created
@@ -246,6 +284,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 	cmd.Flags().BoolVar(&allowDirty, "allow-dirty", false, "skip the clean-working-tree precondition")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the plan (subs, branches, readiness) without running anything")
 	cmd.Flags().BoolVar(&additional, "additional", false, "run the whole epic in the isolated 'additional' worktree instead of the main checkout; requires executor.additional_worktree in project.yaml")
+	cmd.Flags().BoolVar(&independent, "independent", false, "batch mode for unrelated subs: each on its own branch off the base, pushed, never merged (also enabled by `epic_mode: independent` on the tracker)")
 
 	return cmd
 }
@@ -422,6 +461,92 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 	return subOutcome{sub.Meta.ID, "merged", briefReason(res)}
 }
 
+// driveSubIndependent runs one ready sub in independent (batch) mode: fresh
+// branch off the base, best-effort worker, then push whatever landed and record
+// the handoff. Nothing is merged and nothing parks on waiting - every task in
+// the batch gets a human follow-up on its own branch, so a non-green sub simply
+// stays on its WIP status with the reason in the handoff (brief/log + Manager
+// Notes).
+func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker, sub *storage.Task, baseBranch string, doneStatus storage.TaskStatus, opts workOptions, run *storage.RunState, worktree bool) subOutcome {
+	dir := workDir
+	branch := resolveWorkBranch(sub)
+
+	// On the reused "additional" worktree force a FRESH branch from the base tip
+	// (wiping leftovers); on the main checkout keep create-or-continue.
+	newBranch := gitEnsureBranch
+	if worktree {
+		newBranch = gitFreshBranch
+	}
+	if err := newBranch(dir, branch, baseBranch); err != nil {
+		return subOutcome{sub.Meta.ID, "failed", "create branch: " + err.Error()}
+	}
+
+	logIfErr("move "+sub.Meta.ID+" to doing", store.MoveTask(sub, storage.StatusDoing))
+
+	plan, err := planWork(store, sub, slug, opts)
+	if err != nil {
+		return subOutcome{sub.Meta.ID, "failed", err.Error()}
+	}
+
+	run.CurrentSession = plan.sessionID
+	for i := range run.Subs {
+		if run.Subs[i].ID == sub.Meta.ID {
+			run.Subs[i].Session = plan.sessionID
+		}
+	}
+	_ = storage.WriteRunState(store.ProjectDir(slug), run)
+
+	res, err := executeWork(store, sub, plan, opts)
+	if err != nil {
+		// Worker died (timeout/crash). Push whatever it committed before dying so
+		// partial work survives the worktree's next wipe.
+		note := err.Error()
+		if pushNote := pushIfAhead(dir, branch, baseBranch); pushNote != "" {
+			note += "; " + pushNote
+		}
+		return subOutcome{sub.Meta.ID, "failed", note}
+	}
+
+	for i := range run.Subs {
+		if run.Subs[i].ID == sub.Meta.ID {
+			run.Subs[i].Turns = res.Turns
+			run.Subs[i].CostUSD = res.CostUSD
+		}
+	}
+
+	// Push regardless of outcome - in best-effort mode partial work on origin
+	// beats perfect work lost to the next branch wipe.
+	note := briefReason(res)
+	if pushNote := pushIfAhead(dir, branch, baseBranch); pushNote != "" {
+		note = strings.TrimSpace(pushNote + "; " + note)
+	}
+
+	if res.Status != "merged" {
+		logIfErr("record feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, res.Status, parkedFindings(res)))
+		return subOutcome{sub.Meta.ID, res.Status, note}
+	}
+
+	logIfErr("mark "+sub.Meta.ID+" "+string(doneStatus), store.MoveTask(sub, doneStatus))
+	logIfErr("refresh feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, "merged", res.Unresolved))
+	return subOutcome{sub.Meta.ID, "merged", note}
+}
+
+// pushIfAhead pushes branch to origin when it carries commits base does not
+// have. Returns a short human note for the outcome ("" when there was nothing
+// to push). Never fatal - a failed push only means the work stays local.
+func pushIfAhead(dir, branch, base string) string {
+	if gitAheadCount(dir, branch, base) == 0 {
+		return ""
+	}
+	if !gitHasRemote(dir) {
+		return "no remote - branch " + branch + " stays local"
+	}
+	if err := gitPush(dir, branch); err != nil {
+		return "push failed (" + err.Error() + ") - branch " + branch + " stays local"
+	}
+	return "pushed " + branch
+}
+
 // updateSubRun sets the status (and note) of sub id in the run-state, appending
 // an entry if it is not present yet.
 func updateSubRun(run *storage.RunState, id, status, note string) {
@@ -570,13 +695,17 @@ func openEpicPR(dir, epicBranch string, tracker *storage.Task) {
 	}
 }
 
-func printEpicPlan(tracker *storage.Task, epicBranch, base string, startStatus, doneStatus storage.TaskStatus, subs []*storage.Task, additional bool, workDir string) {
+func printEpicPlan(tracker *storage.Task, epicBranch, base string, startStatus, doneStatus storage.TaskStatus, subs []*storage.Task, additional bool, workDir string, independent bool) {
 	runLine := "run: DEFAULT (main checkout, clean-tree required)"
 	if additional {
 		runLine = "run: ADDITIONAL worktree " + workDir + " (isolated branch/port/sim; main checkout untouched)"
 	}
-	fmt.Printf("# pm run-epic (dry-run)\ntracker: %s  %s\n%s\nintegration branch: %s (off %s)\nready status: %s -> done status: %s\n\nsubs (in Order):\n",
-		tracker.Meta.ID, tracker.Meta.Title, runLine, epicBranch, base, startStatus, doneStatus)
+	branchLine := fmt.Sprintf("integration branch: %s (off %s)", epicBranch, base)
+	if independent {
+		branchLine = fmt.Sprintf("mode: INDEPENDENT - each sub on its own branch off %s, pushed to origin; no integration branch, no merging, no epic PR", base)
+	}
+	fmt.Printf("# pm run-epic (dry-run)\ntracker: %s  %s\n%s\n%s\nready status: %s -> done status: %s\n\nsubs (in Order):\n",
+		tracker.Meta.ID, tracker.Meta.Title, runLine, branchLine, startStatus, doneStatus)
 	for _, s := range subs {
 		ready := "skip"
 		if s.Meta.Status == doneStatus || s.Meta.Status == storage.StatusDone {
@@ -590,7 +719,7 @@ func printEpicPlan(tracker *storage.Task, epicBranch, base string, startStatus, 
 		if len(s.Meta.DependsOn) > 0 {
 			dep = "  depends_on=" + strings.Join(s.Meta.DependsOn, ",")
 		}
-		fmt.Printf("  [%-6s] %-14s %-8s order=%d  -> feat/%s%s\n", ready, s.Meta.ID, s.Meta.Status, s.Meta.Order, storage.Slugify(s.Meta.Title), dep)
+		fmt.Printf("  [%-6s] %-14s %-8s order=%d  -> %s%s\n", ready, s.Meta.ID, s.Meta.Status, s.Meta.Order, resolveWorkBranch(s), dep)
 	}
 }
 

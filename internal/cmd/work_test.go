@@ -137,6 +137,29 @@ func TestBuildWorkerPrompt(t *testing.T) {
 			t.Error("AC present in spec body should not render the none-stated fallback")
 		}
 	})
+
+	t.Run("context repos render sorted and read-only", func(t *testing.T) {
+		withRepos := exec
+		withRepos.ContextRepos = map[string]string{
+			"backend": "../platform.orbit",
+			"api":     "~/repos/api-docs",
+		}
+		got := buildWorkerPrompt(task, nil, proj, "atlas", withRepos, "feat/t", true)
+		mustContain(t, got, "## Reference repos (READ-ONLY)")
+		mustContain(t, got, "- api: ~/repos/api-docs")
+		mustContain(t, got, "- backend: ../platform.orbit")
+		mustContain(t, got, "NEVER modify")
+		if strings.Index(got, "- api:") > strings.Index(got, "- backend:") {
+			t.Error("context repos should render in sorted key order")
+		}
+	})
+
+	t.Run("no context repos -> no section", func(t *testing.T) {
+		got := buildWorkerPrompt(task, nil, proj, "atlas", exec, "feat/t", true)
+		if strings.Contains(got, "Reference repos") {
+			t.Error("empty context_repos must not render the section")
+		}
+	})
 }
 
 func TestDisplayStatus(t *testing.T) {
@@ -160,7 +183,7 @@ func TestDisplayStatus(t *testing.T) {
 func TestBuildWorkerSystemPrompt(t *testing.T) {
 	exec := storage.Executor{FixRounds: 5}
 	t.Run("standalone mentions draft PR + generics + contract", func(t *testing.T) {
-		got := buildWorkerSystemPrompt(exec, true)
+		got := buildWorkerSystemPrompt(exec, true, false)
 		mustContain(t, got, "Review->fix round cap: 5")
 		mustContain(t, got, "DRAFT pull request")
 		mustContain(t, got, "autonomy envelope")
@@ -168,10 +191,23 @@ func TestBuildWorkerSystemPrompt(t *testing.T) {
 		mustContain(t, got, "status:")
 	})
 	t.Run("epic omits pr generic and says no PR", func(t *testing.T) {
-		got := buildWorkerSystemPrompt(exec, false)
+		got := buildWorkerSystemPrompt(exec, false, false)
 		mustContain(t, got, "do NOT open a pull request")
 		if strings.Contains(got, "- pr: Open a DRAFT") {
 			t.Error("epic mode should not include the pr generic")
+		}
+	})
+	t.Run("independent adds the best-effort protocol", func(t *testing.T) {
+		got := buildWorkerSystemPrompt(exec, false, true)
+		mustContain(t, got, "Independent batch mode (BEST-EFFORT)")
+		mustContain(t, got, "ASSUMPTION: ")
+		mustContain(t, got, "TODO: ")
+		mustContain(t, got, "NEVER stop early")
+	})
+	t.Run("non-independent omits the best-effort protocol", func(t *testing.T) {
+		got := buildWorkerSystemPrompt(exec, false, false)
+		if strings.Contains(got, "Independent batch mode") {
+			t.Error("integration epic mode must not carry the best-effort protocol")
 		}
 	})
 }

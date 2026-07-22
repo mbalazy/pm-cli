@@ -385,7 +385,7 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 		{Meta: storage.TaskMeta{ID: "p-1-5", Title: "manual done", Status: storage.StatusDone, Order: 50, Mode: "manual"}},
 	}
 	out := captureStdout(t, func() {
-		printEpicPlan(tracker, "epic/p-1", "main", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo")
+		printEpicPlan(tracker, "epic/p-1", "main", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", false)
 	})
 	for _, want := range []string{
 		"[READY ] p-1-1",
@@ -397,6 +397,22 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("plan output missing %q:\n%s", want, out)
 		}
+	}
+	if !strings.Contains(out, "integration branch: epic/p-1") {
+		t.Errorf("integration plan should name the integration branch:\n%s", out)
+	}
+
+	independent := captureStdout(t, func() {
+		printEpicPlan(tracker, "epic/p-1", "development", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", true)
+	})
+	if !strings.Contains(independent, "mode: INDEPENDENT") {
+		t.Errorf("independent plan should announce the mode:\n%s", independent)
+	}
+	if !strings.Contains(independent, "off development") {
+		t.Errorf("independent plan should name the fork base:\n%s", independent)
+	}
+	if strings.Contains(independent, "integration branch:") {
+		t.Errorf("independent plan must not mention an integration branch:\n%s", independent)
 	}
 }
 

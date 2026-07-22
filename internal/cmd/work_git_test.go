@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -119,5 +120,54 @@ func TestGitCleanWorktreePreservesCommitsAndIgnored(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".env")); err != nil {
 		t.Fatalf(".env must be preserved: %v", err)
+	}
+}
+
+// TestGitAheadCountAndPushIfAhead covers the independent-mode push gate: a sub
+// branch is pushed only when it carries commits its base does not, and a repo
+// without a remote reports that instead of failing the run.
+func TestGitAheadCountAndPushIfAhead(t *testing.T) {
+	repo := t.TempDir()
+	gitT(t, repo, "init", "-q")
+	gitT(t, repo, "checkout", "-q", "-b", "development")
+	os.WriteFile(filepath.Join(repo, "a.txt"), []byte("base\n"), 0644)
+	gitT(t, repo, "add", ".")
+	gitT(t, repo, "commit", "-q", "-m", "base")
+
+	gitT(t, repo, "checkout", "-q", "-b", "feat/empty", "development")
+	if n := gitAheadCount(repo, "feat/empty", "development"); n != 0 {
+		t.Errorf("gitAheadCount(empty branch) = %d, want 0", n)
+	}
+	if note := pushIfAhead(repo, "feat/empty", "development"); note != "" {
+		t.Errorf("pushIfAhead(empty branch) = %q, want no-op", note)
+	}
+
+	gitT(t, repo, "checkout", "-q", "-b", "feat/work", "development")
+	os.WriteFile(filepath.Join(repo, "b.txt"), []byte("work\n"), 0644)
+	gitT(t, repo, "add", ".")
+	gitT(t, repo, "commit", "-q", "-m", "work 1")
+	os.WriteFile(filepath.Join(repo, "b.txt"), []byte("work 2\n"), 0644)
+	gitT(t, repo, "commit", "-q", "-am", "work 2")
+	if n := gitAheadCount(repo, "feat/work", "development"); n != 2 {
+		t.Errorf("gitAheadCount(2 commits) = %d, want 2", n)
+	}
+	if note := pushIfAhead(repo, "feat/work", "development"); !strings.Contains(note, "no remote") {
+		t.Errorf("pushIfAhead without remote = %q, want a 'no remote' note", note)
+	}
+
+	// With a (local bare) remote the push succeeds and reports the branch.
+	bare := t.TempDir()
+	gitT(t, bare, "init", "-q", "--bare")
+	gitT(t, repo, "remote", "add", "origin", bare)
+	if note := pushIfAhead(repo, "feat/work", "development"); note != "pushed feat/work" {
+		t.Errorf("pushIfAhead with remote = %q, want 'pushed feat/work'", note)
+	}
+	out, err := exec.Command("git", "-C", bare, "rev-parse", "--verify", "refs/heads/feat/work").Output()
+	if err != nil || len(out) == 0 {
+		t.Errorf("feat/work not present on the remote after push: %v", err)
+	}
+
+	if n := gitAheadCount(repo, "feat/work", "missing-base"); n != 0 {
+		t.Errorf("gitAheadCount with unknown base = %d, want 0 (error swallowed)", n)
 	}
 }
