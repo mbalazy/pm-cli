@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"sort"
 
 	"gopkg.in/yaml.v3"
 )
@@ -31,10 +32,15 @@ type Executor struct {
 	// happens to have checked out. Precedence: explicit --base flag > this >
 	// (pm work) the main checkout's current branch / (pm run-epic) "main".
 	BaseBranch string `yaml:"base_branch,omitempty"`
-	// Env is an opaque string->string map injected verbatim into the worker's
-	// environment when running in the worktree. pm does NOT interpret these -
-	// they carry project-specific knowledge (e.g. a Metro port, a simulator
-	// UDID) that stays out of pm and lives in project.yaml.
+	// Env is an opaque string->string map injected verbatim into spawned claude
+	// processes: the executor worker when running with --additional, and the
+	// board's interactive worktree launches (any executor.env, regardless of
+	// AdditionalWorktree). pm does NOT interpret these - they carry
+	// project-specific knowledge (e.g. a Metro port, a simulator UDID) that
+	// stays out of pm and lives in project.yaml. Keys are arbitrary: name them
+	// whatever the consuming project reads (e.g. SIM_UDID). Pairs are appended
+	// LAST so they win over inherited values - which also means a
+	// CLAUDE_CONFIG_DIR key here would override the config-dir pinning.
 	Env         map[string]string       `yaml:"env,omitempty"`
 	StartStatus string                  `yaml:"start_status,omitempty"` // sub status meaning "ready to pick up"
 	WipStatus   string                  `yaml:"wip_status,omitempty"`
@@ -189,6 +195,25 @@ func (e Executor) Phase(name string) PhaseBinding {
 		return PhaseBinding{}
 	}
 	return e.Phases[name]
+}
+
+// EnvSlice renders Env as a sorted []string of KEY=VALUE pairs for injection
+// into a spawned process's environment. Sorted purely for determinism; nil when
+// no env is configured. pm does not interpret these values.
+func (e Executor) EnvSlice() []string {
+	if len(e.Env) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(e.Env))
+	for k := range e.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k+"="+e.Env[k])
+	}
+	return out
 }
 
 // GetExecutor returns the resolved execution profile for a project: an explicit

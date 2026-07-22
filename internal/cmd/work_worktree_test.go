@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -186,21 +185,6 @@ func TestResolveWorktreeBase(t *testing.T) {
 	}
 }
 
-func TestExecutorEnvSlice(t *testing.T) {
-	if got := executorEnvSlice(storage.Executor{}); got != nil {
-		t.Fatalf("nil env should yield nil slice, got %v", got)
-	}
-	env := map[string]string{
-		"ADDITIONAL_SIM_UDID":   "2CE9",
-		"ADDITIONAL_METRO_PORT": "8090",
-	}
-	// Sorted by key for determinism.
-	want := []string{"ADDITIONAL_METRO_PORT=8090", "ADDITIONAL_SIM_UDID=2CE9"}
-	if got := executorEnvSlice(storage.Executor{Env: env}); !reflect.DeepEqual(got, want) {
-		t.Fatalf("executorEnvSlice = %v, want %v", got, want)
-	}
-}
-
 // TestExecutorWorktreeYAML verifies the new schema fields round-trip and that a
 // project without an executor block keeps worktree off.
 func TestExecutorWorktreeYAML(t *testing.T) {
@@ -242,7 +226,7 @@ executor:
 	if got := resolveWorktreePath(proj, exec); got != "/repos/app-additional" {
 		t.Fatalf("resolved = %q", got)
 	}
-	if slice := executorEnvSlice(exec); len(slice) != 1 || !strings.HasPrefix(slice[0], "ADDITIONAL_METRO_PORT=") {
+	if slice := exec.EnvSlice(); len(slice) != 1 || !strings.HasPrefix(slice[0], "ADDITIONAL_METRO_PORT=") {
 		t.Fatalf("env slice = %v", slice)
 	}
 

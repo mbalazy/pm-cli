@@ -3,7 +3,6 @@ package cmd
 import (
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -42,25 +41,6 @@ func resolveWorktreeBase(flagBase, execBase, fallback string) string {
 		return execBase
 	}
 	return fallback
-}
-
-// executorEnvSlice renders exec.Env as a sorted []string of KEY=VALUE pairs for
-// injection into the worker's environment. Sorted purely for determinism. pm
-// does not interpret these values.
-func executorEnvSlice(exec storage.Executor) []string {
-	if len(exec.Env) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(exec.Env))
-	for k := range exec.Env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	out := make([]string, 0, len(keys))
-	for _, k := range keys {
-		out = append(out, k+"="+exec.Env[k])
-	}
-	return out
 }
 
 // prepareWorktree makes the shared "additional" worktree ready for a worker

@@ -281,7 +281,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		// branch. Resolved here (a read, no side effect) so --dry-run shows it too.
 		cur, _ := gitCurrentBranch(proj.Path)
 		base = resolveWorktreeBase(opts.base, exec.BaseBranch, cur)
-		env = executorEnvSlice(exec)
+		env = exec.EnvSlice()
 	}
 
 	return &workPlan{

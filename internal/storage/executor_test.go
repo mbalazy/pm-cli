@@ -1,10 +1,26 @@
 package storage
 
 import (
+	"reflect"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 )
+
+func TestExecutorEnvSlice(t *testing.T) {
+	if got := (Executor{}).EnvSlice(); got != nil {
+		t.Fatalf("nil env should yield nil slice, got %v", got)
+	}
+	env := map[string]string{
+		"SIM_UDID":              "2CE9",
+		"ADDITIONAL_METRO_PORT": "8090",
+	}
+	// Sorted by key for determinism.
+	want := []string{"ADDITIONAL_METRO_PORT=8090", "SIM_UDID=2CE9"}
+	if got := (Executor{Env: env}).EnvSlice(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("EnvSlice = %v, want %v", got, want)
+	}
+}
 
 func TestGetExecutorMissingBlock(t *testing.T) {
 	// A project with no executor block resolves to all-generic defaults.
