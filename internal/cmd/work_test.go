@@ -201,6 +201,7 @@ func TestBuildWorkerSystemPrompt(t *testing.T) {
 		got := buildWorkerSystemPrompt(exec, false, true)
 		mustContain(t, got, "Independent batch mode (BEST-EFFORT)")
 		mustContain(t, got, "ASSUMPTION: ")
+		mustContain(t, got, "verify: <how>")
 		mustContain(t, got, "TODO: ")
 		mustContain(t, got, "NEVER stop early")
 	})
