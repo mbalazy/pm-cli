@@ -18,6 +18,7 @@ type subOutcome struct {
 	id     string
 	result string // merged | blocked | failed | skipped | conflict | manual
 	note   string
+	branch string // branch the sub's work landed on; empty for skips (no worker ran)
 }
 
 func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
@@ -196,7 +197,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			epicStart := time.Now()
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 				Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID,
-				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Branch: journalBranch,
+				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Independent: independentMode, Branch: journalBranch,
 			})
 
 			// ID -> sub for the dependency gate. Pointers are shared with the loop,
@@ -248,7 +249,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			// Journal end line: the run's durable record (outcome + duration per sub).
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 				Event: storage.JournalEventEnd, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID,
-				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Branch: journalBranch,
+				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Independent: independentMode, Branch: journalBranch,
 				Status: storage.RunStatusDone, DurationS: int(time.Since(epicStart).Seconds()),
 				Subs: journalSubs(outcomes, subDurations, run),
 			})
@@ -301,17 +302,17 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 // worker but leaves it on its ready status so a later re-run picks it up.
 func classifySub(sub *storage.Task, byID map[string]*storage.Task, startStatus, doneStatus storage.TaskStatus) (oc subOutcome, drive bool, announce string) {
 	if sub.Meta.Status == doneStatus || sub.Meta.Status == storage.StatusDone {
-		return subOutcome{sub.Meta.ID, "skipped", "already " + string(sub.Meta.Status)}, false, ""
+		return subOutcome{sub.Meta.ID, "skipped", "already " + string(sub.Meta.Status), ""}, false, ""
 	}
 	if sub.Meta.Mode == "manual" {
-		return subOutcome{sub.Meta.ID, "manual", "manual sub - run by hand, move to " + string(doneStatus) + " when done"},
+		return subOutcome{sub.Meta.ID, "manual", "manual sub - run by hand, move to " + string(doneStatus) + " when done", ""},
 			false, sub.Meta.ID + " skipped - manual sub (human-only)"
 	}
 	if sub.Meta.Status != startStatus {
-		return subOutcome{sub.Meta.ID, "skipped", "not ready (status " + string(sub.Meta.Status) + ")"}, false, ""
+		return subOutcome{sub.Meta.ID, "skipped", "not ready (status " + string(sub.Meta.Status) + ")", ""}, false, ""
 	}
 	if reason := unmetDeps(sub, byID, doneStatus); reason != "" {
-		return subOutcome{sub.Meta.ID, "skipped", reason}, false, sub.Meta.ID + " skipped - " + reason
+		return subOutcome{sub.Meta.ID, "skipped", reason, ""}, false, sub.Meta.ID + " skipped - " + reason
 	}
 	return subOutcome{id: sub.Meta.ID}, true, ""
 }
@@ -379,7 +380,7 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 	// Branch the sub off the current integration branch (which already carries
 	// the prior subs - seams resolve via sequencing).
 	if err := gitEnsureBranch(dir, epicBranch, ""); err != nil {
-		return subOutcome{sub.Meta.ID, "failed", "checkout integration: " + err.Error()}
+		return subOutcome{sub.Meta.ID, "failed", "checkout integration: " + err.Error(), branch}
 	}
 	// On the reused "additional" worktree, force a FRESH feat branch from the
 	// integration tip (wiping any leftovers), so a re-run after a kill doesn't
@@ -390,7 +391,7 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 		newBranch = gitFreshBranch
 	}
 	if err := newBranch(dir, branch, epicBranch); err != nil {
-		return subOutcome{sub.Meta.ID, "failed", "create branch: " + err.Error()}
+		return subOutcome{sub.Meta.ID, "failed", "create branch: " + err.Error(), branch}
 	}
 
 	logIfErr("move "+sub.Meta.ID+" to doing", store.MoveTask(sub, storage.StatusDoing))
@@ -398,7 +399,7 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 	plan, err := planWork(store, sub, slug, opts)
 	if err != nil {
 		logIfErr("park "+sub.Meta.ID, store.MoveTask(sub, storage.StatusWaiting))
-		return subOutcome{sub.Meta.ID, "failed", err.Error()}
+		return subOutcome{sub.Meta.ID, "failed", err.Error(), branch}
 	}
 
 	// Surface the worker's session up front so the live agent-view knows which
@@ -414,7 +415,7 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 	res, err := executeWork(store, sub, plan, opts)
 	if err != nil {
 		logIfErr("park "+sub.Meta.ID, store.MoveTask(sub, storage.StatusWaiting))
-		return subOutcome{sub.Meta.ID, "failed", err.Error()}
+		return subOutcome{sub.Meta.ID, "failed", err.Error(), branch}
 	}
 
 	// Stamp the worker's envelope stats onto the sub's run-state entry so the
@@ -437,19 +438,19 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 		// each child. Status itself stays in the child + generated rollup; this is
 		// open-questions content, not a status table.
 		logIfErr("record feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, res.Status, parkedFindings(res)))
-		return subOutcome{sub.Meta.ID, res.Status, briefReason(res)}
+		return subOutcome{sub.Meta.ID, res.Status, briefReason(res), branch}
 	}
 
 	// Verify-green: merge the sub back into the integration branch.
 	if err := gitEnsureBranch(dir, epicBranch, ""); err != nil {
 		logIfErr("park "+sub.Meta.ID, store.MoveTask(sub, storage.StatusWaiting))
-		return subOutcome{sub.Meta.ID, "failed", "checkout integration to merge: " + err.Error()}
+		return subOutcome{sub.Meta.ID, "failed", "checkout integration to merge: " + err.Error(), branch}
 	}
 	msg := fmt.Sprintf("Merge %s (%s) into %s", branch, sub.Meta.ID, epicBranch)
 	if err := gitMergeNoFF(dir, branch, msg); err != nil {
 		// A seam the ordering did not resolve - escalate to a human.
 		logIfErr("park "+sub.Meta.ID, store.MoveTask(sub, storage.StatusWaiting))
-		return subOutcome{sub.Meta.ID, "conflict", err.Error()}
+		return subOutcome{sub.Meta.ID, "conflict", err.Error(), branch}
 	}
 	logIfErr("mark "+sub.Meta.ID+" "+string(doneStatus), store.MoveTask(sub, doneStatus))
 	_ = gitDeleteBranch(dir, branch) // best-effort cleanup; the merge already landed
@@ -458,7 +459,7 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 	// findings for later subs, and (with empty findings) clear any stale parked
 	// note now that the sub has merged.
 	logIfErr("refresh feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, "merged", res.Unresolved))
-	return subOutcome{sub.Meta.ID, "merged", briefReason(res)}
+	return subOutcome{sub.Meta.ID, "merged", briefReason(res), branch}
 }
 
 // driveSubIndependent runs one ready sub in independent (batch) mode: fresh
@@ -478,14 +479,14 @@ func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker,
 		newBranch = gitFreshBranch
 	}
 	if err := newBranch(dir, branch, baseBranch); err != nil {
-		return subOutcome{sub.Meta.ID, "failed", "create branch: " + err.Error()}
+		return subOutcome{sub.Meta.ID, "failed", "create branch: " + err.Error(), branch}
 	}
 
 	logIfErr("move "+sub.Meta.ID+" to doing", store.MoveTask(sub, storage.StatusDoing))
 
 	plan, err := planWork(store, sub, slug, opts)
 	if err != nil {
-		return subOutcome{sub.Meta.ID, "failed", err.Error()}
+		return subOutcome{sub.Meta.ID, "failed", err.Error(), branch}
 	}
 
 	run.CurrentSession = plan.sessionID
@@ -504,7 +505,7 @@ func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker,
 		if pushNote := pushIfAhead(dir, branch, baseBranch); pushNote != "" {
 			note += "; " + pushNote
 		}
-		return subOutcome{sub.Meta.ID, "failed", note}
+		return subOutcome{sub.Meta.ID, "failed", note, branch}
 	}
 
 	for i := range run.Subs {
@@ -523,12 +524,12 @@ func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker,
 
 	if res.Status != "merged" {
 		logIfErr("record feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, res.Status, parkedFindings(res)))
-		return subOutcome{sub.Meta.ID, res.Status, note}
+		return subOutcome{sub.Meta.ID, res.Status, note, branch}
 	}
 
 	logIfErr("mark "+sub.Meta.ID+" "+string(doneStatus), store.MoveTask(sub, doneStatus))
 	logIfErr("refresh feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, "merged", res.Unresolved))
-	return subOutcome{sub.Meta.ID, "merged", note}
+	return subOutcome{sub.Meta.ID, "merged", note, branch}
 }
 
 // pushIfAhead pushes branch to origin when it carries commits base does not
@@ -572,7 +573,7 @@ func journalSubs(outcomes []subOutcome, durations map[string]int, run *storage.R
 	for _, o := range outcomes {
 		sr := byID[o.id]
 		out = append(out, storage.JournalSub{
-			ID: o.id, Result: o.result, Note: o.note,
+			ID: o.id, Result: o.result, Note: o.note, Branch: o.branch,
 			DurationS: durations[o.id], Session: sr.Session,
 			Turns: sr.Turns, CostUSD: sr.CostUSD,
 		})

@@ -418,9 +418,9 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 
 func TestJournalSubs(t *testing.T) {
 	outcomes := []subOutcome{
-		{"p-1-1", "merged", "ok"},
-		{"p-1-2", "manual", "manual sub"},
-		{"p-1-3", "skipped", "waiting on p-1-2"},
+		{"p-1-1", "merged", "ok", "feat/one"},
+		{"p-1-2", "manual", "manual sub", ""},
+		{"p-1-3", "skipped", "waiting on p-1-2", ""},
 	}
 	durations := map[string]int{"p-1-1": 90}
 	run := &storage.RunState{Subs: []storage.SubRun{
@@ -436,6 +436,12 @@ func TestJournalSubs(t *testing.T) {
 	first := got[0]
 	if first.Session != "sess-1" || first.Turns != 42 || first.CostUSD != 1.25 || first.DurationS != 90 {
 		t.Errorf("driven sub stats not attached: %+v", first)
+	}
+	if first.Branch != "feat/one" {
+		t.Errorf("driven sub branch not attached: %+v", first)
+	}
+	if got[1].Branch != "" || got[2].Branch != "" {
+		t.Errorf("skipped/manual subs should carry no branch: %+v %+v", got[1], got[2])
 	}
 	if got[1].Result != "manual" || got[1].Turns != 0 || got[1].CostUSD != 0 || got[1].DurationS != 0 {
 		t.Errorf("manual sub should carry no worker stats: %+v", got[1])

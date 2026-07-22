@@ -22,9 +22,9 @@ func TestJournalAppendRead(t *testing.T) {
 	}
 	end := &JournalEntry{
 		Event: JournalEventEnd, Kind: "run-epic", Project: "proj", TaskID: "proj-1",
-		Status: "done", DurationS: 123,
+		Status: "done", DurationS: 123, Independent: true,
 		Subs: []JournalSub{
-			{ID: "proj-1-1", Result: "merged", DurationS: 100, Session: "abc", Turns: 42, CostUSD: 1.25},
+			{ID: "proj-1-1", Result: "merged", Branch: "feat/one", DurationS: 100, Session: "abc", Turns: 42, CostUSD: 1.25},
 			{ID: "proj-1-2", Result: "manual", Note: "manual sub"},
 		},
 	}
@@ -47,6 +47,12 @@ func TestJournalAppendRead(t *testing.T) {
 	}
 	if got[1].Subs[0].Turns != 42 || got[1].Subs[0].CostUSD != 1.25 {
 		t.Errorf("turns/cost did not round-trip: %+v", got[1].Subs[0])
+	}
+	if !got[1].Independent || got[1].Subs[0].Branch != "feat/one" {
+		t.Errorf("independent/branch did not round-trip: %+v", got[1])
+	}
+	if got[0].Independent {
+		t.Error("start entry without the flag must stay non-independent")
 	}
 }
 

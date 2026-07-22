@@ -377,7 +377,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 				Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
 				PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
 				Status: storage.RunStatusFailed, DurationS: int(time.Since(workStart).Seconds()), Error: err.Error(),
-				Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: "failed", Note: err.Error(), DurationS: int(time.Since(workStart).Seconds()), Session: plan.sessionID}},
+				Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: "failed", Note: err.Error(), Branch: plan.branch, DurationS: int(time.Since(workStart).Seconds()), Session: plan.sessionID}},
 			})
 		}
 		return nil, err
@@ -402,7 +402,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
 			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
 			Status: storage.RunStatusDone, DurationS: int(time.Since(workStart).Seconds()),
-			Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: res.Status, Note: strings.TrimSpace(res.Summary), DurationS: int(time.Since(workStart).Seconds()), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD}},
+			Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: res.Status, Note: strings.TrimSpace(res.Summary), Branch: plan.branch, DurationS: int(time.Since(workStart).Seconds()), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD}},
 		})
 	}
 	return res, nil

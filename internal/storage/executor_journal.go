@@ -35,6 +35,7 @@ type JournalSub struct {
 	ID        string  `json:"id"`
 	Result    string  `json:"result"` // merged | blocked | failed | conflict | skipped | manual
 	Note      string  `json:"note,omitempty"`
+	Branch    string  `json:"branch,omitempty"`     // the branch the sub's work landed on (key artifact in independent mode)
 	DurationS int     `json:"duration_s,omitempty"` // wall-clock of the driveSub/worker, 0 for skips
 	Session   string  `json:"session,omitempty"`    // worker session id -> transcript .jsonl
 	Turns     int     `json:"turns,omitempty"`      // claude envelope num_turns (0 for skips)
@@ -43,20 +44,24 @@ type JournalSub struct {
 
 // JournalEntry is one line in the executor journal.
 type JournalEntry struct {
-	Event      string       `json:"event"` // start | end | killed
-	TS         string       `json:"ts"`    // RFC3339, stamped by AppendJournal if empty
-	Kind       string       `json:"kind"`  // "work" | "run-epic"
-	Project    string       `json:"project"`
-	TaskID     string       `json:"task_id"` // task (work) or tracker (run-epic) id
-	PID        int          `json:"pid,omitempty"`
-	Model      string       `json:"model,omitempty"`
-	Additional bool         `json:"additional,omitempty"`
-	Yolo       bool         `json:"yolo,omitempty"`
-	Branch     string       `json:"branch,omitempty"`     // epic integration branch / task branch
-	Status     string       `json:"status,omitempty"`     // end only: done | failed (run level)
-	DurationS  int          `json:"duration_s,omitempty"` // end only: whole-run wall-clock
-	Subs       []JournalSub `json:"subs,omitempty"`       // end only: per-sub outcomes
-	Error      string       `json:"error,omitempty"`
+	Event      string `json:"event"` // start | end | killed
+	TS         string `json:"ts"`    // RFC3339, stamped by AppendJournal if empty
+	Kind       string `json:"kind"`  // "work" | "run-epic"
+	Project    string `json:"project"`
+	TaskID     string `json:"task_id"` // task (work) or tracker (run-epic) id
+	PID        int    `json:"pid,omitempty"`
+	Model      string `json:"model,omitempty"`
+	Additional bool   `json:"additional,omitempty"`
+	Yolo       bool   `json:"yolo,omitempty"`
+	// Independent = the run drove an independent (batch) epic: subs on their
+	// own branches off the base, pushed, nothing merged. Explicit so retros can
+	// segment integration vs batch runs without parsing Branch.
+	Independent bool         `json:"independent,omitempty"`
+	Branch      string       `json:"branch,omitempty"`     // epic integration branch / task branch; "independent:<base>" for batch runs
+	Status      string       `json:"status,omitempty"`     // end only: done | failed (run level)
+	DurationS   int          `json:"duration_s,omitempty"` // end only: whole-run wall-clock
+	Subs        []JournalSub `json:"subs,omitempty"`       // end only: per-sub outcomes
+	Error       string       `json:"error,omitempty"`
 }
 
 // JournalPath is the executor journal path for a project dir.
