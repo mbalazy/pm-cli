@@ -75,23 +75,42 @@ func (m *Model) claudeConfigDir(projectSlug string) string {
 }
 
 // claudeLaunchEnv returns the environment for a spawned claude process,
-// injecting CLAUDE_CONFIG_DIR when the project uses a non-default config dir.
-// Returns nil (= inherit parent env unchanged) for the default config dir, so
-// default projects are spawned exactly as before.
-func claudeLaunchEnv(configDir string) []string {
-	if configDir == "" || configDir == storage.DefaultClaudeConfigDir() {
-		return nil
+// injecting CLAUDE_CONFIG_DIR when the project uses a non-default config dir,
+// plus any extra KEY=VALUE pairs (appended last, so they win over inherited
+// values - same ordering as the executor's runWorker). Returns nil (= inherit
+// parent env unchanged) when there is nothing to inject, so default projects
+// are spawned exactly as before.
+func claudeLaunchEnv(configDir string, extra ...string) []string {
+	var env []string
+	if configDir != "" && configDir != storage.DefaultClaudeConfigDir() {
+		env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+configDir)
 	}
-	return append(os.Environ(), "CLAUDE_CONFIG_DIR="+configDir)
+	if len(extra) > 0 {
+		if env == nil {
+			env = os.Environ()
+		}
+		env = append(env, extra...)
+	}
+	return env
 }
 
-// claudeEnvPrefix returns a shell prefix ("CLAUDE_CONFIG_DIR=<dir> ") for tmux /
-// shell-string launches, or "" for the default config dir.
-func claudeEnvPrefix(configDir string) string {
-	if configDir == "" || configDir == storage.DefaultClaudeConfigDir() {
-		return ""
+// claudeEnvPrefix returns a shell prefix ("KEY=val ... ") for tmux /
+// shell-string launches: CLAUDE_CONFIG_DIR for a non-default config dir plus
+// any extra KEY=VALUE pairs (values shell-quoted). "" when there is nothing to
+// inject. The prefix relies on tmuxNewWindow running commands via `sh -c`.
+func claudeEnvPrefix(configDir string, extra ...string) string {
+	var sb strings.Builder
+	if configDir != "" && configDir != storage.DefaultClaudeConfigDir() {
+		sb.WriteString("CLAUDE_CONFIG_DIR=" + shellQuote(configDir) + " ")
 	}
-	return "CLAUDE_CONFIG_DIR=" + shellQuote(configDir) + " "
+	for _, kv := range extra {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		sb.WriteString(k + "=" + shellQuote(v) + " ")
+	}
+	return sb.String()
 }
 
 // ccProjectDirs returns CC project directories to search for session data.

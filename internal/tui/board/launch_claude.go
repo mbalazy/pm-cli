@@ -98,11 +98,15 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		skipFlag = "--dangerously-skip-permissions"
 	}
 
-	// Resolve project working directory
+	// Resolve project working directory (proj is kept for worktreeLaunchEnv)
 	var projDir string
-	if proj, err := m.store.GetProject(t.Project); err == nil && proj.Path != "" {
-		if info, err := os.Stat(proj.Path); err == nil && info.IsDir() {
-			projDir = proj.Path
+	var proj *storage.Project
+	if p, err := m.store.GetProject(t.Project); err == nil {
+		proj = p
+		if proj.Path != "" {
+			if info, err := os.Stat(proj.Path); err == nil && info.IsDir() {
+				projDir = proj.Path
+			}
 		}
 	}
 
@@ -131,11 +135,11 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	setDir := func(c *exec.Cmd) {
+	setDir := func(c *exec.Cmd, extraEnv ...string) {
 		if projDir != "" {
 			c.Dir = projDir
 		}
-		if env := claudeLaunchEnv(configDir); env != nil {
+		if env := claudeLaunchEnv(configDir, extraEnv...); env != nil {
 			c.Env = env
 		}
 	}
@@ -162,8 +166,8 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	withCd := func(cmd string) string {
-		cmd = claudeEnvPrefix(configDir) + cmd
+	withCd := func(cmd string, extraEnv ...string) string {
+		cmd = claudeEnvPrefix(configDir, extraEnv...) + cmd
 		if projDir != "" {
 			return fmt.Sprintf("cd %s && %s", shellQuote(projDir), cmd)
 		}
@@ -227,7 +231,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 		args = append(args, prompt)
 		c := exec.Command("claude", args...)
-		setDir(c)
+		setDir(c, worktreeLaunchEnv(proj)...)
 		origWin := tmuxGetWindowName()
 		tmuxRenameWindow(tmuxWindowName("wt", t.Meta.ID, sessionID))
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
@@ -242,7 +246,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		if projDir != "" {
 			copyWorktreeFiles(projDir, wtName)
 		}
-		shellCmd := withCd(fmt.Sprintf("claude -w %s --session-id %s %s %s", shellQuote(wtName), sessionID, skipFlag, shellQuote(prompt)))
+		shellCmd := withCd(fmt.Sprintf("claude -w %s --session-id %s %s %s", shellQuote(wtName), sessionID, skipFlag, shellQuote(prompt)), worktreeLaunchEnv(proj)...)
 		winName := tmuxWindowName("wt", t.Meta.ID, sessionID)
 		sess, err := tmuxNewWindow(winName, shellCmd)
 		if err != nil {
@@ -333,6 +337,21 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// worktreeLaunchEnv returns the project's executor.env as KEY=VALUE pairs for
+// interactive WORKTREE launches. A worktree session runs outside the main
+// checkout, so it gets the same runtime-isolation env (e.g. Metro port,
+// simulator UDID) the executor's --additional worker gets - unconditionally
+// whenever executor.env is set, regardless of additional_worktree. Non-worktree
+// launches never inject it: a main-checkout session must keep the default
+// port/simulator. The env carries ONE port/UDID (single-slot by design), so at
+// most one env-injected session should run at a time.
+func worktreeLaunchEnv(proj *storage.Project) []string {
+	if proj == nil {
+		return nil
+	}
+	return proj.GetExecutor().EnvSlice()
 }
 
 func buildClaudePrompt(t *storage.Task, store storage.TaskStore) string {
