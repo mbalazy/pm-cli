@@ -122,7 +122,7 @@ func buildWorkerSystemPrompt(exec storage.Executor, standalone, independent bool
 
 ## Inner loop
 Run these phases in order. The user prompt gives the BINDING for each phase (skill | cmd | generic | skip):
-1. implement - write the code. Per checkpoint: code -> lint + typecheck -> commit.
+1. implement - write the code. Per checkpoint: code -> CHEAP scoped checks only (lint the files you touched) -> commit. Do NOT run the full type-check or test suite per checkpoint - in a large repo that burns minutes re-verifying what already passed. Instead run ONE full lint + typecheck pass when the implementation is complete, fix what it finds, and commit - review must see compiling code.
 2. test - add/extend automated tests for what you built; commit them.
 3. review - get a FRESH, adversarial, diff-only review. This MUST be a different perspective than the implementer (a bound review skill, or independent reviewer subagents). Reviewers see ONLY the diff + the AC.
 4. fix - apply fixes for valid findings (review is read-only, so fixing is a separate step), commit, then re-review.
@@ -172,7 +172,7 @@ This task is one of several UNRELATED tasks in a batch. A human returns to every
 func genericPhasePrompt(phase string) string {
 	switch phase {
 	case storage.PhaseImplement:
-		return "Implement the smallest change that satisfies the AC, matching the repo's existing style and conventions. After each logical unit, run the repo's linter and type-checker (if present), fix issues, then commit."
+		return "Implement the smallest change that satisfies the AC, matching the repo's existing style and conventions. Commit after each logical unit, running only cheap scoped checks per commit (e.g. lint the changed files). When the implementation is complete, run the repo's full linter + type-checker ONCE, fix findings, commit. Save the full test suite for the verify phase."
 	case storage.PhaseTest:
 		return "Add or extend automated tests covering the behavior you implemented, following the repo's existing test conventions. Commit them."
 	case storage.PhaseReview:
