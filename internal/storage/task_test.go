@@ -196,6 +196,7 @@ func TestWriteTaskReadTaskRoundtrip(t *testing.T) {
 					Tags:     []string{"backend", "urgent"},
 					Brief:    "Working on auth flow",
 					EpicMode: EpicModeIndependent,
+					Model:    "sonnet",
 				},
 				Body: "## Description\n\nSome body content\n\n## Notes\n\n- Note 1",
 			},
@@ -271,6 +272,9 @@ func TestWriteTaskReadTaskRoundtrip(t *testing.T) {
 			}
 			if got.Meta.EpicMode != tt.task.Meta.EpicMode {
 				t.Errorf("EpicMode: got %q, want %q", got.Meta.EpicMode, tt.task.Meta.EpicMode)
+			}
+			if got.Meta.Model != tt.task.Meta.Model {
+				t.Errorf("Model: got %q, want %q", got.Meta.Model, tt.task.Meta.Model)
 			}
 			if got.Body != tt.task.Body {
 				t.Errorf("Body: got %q, want %q", got.Body, tt.task.Body)

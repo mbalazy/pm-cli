@@ -63,6 +63,12 @@ type TaskMeta struct {
 	// does the work and moves it to the done status themselves. Empty = "auto"
 	// (backward compatible - existing subs run exactly as before).
 	Mode string `yaml:"mode,omitempty"`
+	// Model overrides the worker model for THIS sub when `pm run-epic` (or
+	// `pm work` without an explicit --model) spawns it. Any claude model alias
+	// or full name (e.g. "sonnet", "opus", "haiku"). Empty = inherit the
+	// run-level model. Lets a batch put trivial subs (copy/color tweaks) on a
+	// cheaper model while investigation subs stay on the default.
+	Model string `yaml:"model,omitempty"`
 	// EpicMode (meaningful on a PARENT tracker only) selects how `pm run-epic`
 	// drives the subs. "" (default) = integration mode: subs branch off and merge
 	// back into a shared epic/<tracker> branch, ending in one epic PR.

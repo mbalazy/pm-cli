@@ -248,11 +248,17 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				updateSubRun(run, sub.Meta.ID, storage.RunStatusRunning, "")
 				_ = storage.WriteRunState(stateDir, run)
 
+				subOpts := opts
+				if sub.Meta.Model != "" {
+					subOpts.model = sub.Meta.Model
+					fmt.Fprintf(os.Stderr, "pm run-epic: %s model override -> %s\n", sub.Meta.ID, sub.Meta.Model)
+				}
+
 				subStart := time.Now()
 				if independentMode {
-					oc = driveSubIndependent(store, workDir, slug, tracker, sub, baseBranch, doneStatus, opts, run, additional)
+					oc = driveSubIndependent(store, workDir, slug, tracker, sub, baseBranch, doneStatus, subOpts, run, additional)
 				} else {
-					oc = driveSub(store, workDir, slug, tracker, sub, epicBranch, doneStatus, opts, run, additional)
+					oc = driveSub(store, workDir, slug, tracker, sub, epicBranch, doneStatus, subOpts, run, additional)
 				}
 				subDurations[oc.id] = int(time.Since(subStart).Seconds())
 				outcomes = append(outcomes, oc)

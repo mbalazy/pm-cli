@@ -176,7 +176,7 @@ func genericPhasePrompt(phase string) string {
 	case storage.PhaseTest:
 		return "Add or extend automated tests covering the behavior you implemented, following the repo's existing test conventions. Commit them."
 	case storage.PhaseReview:
-		return "Spawn 3 independent reviewer subagents via the Task tool. Give each ONLY the branch diff (`git diff main...HEAD`, or vs the merge-base) plus the AC, and instruct each to actively REFUTE the change: correctness bugs, missed/over-shot AC, broken edge cases, style violations. Treat a finding as valid if >=2 reviewers raise it OR any reviewer finds a clear correctness bug."
+		return "Size the review to the diff: first run `git diff --stat` vs the merge-base. Small diff (<~50 changed lines across <=2 files, excluding lockfiles/snapshots) -> spawn 1 independent reviewer subagent; anything larger -> spawn 3. Give each ONLY the branch diff (`git diff main...HEAD`, or vs the merge-base) plus the AC, and instruct each to actively REFUTE the change: correctness bugs, missed/over-shot AC, broken edge cases, style violations. With 3 reviewers, treat a finding as valid if >=2 raise it OR any one finds a clear correctness bug; with 1 reviewer, treat every concretely-argued finding as valid."
 	case storage.PhaseVerify:
 		return "Detect and run the repo's full verification - tests + lint + typecheck (e.g. `go vet ./... && go test ./...`; or `yarn jest && yarn biome check && yarn tsc --noEmit`; or `npm test`). All must pass. If you cannot determine the commands, list that in `unresolved`."
 	case storage.PhasePR:

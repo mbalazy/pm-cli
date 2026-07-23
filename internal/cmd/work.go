@@ -83,6 +83,11 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Task frontmatter `model:` wins over the flag DEFAULT, but an
+			// explicitly passed --model always wins over the frontmatter.
+			if task.Meta.Model != "" && !cmd.Flags().Changed("model") {
+				model = task.Meta.Model
+			}
 			opts := workOptions{
 				standalone: !epic,
 				model:      model,

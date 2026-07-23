@@ -1,4 +1,4 @@
-VERSION ?= 0.21.0
+VERSION ?= 0.21.1
 LDFLAGS = -ldflags "-X github.com/mbalazy/pm/internal/version.Version=$(VERSION)"
 
 .PHONY: install vet test check build-pm-linux
