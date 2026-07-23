@@ -259,6 +259,18 @@ func TestWorkerEnvStripsAPIKey(t *testing.T) {
 	}
 }
 
+func TestWorkerEnvMarksHeadless(t *testing.T) {
+	count := 0
+	for _, kv := range workerEnv("") {
+		if kv == "PM_HEADLESS=1" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("workerEnv must append PM_HEADLESS=1 exactly once (project hooks skip sim/Metro boot on it), got %d", count)
+	}
+}
+
 func TestWorkerEnvPinsConfigDir(t *testing.T) {
 	// Inherit a config dir from the parent env; treat it as the resolved default.
 	t.Setenv("CLAUDE_CONFIG_DIR", "/inherited/dir")

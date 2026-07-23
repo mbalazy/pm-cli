@@ -489,9 +489,15 @@ func runWorker(dir string, args []string, timeout time.Duration, configDir strin
 // Claude config dir (configDir != ~/.claude), pins CLAUDE_CONFIG_DIR so the
 // worker authenticates with that project's account/config (e.g. a company Team
 // account in ~/.claude-alt) instead of the personal default.
+//
+// It also marks the process with PM_HEADLESS=1 so project-side hooks (e.g. a
+// SessionStart hook that boots a simulator + Metro for interactive worktree
+// sessions) can tell a headless worker apart from an interactive launch and
+// skip work a headless run cannot use. Interactive board launches go through a
+// different path (tui/board claudeLaunchEnv) and never carry this marker.
 func workerEnv(configDir string) []string {
 	src := os.Environ()
-	out := make([]string, 0, len(src)+1)
+	out := make([]string, 0, len(src)+2)
 	pinConfig := configDir != "" && configDir != storage.DefaultClaudeConfigDir()
 	for _, kv := range src {
 		if strings.HasPrefix(kv, "ANTHROPIC_API_KEY=") || strings.HasPrefix(kv, "ANTHROPIC_AUTH_TOKEN=") {
@@ -505,6 +511,7 @@ func workerEnv(configDir string) []string {
 	if pinConfig {
 		out = append(out, "CLAUDE_CONFIG_DIR="+configDir)
 	}
+	out = append(out, "PM_HEADLESS=1")
 	return out
 }
 
