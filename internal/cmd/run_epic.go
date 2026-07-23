@@ -32,6 +32,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 		allowDirty  bool
 		dryRun      bool
 		additional  bool
+		slotPin     int
 		independent bool
 	)
 
@@ -69,10 +70,11 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				return fmt.Errorf("executor disabled for project %s (executor.enabled: false)", slug)
 			}
 			// --additional is opt-in PER RUN; the default is the main checkout
-			// (unchanged pre-worktree behaviour). It requires the project to have the
-			// additional worktree configured.
-			if additional && !exc.AdditionalWorktree {
-				return fmt.Errorf("--additional requested but project %s has no additional worktree configured - set `executor.additional_worktree: true` (+ worktree_path/base_branch/env) in project.yaml", slug)
+			// (unchanged pre-worktree behaviour). It requires the project to have at
+			// least one worktree slot configured.
+			slots := exc.ResolveWorktrees(proj.Path)
+			if additional && len(slots) == 0 {
+				return fmt.Errorf("--additional requested but project %s has no worktree slots configured - set `executor.worktrees` (or legacy `additional_worktree: true` + worktree_path/env) in project.yaml", slug)
 			}
 
 			subs, err := readySubs(store, slug, tracker.Meta.ID)
@@ -107,7 +109,8 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 
 			workDir := proj.Path
 			if additional {
-				workDir = resolveWorktreePath(proj, exc)
+				// Provisional (dry-run display); the real slot is claimed below.
+				workDir = describeSlotPool(slots)
 			}
 
 			if dryRun {
@@ -119,16 +122,24 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				fmt.Fprintf(os.Stderr, "warning: done status %q is not in project %s statuses - add it to project.yaml so merged subs show on the board\n", doneStatus, slug)
 			}
 
-			// Additional mode: the whole epic runs in the single "additional"
-			// worktree (workDir), leaving the user's main checkout untouched. Ensure
-			// + seed + lock it ONCE for the run; the deferred release frees the lock
-			// on every normal exit (a kill is handled by the board, see killRun).
+			// Additional mode: the whole epic runs in ONE claimed worktree slot
+			// (first free, or --slot N), leaving the user's main checkout untouched.
+			// Ensure + seed + lock it ONCE for the run; the deferred release frees
+			// the lock on every normal exit (a kill is handled by the board, see
+			// killRun). Every per-sub plan targets this claimed slot via
+			// opts.slotDir/slotEnv - subs never re-resolve the pool mid-run.
+			var claimedEnv []string
 			if additional {
-				release, err := prepareWorktree(proj, workDir, tracker.Meta.ID, "run-epic")
+				slot, release, err := acquireWorktreeSlot(proj, slots, slotPin, tracker.Meta.ID, "run-epic")
 				if err != nil {
 					return err
 				}
 				defer release()
+				workDir = slot.Path
+				claimedEnv = slot.Env
+				if len(slots) > 1 {
+					fmt.Fprintf(os.Stderr, "pm run-epic: claimed worktree slot %s\n", workDir)
+				}
 				// Wipe any leftovers from a previous (possibly killed) run before
 				// touching the integration branch, so half-done work never bleeds in.
 				// Preserves the integration branch's COMMITTED history (re-entrancy)
@@ -160,6 +171,10 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			}
 
 			opts := workOptions{standalone: false, model: model, maxTurns: maxTurns, yolo: yolo, allowDirty: true, timeout: timeout, additional: additional, independent: independentMode}
+			if additional {
+				opts.slotDir = workDir
+				opts.slotEnv = claimedEnv
+			}
 
 			// Run-state for observability: the manager owns the epic-level file;
 			// driveSub fills in each sub's worker session as it goes. It lives in
@@ -194,10 +209,15 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			if independentMode {
 				journalBranch = "independent:" + baseBranch
 			}
+			journalDir := ""
+			if additional {
+				journalDir = workDir
+			}
 			epicStart := time.Now()
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 				Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID,
 				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Independent: independentMode, Branch: journalBranch,
+				WorkDir: journalDir,
 			})
 
 			// ID -> sub for the dependency gate. Pointers are shared with the loop,
@@ -250,7 +270,8 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 				Event: storage.JournalEventEnd, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID,
 				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Independent: independentMode, Branch: journalBranch,
-				Status: storage.RunStatusDone, DurationS: int(time.Since(epicStart).Seconds()),
+				WorkDir: journalDir,
+				Status:  storage.RunStatusDone, DurationS: int(time.Since(epicStart).Seconds()),
 				Subs: journalSubs(outcomes, subDurations, run),
 			})
 
@@ -284,7 +305,8 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 	cmd.Flags().BoolVar(&noPR, "no-pr", false, "do not open the final epic->main draft PR")
 	cmd.Flags().BoolVar(&allowDirty, "allow-dirty", false, "skip the clean-working-tree precondition")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the plan (subs, branches, readiness) without running anything")
-	cmd.Flags().BoolVar(&additional, "additional", false, "run the whole epic in the isolated 'additional' worktree instead of the main checkout; requires executor.additional_worktree in project.yaml")
+	cmd.Flags().BoolVar(&additional, "additional", false, "run the whole epic in an isolated 'additional' worktree slot instead of the main checkout; requires executor.worktrees (or legacy additional_worktree) in project.yaml")
+	cmd.Flags().IntVar(&slotPin, "slot", 0, "with --additional: pin a specific worktree slot (1-based); default 0 = first free slot")
 	cmd.Flags().BoolVar(&independent, "independent", false, "batch mode for unrelated subs: each on its own branch off the base, pushed, never merged (also enabled by `epic_mode: independent` on the tracker)")
 
 	return cmd
@@ -694,6 +716,19 @@ func openEpicPR(dir, epicBranch string, tracker *storage.Task) {
 	} else {
 		fmt.Fprintf(os.Stderr, "\nopened draft PR: %s\n", strings.TrimSpace(string(out)))
 	}
+}
+
+// describeSlotPool renders the worktree pool for dry-run display: the single
+// slot's path, or "first free of: p1 | p2 | ..." when there is a real pool.
+func describeSlotPool(slots []storage.ResolvedWorktree) string {
+	if len(slots) == 1 {
+		return slots[0].Path
+	}
+	paths := make([]string, 0, len(slots))
+	for _, s := range slots {
+		paths = append(paths, s.Path)
+	}
+	return "first free of: " + strings.Join(paths, " | ")
 }
 
 func printEpicPlan(tracker *storage.Task, epicBranch, base string, startStatus, doneStatus storage.TaskStatus, subs []*storage.Task, additional bool, workDir string, independent bool) {

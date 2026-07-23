@@ -155,7 +155,7 @@ func TestPlanWorkAdditionalGating(t *testing.T) {
 		pt := &storage.Task{Meta: storage.TaskMeta{ID: "plain-1", Title: "T", Status: storage.StatusTodo}}
 		store.AddTask("plain", pt)
 		_, err := planWork(store, pt, "plain", workOptions{standalone: true, additional: true})
-		if err == nil || !strings.Contains(err.Error(), "no additional worktree configured") {
+		if err == nil || !strings.Contains(err.Error(), "no worktree slots configured") {
 			t.Fatalf("expected 'not configured' error, got %v", err)
 		}
 	})
@@ -234,4 +234,113 @@ executor:
 	if (&storage.Project{}).GetExecutor().AdditionalWorktree {
 		t.Fatal("default executor must have additional_worktree off")
 	}
+}
+
+// TestAcquireWorktreeSlot exercises the pool allocation: first free slot wins,
+// a busy slot is skipped, --slot pins, and an exhausted pool errors with every
+// holder listed.
+func TestAcquireWorktreeSlot(t *testing.T) {
+	newRepo := func(t *testing.T) *storage.Project {
+		repo := t.TempDir()
+		gitT(t, repo, "init", "-q")
+		os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
+		gitT(t, repo, "add", ".")
+		gitT(t, repo, "commit", "-q", "-m", "init")
+		return &storage.Project{Path: repo}
+	}
+	newSlots := func(t *testing.T) []storage.ResolvedWorktree {
+		base := t.TempDir()
+		return []storage.ResolvedWorktree{
+			{Path: filepath.Join(base, "slot1"), Env: []string{"PORT=8090"}},
+			{Path: filepath.Join(base, "slot2"), Env: []string{"PORT=8091"}},
+		}
+	}
+	// A live pid that is NOT ours: our own pid re-acquires idempotently, which
+	// would defeat the busy check. The test runner's parent is alive + signalable.
+	otherLivePID := os.Getppid()
+
+	t.Run("first free slot wins", func(t *testing.T) {
+		proj, slots := newRepo(t), newSlots(t)
+		slot, release, err := acquireWorktreeSlot(proj, slots, 0, "app-1", "work")
+		if err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+		defer release()
+		if slot.Path != slots[0].Path {
+			t.Fatalf("claimed %q, want slot 1 %q", slot.Path, slots[0].Path)
+		}
+		if lk, _ := storage.ReadWorktreeLock(slot.Path); lk == nil || lk.TaskID != "app-1" {
+			t.Fatalf("lock not held on claimed slot: %+v", lk)
+		}
+	})
+
+	t.Run("busy slot 1 falls through to slot 2", func(t *testing.T) {
+		proj, slots := newRepo(t), newSlots(t)
+		os.MkdirAll(slots[0].Path, 0755)
+		if err := storage.AcquireWorktreeLock(slots[0].Path, "app-other", "work", otherLivePID); err != nil {
+			t.Fatalf("seed busy lock: %v", err)
+		}
+		slot, release, err := acquireWorktreeSlot(proj, slots, 0, "app-1", "work")
+		if err != nil {
+			t.Fatalf("acquire: %v", err)
+		}
+		defer release()
+		if slot.Path != slots[1].Path {
+			t.Fatalf("claimed %q, want slot 2 %q", slot.Path, slots[1].Path)
+		}
+		if len(slot.Env) != 1 || slot.Env[0] != "PORT=8091" {
+			t.Fatalf("claimed slot env = %v, want slot 2's", slot.Env)
+		}
+	})
+
+	t.Run("all slots busy lists every holder", func(t *testing.T) {
+		proj, slots := newRepo(t), newSlots(t)
+		for _, s := range slots {
+			os.MkdirAll(s.Path, 0755)
+			if err := storage.AcquireWorktreeLock(s.Path, "app-other", "work", otherLivePID); err != nil {
+				t.Fatalf("seed busy lock: %v", err)
+			}
+		}
+		_, _, err := acquireWorktreeSlot(proj, slots, 0, "app-1", "work")
+		if err == nil {
+			t.Fatal("expected all-busy error")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "all 2 worktree slot(s) busy") ||
+			!strings.Contains(msg, slots[0].Path) || !strings.Contains(msg, slots[1].Path) {
+			t.Fatalf("error must list both holders, got: %v", err)
+		}
+	})
+
+	t.Run("pin claims that slot even when slot 1 is free", func(t *testing.T) {
+		proj, slots := newRepo(t), newSlots(t)
+		slot, release, err := acquireWorktreeSlot(proj, slots, 2, "app-1", "work")
+		if err != nil {
+			t.Fatalf("acquire pinned: %v", err)
+		}
+		defer release()
+		if slot.Path != slots[1].Path {
+			t.Fatalf("claimed %q, want pinned slot 2 %q", slot.Path, slots[1].Path)
+		}
+	})
+
+	t.Run("pinned busy slot fails fast", func(t *testing.T) {
+		proj, slots := newRepo(t), newSlots(t)
+		os.MkdirAll(slots[1].Path, 0755)
+		if err := storage.AcquireWorktreeLock(slots[1].Path, "app-other", "work", otherLivePID); err != nil {
+			t.Fatalf("seed busy lock: %v", err)
+		}
+		_, _, err := acquireWorktreeSlot(proj, slots, 2, "app-1", "work")
+		if err == nil || !strings.Contains(err.Error(), "slot 2") {
+			t.Fatalf("expected pinned-busy error mentioning slot 2, got %v", err)
+		}
+	})
+
+	t.Run("pin out of range errors", func(t *testing.T) {
+		proj, slots := newRepo(t), newSlots(t)
+		_, _, err := acquireWorktreeSlot(proj, slots, 3, "app-1", "work")
+		if err == nil || !strings.Contains(err.Error(), "out of range") {
+			t.Fatalf("expected out-of-range error, got %v", err)
+		}
+	})
 }

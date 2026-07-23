@@ -67,12 +67,14 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 		// so default to tmux when available. No worktree/resume/fork options.
 		m.executorIsTracker = len(m.taskChildren(t)) > 0
 		// The isolated "additional" worktree is only offered when the project has
-		// it configured (executor.additional_worktree). The user picks default vs
-		// additional per launch via the `#` toggle (never inferred).
+		// at least one worktree slot configured (executor.worktrees, or the legacy
+		// additional_worktree pair). The user picks default vs additional per
+		// launch via the `#` toggle (never inferred); the slot itself is claimed
+		// first-free at run time by pm work/run-epic.
 		m.executorAdditionalAvail = false
 		if t != nil && m.store != nil {
 			if proj, err := m.store.GetProject(t.Project); err == nil {
-				m.executorAdditionalAvail = proj.GetExecutor().AdditionalWorktree
+				m.executorAdditionalAvail = len(proj.GetExecutor().ResolveWorktrees(proj.Path)) > 0
 			}
 		}
 		if !m.executorAdditionalAvail {

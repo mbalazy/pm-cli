@@ -339,19 +339,27 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// worktreeLaunchEnv returns the project's executor.env as KEY=VALUE pairs for
-// interactive WORKTREE launches. A worktree session runs outside the main
-// checkout, so it gets the same runtime-isolation env (e.g. Metro port,
-// simulator UDID) the executor's --additional worker gets - unconditionally
-// whenever executor.env is set, regardless of additional_worktree. Non-worktree
-// launches never inject it: a main-checkout session must keep the default
-// port/simulator. The env carries ONE port/UDID (single-slot by design), so at
-// most one env-injected session should run at a time.
+// worktreeLaunchEnv returns the runtime-isolation env (e.g. Metro port,
+// simulator UDID) as KEY=VALUE pairs for interactive WORKTREE launches. A
+// worktree session runs outside the main checkout, so it gets the same env the
+// executor's --additional worker gets. Non-worktree launches never inject it:
+// a main-checkout session must keep the default port/simulator.
+//
+// With a worktree pool configured this is SLOT 1's merged env: interactive
+// sessions are untracked (no lock, unknown pid), so pm cannot allocate slots
+// for them - at most one env-injected INTERACTIVE session should run at a
+// time. Executor runs holding slot locks don't conflict with it: headless
+// workers never boot Metro or a simulator (PM_HEADLESS). Without any slots,
+// falls back to executor.env verbatim (legacy env-without-worktree projects).
 func worktreeLaunchEnv(proj *storage.Project) []string {
 	if proj == nil {
 		return nil
 	}
-	return proj.GetExecutor().EnvSlice()
+	exec := proj.GetExecutor()
+	if slots := exec.ResolveWorktrees(proj.Path); len(slots) > 0 {
+		return slots[0].Env
+	}
+	return exec.EnvSlice()
 }
 
 func buildClaudePrompt(t *storage.Task, store storage.TaskStore) string {

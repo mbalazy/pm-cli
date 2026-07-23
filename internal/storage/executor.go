@@ -17,16 +17,25 @@ import (
 // human. The block is the ONLY project-specific piece of the engine.
 type Executor struct {
 	Enabled bool `yaml:"enabled"`
-	// AdditionalWorktree = the isolated "additional" worktree is CONFIGURED for
-	// this project (makes worktree_path/base_branch/env meaningful). It is a
-	// capability gate, NOT "always use it": a run only uses the worktree when it
-	// opts in per-run via --additional. DEFAULT false.
+	// AdditionalWorktree = the LEGACY single "additional" worktree is CONFIGURED
+	// for this project (makes worktree_path/env meaningful). It is a capability
+	// gate, NOT "always use it": a run only uses a worktree when it opts in
+	// per-run via --additional. DEFAULT false. Superseded by Worktrees - when
+	// that list is set, this flag and WorktreePath are ignored.
 	AdditionalWorktree bool `yaml:"additional_worktree"`
-	// WorktreePath is where the single "additional" worktree lives. Relative
-	// paths resolve against the repo dir (`../foo-additional` -> a sibling); "~"
-	// is expanded; empty defaults to "<repo>-additional". Only consulted when
-	// AdditionalWorktree is true. There is exactly ONE such worktree (not N slots).
+	// WorktreePath is where the LEGACY single "additional" worktree lives.
+	// Relative paths resolve against the repo dir (`../foo-additional` -> a
+	// sibling); "~" is expanded; empty defaults to "<repo>-additional". Only
+	// consulted when AdditionalWorktree is true and Worktrees is empty.
 	WorktreePath string `yaml:"worktree_path,omitempty"`
+	// Worktrees is the multi-slot worktree pool: each slot is an isolated
+	// worktree a run can claim via --additional (first free slot wins; --slot N
+	// pins one). Per-slot Env overlays the executor-level Env (slot wins on
+	// conflict) so shared keys live once at the top and per-slot keys (e.g. a
+	// Metro port, a simulator UDID) differ per slot. When set, it supersedes the
+	// legacy AdditionalWorktree/WorktreePath pair. Resolution rules are shared
+	// with the legacy path (see ResolveWorktrees).
+	Worktrees []WorktreeSlot `yaml:"worktrees,omitempty"`
 	// BaseBranch is the fixed branch each fresh task/epic branch forks from in
 	// additional-worktree mode, so a run never depends on whatever the user's main checkout
 	// happens to have checked out. Precedence: explicit --base flag > this >
@@ -54,6 +63,14 @@ type Executor struct {
 	Gate         Gate                    `yaml:"gate,omitempty"`
 	Phases       map[string]PhaseBinding `yaml:"phases,omitempty"`
 	Notes        string                  `yaml:"notes,omitempty"`
+}
+
+// WorktreeSlot is one entry of the executor's worktree pool: where the
+// worktree lives (same path rules as the legacy worktree_path) plus the
+// per-slot env overrides layered on top of the executor-level Env.
+type WorktreeSlot struct {
+	Path string            `yaml:"path,omitempty"`
+	Env  map[string]string `yaml:"env,omitempty"`
 }
 
 // GateMode controls whether a side-effecting step (pr, merge) is human-gated or

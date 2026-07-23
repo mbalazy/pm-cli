@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -103,6 +104,91 @@ func ExcludeFromGit(repo, pattern string) {
 	}
 	defer f.Close()
 	_, _ = f.WriteString(pattern + "\n")
+}
+
+// ResolvedWorktree is one usable worktree slot after config resolution: an
+// absolute path plus the fully merged KEY=VALUE env for processes running
+// against it.
+type ResolvedWorktree struct {
+	Path string
+	Env  []string
+}
+
+// ResolveWorktrees returns the executor's worktree slot pool resolved against
+// the project's repo path, in config order. The `worktrees` list supersedes the
+// legacy pair; a legacy `additional_worktree: true` (with optional
+// worktree_path/env) synthesizes a single slot so old configs keep working.
+// Empty -> nil (worktrees not configured). Slot env = executor-level Env
+// overlaid with the slot's own Env (slot wins), sorted for determinism.
+func (e Executor) ResolveWorktrees(projPath string) []ResolvedWorktree {
+	if len(e.Worktrees) > 0 {
+		out := make([]ResolvedWorktree, 0, len(e.Worktrees))
+		for i, s := range e.Worktrees {
+			out = append(out, ResolvedWorktree{
+				Path: resolveSlotDir(projPath, s.Path, i),
+				Env:  mergedEnvSlice(e.Env, s.Env),
+			})
+		}
+		return out
+	}
+	if e.AdditionalWorktree {
+		return []ResolvedWorktree{{Path: ResolveWorktreeDir(projPath, e.WorktreePath), Env: e.EnvSlice()}}
+	}
+	return nil
+}
+
+// ResolveWorktreeDir resolves a configured worktree path against the repo dir:
+// absolute is used as-is, "~" is home-expanded, relative resolves against
+// projPath (so `../foo-additional` is a sibling), empty defaults to
+// "<repo>-additional".
+func ResolveWorktreeDir(projPath, p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return filepath.Clean(projPath) + "-additional"
+	}
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, strings.TrimPrefix(p, "~"))
+	}
+	if filepath.IsAbs(p) {
+		return filepath.Clean(p)
+	}
+	return filepath.Clean(filepath.Join(projPath, p))
+}
+
+// resolveSlotDir is ResolveWorktreeDir with an index-aware default, so two
+// pathless slots never collide: slot 1 defaults to "<repo>-additional", slot
+// N>1 to "<repo>-additional-N".
+func resolveSlotDir(projPath, p string, idx int) string {
+	if strings.TrimSpace(p) == "" && idx > 0 {
+		return fmt.Sprintf("%s-additional-%d", filepath.Clean(projPath), idx+1)
+	}
+	return ResolveWorktreeDir(projPath, p)
+}
+
+// mergedEnvSlice overlays over onto base (over wins) and renders the result as
+// a sorted []string of KEY=VALUE pairs. Nil when both maps are empty.
+func mergedEnvSlice(base, over map[string]string) []string {
+	if len(base) == 0 && len(over) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(base)+len(over))
+	for k, v := range base {
+		m[k] = v
+	}
+	for k, v := range over {
+		m[k] = v
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k+"="+m[k])
+	}
+	return out
 }
 
 // WorktreeLock is the JSON payload of a worktree lock: who holds the shared

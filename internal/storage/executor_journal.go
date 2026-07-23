@@ -57,7 +57,10 @@ type JournalEntry struct {
 	// own branches off the base, pushed, nothing merged. Explicit so retros can
 	// segment integration vs batch runs without parsing Branch.
 	Independent bool         `json:"independent,omitempty"`
-	Branch      string       `json:"branch,omitempty"`     // epic integration branch / task branch; "independent:<base>" for batch runs
+	// WorkDir = the worktree slot the run claimed (additional runs only) so
+	// retros can tell WHICH slot served a run once there is more than one.
+	WorkDir string `json:"work_dir,omitempty"`
+	Branch  string `json:"branch,omitempty"` // epic integration branch / task branch; "independent:<base>" for batch runs
 	Status      string       `json:"status,omitempty"`     // end only: done | failed (run level)
 	DurationS   int          `json:"duration_s,omitempty"` // end only: whole-run wall-clock
 	Subs        []JournalSub `json:"subs,omitempty"`       // end only: per-sub outcomes

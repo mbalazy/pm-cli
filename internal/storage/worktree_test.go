@@ -166,3 +166,71 @@ func TestWorktreeLockStaleTakeover(t *testing.T) {
 		t.Fatalf("takeover did not rewrite lock: %+v", lk)
 	}
 }
+
+func TestResolveWorktrees(t *testing.T) {
+	proj := "/repos/app"
+
+	t.Run("not configured -> nil", func(t *testing.T) {
+		if got := (Executor{}).ResolveWorktrees(proj); got != nil {
+			t.Fatalf("expected nil, got %+v", got)
+		}
+	})
+
+	t.Run("legacy pair synthesizes one slot", func(t *testing.T) {
+		e := Executor{
+			AdditionalWorktree: true,
+			WorktreePath:       "../app-additional",
+			Env:                map[string]string{"PORT": "8090", "SIM": "aaa"},
+		}
+		got := e.ResolveWorktrees(proj)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 slot, got %d", len(got))
+		}
+		if got[0].Path != "/repos/app-additional" {
+			t.Fatalf("path = %q", got[0].Path)
+		}
+		if len(got[0].Env) != 2 || got[0].Env[0] != "PORT=8090" || got[0].Env[1] != "SIM=aaa" {
+			t.Fatalf("env = %v", got[0].Env)
+		}
+	})
+
+	t.Run("worktrees list supersedes legacy pair", func(t *testing.T) {
+		e := Executor{
+			AdditionalWorktree: true,
+			WorktreePath:       "../legacy-ignored",
+			Env:                map[string]string{"PORT": "8090", "SHARED": "x"},
+			Worktrees: []WorktreeSlot{
+				{Path: "../app-additional"},
+				{Path: "../app-additional-2", Env: map[string]string{"PORT": "8091", "SIM": "bbb"}},
+			},
+		}
+		got := e.ResolveWorktrees(proj)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 slots, got %d", len(got))
+		}
+		if got[0].Path != "/repos/app-additional" || got[1].Path != "/repos/app-additional-2" {
+			t.Fatalf("paths = %q, %q", got[0].Path, got[1].Path)
+		}
+		// Slot 1 inherits the base env untouched.
+		want1 := []string{"PORT=8090", "SHARED=x"}
+		if len(got[0].Env) != 2 || got[0].Env[0] != want1[0] || got[0].Env[1] != want1[1] {
+			t.Fatalf("slot 1 env = %v, want %v", got[0].Env, want1)
+		}
+		// Slot 2 overlays: PORT overridden, SHARED inherited, SIM added.
+		want2 := []string{"PORT=8091", "SHARED=x", "SIM=bbb"}
+		if len(got[1].Env) != 3 || got[1].Env[0] != want2[0] || got[1].Env[1] != want2[1] || got[1].Env[2] != want2[2] {
+			t.Fatalf("slot 2 env = %v, want %v", got[1].Env, want2)
+		}
+	})
+
+	t.Run("pathless slots get non-colliding defaults", func(t *testing.T) {
+		e := Executor{Worktrees: []WorktreeSlot{{}, {}, {}}}
+		got := e.ResolveWorktrees(proj)
+		want := []string{"/repos/app-additional", "/repos/app-additional-2", "/repos/app-additional-3"}
+		for i, w := range want {
+			if got[i].Path != w {
+				t.Fatalf("slot %d path = %q, want %q", i+1, got[i].Path, w)
+			}
+		}
+	})
+}

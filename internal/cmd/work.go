@@ -66,6 +66,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 		timeout    time.Duration
 		base       string
 		additional bool
+		slotPin    int
 	)
 
 	cmd := &cobra.Command{
@@ -102,11 +103,16 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 				fmt.Printf("# pm work (dry-run)\nproject: %s\ntask: %s\nbranch: %s\nmode: %s\ncwd: %s\n",
 					slug, task.Meta.ID, plan.branch, modeLabel(opts.standalone), plan.workDir)
 				if plan.worktree {
-					fmt.Printf("run: ADDITIONAL worktree %s (reused if present; lock: %s)\nfresh branch base: %s\n",
-						plan.workDir, ".pm-executor.lock", plan.base)
-					if len(plan.env) > 0 {
-						fmt.Printf("inject env: %s\n", strings.Join(plan.env, " "))
+					fmt.Printf("run: ADDITIONAL worktree - first free of %d slot(s), claimed at run time (lock: %s)\n",
+						len(plan.slots), ".pm-executor.lock")
+					for i, s := range plan.slots {
+						fmt.Printf("  slot %d: %s", i+1, s.Path)
+						if len(s.Env) > 0 {
+							fmt.Printf("  (env: %s)", strings.Join(s.Env, " "))
+						}
+						fmt.Println()
 					}
+					fmt.Printf("fresh branch base: %s\n", plan.base)
 				} else {
 					fmt.Printf("run: DEFAULT (main checkout, clean-tree required)\n")
 				}
@@ -115,15 +121,21 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 				return nil
 			}
 
-			// Worktree mode: ensure + seed + lock the single "additional" worktree.
-			// A busy worktree refuses here with a clear message; the lock is released
-			// by the deferred closure on every exit path (success, fail, panic).
+			// Worktree mode: claim a slot from the pool (first free, or --slot N),
+			// ensure + seed + lock it, and point the plan at the CLAIMED slot. The
+			// lock is released by the deferred closure on every exit path (success,
+			// fail, panic).
 			if plan.worktree {
-				release, err := prepareWorktree(plan.proj, plan.workDir, task.Meta.ID, "work")
+				slot, release, err := acquireWorktreeSlot(plan.proj, plan.slots, slotPin, task.Meta.ID, "work")
 				if err != nil {
 					return err
 				}
 				defer release()
+				plan.workDir = slot.Path
+				plan.env = slot.Env
+				if len(plan.slots) > 1 {
+					fmt.Fprintf(os.Stderr, "pm work: claimed worktree slot %s\n", slot.Path)
+				}
 			}
 
 			res, err := executeWork(store, task, plan, opts)
@@ -145,7 +157,8 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 	cmd.Flags().BoolVar(&allowDirty, "allow-dirty", false, "skip the clean-working-tree precondition (standalone)")
 	cmd.Flags().DurationVar(&timeout, "timeout", 45*time.Minute, "max wall-clock time for the worker before it is killed")
 	cmd.Flags().StringVar(&base, "base", "", "with --additional: base the fresh task branch forks from (default: executor.base_branch, else the main checkout's current branch)")
-	cmd.Flags().BoolVar(&additional, "additional", false, "run in the isolated 'additional' worktree (own branch/port/sim) instead of the main checkout; requires executor.additional_worktree in project.yaml")
+	cmd.Flags().BoolVar(&additional, "additional", false, "run in an isolated 'additional' worktree slot (own branch/port/sim) instead of the main checkout; requires executor.worktrees (or legacy additional_worktree) in project.yaml")
+	cmd.Flags().IntVar(&slotPin, "slot", 0, "with --additional: pin a specific worktree slot (1-based); default 0 = first free slot")
 
 	return cmd
 }
@@ -206,7 +219,13 @@ type workOptions struct {
 	allowDirty bool
 	timeout    time.Duration
 	base       string // with additional: base branch the fresh task branch forks from
-	additional bool   // opt in to the isolated "additional" worktree for THIS run
+	additional bool   // opt in to an isolated "additional" worktree slot for THIS run
+	// slotDir/slotEnv: the worktree slot the CALLER already claimed (the epic
+	// manager claims once for the whole run). When set, planWork targets this
+	// slot instead of the pool - re-resolving per sub could pick a different
+	// slot than the one the manager locked and runs in.
+	slotDir string
+	slotEnv []string
 	// independent = the sub belongs to an independent (batch) epic: the worker
 	// runs best-effort (never gives up early, records assumptions + handoff in
 	// unresolved) and a non-green result does NOT park the task on waiting - a
@@ -225,16 +244,21 @@ type workPlan struct {
 	cmdArgs   []string
 
 	// Worktree fields (populated only when THIS run opted in via --additional).
-	// worktree = this run uses the isolated "additional" worktree. workDir is the
-	// dir the worker runs in AND all git ops target: the "additional" worktree
-	// when opted in, else proj.Path (the main checkout). base is the resolved
-	// branch the fresh task branch forks from (precedence: --base >
+	// worktree = this run uses an isolated "additional" worktree slot. workDir is
+	// the dir the worker runs in AND all git ops target: the claimed worktree
+	// slot when opted in, else proj.Path (the main checkout). base is the
+	// resolved branch the fresh task branch forks from (precedence: --base >
 	// executor.base_branch > main checkout's current branch). env is the extra
-	// KEY=VALUE pairs injected into the worker.
+	// KEY=VALUE pairs injected into the worker. slots is the resolved slot pool
+	// when the slot is NOT claimed yet (standalone runs claim at run start, after
+	// the dry-run gate); until then workDir/env provisionally point at slot 1.
+	// With opts.slotDir set (epic subs) the slot is already claimed and slots is
+	// nil.
 	workDir  string
 	worktree bool
 	base     string
 	env      []string
+	slots    []storage.ResolvedWorktree
 }
 
 // planWork validates preconditions and assembles everything needed to invoke a
@@ -270,29 +294,38 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 	sysPrompt := buildWorkerSystemPrompt(exec, opts.standalone, opts.independent)
 	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo)
 
-	// The isolated "additional" worktree is opt-in PER RUN via --additional; the
-	// default is the main checkout (unchanged pre-worktree behaviour). No side
-	// effects here - the worktree is created + locked in prepareWorktree at run
-	// time (not on the dry-run path).
+	// An isolated "additional" worktree slot is opt-in PER RUN via --additional;
+	// the default is the main checkout (unchanged pre-worktree behaviour). No
+	// side effects here - the slot is claimed + locked in acquireWorktreeSlot at
+	// run time (not on the dry-run path).
 	workDir := proj.Path
 	base := ""
 	env := []string(nil)
+	var slots []storage.ResolvedWorktree
 	if opts.additional {
-		if !exec.AdditionalWorktree {
-			return nil, fmt.Errorf("--additional requested but project %s has no additional worktree configured - set `executor.additional_worktree: true` (+ worktree_path/base_branch/env) in project.yaml", slug)
-		}
-		workDir = resolveWorktreePath(proj, exec)
 		// Base precedence: --base > executor.base_branch > main checkout's current
 		// branch. Resolved here (a read, no side effect) so --dry-run shows it too.
 		cur, _ := gitCurrentBranch(proj.Path)
 		base = resolveWorktreeBase(opts.base, exec.BaseBranch, cur)
-		env = exec.EnvSlice()
+		if opts.slotDir != "" {
+			// The caller (epic manager) already claimed a slot - target it.
+			workDir = opts.slotDir
+			env = opts.slotEnv
+		} else {
+			slots = exec.ResolveWorktrees(proj.Path)
+			if len(slots) == 0 {
+				return nil, fmt.Errorf("--additional requested but project %s has no worktree slots configured - set `executor.worktrees` (or legacy `additional_worktree: true` + worktree_path/env) in project.yaml", slug)
+			}
+			// Provisional until a slot is claimed at run start.
+			workDir = slots[0].Path
+			env = slots[0].Env
+		}
 	}
 
 	return &workPlan{
 		proj: proj, branch: branch, sessionID: sessionID,
 		prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs,
-		workDir: workDir, worktree: opts.additional, base: base, env: env,
+		workDir: workDir, worktree: opts.additional, base: base, env: env, slots: slots,
 	}, nil
 }
 
@@ -334,6 +367,10 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// WriteRunState below is best-effort: a failed write only costs a stale
 	// dashboard, never correctness, so the error is dropped.
 	stateDir := store.ProjectDir(task.Project)
+	journalDir := ""
+	if plan.worktree {
+		journalDir = dir
+	}
 	var run *storage.RunState
 	if opts.standalone {
 		run = &storage.RunState{
@@ -356,6 +393,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 			Event: storage.JournalEventStart, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
 			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
+			WorkDir: journalDir,
 		})
 	}
 
@@ -376,7 +414,8 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 				Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
 				PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-				Status: storage.RunStatusFailed, DurationS: int(time.Since(workStart).Seconds()), Error: err.Error(),
+				WorkDir: journalDir,
+				Status:  storage.RunStatusFailed, DurationS: int(time.Since(workStart).Seconds()), Error: err.Error(),
 				Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: "failed", Note: err.Error(), Branch: plan.branch, DurationS: int(time.Since(workStart).Seconds()), Session: plan.sessionID}},
 			})
 		}
@@ -401,7 +440,8 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
 			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-			Status: storage.RunStatusDone, DurationS: int(time.Since(workStart).Seconds()),
+			WorkDir: journalDir,
+			Status:  storage.RunStatusDone, DurationS: int(time.Since(workStart).Seconds()),
 			Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: res.Status, Note: strings.TrimSpace(res.Summary), Branch: plan.branch, DurationS: int(time.Since(workStart).Seconds()), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD}},
 		})
 	}

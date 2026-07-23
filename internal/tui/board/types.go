@@ -174,8 +174,10 @@ type Model struct {
 	launchAgent         launchAgent
 	executorIsTracker   bool // when launchAgent==executor: run-epic vs work (for menu title)
 	// executor "additional" worktree choice, made per launch (like skip-perms).
-	// claudeMenuAdditional = user picked the isolated worktree for THIS launch;
-	// executorAdditionalAvail = the project has it configured (executor.additional_worktree).
+	// claudeMenuAdditional = user picked an isolated worktree slot for THIS
+	// launch (first free slot claimed at run time); executorAdditionalAvail =
+	// the project has at least one slot configured (executor.worktrees, or the
+	// legacy additional_worktree pair).
 	claudeMenuAdditional    bool
 	executorAdditionalAvail bool
 
