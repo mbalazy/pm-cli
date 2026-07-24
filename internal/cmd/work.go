@@ -634,9 +634,11 @@ func parseClaudeResult(data []byte) (*workerResult, string, error) {
 // read of the task, under the project's cross-process lock; t is then updated
 // in place so callers (driveSub's status checks) see the written state.
 func applyWorkerResult(store storage.TaskStore, t *storage.Task, branch, sessionID string, res *workerResult, standalone, independent bool) error {
-	if release, err := store.LockProject(t.Project); err == nil {
-		defer release()
+	release, lockErr := store.LockProject(t.Project)
+	if lockErr != nil {
+		release = func() {}
 	}
+	defer release()
 	if fresh, err := store.FindTask(t.Project, t.Meta.ID); err == nil {
 		*t = *fresh
 	}
@@ -656,6 +658,13 @@ func applyWorkerResult(store storage.TaskStore, t *storage.Task, branch, session
 	if res.Status == "blocked" && !independent {
 		statuses := store.GetProjectStatuses(t.Project)
 		if statusAllowed(storage.StatusWaiting, statuses) {
+			// Write our mutations first, then hand off to MoveTask - it takes the
+			// project lock itself, so OURS must be released (in-process flock
+			// nesting deadlocks). Idempotent release; the defer stays harmless.
+			if err := store.WriteTask(t); err != nil {
+				return err
+			}
+			release()
 			return store.MoveTask(t, storage.StatusWaiting)
 		}
 	}

@@ -156,7 +156,19 @@ func (s *Store) GetAllTasks() ([]*Task, error) {
 // MoveTask changes a task's status and updates the timestamp.
 // This is the single source of truth for status transition logic.
 // Brief is preserved on all status transitions (useful for summaries/reverts).
+//
+// The caller's copy may be MINUTES old (a board loaded at the last reload, an
+// epic sub read at run start) and a move rewrites the whole file - so the task
+// is re-read FRESH under the project lock and only then moved, refreshing the
+// caller's copy in place. Callers must NOT hold the project lock themselves
+// (a second flock in the same process deadlocks); release before calling.
 func (s *Store) MoveTask(t *Task, newStatus TaskStatus) error {
+	if release, err := s.LockProject(t.Project); err == nil {
+		defer release()
+	}
+	if fresh, err := s.FindTask(t.Project, t.Meta.ID); err == nil {
+		*t = *fresh
+	}
 	t.Meta.Status = newStatus
 	t.Meta.Updated = Today()
 	return writeTask(t)

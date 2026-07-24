@@ -520,12 +520,8 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
 		}
-		// Serialize the read-modify-write against other pm processes (parallel
-		// CC sessions, executor managers) so concurrent updates never drop each
-		// other; best-effort - a lock failure degrades to today's behaviour.
-		if release, lockErr := store.LockProject(slug); lockErr == nil {
-			defer release()
-		}
+		// No handler-level lock here: MoveTask itself locks the project and
+		// re-reads the task fresh (a second flock in-process would deadlock).
 		task, err := store.FindTask(slug, in.TaskID)
 		if err != nil {
 			r, _ := toolError(err.Error())

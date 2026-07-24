@@ -94,3 +94,36 @@ func setupLockTestStore(t *testing.T) *Store {
 	}
 	return s
 }
+
+// TestMoveTaskFreshRead: a move from a stale copy (board loaded minutes ago,
+// epic sub read at run start) must not clobber edits made in between.
+func TestMoveTaskFreshRead(t *testing.T) {
+	s := setupLockTestStore(t)
+
+	stale, err := s.FindTask("app", "app-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	other, _ := s.FindTask("app", "app-1")
+	other.Meta.Brief = "fresh brief"
+	other.Body = "fresh note"
+	if err := s.WriteTask(other); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.MoveTask(stale, StatusDone); err != nil {
+		t.Fatal(err)
+	}
+
+	final, _ := s.FindTask("app", "app-1")
+	if final.Meta.Status != StatusDone {
+		t.Fatalf("status = %s", final.Meta.Status)
+	}
+	if final.Meta.Brief != "fresh brief" || final.Body != "fresh note" {
+		t.Fatalf("stale move clobbered mid-time edits: brief=%q body=%q", final.Meta.Brief, final.Body)
+	}
+	if stale.Meta.Brief != "fresh brief" {
+		t.Fatal("caller's copy not refreshed in place")
+	}
+}

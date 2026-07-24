@@ -3,6 +3,7 @@ package storage
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 )
 
@@ -34,8 +35,13 @@ func (s *Store) LockProject(slug string) (func(), error) {
 		f.Close()
 		return nil, err
 	}
+	var once sync.Once
+	// Idempotent: callers may release early (to hand off to a self-locking
+	// callee like MoveTask) AND still have the deferred release fire.
 	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
+		once.Do(func() {
+			_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+			_ = f.Close()
+		})
 	}, nil
 }
