@@ -429,20 +429,3 @@ func renderZoomCard(t *storage.Task, width int, selected bool, selectMark, badge
 
 	return style.Render(strings.Join(lines, "\n"))
 }
-
-func zoomCardHeight(t *storage.Task) int {
-	lines := 2 // title + project
-	if len(t.Meta.Tags) > 0 {
-		lines++
-	}
-	if t.Meta.Branch != "" {
-		lines++
-	}
-	if len(t.Meta.Links) > 0 {
-		lines++
-	}
-	if t.Meta.Brief != "" {
-		lines += 3 // blank line + up to 2 lines of brief
-	}
-	return lines + 3 // +2 border, +1 margin
-}

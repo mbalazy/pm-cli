@@ -107,7 +107,7 @@ func (m Model) viewArchive() string {
 	// confirmation prompt
 	if m.confirmAction != "" {
 		sb.WriteString("\n")
-		prompt := fmt.Sprintf("  press x again to delete")
+		prompt := "  press x again to delete"
 		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#FF0000", Dark: "#FF6666"}).Render(prompt))
 		sb.WriteString("\n")
 	}

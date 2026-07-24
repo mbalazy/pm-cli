@@ -16,4 +16,18 @@ if [ -n "$unformatted" ]; then
 fi
 
 go vet ./... || { echo "pre-commit: go vet failed" >&2; exit 1; }
+
+# staticcheck lives in GOBIN, which is often not on PATH inside hooks - resolve it.
+STATICCHECK=$(command -v staticcheck 2>/dev/null || true)
+if [ -z "$STATICCHECK" ]; then
+  gobin=$(go env GOBIN)
+  [ -n "$gobin" ] || gobin="$(go env GOPATH)/bin"
+  STATICCHECK="$gobin/staticcheck"
+fi
+if [ ! -x "$STATICCHECK" ]; then
+  echo "pre-commit: staticcheck not found - run: go install honnef.co/go/tools/cmd/staticcheck@latest" >&2
+  exit 1
+fi
+"$STATICCHECK" ./... || { echo "pre-commit: staticcheck failed" >&2; exit 1; }
+
 go test ./internal/... -count=1 || { echo "pre-commit: tests failed" >&2; exit 1; }

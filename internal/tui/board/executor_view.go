@@ -186,12 +186,12 @@ func (m Model) updateExecutorView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case msg.String() == "ctrl+j":
-		m.executorViewport.LineDown(10)
+		m.executorViewport.ScrollDown(10)
 		m.executorFollow = m.executorViewport.AtBottom()
 		return m, nil
 
 	case msg.String() == "ctrl+k":
-		m.executorViewport.LineUp(10)
+		m.executorViewport.ScrollUp(10)
 		m.executorFollow = m.executorViewport.AtBottom()
 		return m, nil
 

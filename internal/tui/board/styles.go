@@ -43,10 +43,6 @@ var (
 	cardTagStyle = lipgloss.NewStyle().
 			Foreground(special)
 
-	statusBarStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"}).
-			Padding(1, 0, 0, 0)
-
 	tabStyle = lipgloss.NewStyle().
 			Padding(0, 2)
 
