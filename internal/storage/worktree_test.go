@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -293,5 +294,41 @@ func TestSeedExcludesOverride(t *testing.T) {
 	}
 	if !seedExcluded("vendor/x.go", []string{"vendor/"}) || seedExcluded("node_modules/x", []string{"vendor/"}) {
 		t.Fatal("override matching wrong")
+	}
+}
+
+// TestAcquireWorktreeLockAtomicRace hammers the O_EXCL claim: two live
+// acquirers (distinct pids) race for the same slot; exactly one must win and
+// the loser must get a busy error naming the winner - never two winners, never
+// two losers.
+func TestAcquireWorktreeLockAtomicRace(t *testing.T) {
+	pids := []int{os.Getpid(), os.Getppid()} // both alive + signalable
+	for i := 0; i < 50; i++ {
+		dir := t.TempDir()
+		var wg sync.WaitGroup
+		errs := make([]error, len(pids))
+		for j, pid := range pids {
+			wg.Add(1)
+			go func(j, pid int) {
+				defer wg.Done()
+				errs[j] = AcquireWorktreeLock(dir, "task-race", "work", pid)
+			}(j, pid)
+		}
+		wg.Wait()
+
+		wins := 0
+		for j, err := range errs {
+			if err == nil {
+				wins++
+				continue
+			}
+			var busy *WorktreeBusyError
+			if !errors.As(err, &busy) {
+				t.Fatalf("iteration %d: acquirer %d got non-busy error: %v", i, j, err)
+			}
+		}
+		if wins != 1 {
+			t.Fatalf("iteration %d: expected exactly 1 winner, got %d (errs: %v)", i, wins, errs)
+		}
 	}
 }

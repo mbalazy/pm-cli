@@ -305,15 +305,17 @@ func ReadWorktreeLock(worktreePath string) (*WorktreeLock, error) {
 // by another LIVE process returns *WorktreeBusyError. A stale lock (the holder's
 // pid is dead) is taken over automatically. Re-acquiring with the same pid is
 // idempotent (lets the epic manager re-enter its own lock per sub).
+//
+// The claim itself is ATOMIC, via two primitives:
+//   - claim = link(2) of a fully-written private tmp file onto the lock path -
+//     the lock either doesn't exist or exists WITH complete content, so a rival
+//     can never observe a half-written winner (a plain O_EXCL create + write
+//     has exactly that window). Two simultaneous links: one wins, the loser
+//     gets EEXIST, reads the winner's payload and reports busy.
+//   - takeover of a stale/corrupt lock = rename it aside, then re-claim. Two
+//     simultaneous takeovers race on the rename; the loser's rename fails
+//     (ENOENT) and its next claim attempt sees the winner's fresh lock.
 func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
-	existing, err := ReadWorktreeLock(worktreePath)
-	if err != nil {
-		return err
-	}
-	if existing != nil && existing.PID != pid && ProcessAlive(existing.PID) {
-		return &WorktreeBusyError{Holder: existing}
-	}
-	// Free, stale (dead holder), or our own lock -> claim it.
 	lk := WorktreeLock{PID: pid, TaskID: taskID, Kind: kind, Started: time.Now().UTC().Format(time.RFC3339)}
 	data, err := json.MarshalIndent(&lk, "", "  ")
 	if err != nil {
@@ -322,7 +324,47 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 	if err := os.MkdirAll(worktreePath, 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(worktreeLockPath(worktreePath), data, 0644)
+	path := worktreeLockPath(worktreePath)
+
+	for attempt := 0; attempt < 5; attempt++ {
+		tmp := fmt.Sprintf("%s.%d.tmp", path, pid)
+		if err := os.WriteFile(tmp, data, 0644); err != nil {
+			return err
+		}
+		linkErr := os.Link(tmp, path)
+		_ = os.Remove(tmp)
+		if linkErr == nil {
+			return nil
+		}
+		if !os.IsExist(linkErr) {
+			return linkErr
+		}
+
+		existing, rerr := ReadWorktreeLock(worktreePath)
+		if rerr == nil {
+			if existing == nil {
+				continue // vanished between EEXIST and read (released/stolen) - retry
+			}
+			if existing.PID == pid {
+				// Our own re-entrant lock: refresh the payload in place (the task
+				// id changes as the epic manager re-enters per sub). No race - only
+				// this process writes a lock it owns.
+				return os.WriteFile(path, data, 0644)
+			}
+			if ProcessAlive(existing.PID) {
+				return &WorktreeBusyError{Holder: existing}
+			}
+		}
+		// Stale (dead holder) or corrupt (rerr != nil - a truncated file from a
+		// crashed process must not brick the slot). Steal it ATOMICALLY: rename
+		// aside and loop to re-claim. If a rival steals first our rename fails
+		// harmlessly and the next attempt sees their fresh lock.
+		steal := fmt.Sprintf("%s.steal.%d", path, pid)
+		if os.Rename(path, steal) == nil {
+			_ = os.Remove(steal)
+		}
+	}
+	return fmt.Errorf("could not acquire worktree lock at %s (takeover contention)", path)
 }
 
 // ReleaseWorktreeLock removes the lock on worktreePath, but only when it is held

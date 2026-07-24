@@ -115,6 +115,11 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 
 			if dryRun {
 				printEpicPlan(tracker, epicBranch, baseBranch, startStatus, doneStatus, subs, additional, workDir, independentMode)
+				if additional {
+					if prep := strings.TrimSpace(exc.Prepare); prep != "" {
+						fmt.Printf("\nprepare (once per run, in claimed slot): %s\n", prep)
+					}
+				}
 				return nil
 			}
 
@@ -168,6 +173,24 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 					return fmt.Errorf("create integration branch %s: %w", epicBranch, err)
 				}
 				fmt.Fprintf(os.Stderr, "pm run-epic: %s on %s (%d sub(s))\n", tracker.Meta.ID, epicBranch, len(subs))
+			}
+
+			// Prepare the claimed slot ONCE for the whole run (deps install etc.) -
+			// per-sub would repeat it for every worker. Runs after branch setup so
+			// the lockfile prepare sees is the one every sub forks from; in
+			// independent mode check the base branch out first for the same reason.
+			if additional {
+				if prep := strings.TrimSpace(exc.Prepare); prep != "" {
+					if independentMode {
+						if err := gitEnsureBranch(workDir, baseBranch, ""); err != nil {
+							return fmt.Errorf("checkout %s for prepare: %w", baseBranch, err)
+						}
+					}
+					fmt.Fprintf(os.Stderr, "pm run-epic: prepare in %s: %s\n", workDir, prep)
+					if err := runPrepare(workDir, prep); err != nil {
+						return fmt.Errorf("prepare cmd (%s) failed in %s: %w", prep, workDir, err)
+					}
+				}
 			}
 
 			opts := workOptions{standalone: false, model: model, maxTurns: maxTurns, yolo: yolo, allowDirty: true, timeout: timeout, additional: additional, independent: independentMode}

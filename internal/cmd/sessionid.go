@@ -148,8 +148,9 @@ func sessionFromProjectDir() (string, bool) {
 
 // encodeProjectPath converts a filesystem path to CC's project directory name:
 // every "/" and "." becomes "-". Matches board.pathToCCProject.
-//   /Users/alice/.claude/pm-cli          -> -Users-mart--claude-pm-cli
-//   /Users/alice/repos/x/app.orbit -> -Users-mart-repos-x-app-orbit
+//
+//	/Users/alice/.claude/pm-cli          -> -Users-mart--claude-pm-cli
+//	/Users/alice/repos/x/app.orbit -> -Users-mart-repos-x-app-orbit
 func encodeProjectPath(path string) string {
 	s := strings.ReplaceAll(path, "/", "-")
 	s = strings.ReplaceAll(s, ".", "-")

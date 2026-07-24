@@ -35,6 +35,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// tick keeps the render loop alive (toasts expire) and refreshes the
 		// cheap executor run-states so live runs show up without a manual reload.
 		m.refreshRunStates()
+		// Live-refresh the slot indicator while the executor launch menu is open,
+		// so a slot freed/claimed mid-decision shows up without reopening (two
+		// small lock-file reads per slot).
+		if m.claudeMenu && m.launchAgent == launchAgentExecutor && m.executorAdditionalAvail && m.store != nil {
+			if t := m.menuTask(); t != nil {
+				if proj, err := m.store.GetProject(t.Project); err == nil {
+					m.executorSlots = executorSlotStatuses(proj)
+				}
+			}
+		}
 		if m.currentView == viewExecutor {
 			m.refreshExecutorView()
 		}

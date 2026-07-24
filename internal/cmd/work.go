@@ -333,8 +333,11 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		}
 	}
 
+	// Standalone only: the epic manager runs prepare ITSELF, once per run,
+	// right after claiming the slot - not per sub (5 subs must not mean 5
+	// dependency installs).
 	prepare := ""
-	if opts.additional {
+	if opts.additional && opts.standalone {
 		prepare = strings.TrimSpace(exec.Prepare)
 	}
 

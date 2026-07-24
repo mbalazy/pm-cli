@@ -56,13 +56,14 @@ type Executor struct {
 	// fresh worktree (dependency/build artifacts). When set it REPLACES the
 	// defaults, so include the defaults you still want.
 	SeedExclude []string `yaml:"seed_exclude,omitempty"`
-	// Prepare is an optional shell command the manager runs in the CLAIMED
-	// worktree slot (cwd = the worktree) after branch setup and before every
-	// worker, e.g. `yarn install --frozen-lockfile` - it makes dependency
-	// freshness structural instead of relying on the worker to discover missing
-	// modules via a red verify. Only runs in --additional mode (the main
-	// checkout's deps are the user's business). A failure aborts the run. pm
-	// does not interpret the command.
+	// Prepare is an optional shell command run in the CLAIMED worktree slot
+	// (cwd = the worktree) after branch setup, e.g. `yarn install
+	// --frozen-lockfile` - it makes dependency freshness structural instead of
+	// relying on the worker to discover missing modules via a red verify. Runs
+	// ONCE per run: the epic manager runs it once for the whole epic (not per
+	// sub); `pm work` runs it once before its worker. Only in --additional mode
+	// (the main checkout's deps are the user's business). A failure aborts the
+	// run. pm does not interpret the command.
 	Prepare string `yaml:"prepare,omitempty"`
 	// ContextRepos maps a short name to a local repo path the worker may READ
 	// for cross-repo context (e.g. backend: ../platform.orbit to check an
