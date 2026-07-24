@@ -339,6 +339,12 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
 		}
+		// Serialize the read-modify-write against other pm processes (parallel
+		// CC sessions, executor managers) so concurrent updates never drop each
+		// other; best-effort - a lock failure degrades to today's behaviour.
+		if release, lockErr := store.LockProject(slug); lockErr == nil {
+			defer release()
+		}
 
 		id := in.ID
 		if id == "" {
@@ -409,6 +415,12 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		if err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
+		}
+		// Serialize the read-modify-write against other pm processes (parallel
+		// CC sessions, executor managers) so concurrent updates never drop each
+		// other; best-effort - a lock failure degrades to today's behaviour.
+		if release, lockErr := store.LockProject(slug); lockErr == nil {
+			defer release()
 		}
 		task, err := store.FindTask(slug, in.TaskID)
 		if err != nil {
@@ -507,6 +519,12 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		if err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
+		}
+		// Serialize the read-modify-write against other pm processes (parallel
+		// CC sessions, executor managers) so concurrent updates never drop each
+		// other; best-effort - a lock failure degrades to today's behaviour.
+		if release, lockErr := store.LockProject(slug); lockErr == nil {
+			defer release()
 		}
 		task, err := store.FindTask(slug, in.TaskID)
 		if err != nil {
@@ -608,6 +626,12 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		if err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
+		}
+		// Serialize the read-modify-write against other pm processes (parallel
+		// CC sessions, executor managers) so concurrent updates never drop each
+		// other; best-effort - a lock failure degrades to today's behaviour.
+		if release, lockErr := store.LockProject(slug); lockErr == nil {
+			defer release()
 		}
 		task, err := store.FindTask(slug, in.TaskID)
 		if err != nil {

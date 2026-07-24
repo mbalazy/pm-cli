@@ -627,7 +627,19 @@ func parseClaudeResult(data []byte) (*workerResult, string, error) {
 // and a conservative status move (only blocked -> waiting; never auto-done).
 // In independent (batch) mode nothing is parked - every task in the batch gets
 // a human follow-up regardless, so waiting would only add noise.
+//
+// t was read BEFORE the worker ran - potentially 30+ minutes ago. Writing that
+// stale copy back would clobber any edit made meanwhile from another session
+// (a brief update, a link, a log note), so the outcome is applied to a FRESH
+// read of the task, under the project's cross-process lock; t is then updated
+// in place so callers (driveSub's status checks) see the written state.
 func applyWorkerResult(store storage.TaskStore, t *storage.Task, branch, sessionID string, res *workerResult, standalone, independent bool) error {
+	if release, err := store.LockProject(t.Project); err == nil {
+		defer release()
+	}
+	if fresh, err := store.FindTask(t.Project, t.Meta.ID); err == nil {
+		*t = *fresh
+	}
 	if sessionID != "" {
 		t.Meta.Sessions = append(t.Meta.Sessions, sessionID)
 	}

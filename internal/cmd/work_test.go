@@ -334,3 +334,52 @@ func mustContain(t *testing.T, haystack, needle string) {
 		t.Errorf("expected output to contain %q\n---\n%s", needle, haystack)
 	}
 }
+
+// TestApplyWorkerResultFreshRead encodes the stale-write hazard: the task copy
+// the executor holds was read BEFORE the worker ran; an edit made meanwhile
+// from another session (here: a link + a log note) must survive the result
+// write.
+func TestApplyWorkerResultFreshRead(t *testing.T) {
+	store := &storage.Store{Root: t.TempDir()}
+	if err := store.CreateProject("app", &storage.Project{Name: "App"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddTask("app", &storage.Task{Meta: storage.TaskMeta{ID: "app-1", Title: "T", Status: storage.StatusDoing}}); err != nil {
+		t.Fatal(err)
+	}
+
+	stale, err := store.FindTask("app", "app-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// "Another session" edits the task while the worker runs.
+	other, _ := store.FindTask("app", "app-1")
+	other.Meta.Links = map[string]string{"pr": "https://example.com/pr/1"}
+	other.Body = "mid-run note"
+	if err := store.WriteTask(other); err != nil {
+		t.Fatal(err)
+	}
+
+	res := &workerResult{Status: "merged", Summary: "done", Branch: "feat/x", Commits: []string{"abc"}}
+	if err := applyWorkerResult(store, stale, "feat/x", "sess-1", res, true, false); err != nil {
+		t.Fatal(err)
+	}
+
+	final, err := store.FindTask("app", "app-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Meta.Links["pr"] != "https://example.com/pr/1" {
+		t.Fatalf("mid-run link clobbered by stale worker write: %v", final.Meta.Links)
+	}
+	if !strings.Contains(final.Body, "mid-run note") {
+		t.Fatalf("mid-run log note clobbered: %q", final.Body)
+	}
+	if !strings.Contains(final.Body, "Worker run") {
+		t.Fatalf("worker log entry missing: %q", final.Body)
+	}
+	if stale.Meta.Links["pr"] == "" {
+		t.Fatal("caller's task copy not refreshed in place")
+	}
+}

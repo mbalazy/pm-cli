@@ -34,4 +34,9 @@ type TaskStore interface {
 	WriteTask(t *Task) error
 	MoveTask(t *Task, newStatus TaskStatus) error
 	DeleteTask(t *Task) error
+
+	// Concurrency: exclusive cross-process lock for read-modify-write cycles
+	// on the project's task files (see Store.LockProject). Hold around
+	// FindTask -> mutate -> WriteTask; read the task FRESH inside.
+	LockProject(slug string) (func(), error)
 }

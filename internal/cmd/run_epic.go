@@ -662,6 +662,15 @@ func parkedFindings(res *workerResult) []string {
 // of stacking duplicates. outcome != "merged" tags the line (e.g. "x2 · blocked")
 // so a parked sub reads differently from a merged sub's cross-cutting note.
 func recordSubFeedback(store storage.TaskStore, parent *storage.Task, subID, outcome string, findings []string) error {
+	// The parent was read at run start and is rewritten after EVERY sub, while
+	// other sessions may be editing it - refresh under the project lock so a
+	// mid-run edit (spec update, note) is never clobbered by a stale copy.
+	if release, err := store.LockProject(parent.Project); err == nil {
+		defer release()
+	}
+	if fresh, err := store.FindTask(parent.Project, parent.Meta.ID); err == nil {
+		*parent = *fresh
+	}
 	note := managerNoteBlock(subID, outcome, findings)
 	spec := storage.ExtractSpec(parent.Body)
 	if spec == "" {
