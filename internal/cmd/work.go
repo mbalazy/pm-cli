@@ -676,6 +676,9 @@ func workerEnv(configDir string) []string {
 		if pinConfig && strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {
 			continue // replaced below
 		}
+		if strings.HasPrefix(kv, "PM_HEADLESS=") {
+			continue // replaced below; a nested worker inherits one already
+		}
 		out = append(out, kv)
 	}
 	if pinConfig {

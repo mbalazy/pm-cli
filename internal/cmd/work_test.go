@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -260,14 +261,35 @@ func TestWorkerEnvStripsAPIKey(t *testing.T) {
 }
 
 func TestWorkerEnvMarksHeadless(t *testing.T) {
-	count := 0
-	for _, kv := range workerEnv("") {
-		if kv == "PM_HEADLESS=1" {
-			count++
-		}
+	// The marker must land exactly once REGARDLESS of what the parent env
+	// carries: a pm worker running the suite already has PM_HEADLESS=1 in its
+	// own environment, and a naive append would leave two entries.
+	cases := []struct {
+		name      string
+		inherited string // PM_HEADLESS value in the parent env ("" = unset)
+	}{
+		{name: "clean env"},
+		{name: "nested worker", inherited: "1"},
+		{name: "nested worker, odd value", inherited: "yes"},
 	}
-	if count != 1 {
-		t.Errorf("workerEnv must append PM_HEADLESS=1 exactly once (project hooks skip sim/Metro boot on it), got %d", count)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.inherited != "" {
+				t.Setenv("PM_HEADLESS", tc.inherited)
+			} else {
+				t.Setenv("PM_HEADLESS", "") // t.Setenv restores the original after the test
+				os.Unsetenv("PM_HEADLESS")
+			}
+			var got []string
+			for _, kv := range workerEnv("") {
+				if strings.HasPrefix(kv, "PM_HEADLESS=") {
+					got = append(got, kv)
+				}
+			}
+			if len(got) != 1 || got[0] != "PM_HEADLESS=1" {
+				t.Errorf("workerEnv must set PM_HEADLESS=1 exactly once (project hooks skip sim/Metro boot on it), got %v", got)
+			}
+		})
 	}
 }
 
