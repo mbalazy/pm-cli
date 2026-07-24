@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -225,13 +226,22 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		if projDir != "" {
 			copyWorktreeFiles(projDir, wtName)
 		}
+		claim := m.pickWorktreeSlot(proj, t.Project, sessionID)
 		args := []string{"-w", wtName, "--session-id", sessionID}
 		if skipFlag != "" {
 			args = append(args, skipFlag)
 		}
 		args = append(args, prompt)
-		c := exec.Command("claude", args...)
-		setDir(c, worktreeLaunchEnv(proj)...)
+		var c *exec.Cmd
+		if claim.lockCmd != "" {
+			// Claim the slot with the shell's pid, then exec claude so that
+			// pid becomes claude's - the lock holder is the live session.
+			shArgs := append([]string{"-c", claim.lockCmd + `exec claude "$@"`, "claude"}, args...)
+			c = exec.Command("sh", shArgs...)
+		} else {
+			c = exec.Command("claude", args...)
+		}
+		setDir(c, claim.env...)
 		origWin := tmuxGetWindowName()
 		tmuxRenameWindow(tmuxWindowName("wt", t.Meta.ID, sessionID))
 		return m, tea.ExecProcess(c, func(err error) tea.Msg {
@@ -246,7 +256,16 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		if projDir != "" {
 			copyWorktreeFiles(projDir, wtName)
 		}
-		shellCmd := withCd(fmt.Sprintf("claude -w %s --session-id %s %s %s", shellQuote(wtName), sessionID, skipFlag, shellQuote(prompt)), worktreeLaunchEnv(proj)...)
+		claim := m.pickWorktreeSlot(proj, t.Project, sessionID)
+		// Lock write goes between `cd` and the env-prefixed claude command;
+		// sh execs the trailing command (or waits on it), so the lock's $$
+		// tracks the session's lifetime either way.
+		inner := claim.lockCmd + claudeEnvPrefix(configDir, claim.env...) +
+			fmt.Sprintf("claude -w %s --session-id %s %s %s", shellQuote(wtName), sessionID, skipFlag, shellQuote(prompt))
+		shellCmd := inner
+		if projDir != "" {
+			shellCmd = fmt.Sprintf("cd %s && %s", shellQuote(projDir), inner)
+		}
 		winName := tmuxWindowName("wt", t.Meta.ID, sessionID)
 		sess, err := tmuxNewWindow(winName, shellCmd)
 		if err != nil {
@@ -339,27 +358,56 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// worktreeLaunchEnv returns the runtime-isolation env (e.g. Metro port,
-// simulator UDID) as KEY=VALUE pairs for interactive WORKTREE launches. A
-// worktree session runs outside the main checkout, so it gets the same env the
-// executor's --additional worker gets. Non-worktree launches never inject it:
-// a main-checkout session must keep the default port/simulator.
-//
-// With a worktree pool configured this is SLOT 1's merged env: interactive
-// sessions are untracked (no lock, unknown pid), so pm cannot allocate slots
-// for them - at most one env-injected INTERACTIVE session should run at a
-// time. Executor runs holding slot locks don't conflict with it: headless
-// workers never boot Metro or a simulator (PM_HEADLESS). Without any slots,
-// falls back to executor.env verbatim (legacy env-without-worktree projects).
-func worktreeLaunchEnv(proj *storage.Project) []string {
+// worktreeSlotClaim is the result of picking an interactive-session slot for
+// a worktree launch: the runtime-isolation env (Metro port, sim UDID, ...) to
+// inject plus the shell snippet that claims the slot from inside the launched
+// process. An empty lockCmd means there is nothing to claim: no slots
+// configured (legacy executor.env passthrough) or every slot busy (degraded
+// to slot 1's env, matching the pre-registry behaviour).
+type worktreeSlotClaim struct {
+	env     []string
+	lockCmd string
+}
+
+// pickWorktreeSlot picks the first slot WITHOUT a live interactive-session
+// lock for a worktree launch, so two interactive worktree sessions get
+// DIFFERENT slots (own port/sim). Non-worktree launches never call this: a
+// main-checkout session must keep the default port/simulator. The session
+// lock is separate from the executor's worktree lock - a live --additional
+// run doesn't conflict on runtime resources (headless workers never boot
+// Metro/sims, PM_HEADLESS), so only session locks gate the pick.
+func (m *Model) pickWorktreeSlot(proj *storage.Project, slug, sessionID string) worktreeSlotClaim {
 	if proj == nil {
-		return nil
+		return worktreeSlotClaim{}
 	}
-	exec := proj.GetExecutor()
-	if slots := exec.ResolveWorktrees(proj.Path); len(slots) > 0 {
-		return slots[0].Env
+	ex := proj.GetExecutor()
+	slots := ex.ResolveWorktrees(proj.Path)
+	if len(slots) == 0 {
+		return worktreeSlotClaim{env: ex.EnvSlice()}
 	}
-	return exec.EnvSlice()
+	projDir := m.store.ProjectDir(slug)
+	for i, s := range slots {
+		if storage.LiveSessionHolder(projDir, i+1) == nil {
+			return worktreeSlotClaim{env: s.Env, lockCmd: sessionLockScript(projDir, i+1, sessionID)}
+		}
+	}
+	// Every slot already hosts a live interactive session: fall back to slot
+	// 1's env without claiming (pre-registry behaviour, sessions collide).
+	return worktreeSlotClaim{env: slots[0].Env}
+}
+
+// sessionLockScript returns a shell snippet (terminated by "; ") that writes
+// the slot's session lock with the shell's own pid ($$). The launch execs
+// claude from that same shell, so the recorded pid is claude's pid; when the
+// session ends the pid dies and the lock reads as stale (= free) - no cleanup
+// needed. Lock-write failure must never block the launch, hence ";" not "&&"
+// before the command that follows.
+func sessionLockScript(projDir string, slot int, sessionID string) string {
+	lock := storage.SessionLockPath(projDir, slot)
+	payload := fmt.Sprintf(`{"pid":%%d,"session_id":%q,"slot":%d,"started":%q}`,
+		sessionID, slot, time.Now().UTC().Format(time.RFC3339))
+	return fmt.Sprintf("mkdir -p %s && printf %s \"$$\" > %s 2>/dev/null; ",
+		shellQuote(filepath.Dir(lock)), shellQuote(payload), shellQuote(lock))
 }
 
 func buildClaudePrompt(t *storage.Task, store storage.TaskStore) string {

@@ -1,7 +1,9 @@
 package board
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -82,23 +84,126 @@ func TestClaudeEnvPrefix(t *testing.T) {
 	})
 }
 
-func TestWorktreeLaunchEnv(t *testing.T) {
-	if got := worktreeLaunchEnv(nil); got != nil {
-		t.Fatalf("nil project should yield nil, got %v", got)
+func writeBoardSessionLock(t *testing.T, projDir string, slot, pid int) {
+	t.Helper()
+	path := storage.SessionLockPath(projDir, slot)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
 	}
-	if got := worktreeLaunchEnv(&storage.Project{}); got != nil {
-		t.Fatalf("project without executor env should yield nil, got %v", got)
+	payload := fmt.Sprintf(`{"pid":%d,"session_id":"held","slot":%d}`, pid, slot)
+	if err := os.WriteFile(path, []byte(payload), 0644); err != nil {
+		t.Fatal(err)
 	}
-	proj := &storage.Project{Executor: &storage.Executor{
-		Env: map[string]string{"SIM_UDID": "2CE9", "ADDITIONAL_METRO_PORT": "8090"},
-	}}
-	got := worktreeLaunchEnv(proj)
-	if len(got) != 2 || got[0] != "ADDITIONAL_METRO_PORT=8090" || got[1] != "SIM_UDID=2CE9" {
-		t.Fatalf("worktreeLaunchEnv = %v", got)
+}
+
+func TestPickWorktreeSlot(t *testing.T) {
+	newModel := func(t *testing.T) *Model {
+		return &Model{store: &storage.Store{Root: t.TempDir()}}
 	}
-	// executor.env flows into worktree launches even without additional_worktree
-	// (unconditional passthrough - the capability flag gates only --additional).
-	if proj.Executor.AdditionalWorktree {
-		t.Fatal("test project must not have additional_worktree set")
+	twoSlots := func() *storage.Project {
+		return &storage.Project{
+			Path: "/tmp/pick-slot-repo",
+			Executor: &storage.Executor{
+				Env: map[string]string{"SIM_UDID": "BASE"},
+				Worktrees: []storage.WorktreeSlot{
+					{Env: map[string]string{"ADDITIONAL_METRO_PORT": "8090"}},
+					{Env: map[string]string{"ADDITIONAL_METRO_PORT": "8091"}},
+				},
+			},
+		}
+	}
+	const deadPID = 2147483646
+
+	t.Run("nil project yields nothing", func(t *testing.T) {
+		claim := newModel(t).pickWorktreeSlot(nil, "p", "sess")
+		if claim.env != nil || claim.lockCmd != "" {
+			t.Fatalf("claim = %+v, want zero", claim)
+		}
+	})
+
+	t.Run("no slots passes executor env through without a claim", func(t *testing.T) {
+		proj := &storage.Project{Executor: &storage.Executor{
+			Env: map[string]string{"SIM_UDID": "2CE9", "ADDITIONAL_METRO_PORT": "8090"},
+		}}
+		claim := newModel(t).pickWorktreeSlot(proj, "p", "sess")
+		if len(claim.env) != 2 || claim.env[0] != "ADDITIONAL_METRO_PORT=8090" || claim.env[1] != "SIM_UDID=2CE9" {
+			t.Fatalf("env = %v", claim.env)
+		}
+		if claim.lockCmd != "" {
+			t.Fatalf("legacy env passthrough must not claim a slot, got %q", claim.lockCmd)
+		}
+	})
+
+	t.Run("first free slot is claimed", func(t *testing.T) {
+		m := newModel(t)
+		claim := m.pickWorktreeSlot(twoSlots(), "p", "sess-1")
+		if !containsEnv(claim.env, "ADDITIONAL_METRO_PORT=8090") {
+			t.Fatalf("want slot 1 env, got %v", claim.env)
+		}
+		if !strings.Contains(claim.lockCmd, "slot-1.lock") || !strings.Contains(claim.lockCmd, `"$$"`) {
+			t.Fatalf("lockCmd should claim slot 1 with $$, got %q", claim.lockCmd)
+		}
+	})
+
+	t.Run("live session on slot 1 pushes launch to slot 2", func(t *testing.T) {
+		m := newModel(t)
+		writeBoardSessionLock(t, m.store.ProjectDir("p"), 1, os.Getpid())
+		claim := m.pickWorktreeSlot(twoSlots(), "p", "sess-2")
+		if !containsEnv(claim.env, "ADDITIONAL_METRO_PORT=8091") {
+			t.Fatalf("want slot 2 env, got %v", claim.env)
+		}
+		if !strings.Contains(claim.lockCmd, "slot-2.lock") {
+			t.Fatalf("lockCmd should claim slot 2, got %q", claim.lockCmd)
+		}
+	})
+
+	t.Run("stale lock reads as free", func(t *testing.T) {
+		m := newModel(t)
+		writeBoardSessionLock(t, m.store.ProjectDir("p"), 1, deadPID)
+		claim := m.pickWorktreeSlot(twoSlots(), "p", "sess-3")
+		if !containsEnv(claim.env, "ADDITIONAL_METRO_PORT=8090") {
+			t.Fatalf("stale slot 1 should be reused, got %v", claim.env)
+		}
+	})
+
+	t.Run("all slots busy degrades to slot 1 env without a claim", func(t *testing.T) {
+		m := newModel(t)
+		writeBoardSessionLock(t, m.store.ProjectDir("p"), 1, os.Getpid())
+		writeBoardSessionLock(t, m.store.ProjectDir("p"), 2, os.Getpid())
+		claim := m.pickWorktreeSlot(twoSlots(), "p", "sess-4")
+		if !containsEnv(claim.env, "ADDITIONAL_METRO_PORT=8090") {
+			t.Fatalf("fallback should carry slot 1 env, got %v", claim.env)
+		}
+		if claim.lockCmd != "" {
+			t.Fatalf("no free slot -> no claim, got %q", claim.lockCmd)
+		}
+	})
+}
+
+func containsEnv(env []string, kv string) bool {
+	for _, e := range env {
+		if e == kv {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSessionLockScript(t *testing.T) {
+	got := sessionLockScript("/data/pm/proj", 2, "abcd-1234")
+	if !strings.Contains(got, "mkdir -p '/data/pm/proj/.sessions'") {
+		t.Errorf("script must create the lock dir, got %q", got)
+	}
+	if !strings.Contains(got, `"$$"`) || !strings.Contains(got, `"pid":%d`) {
+		t.Errorf("script must record the shell pid via printf %%d + $$, got %q", got)
+	}
+	if !strings.Contains(got, "abcd-1234") || !strings.Contains(got, `"slot":2`) {
+		t.Errorf("script must embed session id and slot, got %q", got)
+	}
+	if !strings.Contains(got, "slot-2.lock") {
+		t.Errorf("script must target the slot's lock file, got %q", got)
+	}
+	if !strings.HasSuffix(got, "; ") {
+		t.Errorf("script must end with '; ' so a failed lock write never blocks the launch, got %q", got)
 	}
 }
