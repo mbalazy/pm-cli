@@ -261,3 +261,22 @@ executor:
 		}
 	})
 }
+
+func TestExecutorBaseline(t *testing.T) {
+	data := "name: X\nexecutor:\n  enabled: true\n  baseline: yarn validate\n"
+	var p Project
+	if err := yaml.Unmarshal([]byte(data), &p); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got := p.GetExecutor().Baseline; got != "yarn validate" {
+		t.Errorf("Baseline = %q, want yarn validate", got)
+	}
+
+	var bare Project
+	if err := yaml.Unmarshal([]byte("name: X\nexecutor:\n  enabled: true\n"), &bare); err != nil {
+		t.Fatalf("Unmarshal bare: %v", err)
+	}
+	if got := bare.GetExecutor().Baseline; got != "" {
+		t.Errorf("Baseline must default to empty, got %q", got)
+	}
+}

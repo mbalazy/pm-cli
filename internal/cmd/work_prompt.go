@@ -81,6 +81,22 @@ func buildWorkerPrompt(t *storage.Task, parent *storage.Task, proj *storage.Proj
 	return sb.String()
 }
 
+// baselineSection renders the "## Verification baseline" prompt section from a
+// captured executor.baseline run. exitCode 0 = green baseline (any failure the
+// worker sees is new); non-zero = the output lists PRE-EXISTING failures that
+// must not count against the worker's verdict.
+func baselineSection(command string, exitCode int, output string) string {
+	var sb strings.Builder
+	sb.WriteString("\n## Verification baseline (captured BEFORE your run, on the branch you start from)\n")
+	if exitCode == 0 {
+		fmt.Fprintf(&sb, "`%s` exited 0 - the baseline is GREEN. Any verification failure you encounter is NEW and caused by your changes.\n", command)
+		return sb.String()
+	}
+	fmt.Fprintf(&sb, "`%s` exited %d BEFORE any of your changes. The failures below are PRE-EXISTING: they are not yours to fix (out of your scope) and MUST NOT count against your verify verdict. Judge verify ONLY on failures NOT present in this baseline. Do not spend turns re-diagnosing these; record them once as \"PRE-EXISTING: <short summary>\" in `unresolved` if verify stays red because of them.\n\n", command, exitCode)
+	fmt.Fprintf(&sb, "```\n%s\n```\n", output)
+	return sb.String()
+}
+
 // specOrBody returns the task's Spec zone (current truth) if present, else the
 // whole body.
 func specOrBody(t *storage.Task) string {
@@ -127,7 +143,7 @@ Run these phases in order. The user prompt gives the BINDING for each phase (ski
 3. review - get a FRESH, adversarial, diff-only review. This MUST be a different perspective than the implementer (a bound review skill, or independent reviewer subagents). Reviewers see ONLY the diff + the AC.
 4. fix - apply fixes for valid findings (review is read-only, so fixing is a separate step), commit, then re-review.
    Repeat review->fix until the review is clean OR you reach the review->fix round cap. If still not clean at the cap, STOP and return status "blocked" with the unresolved findings.
-5. verify - the GATE. Run the project's full verification (tests + lint + typecheck). It MUST pass before success. If it cannot be made green within AC scope, return status "failed" (or "blocked") with the reason.
+5. verify - the GATE. Run the project's full verification (tests + lint + typecheck). It MUST pass before success. PRE-EXISTING failures do not count against you: when the prompt carries a "Verification baseline" section, judge ONLY failures not present in that baseline; without one, a failure that is demonstrably pre-existing (wholly in files outside your diff, present on the branch you forked from) is likewise out of scope - record it once as "PRE-EXISTING: <what>" in unresolved instead of failing on it. If NEW failures cannot be fixed within AC scope, return status "failed" (or "blocked") with the reason.
 
 `)
 	fmt.Fprintf(&sb, "Review->fix round cap: %d.\n\n", exec.FixRounds)
@@ -141,7 +157,7 @@ Run these phases in order. The user prompt gives the BINDING for each phase (ski
 	}
 
 	sb.WriteString("\n## Result contract\nWhen you finish (or must stop), return the structured result:\n")
-	sb.WriteString(`- status: "merged" = implemented + reviewed-clean + verify-green (ready to merge); "blocked" = escalated to a human (review could not converge, or ambiguous/out-of-scope); "failed" = verify could not pass.
+	sb.WriteString(`- status: "merged" = implemented + reviewed-clean + verify-green (green = zero NEW failures; pre-existing breakage noted as PRE-EXISTING does not demote this); "blocked" = escalated to a human (review could not converge, or ambiguous/out-of-scope); "failed" = verify could not pass due to failures your changes introduced.
 - summary: 2-4 sentences of what you did.
 - branch: the git branch you committed on.
 - commits: short hashes of the commits you created (empty if none).
@@ -161,7 +177,7 @@ This task is one of several UNRELATED tasks in a batch. A human returns to every
 - When information is missing or a decision is ambiguous, make the most reasonable assumption, proceed, and RECORD it in ` + "`unresolved`" + ` prefixed "ASSUMPTION: ". Every assumption MUST be a testable statement AND carry a concrete empirical check, appended as " - verify: <how>" (e.g. "ASSUMPTION: GET /clients returns a plain array, not a paginated object - verify: hit the endpoint on dev and inspect the response" or "ASSUMPTION: prop isNew is never undefined here - verify: log it in <file> and open the screen"). You know exactly where you hesitated and where the doubt is observable - hand the human that check. A wrong assumption buried inside working-looking code is the worst bug you can leave behind; the human runs these checks FIRST when finishing the task.
 - A premise that is checkable against this repo or a READ-ONLY reference repo (an enum, an endpoint shape, a contract) is NOT an assumption - CHECK it (grep/read costs minutes) and record the evidence instead. This applies even when the spec hands you a pre-made decision: if your evidence refutes the decision's stated premise, record "SPEC-CONFLICT: <premise> refuted by <evidence file:line>" in ` + "`unresolved`" + `, prefer the variant the evidence supports when it still fits the ticket's intent, and flag it prominently either way. Never silently implement a decision whose premise you have disproven.
 - Everything you could not finish or verify (needs a simulator/visual check, a design or product decision, an answer from a human) goes into ` + "`unresolved`" + ` as a concrete, actionable handoff item prefixed "TODO: ".
-- Status semantics in this mode: "merged" = verify is green (open handoff items in unresolved are fine and expected); "failed" = verify stays red despite best effort; "blocked" ONLY when no meaningful progress was possible at all.
+- Status semantics in this mode: "merged" = the work is implemented + committed and verify shows zero NEW failures caused by your changes (open handoff items in unresolved are fine and expected, and PRE-EXISTING breakage never demotes the verdict - the human reads it from unresolved); "failed" = your changes introduce failures you could not fix despite best effort; "blocked" ONLY when no meaningful progress was possible at all.
 `)
 	}
 

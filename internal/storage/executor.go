@@ -65,6 +65,18 @@ type Executor struct {
 	// (the main checkout's deps are the user's business). A failure aborts the
 	// run. pm does not interpret the command.
 	Prepare string `yaml:"prepare,omitempty"`
+	// Baseline is an optional shell command (typically the project's full
+	// verification, e.g. `yarn validate`) whose output is captured ONCE per run
+	// on the branch the work forks from, BEFORE any worker starts, and injected
+	// into every worker prompt as the set of PRE-EXISTING failures. Without it,
+	// a worker landing in a repo whose verification is already red cannot prove
+	// which failures are its own - in practice it burns turns rediscovering old
+	// breakage and then reports a false failure. With a baseline the verdict is
+	// judged on NEW failures only. The command's exit code is expected to be
+	// non-zero on a red baseline - that is data, not an error; a baseline that
+	// fails to even start degrades to "no baseline" with a warning. pm does not
+	// interpret the command or its output.
+	Baseline string `yaml:"baseline,omitempty"`
 	// ContextRepos maps a short name to a local repo path the worker may READ
 	// for cross-repo context (e.g. backend: ../platform.orbit to check an
 	// endpoint's real shape). Listed in the worker prompt as read-only reference

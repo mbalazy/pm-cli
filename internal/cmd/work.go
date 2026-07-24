@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -124,6 +125,9 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 				} else {
 					fmt.Printf("run: DEFAULT (main checkout, clean-tree required)\n")
 				}
+				if plan.baselineCmd != "" {
+					fmt.Printf("baseline (captured before worker, injected into prompt): %s\n", plan.baselineCmd)
+				}
 				fmt.Printf("\n$ claude %s\n\n", strings.Join(quoteArgs(plan.cmdArgs), " "))
 				fmt.Printf("=== SYSTEM PROMPT ===\n%s\n\n=== PROMPT ===\n%s\n", plan.sysPrompt, plan.prompt)
 				return nil
@@ -239,6 +243,13 @@ type workOptions struct {
 	// unresolved) and a non-green result does NOT park the task on waiting - a
 	// human returns to every task in the batch anyway.
 	independent bool
+	// baseline: the pre-rendered "## Verification baseline" prompt section,
+	// captured ONCE by the epic manager (executor.baseline on the fork base) and
+	// shared by every sub - N subs must not mean N baseline runs. Empty for
+	// standalone `pm work`, which captures its own baseline in executeWork
+	// (after branch setup + prepare, so it measures exactly what the worker
+	// forked from).
+	baseline string
 }
 
 // workPlan is the resolved, ready-to-run worker invocation: the project, the
@@ -270,6 +281,10 @@ type workPlan struct {
 	// prepare = executor.prepare, run in the claimed worktree after branch setup
 	// and before the worker (worktree mode only). Empty = skip.
 	prepare string
+	// baselineCmd = executor.baseline to capture in executeWork right before the
+	// worker (standalone runs only - epic subs receive the manager's shared
+	// capture via opts.baseline instead, already baked into prompt/cmdArgs).
+	baselineCmd string
 }
 
 // planWork validates preconditions and assembles everything needed to invoke a
@@ -302,6 +317,11 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 	branch := resolveWorkBranch(task)
 	sessionID := storage.NewSessionID()
 	prompt := buildWorkerPrompt(task, parent, proj, slug, exec, branch, opts.standalone)
+	// Epic subs: the manager captured the baseline once for the whole run -
+	// bake its section into this sub's prompt here.
+	if opts.baseline != "" {
+		prompt += "\n" + opts.baseline
+	}
 	sysPrompt := buildWorkerSystemPrompt(exec, opts.standalone, opts.independent)
 	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo)
 
@@ -335,17 +355,23 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 
 	// Standalone only: the epic manager runs prepare ITSELF, once per run,
 	// right after claiming the slot - not per sub (5 subs must not mean 5
-	// dependency installs).
+	// dependency installs). Same split for the baseline capture.
 	prepare := ""
-	if opts.additional && opts.standalone {
-		prepare = strings.TrimSpace(exec.Prepare)
+	baselineCmd := ""
+	if opts.standalone {
+		if opts.additional {
+			prepare = strings.TrimSpace(exec.Prepare)
+		}
+		if opts.baseline == "" {
+			baselineCmd = strings.TrimSpace(exec.Baseline)
+		}
 	}
 
 	return &workPlan{
 		proj: proj, branch: branch, sessionID: sessionID,
 		prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs,
 		workDir: workDir, worktree: opts.additional, base: base, env: env, slots: slots,
-		prepare: prepare,
+		prepare: prepare, baselineCmd: baselineCmd,
 	}, nil
 }
 
@@ -389,6 +415,20 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		fmt.Fprintf(os.Stderr, "pm work: prepare in %s: %s\n", dir, plan.prepare)
 		if err := runPrepare(dir, plan.prepare); err != nil {
 			return nil, fmt.Errorf("prepare cmd (%s) failed in %s: %w", plan.prepare, dir, err)
+		}
+	}
+
+	// Capture the verification baseline (executor.baseline) on the branch the
+	// worker is about to start from, so the worker can judge its verify verdict
+	// on NEW failures only instead of rediscovering (and being failed by)
+	// pre-existing breakage. Runs after branch setup + prepare - it measures
+	// exactly the state the work forks from. Standalone runs only; epic subs
+	// carry the manager's once-per-run capture, already baked in by planWork.
+	if plan.baselineCmd != "" {
+		fmt.Fprintf(os.Stderr, "pm work: baseline in %s: %s\n", dir, plan.baselineCmd)
+		if section := captureBaseline(dir, plan.baselineCmd); section != "" {
+			plan.prompt += "\n" + section
+			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo)
 		}
 	}
 
@@ -542,6 +582,45 @@ func runPrepare(dir, command string) error {
 		return fmt.Errorf("timed out after %s", prepareTimeout)
 	}
 	return err
+}
+
+// baselineTimeout caps the executor.baseline capture (a full verification run
+// is minutes; a hang must not eat the worker's budget).
+const baselineTimeout = 15 * time.Minute
+
+// baselineOutputCap bounds how much captured output lands in the prompt. The
+// TAIL is kept - test/lint runners print summaries and totals last.
+const baselineOutputCap = 8000
+
+// captureBaseline runs the executor.baseline command in dir and renders the
+// "## Verification baseline" prompt section from its outcome. A non-zero exit
+// is the expected signal of a red baseline, not an error. Returns "" (with a
+// stderr warning) only when the command could not run at all - the run then
+// proceeds without a baseline rather than aborting.
+func captureBaseline(dir, command string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), baselineTimeout)
+	defer cancel()
+	c := exec.CommandContext(ctx, "sh", "-c", command)
+	c.Dir = dir
+	out, err := c.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		fmt.Fprintf(os.Stderr, "pm work: baseline cmd timed out after %s - continuing without a baseline\n", baselineTimeout)
+		return ""
+	}
+	if err == nil {
+		return baselineSection(command, 0, "")
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		// The command never ran (sh missing, dir gone, ...) - no data to report.
+		fmt.Fprintf(os.Stderr, "pm work: baseline cmd could not run (%v) - continuing without a baseline\n", err)
+		return ""
+	}
+	text := strings.TrimSpace(string(out))
+	if len(text) > baselineOutputCap {
+		text = "(... first " + fmt.Sprintf("%d", len(text)-baselineOutputCap) + " bytes truncated ...)\n" + text[len(text)-baselineOutputCap:]
+	}
+	return baselineSection(command, exitErr.ExitCode(), text)
 }
 
 // runWorker invokes claude headless in dir under a wall-clock deadline, parses

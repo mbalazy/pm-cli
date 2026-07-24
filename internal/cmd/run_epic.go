@@ -120,6 +120,9 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 						fmt.Printf("\nprepare (once per run, in claimed slot): %s\n", prep)
 					}
 				}
+				if bl := strings.TrimSpace(exc.Baseline); bl != "" {
+					fmt.Printf("\nbaseline (once per run, injected into every worker prompt): %s\n", bl)
+				}
 				return nil
 			}
 
@@ -197,6 +200,25 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			if additional {
 				opts.slotDir = workDir
 				opts.slotEnv = claimedEnv
+			}
+
+			// Capture the verification baseline ONCE for the whole run, on the
+			// branch every sub forks from (base in independent mode, the
+			// integration branch otherwise), so each worker judges its verify on
+			// NEW failures only - instead of every sub re-discovering the same
+			// pre-existing breakage and reporting a false failure. Best-effort: a
+			// baseline that cannot run degrades to no-baseline, never aborts.
+			if bl := strings.TrimSpace(exc.Baseline); bl != "" {
+				ref := epicBranch
+				if independentMode {
+					ref = baseBranch
+				}
+				if err := gitEnsureBranch(workDir, ref, ""); err != nil {
+					fmt.Fprintf(os.Stderr, "pm run-epic: checkout %s for baseline failed (%v) - continuing without a baseline\n", ref, err)
+				} else {
+					fmt.Fprintf(os.Stderr, "pm run-epic: baseline in %s: %s\n", workDir, bl)
+					opts.baseline = captureBaseline(workDir, bl)
+				}
 			}
 
 			// Run-state for observability: the manager owns the epic-level file;
