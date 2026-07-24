@@ -51,6 +51,19 @@ type Executor struct {
 	// LAST so they win over inherited values - which also means a
 	// CLAUDE_CONFIG_DIR key here would override the config-dir pinning.
 	Env map[string]string `yaml:"env,omitempty"`
+	// SeedExclude overrides DefaultSeedExcludes for worktree seeding
+	// (CopyUntrackedFiles): untracked directories that must NOT be copied into a
+	// fresh worktree (dependency/build artifacts). When set it REPLACES the
+	// defaults, so include the defaults you still want.
+	SeedExclude []string `yaml:"seed_exclude,omitempty"`
+	// Prepare is an optional shell command the manager runs in the CLAIMED
+	// worktree slot (cwd = the worktree) after branch setup and before every
+	// worker, e.g. `yarn install --frozen-lockfile` - it makes dependency
+	// freshness structural instead of relying on the worker to discover missing
+	// modules via a red verify. Only runs in --additional mode (the main
+	// checkout's deps are the user's business). A failure aborts the run. pm
+	// does not interpret the command.
+	Prepare string `yaml:"prepare,omitempty"`
 	// ContextRepos maps a short name to a local repo path the worker may READ
 	// for cross-repo context (e.g. backend: ../platform.orbit to check an
 	// endpoint's real shape). Listed in the worker prompt as read-only reference

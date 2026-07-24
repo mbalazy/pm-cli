@@ -2,6 +2,7 @@ package board
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -366,8 +367,10 @@ func (m Model) viewClaudeMenu() string {
 	}
 	lines = append(lines, "  "+keyStyle.Render("!")+checkStyle.Render(" "+check+" "+permsLabel))
 
-	// Executor-only: choose default (main checkout) vs the isolated "additional"
-	// worktree for THIS launch. Shown only when the project has it configured.
+	// Executor-only: choose default (main checkout) vs an isolated "additional"
+	// worktree slot for THIS launch. Shown only when the project has slots
+	// configured, with per-slot occupancy so the user sees which slot a launch
+	// would claim (first free wins).
 	if m.launchAgent == launchAgentExecutor && m.executorAdditionalAvail {
 		addCheck := "[ ]"
 		addStyle := dimStyle
@@ -375,7 +378,27 @@ func (m Model) viewClaudeMenu() string {
 			addCheck = "[x]"
 			addStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
 		}
-		lines = append(lines, "  "+keyStyle.Render("#")+addStyle.Render(" "+addCheck+" additional worktree (isolated branch/port/sim)"))
+		label := " additional worktree (first free slot; own branch/port/sim)"
+		if len(m.executorSlots) == 1 {
+			label = " additional worktree (isolated branch/port/sim)"
+		}
+		lines = append(lines, "  "+keyStyle.Render("#")+addStyle.Render(" "+addCheck+label))
+
+		freeStyle := lipgloss.NewStyle().Foreground(special)
+		busyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B"))
+		allBusy := true
+		for i, s := range m.executorSlots {
+			name := filepath.Base(s.path)
+			if s.holder == nil {
+				allBusy = false
+				lines = append(lines, dimStyle.Render(fmt.Sprintf("       slot %d  %s  ", i+1, name))+freeStyle.Render("○ free"))
+			} else {
+				lines = append(lines, dimStyle.Render(fmt.Sprintf("       slot %d  %s  ", i+1, name))+busyStyle.Render(fmt.Sprintf("● busy: %s (pid %d)", s.holder.TaskID, s.holder.PID)))
+			}
+		}
+		if m.claudeMenuAdditional && allBusy {
+			lines = append(lines, "       "+busyStyle.Bold(true).Render("all slots busy - this launch will fail; wait or kill a run (K)"))
+		}
 	}
 	lines = append(lines, "")
 

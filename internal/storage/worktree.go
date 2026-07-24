@@ -15,38 +15,89 @@ import (
 // worktree, written at the worktree root.
 const worktreeLockFile = ".pm-executor.lock"
 
-// CopyUntrackedFiles copies every untracked file (INCLUDING gitignored ones -
+// DefaultSeedExcludes are the untracked directories the worktree seeding skips
+// by default: dependency/build artifacts that are huge (a JS repo carries
+// ~100k node_modules/Pods files), regenerable in place, and actively DANGEROUS
+// to copy - the file-by-file copy turns symlinks (e.g. node_modules/.bin/*)
+// into broken plain files. Seeding is for config files a build needs (.env*,
+// plists), never for artifacts. Overridable per project via
+// executor.seed_exclude.
+var DefaultSeedExcludes = []string{
+	"node_modules/", "Pods/", "DerivedData/", ".gradle/",
+	".venv/", "venv/", "__pycache__/",
+	"target/", "build/", "dist/",
+}
+
+// SeedExcludes returns the project's seeding exclude list: executor.seed_exclude
+// when set (REPLACES the defaults), else DefaultSeedExcludes.
+func (e Executor) SeedExcludes() []string {
+	if len(e.SeedExclude) > 0 {
+		return e.SeedExclude
+	}
+	return DefaultSeedExcludes
+}
+
+// seedExcluded reports whether rel (a slash-separated repo-relative path) falls
+// under any exclude entry. An entry names a directory (trailing "/" optional)
+// and matches it at ANY depth, so "node_modules/" covers nested workspace
+// installs and "Pods/" covers "ios/Pods/".
+func seedExcluded(rel string, excludes []string) bool {
+	for _, e := range excludes {
+		e = strings.TrimSuffix(strings.TrimSpace(e), "/")
+		if e == "" {
+			continue
+		}
+		if strings.HasPrefix(rel, e+"/") || strings.Contains(rel, "/"+e+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// CopyUntrackedFiles copies untracked files (INCLUDING gitignored ones -
 // `git ls-files --others`, no --exclude-standard) from srcRepo into dstDir,
-// skipping any file that already exists at the destination. This is how the
-// executor and the TUI seed a fresh worktree with the untracked config files a
-// build needs (.env*, GoogleService-Info.plist, .xcode.env.local, ...) that are
-// deliberately kept out of git. Existing files are never clobbered, so it is
-// safe to re-run against a persistent worktree.
-func CopyUntrackedFiles(srcRepo, dstDir string) error {
+// skipping any file that already exists at the destination and any path under
+// excludes (nil = DefaultSeedExcludes). This is how the executor and the TUI
+// seed a fresh worktree with the untracked config files a build needs (.env*,
+// GoogleService-Info.plist, .xcode.env.local, ...) that are deliberately kept
+// out of git - dependency artifacts are excluded and get installed in place
+// instead (see executor.prepare). Existing files are never clobbered, so it is
+// safe to re-run against a persistent worktree. Symlinks are recreated as
+// symlinks, never dereferenced into copies.
+func CopyUntrackedFiles(srcRepo, dstDir string, excludes []string) error {
+	if excludes == nil {
+		excludes = DefaultSeedExcludes
+	}
 	cmd := exec.Command("git", "-C", srcRepo, "ls-files", "--others")
 	out, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("git ls-files --others in %s: %w", srcRepo, err)
 	}
 	for _, rel := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if rel == "" {
+		if rel == "" || seedExcluded(rel, excludes) {
 			continue
 		}
 		src := filepath.Join(srcRepo, rel)
 		dst := filepath.Join(dstDir, rel)
-		if _, err := os.Stat(dst); err == nil {
+		if _, err := os.Lstat(dst); err == nil {
 			continue // never clobber an existing destination file
+		}
+		info, err := os.Lstat(src)
+		if err != nil {
+			continue
+		}
+		_ = os.MkdirAll(filepath.Dir(dst), 0755)
+		if info.Mode()&os.ModeSymlink != 0 {
+			if target, err := os.Readlink(src); err == nil {
+				_ = os.Symlink(target, dst)
+			}
+			continue
 		}
 		data, err := os.ReadFile(src)
 		if err != nil {
 			continue
 		}
-		mode := os.FileMode(0644)
-		if info, err := os.Stat(src); err == nil {
-			mode = info.Mode()
-		}
-		_ = os.MkdirAll(filepath.Dir(dst), 0755)
-		_ = os.WriteFile(dst, data, mode)
+		_ = os.WriteFile(dst, data, info.Mode())
 	}
 	return nil
 }
@@ -217,6 +268,20 @@ func (e *WorktreeBusyError) Error() string {
 
 func worktreeLockPath(worktreePath string) string {
 	return filepath.Join(worktreePath, worktreeLockFile)
+}
+
+// LiveWorktreeHolder returns the lock holder when worktreePath is held by
+// another LIVE process, else nil (free, stale, or the caller's own re-entrant
+// lock). Shared by the slot allocator (cmd) and the board's slot indicator.
+func LiveWorktreeHolder(worktreePath string) *WorktreeLock {
+	lk, err := ReadWorktreeLock(worktreePath)
+	if err != nil || lk == nil {
+		return nil
+	}
+	if lk.PID == os.Getpid() || !ProcessAlive(lk.PID) {
+		return nil
+	}
+	return lk
 }
 
 // ReadWorktreeLock returns the lock currently held on worktreePath, or (nil,

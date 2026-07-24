@@ -51,7 +51,7 @@ func TestCopyUntrackedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := CopyUntrackedFiles(src, dst); err != nil {
+	if err := CopyUntrackedFiles(src, dst, nil); err != nil {
 		t.Fatalf("CopyUntrackedFiles: %v", err)
 	}
 
@@ -233,4 +233,65 @@ func TestResolveWorktrees(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestCopyUntrackedFilesExcludesAndSymlinks verifies the seeding fix: dependency
+// dirs are skipped at any depth (node_modules held ~87k files and its symlinks
+// arrived as broken plain copies) and seeded symlinks stay symlinks.
+func TestCopyUntrackedFilesExcludesAndSymlinks(t *testing.T) {
+	src := t.TempDir()
+	gitInit(t, src)
+
+	os.WriteFile(filepath.Join(src, ".gitignore"), []byte("node_modules/\n.env\n"), 0644)
+	os.WriteFile(filepath.Join(src, ".env"), []byte("SECRET=1\n"), 0600)
+	os.MkdirAll(filepath.Join(src, "node_modules", "pkg"), 0755)
+	os.WriteFile(filepath.Join(src, "node_modules", "pkg", "index.js"), []byte("x"), 0644)
+	os.MkdirAll(filepath.Join(src, "packages", "a", "node_modules"), 0755)
+	os.WriteFile(filepath.Join(src, "packages", "a", "node_modules", "dep.js"), []byte("x"), 0644)
+	os.MkdirAll(filepath.Join(src, "ios", "Pods"), 0755)
+	os.WriteFile(filepath.Join(src, "ios", "Pods", "Pod.h"), []byte("x"), 0644)
+	// An untracked symlink (like node_modules/.bin entries, but outside excludes).
+	os.WriteFile(filepath.Join(src, "real.sh"), []byte("#!/bin/sh\n"), 0755)
+	os.Symlink("real.sh", filepath.Join(src, "link.sh"))
+
+	dst := t.TempDir()
+	if err := CopyUntrackedFiles(src, dst, nil); err != nil {
+		t.Fatalf("CopyUntrackedFiles: %v", err)
+	}
+
+	if got, _ := os.ReadFile(filepath.Join(dst, ".env")); string(got) != "SECRET=1\n" {
+		t.Fatalf("config not seeded: %q", got)
+	}
+	for _, p := range []string{
+		filepath.Join(dst, "node_modules"),
+		filepath.Join(dst, "packages", "a", "node_modules"),
+		filepath.Join(dst, "ios", "Pods"),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			t.Fatalf("excluded dir was seeded: %s", p)
+		}
+	}
+	info, err := os.Lstat(filepath.Join(dst, "link.sh"))
+	if err != nil {
+		t.Fatalf("symlink not seeded: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("symlink was dereferenced into a plain copy")
+	}
+	if target, _ := os.Readlink(filepath.Join(dst, "link.sh")); target != "real.sh" {
+		t.Fatalf("symlink target = %q", target)
+	}
+}
+
+func TestSeedExcludesOverride(t *testing.T) {
+	if got := (Executor{}).SeedExcludes(); len(got) != len(DefaultSeedExcludes) {
+		t.Fatalf("default excludes = %v", got)
+	}
+	custom := Executor{SeedExclude: []string{"vendor/"}}
+	if got := custom.SeedExcludes(); len(got) != 1 || got[0] != "vendor/" {
+		t.Fatalf("override must REPLACE defaults, got %v", got)
+	}
+	if !seedExcluded("vendor/x.go", []string{"vendor/"}) || seedExcluded("node_modules/x", []string{"vendor/"}) {
+		t.Fatal("override matching wrong")
+	}
 }

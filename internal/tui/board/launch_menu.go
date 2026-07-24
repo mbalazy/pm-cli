@@ -70,11 +70,14 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 		// at least one worktree slot configured (executor.worktrees, or the legacy
 		// additional_worktree pair). The user picks default vs additional per
 		// launch via the `#` toggle (never inferred); the slot itself is claimed
-		// first-free at run time by pm work/run-epic.
+		// first-free at run time by pm work/run-epic. The per-slot lock holders
+		// are gathered here (menu open = decision time) for the slot indicator.
 		m.executorAdditionalAvail = false
+		m.executorSlots = nil
 		if t != nil && m.store != nil {
 			if proj, err := m.store.GetProject(t.Project); err == nil {
-				m.executorAdditionalAvail = len(proj.GetExecutor().ResolveWorktrees(proj.Path)) > 0
+				m.executorSlots = executorSlotStatuses(proj)
+				m.executorAdditionalAvail = len(m.executorSlots) > 0
 			}
 		}
 		if !m.executorAdditionalAvail {
@@ -251,4 +254,26 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// executorSlotStatus is one worktree slot's occupancy for the launch-menu
+// indicator: the resolved path and the LIVE lock holder (nil = free).
+type executorSlotStatus struct {
+	path   string
+	holder *storage.WorktreeLock
+}
+
+// executorSlotStatuses resolves the project's worktree slot pool and reads each
+// slot's live lock holder. Cheap (two small file reads per slot), called when
+// the executor launch menu opens so the indicator reflects decision-time state.
+func executorSlotStatuses(proj *storage.Project) []executorSlotStatus {
+	if proj == nil {
+		return nil
+	}
+	slots := proj.GetExecutor().ResolveWorktrees(proj.Path)
+	out := make([]executorSlotStatus, 0, len(slots))
+	for _, s := range slots {
+		out = append(out, executorSlotStatus{path: s.Path, holder: storage.LiveWorktreeHolder(s.Path)})
+	}
+	return out
 }

@@ -47,8 +47,10 @@ func prepareWorktree(proj *storage.Project, workDir, taskID, kind string) (func(
 	}
 	// Best-effort seed of untracked config files (.env*, plists, ...). A failure
 	// here only means the worker may miss a config; the worker (or the human) can
-	// still recover, so it is not fatal.
-	_ = storage.CopyUntrackedFiles(proj.Path, workDir)
+	// still recover, so it is not fatal. Dependency/build artifacts are excluded
+	// (executor.seed_exclude, default DefaultSeedExcludes) - they get installed
+	// in place instead (executor.prepare).
+	_ = storage.CopyUntrackedFiles(proj.Path, workDir, proj.GetExecutor().SeedExcludes())
 	storage.ExcludeFromGit(proj.Path, ".pm-executor.lock")
 
 	pid := os.Getpid()
@@ -73,7 +75,7 @@ func acquireWorktreeSlot(proj *storage.Project, slots []storage.ResolvedWorktree
 			return storage.ResolvedWorktree{}, nil, fmt.Errorf("--slot %d out of range - project has %d worktree slot(s)", pin, len(slots))
 		}
 		slot := slots[pin-1]
-		if holder := liveSlotHolder(slot.Path); holder != nil {
+		if holder := storage.LiveWorktreeHolder(slot.Path); holder != nil {
 			return storage.ResolvedWorktree{}, nil, fmt.Errorf("slot %d (%s): %w", pin, slot.Path, &storage.WorktreeBusyError{Holder: holder})
 		}
 		release, err := prepareWorktree(proj, slot.Path, taskID, kind)
@@ -87,7 +89,7 @@ func acquireWorktreeSlot(proj *storage.Project, slots []storage.ResolvedWorktree
 	for i, slot := range slots {
 		// Check the lock BEFORE touching the slot: ensure + config seeding must
 		// never poke a worktree another run is live in.
-		if holder := liveSlotHolder(slot.Path); holder != nil {
+		if holder := storage.LiveWorktreeHolder(slot.Path); holder != nil {
 			busy = append(busy, fmt.Sprintf("slot %d (%s): pid %d, task %s", i+1, slot.Path, holder.PID, holder.TaskID))
 			continue
 		}
@@ -108,17 +110,4 @@ func acquireWorktreeSlot(proj *storage.Project, slots []storage.ResolvedWorktree
 	}
 	return storage.ResolvedWorktree{}, nil, fmt.Errorf("all %d worktree slot(s) busy - wait for a run to finish or kill one (K on the board):\n  %s",
 		len(slots), strings.Join(busy, "\n  "))
-}
-
-// liveSlotHolder returns the lock holder when slotPath is held by another LIVE
-// process, else nil (free, stale, or our own re-entrant lock).
-func liveSlotHolder(slotPath string) *storage.WorktreeLock {
-	lk, err := storage.ReadWorktreeLock(slotPath)
-	if err != nil || lk == nil {
-		return nil
-	}
-	if lk.PID == os.Getpid() || !storage.ProcessAlive(lk.PID) {
-		return nil
-	}
-	return lk
 }

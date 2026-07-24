@@ -344,3 +344,16 @@ func TestAcquireWorktreeSlot(t *testing.T) {
 		}
 	})
 }
+
+func TestRunPrepare(t *testing.T) {
+	dir := t.TempDir()
+	if err := runPrepare(dir, "echo ok > prepared.txt"); err != nil {
+		t.Fatalf("runPrepare: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "prepared.txt")); err != nil {
+		t.Fatalf("prepare did not run in the worktree dir: %v", err)
+	}
+	if err := runPrepare(dir, "exit 3"); err == nil {
+		t.Fatal("failing prepare must error")
+	}
+}

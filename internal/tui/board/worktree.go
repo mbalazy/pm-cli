@@ -32,5 +32,5 @@ func copyWorktreeFiles(projDir, wtName string) {
 		}
 	}
 
-	_ = storage.CopyUntrackedFiles(projDir, wtPath)
+	_ = storage.CopyUntrackedFiles(projDir, wtPath, nil)
 }

@@ -180,6 +180,10 @@ type Model struct {
 	// legacy additional_worktree pair).
 	claudeMenuAdditional    bool
 	executorAdditionalAvail bool
+	// executorSlots = the project's worktree slot pool with live lock holders,
+	// gathered when the executor launch menu opens (fresh at decision time) and
+	// rendered under the # toggle so the user sees which slot a launch would get.
+	executorSlots []executorSlotStatus
 
 	// executor run-states (live background runs), keyed by task/tracker id;
 	// refreshed on tick from <project>/.executor/*.json

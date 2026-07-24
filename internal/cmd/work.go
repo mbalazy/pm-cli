@@ -118,6 +118,9 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 						fmt.Println()
 					}
 					fmt.Printf("fresh branch base: %s\n", plan.base)
+					if plan.prepare != "" {
+						fmt.Printf("prepare (before worker, in claimed slot): %s\n", plan.prepare)
+					}
 				} else {
 					fmt.Printf("run: DEFAULT (main checkout, clean-tree required)\n")
 				}
@@ -264,6 +267,9 @@ type workPlan struct {
 	base     string
 	env      []string
 	slots    []storage.ResolvedWorktree
+	// prepare = executor.prepare, run in the claimed worktree after branch setup
+	// and before the worker (worktree mode only). Empty = skip.
+	prepare string
 }
 
 // planWork validates preconditions and assembles everything needed to invoke a
@@ -327,10 +333,16 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		}
 	}
 
+	prepare := ""
+	if opts.additional {
+		prepare = strings.TrimSpace(exec.Prepare)
+	}
+
 	return &workPlan{
 		proj: proj, branch: branch, sessionID: sessionID,
 		prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs,
 		workDir: workDir, worktree: opts.additional, base: base, env: env, slots: slots,
+		prepare: prepare,
 	}, nil
 }
 
@@ -363,6 +375,17 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			if err := gitCheckoutBranch(dir, plan.branch); err != nil {
 				return nil, fmt.Errorf("prepare branch %s: %w", plan.branch, err)
 			}
+		}
+	}
+
+	// Make the worktree's dependencies current BEFORE the worker spends turns
+	// discovering they aren't (executor.prepare, worktree mode only, cwd = the
+	// claimed slot). A failed prepare aborts the run - the worker would fail on
+	// the same broken deps anyway, just slower and less legibly.
+	if plan.worktree && plan.prepare != "" {
+		fmt.Fprintf(os.Stderr, "pm work: prepare in %s: %s\n", dir, plan.prepare)
+		if err := runPrepare(dir, plan.prepare); err != nil {
+			return nil, fmt.Errorf("prepare cmd (%s) failed in %s: %w", plan.prepare, dir, err)
 		}
 	}
 
@@ -497,6 +520,26 @@ const workerAllowedTools = "Edit Write Read Grep Glob Task TodoWrite " +
 // merge to main, never hard-reset.
 const workerDisallowedTools = "Bash(git push --force:*) Bash(git push -f:*) Bash(git push --force-with-lease:*) " +
 	"Bash(git reset --hard:*) Bash(gh pr merge:*) Bash(git merge:*)"
+
+// prepareTimeout caps executor.prepare (a dependency install is minutes, a hang
+// must not eat the whole worker timeout).
+const prepareTimeout = 15 * time.Minute
+
+// runPrepare executes the project's prepare command in dir via `sh -c`, with
+// output streamed to stderr (-> the run log for background runs).
+func runPrepare(dir, command string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), prepareTimeout)
+	defer cancel()
+	c := exec.CommandContext(ctx, "sh", "-c", command)
+	c.Dir = dir
+	c.Stdout = os.Stderr
+	c.Stderr = os.Stderr
+	err := c.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("timed out after %s", prepareTimeout)
+	}
+	return err
+}
 
 // runWorker invokes claude headless in dir under a wall-clock deadline, parses
 // the result envelope, and returns the worker result + the session id. A hung

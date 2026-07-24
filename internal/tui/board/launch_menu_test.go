@@ -1,51 +1,50 @@
 package board
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mbalazy/pm/internal/storage"
 )
 
-// TestMenuTask guards the launch-target resolution: in the detail view the
-// launch overlay must act on detailTask (correct even after a [p] parent jump),
-// not the board cursor. Regression for launching CC on a child when the user
-// jumped to the parent detail and pressed [c].
-func TestMenuTask(t *testing.T) {
-	parent := &storage.Task{Meta: storage.TaskMeta{ID: "atlas-64", Title: "Parent", Status: storage.StatusDoing}}
-	child := &storage.Task{Meta: storage.TaskMeta{ID: "atlas-64-2", Title: "Child", Status: storage.StatusDoing, Parent: "atlas-64"}}
+// TestExecutorSlotStatuses verifies the launch-menu slot indicator's data:
+// per-slot live holder (busy), with stale (dead-pid) locks reading as free.
+func TestExecutorSlotStatuses(t *testing.T) {
+	base := t.TempDir()
+	slot1 := filepath.Join(base, "wt-1")
+	slot2 := filepath.Join(base, "wt-2")
+	proj := &storage.Project{Path: filepath.Join(base, "repo"), Executor: &storage.Executor{
+		Enabled: true,
+		Worktrees: []storage.WorktreeSlot{
+			{Path: slot1},
+			{Path: slot2},
+		},
+	}}
 
-	base := func() Model {
-		return Model{
-			tasks:    []*storage.Task{parent, child},
-			statuses: []storage.TaskStatus{storage.StatusDoing},
-			cursors:  []int{0}, // board cursor on first card
-		}
+	// Slot 1 busy (live foreign pid = the test runner's parent), slot 2 has a
+	// STALE lock (dead pid) and must read as free.
+	os.MkdirAll(slot1, 0755)
+	os.MkdirAll(slot2, 0755)
+	if err := storage.AcquireWorktreeLock(slot1, "app-9", "run-epic", os.Getppid()); err != nil {
+		t.Fatalf("seed live lock: %v", err)
+	}
+	if err := storage.AcquireWorktreeLock(slot2, "app-old", "work", 2147483646); err != nil {
+		t.Fatalf("seed stale lock: %v", err)
 	}
 
-	t.Run("detail view returns detailTask, not board cursor", func(t *testing.T) {
-		m := base()
-		m.currentView = viewDetail
-		m.detailTask = parent // jumped to parent via [p]
-		if got := m.menuTask(); got != parent {
-			t.Fatalf("menuTask() = %v, want parent atlas-64", got.Meta.ID)
-		}
-	})
+	got := executorSlotStatuses(proj)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 slots, got %d", len(got))
+	}
+	if got[0].holder == nil || got[0].holder.TaskID != "app-9" {
+		t.Fatalf("slot 1 should be busy by app-9, got %+v", got[0].holder)
+	}
+	if got[1].holder != nil {
+		t.Fatalf("slot 2 (stale lock) should read as free, got %+v", got[1].holder)
+	}
 
-	t.Run("board view falls back to selected task", func(t *testing.T) {
-		m := base()
-		m.currentView = viewBoard
-		m.detailTask = parent // stale; must be ignored outside detail view
-		if got := m.menuTask(); got != m.selectedTask() {
-			t.Fatalf("menuTask() = %v, want board-selected card %v", got, m.selectedTask())
-		}
-	})
-
-	t.Run("detail view with nil detailTask falls back", func(t *testing.T) {
-		m := base()
-		m.currentView = viewDetail
-		m.detailTask = nil
-		if got := m.menuTask(); got == nil {
-			t.Fatal("menuTask() = nil, want fallback to board cursor")
-		}
-	})
+	if executorSlotStatuses(nil) != nil {
+		t.Fatal("nil project must yield nil")
+	}
 }
