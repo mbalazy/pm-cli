@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -196,5 +198,139 @@ func TestE2EConcurrentUpdatesDontDropWrites(t *testing.T) {
 		if !strings.Contains(final.Body, want) {
 			t.Fatalf("lost update: %s missing from body %q", want, final.Body)
 		}
+	}
+}
+
+// TestE2EListTasksBudget covers the pm_list_tasks output budget: default cap
+// of 50 newest tasks, explicit total/shown + note on truncation, a working
+// limit param, and one-line briefs in listings.
+func TestE2EListTasksBudget(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	projDir := filepath.Join(store.RootDir(), "test")
+	for i := 2; i <= 60; i++ {
+		storage.WriteTask(&storage.Task{
+			Meta: storage.TaskMeta{
+				ID:      fmt.Sprintf("t-%d", i),
+				Title:   fmt.Sprintf("Task %d", i),
+				Status:  storage.StatusTodo,
+				Created: "2025-01-01",
+				// Unique, lexicographically increasing "dates": Updated is
+				// compared as a plain string, and t-60 must be the newest.
+				Updated: fmt.Sprintf("2025-03-01-%03d", i),
+				Brief:   "line one\nline two",
+			},
+			FilePath: filepath.Join(projDir, fmt.Sprintf("t-%d.md", i)),
+			Project:  "test",
+		})
+	}
+	sess := startMCP(t, store)
+
+	type listOut struct {
+		Tasks []struct {
+			ID    string `json:"id"`
+			Brief string `json:"brief"`
+		} `json:"tasks"`
+		Total int    `json:"total"`
+		Shown int    `json:"shown"`
+		Note  string `json:"note"`
+	}
+
+	t.Run("default limit truncates with note", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_list_tasks", map[string]any{"project": "test"})
+		if isErr {
+			t.Fatalf("list error: %s", text)
+		}
+		var out listOut
+		mustUnmarshal(t, text, &out)
+		if out.Total != 60 || out.Shown != 50 || len(out.Tasks) != 50 {
+			t.Fatalf("total=%d shown=%d len=%d, want 60/50/50", out.Total, out.Shown, len(out.Tasks))
+		}
+		if !strings.Contains(out.Note, "50 of 60") {
+			t.Fatalf("note should report truncation, got %q", out.Note)
+		}
+	})
+
+	t.Run("briefs are one line", func(t *testing.T) {
+		text, _ := call(t, sess, "pm_list_tasks", map[string]any{"project": "test"})
+		var out listOut
+		mustUnmarshal(t, text, &out)
+		for _, task := range out.Tasks {
+			if strings.Contains(task.Brief, "\n") {
+				t.Fatalf("brief of %s not one-line: %q", task.ID, task.Brief)
+			}
+			if task.Brief == "line one\nline two" {
+				t.Fatalf("brief of %s not compressed", task.ID)
+			}
+		}
+	})
+
+	t.Run("limit param wins over default", func(t *testing.T) {
+		text, _ := call(t, sess, "pm_list_tasks", map[string]any{"project": "test", "limit": 5})
+		var out listOut
+		mustUnmarshal(t, text, &out)
+		if out.Shown != 5 || out.Total != 60 {
+			t.Fatalf("shown=%d total=%d, want 5/60", out.Shown, out.Total)
+		}
+	})
+
+	t.Run("limit above total shows everything without note", func(t *testing.T) {
+		text, _ := call(t, sess, "pm_list_tasks", map[string]any{"project": "test", "limit": 100})
+		var out listOut
+		mustUnmarshal(t, text, &out)
+		if out.Shown != 60 || out.Note != "" {
+			t.Fatalf("shown=%d note=%q, want 60 and empty note", out.Shown, out.Note)
+		}
+	})
+
+	t.Run("newest first survives truncation", func(t *testing.T) {
+		text, _ := call(t, sess, "pm_list_tasks", map[string]any{"project": "test", "limit": 1})
+		var out listOut
+		mustUnmarshal(t, text, &out)
+		if len(out.Tasks) != 1 || out.Tasks[0].ID != "t-60" {
+			t.Fatalf("tasks[0]=%v, want the newest (t-60)", out.Tasks)
+		}
+	})
+}
+
+// TestE2EContextBodyCapped: pm_context returns doing tasks with the body
+// capped at contextBodyLimit + a pointer to pm_get_task; the brief stays full.
+func TestE2EContextBodyCapped(t *testing.T) {
+	store, task := setupMCPTestStore(t)
+	task.Body = strings.Repeat("x", 10000)
+	storage.WriteTask(task)
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_context", map[string]any{"project": "test"})
+	if isErr {
+		t.Fatalf("pm_context error: %s", text)
+	}
+	var out struct {
+		DoingTasks []struct {
+			Body  string `json:"body"`
+			Brief string `json:"brief"`
+		} `json:"doing_tasks"`
+	}
+	mustUnmarshal(t, text, &out)
+	if len(out.DoingTasks) != 1 {
+		t.Fatalf("want 1 doing task, got %d", len(out.DoingTasks))
+	}
+	body := out.DoingTasks[0].Body
+	if len(body) > contextBodyLimit+100 {
+		t.Fatalf("body not capped: %d chars", len(body))
+	}
+	if !strings.Contains(body, "pm_get_task") {
+		t.Fatalf("capped body must point to pm_get_task, got tail %q", body[len(body)-80:])
+	}
+	if out.DoingTasks[0].Brief != "initial brief" {
+		t.Fatalf("brief must stay full in pm_context, got %q", out.DoingTasks[0].Brief)
+	}
+
+	// A short body passes through untouched.
+	task.Body = "short body"
+	storage.WriteTask(task)
+	text, _ = call(t, sess, "pm_context", map[string]any{"project": "test"})
+	mustUnmarshal(t, text, &out)
+	if out.DoingTasks[0].Body != "short body" {
+		t.Fatalf("short body must be untouched, got %q", out.DoingTasks[0].Body)
 	}
 }

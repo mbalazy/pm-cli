@@ -16,7 +16,14 @@ import (
 type listTasksInput struct {
 	Project string `json:"project,omitempty" jsonschema:"Project slug or prefix (omit for all projects)"`
 	Status  string `json:"status,omitempty" jsonschema:"Filter by status (e.g. todo, doing, done, archived)"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"Max tasks to return, newest first (default 50). The result reports total vs shown; narrow with project/status or raise limit to see more."`
 }
+
+// defaultListLimit caps unfiltered pm_list_tasks output: without it a full
+// cross-project listing once dumped 74k chars into the calling session's
+// context. Newest-first + an explicit total/shown footer keeps the tool
+// useful while bounding the damage.
+const defaultListLimit = 50
 
 type getTaskInput struct {
 	Project string `json:"project" jsonschema:"Project slug or prefix"`
@@ -123,6 +130,15 @@ type taskSummary struct {
 	SessionCount int               `json:"session_count"`
 }
 
+// listTasksResult wraps pm_list_tasks output with a size-budget footer: total
+// vs shown makes truncation explicit instead of silently dropping tasks.
+type listTasksResult struct {
+	Tasks []taskSummary `json:"tasks"`
+	Total int           `json:"total"`
+	Shown int           `json:"shown"`
+	Note  string        `json:"note,omitempty"`
+}
+
 type taskDetail struct {
 	taskSummary
 	Created   string   `json:"created"`
@@ -169,6 +185,21 @@ func focusTaskSummaries(store storage.TaskStore) []taskSummary {
 	return result
 }
 
+// contextBodyLimit caps each doing task's body in pm_context output: a
+// project with a dozen doing tasks carrying full Spec/Log bodies dumps
+// 100k+ chars into the calling session otherwise. The brief stays complete
+// (it is the designed cold-start vehicle); the full body is one pm_get_task
+// away.
+const contextBodyLimit = 2000
+
+func truncateBody(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "\n… [body truncated - use pm_get_task for the full body]"
+}
+
 func toDetail(t *storage.Task) taskDetail {
 	return taskDetail{
 		taskSummary: toSummary(t),
@@ -203,7 +234,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	// pm_list_tasks
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_list_tasks",
-		Description: "List tasks, optionally filtered by project and/or status. Excludes archived unless status=archived.",
+		Description: "List tasks, optionally filtered by project and/or status. Excludes archived unless status=archived. Returns at most `limit` newest tasks (default 50) with total/shown counters; briefs are compressed to one line - use pm_get_task for full detail.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in listTasksInput) (*mcp.CallToolResult, any, error) {
 		var tasks []*storage.Task
 		var err error
@@ -232,14 +263,30 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			} else if t.Meta.Status == storage.StatusArchived {
 				continue
 			}
-			filtered = append(filtered, toSummary(t))
+			s := toSummary(t)
+			// One-line brief in listings; pm_get_task returns the full brief.
+			s.Brief = storage.BriefLine(s.Brief)
+			filtered = append(filtered, s)
 		}
 
 		sort.Slice(filtered, func(i, j int) bool {
 			return filtered[i].Updated > filtered[j].Updated
 		})
 
-		r, err := jsonText(filtered)
+		limit := in.Limit
+		if limit <= 0 {
+			limit = defaultListLimit
+		}
+		total := len(filtered)
+		if total > limit {
+			filtered = filtered[:limit]
+		}
+		result := listTasksResult{Tasks: filtered, Total: total, Shown: len(filtered)}
+		if result.Shown < total {
+			result.Note = fmt.Sprintf("%d of %d tasks shown (newest first) - narrow with project/status or raise limit", result.Shown, total)
+		}
+
+		r, err := jsonText(result)
 		return r, nil, err
 	})
 
@@ -799,7 +846,9 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 	for _, t := range tasks {
 		counts[string(t.Meta.Status)]++
 		if t.Meta.Status == storage.StatusDoing && !suppressed[t.Meta.ID] {
-			doing = append(doing, toDetail(t))
+			d := toDetail(t)
+			d.Body = truncateBody(d.Body, contextBodyLimit)
+			doing = append(doing, d)
 		}
 	}
 
