@@ -124,6 +124,11 @@ func contextFixture(t *testing.T, tasks ...*storage.Task) *storage.Store {
 // what the command printed to stdout plus its error.
 func execContextCmd(t *testing.T, store storage.TaskStore, args ...string) (string, error) {
 	t.Helper()
+	// A nil slice makes cobra fall back to os.Args[1:], which would leak the
+	// test binary's own positionals into `pm context`.
+	if args == nil {
+		args = []string{}
+	}
 	var err error
 	out := captureStdout(t, func() {
 		cmd := newContextCmd(store)
