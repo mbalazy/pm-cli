@@ -116,6 +116,9 @@ func statusMark(status string) string {
 	case "waiting":
 		return "⏳"
 	default:
-		return "○"
+		// Emoji marks (✅ 🔀 🔨 ⏳) render as 2 terminal columns; "○" alone is
+		// only 1. Pad it with a trailing space so every mark occupies the
+		// same 2-column width and the ID/status/order columns stay aligned.
+		return "○ "
 	}
 }
