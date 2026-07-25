@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/spf13/cobra"
@@ -101,27 +102,44 @@ type runKey struct {
 	pid    int
 }
 
+// liveWindow bounds how old an unpaired `start` may be before its live-looking
+// pid is treated as pid REUSE rather than a run in flight. The journal is
+// append-only and spans months, while macOS recycles its ~100k pid space in
+// days - without a bound, one old crash whose pid got reused reads as "running"
+// forever and is silently missing from the crash count. Generous enough to
+// cover any real run (the executor's own timeout defaults to 45m).
+const liveWindow = 24 * time.Hour
+
 // aggregateJournal folds journal entries into the rollup. Start lines are
 // paired FIFO with their terminal (end/killed) line by runKey; leftover starts
-// are crashes (or still-running runs, when the pid is alive).
+// are crashes (or still-running runs, when the pid is alive and recent).
 //
-// alive reports whether a pid still belongs to a live process; it is a
-// parameter so tests can pin it (production passes storage.ProcessAlive).
-func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool) journalStats {
+// alive reports whether a pid still belongs to a live process and now is the
+// reference time for liveWindow; both are parameters so tests can pin them
+// (production passes storage.ProcessAlive and time.Now()).
+func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool, now time.Time) journalStats {
 	st := journalStats{
 		Entries:    len(entries),
 		Kinds:      make(map[string]*kindStats),
 		SubResults: make(map[string]int),
 	}
 
-	// open[key]   = start lines still awaiting a terminal line.
-	// closed[key] = runs already paired with a terminal line, so a SECOND
-	// terminal line for the same key can be recognised as a duplicate rather
-	// than invented as a new run. That happens for real: run_epic writes its
-	// "end" line and then keeps working (PR creation), during which the board
-	// can still fire a kill and append a "killed" line for the same run.
+	// open[key]     = start lines still awaiting a terminal line.
+	// closedBy[key] = the event ("end"/"killed") that closed the last run under
+	// this key, so a SECOND terminal line can be classified rather than blindly
+	// counted or blindly dropped:
+	//   - a DIFFERENT event type means both lines describe ONE physical run -
+	//     the kill race. run_epic writes its "end" line (run_epic.go:321) and
+	//     then keeps working (gitEnsureBranch, PR creation), during which the
+	//     board's kill - gated on a run-state cached up to 2s - can still fire
+	//     and append "killed". The reverse order happens too, when a SIGTERM
+	//     fails to land and the manager runs to completion anyway.
+	//   - the SAME event type twice means two distinct runs that happened to
+	//     reuse the pid, the second one's `start` append having been lost.
+	// startTS[key] keeps the timestamps of the still-open starts, oldest first.
 	open := make(map[runKey]int)
-	closed := make(map[runKey]int)
+	closedBy := make(map[runKey]string)
+	startTS := make(map[runKey][]string)
 
 	for _, e := range entries {
 		key := runKey{kind: e.Kind, taskID: e.TaskID, pid: e.PID}
@@ -130,27 +148,37 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool) jour
 			st.Runs++
 			st.kind(e.Kind).Runs++
 			open[key]++
+			startTS[key] = append(startTS[key], e.TS)
 		case storage.JournalEventEnd, storage.JournalEventKilled:
+			duplicate := false
 			switch {
 			case open[key] > 0:
 				open[key]--
-				closed[key]++
-			case closed[key] > 0:
-				// Duplicate terminal line for an already-closed run (the kill
-				// race above). The first terminal line carries the real
-				// duration and subs - ignore this one entirely rather than
-				// double-count the run.
-				continue
+				if ts := startTS[key]; len(ts) > 0 {
+					startTS[key] = ts[1:] // FIFO: the oldest start is the one closed
+				}
+				closedBy[key] = e.Event
+			case closedBy[key] != "" && closedBy[key] != e.Event:
+				// Second terminal line for a run already closed by the OTHER
+				// event type - the kill race. One run, not two.
+				duplicate = true
 			default:
 				// Terminal line whose start is missing (a best-effort start
 				// append that failed, or a corrupt line ReadJournal skipped).
 				// Still a real run, so count it.
 				st.Runs++
 				st.kind(e.Kind).Runs++
-				closed[key]++
+				closedBy[key] = e.Event
 			}
+
 			k := st.kind(e.Kind)
-			k.Statuses[terminalStatus(e)]++
+			if !duplicate {
+				k.Statuses[terminalStatus(e)]++
+			}
+			// Payload is folded in either way: whichever of the two racing
+			// lines carries the subs/duration is the one with the real data,
+			// and a bare "killed" line carries neither, so this is a no-op for
+			// the common order.
 			if e.Event == storage.JournalEventEnd {
 				k.DurationS.addSample(float64(e.DurationS))
 			}
@@ -158,16 +186,17 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool) jour
 		}
 	}
 
-	// Whatever is still open never got a terminal line. A live holder pid means
-	// the run is in flight right now (stats is routinely run mid-epic); a dead
-	// one is the documented crash. Same signal-0 liveness check the TUI uses,
-	// so it inherits the same pid-reuse caveat.
+	// Whatever is still open never got a terminal line. A live holder pid on a
+	// RECENT start means the run is in flight right now (stats is routinely run
+	// mid-epic); anything else is the documented crash. Same signal-0 liveness
+	// check the TUI uses, bounded by liveWindow so a recycled pid on an ancient
+	// entry cannot masquerade as a live run.
 	for key, n := range open {
 		if n == 0 {
 			continue // fully paired run - the counter is just a leftover map key
 		}
 		status := runStatusCrashed
-		if key.pid > 0 && alive != nil && alive(key.pid) {
+		if key.pid > 0 && alive != nil && alive(key.pid) && anyRecent(startTS[key], now) {
 			status = runStatusRunning
 			st.Running += n
 		} else {
@@ -176,6 +205,23 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool) jour
 		st.kind(key.kind).Statuses[status] += n
 	}
 	return st
+}
+
+// anyRecent reports whether any of the RFC3339 timestamps is within liveWindow
+// of now. An unparseable or missing timestamp counts as recent: the pid check
+// already passed, and TS is only a tie-breaker against pid reuse - a journal
+// hand-edited into an unreadable TS should not turn a live run into a crash.
+func anyRecent(stamps []string, now time.Time) bool {
+	if len(stamps) == 0 {
+		return true
+	}
+	for _, s := range stamps {
+		ts, err := time.Parse(time.RFC3339, s)
+		if err != nil || now.Sub(ts) < liveWindow {
+			return true
+		}
+	}
+	return false
 }
 
 // kind returns (creating on demand) the per-kind bucket.
@@ -203,6 +249,26 @@ func (s *journalStats) addSubs(subs []storage.JournalSub) {
 		s.Turns.add(float64(sub.Turns))
 		s.Cost.add(sub.CostUSD)
 	}
+}
+
+// gateResults are the sub outcomes recorded WITHOUT spawning a worker - the
+// manager's gate decisions (classifySub). They matter because `pm run-epic` is
+// re-entrant: every re-run re-records already-done, not-ready and dep-blocked
+// subs as "skipped" and human-gated ones as "manual", so on a re-run these
+// dominate the histogram while representing no actual work.
+var gateResults = map[string]bool{"skipped": true, "manual": true}
+
+// workerBacked splits the sub count into subs a worker actually ran and gate
+// decisions the manager recorded without spawning one.
+func (s journalStats) workerBacked() (worked, gated int) {
+	for res, n := range s.SubResults {
+		if gateResults[res] {
+			gated += n
+		} else {
+			worked += n
+		}
+	}
+	return worked, gated
 }
 
 // terminalStatus maps a terminal entry to its run status.
@@ -250,7 +316,12 @@ func renderJournalStats(slug, path string, st journalStats) string {
 	// the file's line count.
 	fmt.Fprintf(&b, "# %s (%d parsed entries)\n\n", path, st.Entries)
 
-	fmt.Fprintf(&b, "## Runs: %d\n", st.Runs)
+	// The status is how the MANAGER exited, not a verdict on the work: run-epic
+	// hardcodes "done" on its end line whatever the subs did (run_epic.go), so
+	// "done" means "the sub loop returned", and the outcome signal lives in the
+	// sub histogram below. Saying so beats letting a retro read "2 done" as two
+	// successful runs.
+	fmt.Fprintf(&b, "## Runs: %d  (status = how the manager exited, not whether the work landed)\n", st.Runs)
 	kinds := make([]string, 0, len(st.Kinds))
 	for k := range st.Kinds {
 		kinds = append(kinds, k)
@@ -274,16 +345,31 @@ func renderJournalStats(slug, path string, st journalStats) string {
 				fmtDuration(k.DurationS.Total), fmtDuration(k.DurationS.avg()), k.DurationS.Samples)
 		}
 	}
-	if st.Crashes > 0 {
-		fmt.Fprintf(&b, "  crashed:  %d (start with no end/killed line)\n", st.Crashes)
-	}
-	if st.Running > 0 {
-		fmt.Fprintf(&b, "  running:  %d (start with no end/killed line, pid still alive)\n", st.Running)
+	// Totals across all kinds - the per-kind brackets above already count these,
+	// so they are restated here only because they are the two states with no
+	// terminal line at all, which is what the "detected crashes" ask is about.
+	if st.Crashes > 0 || st.Running > 0 {
+		fmt.Fprintln(&b, "  -- across all kinds (already counted above):")
+		if st.Crashes > 0 {
+			fmt.Fprintf(&b, "     crashed %d (start with no end/killed line)\n", st.Crashes)
+		}
+		if st.Running > 0 {
+			fmt.Fprintf(&b, "     running %d (no end/killed line yet, pid still alive)\n", st.Running)
+		}
 	}
 
-	fmt.Fprintf(&b, "\n## Subs: %d\n", st.Subs)
+	// Re-entrancy warning is not cosmetic: a re-run of an 8-sub epic where 5
+	// subs are already done records 5 more "skipped" rows, so the raw count
+	// drifts far from the work actually done.
+	worked, gated := st.workerBacked()
+	fmt.Fprintf(&b, "\n## Subs: %d  (%d worker-backed, %d gate decision(s) - re-runs re-record skips)\n",
+		st.Subs, worked, gated)
 	for _, r := range orderedKeys(st.SubResults, subResultOrder, true) {
-		fmt.Fprintf(&b, "  %-9s %d\n", r, st.SubResults[r])
+		label := ""
+		if gateResults[r] {
+			label = "  (gate)"
+		}
+		fmt.Fprintf(&b, "  %-9s %d%s\n", r, st.SubResults[r], label)
 	}
 
 	// Printed unconditionally: a journal of only killed/crashed runs carries no
@@ -341,13 +427,19 @@ func newExecutorStatsCmd(store storage.TaskStore) *cobra.Command {
 			path := storage.JournalPath(dir)
 			entries, err := storage.ReadJournal(dir)
 			if err != nil {
-				return fmt.Errorf("read journal: %w", err)
+				// ReadJournal returns what it parsed ALONGSIDE the error (a
+				// line over its 1MB scanner cap, an I/O fault mid-file). Its
+				// contract is that one bad line never hides the rest of the
+				// history, so degrade to a partial rollup + a warning rather
+				// than failing the command outright.
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: journal read incomplete (%v) - rollup covers %d entry(ies)\n",
+					err, len(entries))
 			}
 			if len(entries) == 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "no executor runs recorded yet for %s (%s)\n", slug, path)
 				return nil
 			}
-			stats := aggregateJournal(entries, storage.ProcessAlive)
+			stats := aggregateJournal(entries, storage.ProcessAlive, time.Now())
 			fmt.Fprint(cmd.OutOrStdout(), renderJournalStats(slug, path, stats))
 			return nil
 		},

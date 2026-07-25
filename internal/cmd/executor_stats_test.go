@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mbalazy/pm/internal/storage"
 )
@@ -31,6 +32,12 @@ func startEntry(kind, taskID string, pid int) storage.JournalEntry {
 // noneAlive is the default liveness probe for the table: every unpaired start
 // is a crash. Cases that want the live-run branch pass their own.
 func noneAlive(int) bool { return false }
+
+// testNow is the fixed "now" the table aggregates against. AppendJournal stamps
+// TS with the real wall clock, so a far-future reference would push every
+// fixture entry outside liveWindow; this sits close enough to real time that
+// fixtures count as recent, and cases about staleness set TS explicitly.
+var testNow = time.Now()
 
 func TestAggregateJournal(t *testing.T) {
 	tests := []struct {
@@ -270,6 +277,73 @@ func TestAggregateJournal(t *testing.T) {
 			},
 		},
 		{
+			// Reverse kill race: the SIGTERM fails to land, the manager runs to
+			// completion and appends "end" AFTER the board's "killed". Still one
+			// run - and the end line's subs/duration must not be thrown away
+			// just because the killed line arrived first.
+			name: "killed followed by end folds the end line's payload in",
+			entries: []storage.JournalEntry{
+				startEntry("run-epic", "app-6", 600),
+				{Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-6", PID: 600},
+				{
+					Event: storage.JournalEventEnd, Kind: "run-epic", TaskID: "app-6", PID: 600,
+					Status: "done", DurationS: 3600,
+					Subs: []storage.JournalSub{{ID: "app-6-1", Result: "merged", Turns: 10, CostUSD: 1}},
+				},
+			},
+			want: journalStats{
+				Runs: 1,
+				Kinds: map[string]*kindStats{"run-epic": {
+					Runs: 1,
+					// killed won the status (it closed the run first)...
+					Statuses: map[string]int{runStatusKilled: 1},
+					// ...but the end line's duration is still recorded
+					DurationS: numStat{Total: 3600, Samples: 1},
+				}},
+				Subs:       1,
+				SubResults: map[string]int{"merged": 1},
+				Turns:      numStat{Total: 10, Samples: 1},
+				Cost:       numStat{Total: 1, Samples: 1},
+			},
+		},
+		{
+			// Two ends in a row is NOT the kill race - it is two separate runs
+			// that reused the pid, the second one's start append having been
+			// lost. Same event type twice => count both.
+			name: "two end lines for one start are two runs, not a duplicate",
+			entries: []storage.JournalEntry{
+				startEntry("work", "app-1", 100),
+				{Event: storage.JournalEventEnd, Kind: "work", TaskID: "app-1", PID: 100, Status: "done", DurationS: 60},
+				{Event: storage.JournalEventEnd, Kind: "work", TaskID: "app-1", PID: 100, Status: "failed", DurationS: 20},
+			},
+			want: journalStats{
+				Runs: 2,
+				Kinds: map[string]*kindStats{"work": {
+					Runs:      2,
+					Statuses:  map[string]int{"done": 1, "failed": 1},
+					DurationS: numStat{Total: 80, Samples: 2},
+				}},
+				SubResults: map[string]int{},
+			},
+		},
+		{
+			// A live-looking pid on an ancient start is pid REUSE, not a run in
+			// flight. Without the liveWindow bound this reports running:1 and
+			// silently loses a crash.
+			name: "stale start with a live pid is a crash, not running",
+			entries: []storage.JournalEntry{{
+				Event: storage.JournalEventStart, Kind: "run-epic", TaskID: "app-old", PID: 700,
+				TS: testNow.Add(-liveWindow - time.Hour).UTC().Format(time.RFC3339),
+			}},
+			alive: func(pid int) bool { return pid == 700 },
+			want: journalStats{
+				Runs:       1,
+				Crashes:    1,
+				Kinds:      map[string]*kindStats{"run-epic": {Runs: 1, Statuses: map[string]int{runStatusCrashed: 1}}},
+				SubResults: map[string]int{},
+			},
+		},
+		{
 			name: "missing status and result degrade to unknown",
 			entries: []storage.JournalEntry{
 				startEntry("work", "app-4", 600),
@@ -307,7 +381,7 @@ func TestAggregateJournal(t *testing.T) {
 			if alive == nil {
 				alive = noneAlive
 			}
-			got := aggregateJournal(entries, alive)
+			got := aggregateJournal(entries, alive, testNow)
 
 			if got.Entries != len(tt.entries) {
 				t.Errorf("Entries = %d, want %d", got.Entries, len(tt.entries))
@@ -464,14 +538,14 @@ func TestRenderJournalStats(t *testing.T) {
 		startEntry("run-epic", "app-9", 202),
 		{Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-9", PID: 202},
 		startEntry("work", "app-2", 400), // crash
-	}, noneAlive)
+	}, noneAlive, testNow)
 	out := renderJournalStats("app", "/tmp/app/.executor/journal.jsonl", st)
 
 	for _, want := range []string{
 		"# executor stats: app",
 		"/tmp/app/.executor/journal.jsonl (7 parsed entries)",
 		"## Runs: 4",
-		"crashed:  1",
+		"crashed 1 (start with no end/killed line)",
 		"## Subs: 2",
 		"turns     60 total, 60.0 avg (1 sub(s))",
 		"cost      $2.00 total, $2.00 avg (1 sub(s))",
@@ -483,7 +557,7 @@ func TestRenderJournalStats(t *testing.T) {
 
 	// The sub histogram prints the whole vocabulary, in subResultOrder, zeros
 	// included - one contiguous block, so this pins the render's ordering.
-	subBlock := "merged    1\n  blocked   0\n  failed    0\n  conflict  0\n  skipped   1\n  manual    0\n"
+	subBlock := "merged    1\n  blocked   0\n  failed    0\n  conflict  0\n  skipped   1  (gate)\n  manual    0  (gate)\n"
 	if !strings.Contains(out, subBlock) {
 		t.Errorf("sub histogram block missing or misordered, want:\n%s\n---got---\n%s", subBlock, out)
 	}
@@ -506,6 +580,35 @@ func TestRenderJournalStats(t *testing.T) {
 	}
 }
 
+// A re-entrant epic re-records already-done/dep-blocked subs as "skipped" on
+// every run, so the raw sub count drifts away from the work actually done. The
+// header must separate the two.
+func TestRenderJournalStatsSeparatesGateDecisions(t *testing.T) {
+	st := aggregateJournal([]storage.JournalEntry{
+		startEntry("run-epic", "app-9", 200),
+		{
+			Event: storage.JournalEventEnd, Kind: "run-epic", TaskID: "app-9", PID: 200,
+			Status: "done", DurationS: 3600,
+			Subs: []storage.JournalSub{
+				{ID: "s1", Result: "merged", Turns: 10, CostUSD: 1},
+				{ID: "s2", Result: "blocked", Turns: 5, CostUSD: 1},
+				{ID: "s3", Result: "skipped"},
+				{ID: "s4", Result: "skipped"},
+				{ID: "s5", Result: "manual"},
+			},
+		},
+	}, noneAlive, testNow)
+
+	worked, gated := st.workerBacked()
+	if worked != 2 || gated != 3 {
+		t.Errorf("workerBacked() = (%d, %d), want (2, 3)", worked, gated)
+	}
+	out := renderJournalStats("app", "/tmp/j.jsonl", st)
+	if !strings.Contains(out, "## Subs: 5  (2 worker-backed, 3 gate decision(s)") {
+		t.Errorf("header must split worker-backed from gate decisions\n---\n%s", out)
+	}
+}
+
 func TestRenderJournalStatsAlwaysPrintsTotals(t *testing.T) {
 	// A journal with no subs at all (a killed run + a crash) must still print
 	// the totals section - "0" is the answer, not a reason to omit it.
@@ -513,7 +616,7 @@ func TestRenderJournalStatsAlwaysPrintsTotals(t *testing.T) {
 		startEntry("run-epic", "app-5", 300),
 		{Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-5", PID: 300},
 		startEntry("work", "app-2", 400),
-	}, noneAlive)
+	}, noneAlive, testNow)
 	out := renderJournalStats("app", "/tmp/j.jsonl", st)
 
 	for _, want := range []string{
@@ -531,13 +634,13 @@ func TestRenderJournalStatsAlwaysPrintsTotals(t *testing.T) {
 
 func TestRenderJournalStatsShowsRunningRun(t *testing.T) {
 	st := aggregateJournal([]storage.JournalEntry{startEntry("run-epic", "app-7", 700)},
-		func(pid int) bool { return pid == 700 })
+		func(pid int) bool { return pid == 700 }, testNow)
 	out := renderJournalStats("app", "/tmp/j.jsonl", st)
 
-	if !strings.Contains(out, "running:  1") {
+	if !strings.Contains(out, "running 1 (no end/killed line yet, pid still alive)") {
 		t.Errorf("a live unpaired start should render as running\n---\n%s", out)
 	}
-	if strings.Contains(out, "crashed:") {
+	if strings.Contains(out, "crashed") {
 		t.Errorf("a live run must not be reported as a crash\n---\n%s", out)
 	}
 }
