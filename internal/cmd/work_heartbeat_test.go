@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -179,4 +180,134 @@ func TestExecuteWorkHeartbeatsEpicManagerRunState(t *testing.T) {
 	if _, err := storage.ReadRunState(stateDir, task.Meta.ID); !os.IsNotExist(err) {
 		t.Errorf("epic mode must not write a per-sub run-state, got err=%v", err)
 	}
+	// The in-flight session marker (what the board gates the heartbeat age on)
+	// must be dropped as soon as the worker returns, so the manager's
+	// post-worker tail never renders a frozen stamp as a live beat.
+	if got.CurrentSession != "" {
+		t.Errorf("CurrentSession must be cleared when the worker returns, got %q", got.CurrentSession)
+	}
+}
+
+// The manager side of the same AC: driveSubIndependent must hand its worker the
+// epic-level writer. Covers the wiring itself - the executeWork tests above
+// inject a writer by hand and so cannot catch a manager that never passes one.
+func TestDriveSubIndependentHeartbeatsTheEpicRunState(t *testing.T) {
+	// The fake worker commits (so pushIfAhead has something to see) and lives
+	// long enough for several beats.
+	fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\nsleep 2\necho '"+envelope("merged", "done")+"'")
+	store, sub, _, opts := executorFixture(t)
+
+	prevInterval := workerHeartbeatInterval
+	workerHeartbeatInterval = 20 * time.Millisecond
+	t.Cleanup(func() { workerHeartbeatInterval = prevInterval })
+
+	tracker := &storage.Task{Meta: storage.TaskMeta{ID: "app-t", Title: "Batch", Status: storage.StatusDoing}, Project: "app"}
+	if err := store.AddTask("app", tracker); err != nil {
+		t.Fatal(err)
+	}
+	tracker, _ = store.FindTask("app", "app-t")
+
+	proj, _ := store.GetProject("app")
+	stateDir := store.ProjectDir("app")
+	rw := storage.NewRunWriter(stateDir, &storage.RunState{
+		TaskID: "app-t", Project: "app", Kind: "run-epic", Status: storage.RunStatusRunning,
+		PID: os.Getpid(), Started: time.Now().UTC().Format(time.RFC3339),
+		Subs: []storage.SubRun{{ID: sub.Meta.ID, Status: storage.RunStatusRunning}},
+	})
+	if err := rw.Update(nil); err != nil {
+		t.Fatal(err)
+	}
+	opts.standalone = false
+	opts.independent = true
+
+	stopWatch := watchRunStateWrites(storage.ExecutorRunPath(stateDir, "app-t"))
+	oc := driveSubIndependent(store, proj.Path, "app", tracker, sub, gitHeadBranch(t, proj.Path), storage.StatusDone, opts, rw, false)
+	writes := stopWatch()
+
+	if oc.result != "merged" {
+		t.Fatalf("sub outcome = %+v", oc)
+	}
+	if writes < 20 {
+		t.Errorf("epic run-state only saw %d distinct writes - the manager is not passing its writer to the worker (the driver alone writes ~3)", writes)
+	}
+}
+
+// Same guard for integration mode: driveSub must hand its worker the writer too.
+func TestDriveSubHeartbeatsTheEpicRunState(t *testing.T) {
+	fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\nsleep 2\necho '"+envelope("merged", "done")+"'")
+	store, sub, _, opts := executorFixture(t)
+
+	prevInterval := workerHeartbeatInterval
+	workerHeartbeatInterval = 20 * time.Millisecond
+	t.Cleanup(func() { workerHeartbeatInterval = prevInterval })
+
+	tracker := &storage.Task{Meta: storage.TaskMeta{ID: "app-t", Title: "Epic", Status: storage.StatusDoing}, Project: "app"}
+	if err := store.AddTask("app", tracker); err != nil {
+		t.Fatal(err)
+	}
+	tracker, _ = store.FindTask("app", "app-t")
+
+	proj, _ := store.GetProject("app")
+	gitT(t, proj.Path, "checkout", "-q", "-B", "epic/app-t")
+
+	stateDir := store.ProjectDir("app")
+	rw := storage.NewRunWriter(stateDir, &storage.RunState{
+		TaskID: "app-t", Project: "app", Kind: "run-epic", Status: storage.RunStatusRunning,
+		PID: os.Getpid(), Started: time.Now().UTC().Format(time.RFC3339),
+		Subs: []storage.SubRun{{ID: sub.Meta.ID, Status: storage.RunStatusRunning}},
+	})
+	if err := rw.Update(nil); err != nil {
+		t.Fatal(err)
+	}
+	opts.standalone = false
+
+	stopWatch := watchRunStateWrites(storage.ExecutorRunPath(stateDir, "app-t"))
+	oc := driveSub(store, proj.Path, "app", tracker, sub, "epic/app-t", storage.StatusDone, opts, rw, false)
+	writes := stopWatch()
+
+	if oc.result != "merged" {
+		t.Fatalf("sub outcome = %+v", oc)
+	}
+	if writes < 20 {
+		t.Errorf("epic run-state only saw %d distinct writes - the manager is not passing its writer to the worker (the driver alone writes ~3)", writes)
+	}
+}
+
+// watchRunStateWrites polls path and counts DISTINCT mtimes until the returned
+// stop func is called, which returns the count. Distinct mtimes = number of
+// tmp+rename writes observed, which is how a heartbeat proves itself without
+// depending on the second-granularity Updated field.
+func watchRunStateWrites(path string) func() int {
+	done := make(chan struct{})
+	out := make(chan int, 1)
+	go func() {
+		seen := map[int64]bool{}
+		for {
+			if fi, err := os.Stat(path); err == nil {
+				seen[fi.ModTime().UnixNano()] = true
+			}
+			select {
+			case <-done:
+				out <- len(seen)
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+	var once sync.Once
+	return func() int {
+		once.Do(func() { close(done) })
+		return <-out
+	}
+}
+
+// gitHeadBranch is the repo's current branch (the fixture repo's default init
+// branch name is a git config detail, not something to hardcode).
+func gitHeadBranch(t *testing.T, dir string) string {
+	t.Helper()
+	b, err := gitCurrentBranch(dir)
+	if err != nil || b == "" {
+		t.Fatalf("resolve HEAD branch in %s: %v", dir, err)
+	}
+	return b
 }

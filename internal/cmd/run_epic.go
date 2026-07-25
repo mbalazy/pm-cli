@@ -252,7 +252,6 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			// sub's worker heartbeats this same struct from its own goroutine, so
 			// every mutation has to be serialized (see storage.RunWriter).
 			rw := storage.NewRunWriter(stateDir, run)
-			opts.runWriter = rw
 			_ = rw.Update(nil)
 
 			// Journal: durable cross-run history (retro feedstock). Start line now;
@@ -491,6 +490,9 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 	// transcript to tail (claude --session-id pins it before any output).
 	_ = rw.Update(func(run *storage.RunState) { setSubSession(run, sub.Meta.ID, plan.sessionID) })
 
+	// Hand the worker the epic-level writer so it heartbeats THIS run-state
+	// while it runs. opts is a value copy, so this cannot leak to the next sub.
+	opts.runWriter = rw
 	res, err := executeWork(store, sub, plan, opts)
 	if err != nil {
 		logIfErr("park "+sub.Meta.ID, store.MoveTask(sub, storage.StatusWaiting))
@@ -565,6 +567,11 @@ func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker,
 
 	_ = rw.Update(func(run *storage.RunState) { setSubSession(run, sub.Meta.ID, plan.sessionID) })
 
+	// Hand the worker the epic-level writer so it heartbeats THIS run-state
+	// while it runs. opts is a value copy, so this cannot leak to the next sub.
+	// Hand the worker the epic-level writer so it heartbeats THIS run-state
+	// while it runs. opts is a value copy, so this cannot leak to the next sub.
+	opts.runWriter = rw
 	res, err := executeWork(store, sub, plan, opts)
 	if err != nil {
 		// Worker died (timeout/crash). Push whatever it committed before dying so

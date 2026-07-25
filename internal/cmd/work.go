@@ -502,6 +502,13 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	defer stopHeartbeat()
 	res, sessionID, err := runWorker(dir, plan.cmdArgs, opts.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env)
 	stopHeartbeat()
+	// The worker is gone and the heartbeat died with it, so drop the in-flight
+	// session marker in the same breath. It is what an observer gates the
+	// heartbeat age on (see renderExecutorDashboard), and the post-worker tail -
+	// applyWorkerResult's project flock, then the manager's merge or `git push` -
+	// can run for minutes; leaving the marker set there would render a frozen
+	// stamp as a live beat, i.e. a healthy run looking hung.
+	_ = hbw.Update(func(run *storage.RunState) { run.CurrentSession = "" })
 	if err != nil {
 		if runw != nil {
 			_ = runw.Update(func(run *storage.RunState) {
