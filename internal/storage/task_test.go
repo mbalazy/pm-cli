@@ -86,6 +86,43 @@ func TestValidateEpicMode(t *testing.T) {
 	}
 }
 
+// TestWriteTaskRejectsInvalidEpicMode pins the storage-level gate: epic_mode is
+// checked in writeTask exactly like mode, so every writer (MCP, CLI, TUI,
+// executor) is covered - not just the MCP handlers. Without it a hand-edited
+// `epic_mode: INDEPENDENT` would survive every later pm rewrite and only
+// surface when `pm run-epic` refuses to start.
+func TestWriteTaskRejectsInvalidEpicMode(t *testing.T) {
+	dir := t.TempDir()
+
+	newTask := func(epicMode string) *Task {
+		return &Task{
+			Meta:     TaskMeta{ID: "t-1", Title: "Tracker", Status: StatusTodo, EpicMode: epicMode},
+			FilePath: filepath.Join(dir, "t-1-tracker.md"),
+			Project:  "test",
+		}
+	}
+
+	if err := WriteTask(newTask("INDEPENDENT")); err == nil {
+		t.Fatal("expected write to reject invalid epic_mode")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "t-1-tracker.md")); !os.IsNotExist(err) {
+		t.Error("rejected write must not create the file")
+	}
+
+	for _, ok := range []string{"", EpicModeIndependent} {
+		if err := WriteTask(newTask(ok)); err != nil {
+			t.Errorf("WriteTask with epic_mode %q: %v", ok, err)
+		}
+	}
+	reloaded, err := ReadTask(filepath.Join(dir, "t-1-tracker.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Meta.EpicMode != EpicModeIndependent {
+		t.Errorf("epic_mode = %q, want %q", reloaded.Meta.EpicMode, EpicModeIndependent)
+	}
+}
+
 func TestValidateStatus(t *testing.T) {
 	allowed := []TaskStatus{StatusTodo, StatusDoing, StatusDone}
 

@@ -178,6 +178,9 @@ func writeTask(t *Task) error {
 	if err := ValidateMode(t.Meta.Mode); err != nil {
 		return err
 	}
+	if err := ValidateEpicMode(t.Meta.EpicMode); err != nil {
+		return err
+	}
 	metaBytes, err := yaml.Marshal(t.Meta)
 	if err != nil {
 		return err
