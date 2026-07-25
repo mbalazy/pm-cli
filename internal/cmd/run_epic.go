@@ -349,9 +349,9 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&model, "model", "opus", "model for the workers")
-	cmd.Flags().IntVar(&maxTurns, "max-turns", 120, "max agent turns per worker")
+	cmd.Flags().IntVar(&maxTurns, "max-turns", 150, "max agent turns per worker")
 	cmd.Flags().BoolVar(&yolo, "yolo", false, "bypass all permission checks in the workers")
-	cmd.Flags().DurationVar(&timeout, "timeout", 45*time.Minute, "max wall-clock time per worker")
+	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Minute, "max wall-clock time per worker")
 	cmd.Flags().StringVar(&base, "base", "", "base branch the integration branch forks from (default: with --additional executor.base_branch, else main)")
 	cmd.Flags().BoolVar(&noPR, "no-pr", false, "do not open the final epic->main draft PR")
 	cmd.Flags().BoolVar(&allowDirty, "allow-dirty", false, "skip the clean-working-tree precondition")
