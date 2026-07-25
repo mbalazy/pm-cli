@@ -19,6 +19,7 @@ func newExecutorCmd(store storage.TaskStore) *cobra.Command {
 		Short: "Executor profile tooling",
 	}
 	cmd.AddCommand(newExecutorInitCmd(store))
+	cmd.AddCommand(newExecutorStatsCmd(store))
 	return cmd
 }
 
