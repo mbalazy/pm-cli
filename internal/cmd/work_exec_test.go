@@ -184,6 +184,15 @@ func TestExecuteWorkApplyResultErrorStillJournalsEnd(t *testing.T) {
 	if len(entries[1].Subs) != 1 || entries[1].Subs[0].Result != "failed" {
 		t.Fatalf("end line must carry a failed sub outcome, got: %+v", entries[1].Subs)
 	}
+	// The worker itself succeeded (envelope carries num_turns=3, total_cost_usd=0.25) -
+	// that real spend must not be silently dropped just because the later
+	// storage write failed.
+	if entries[1].Subs[0].Turns != 3 || entries[1].Subs[0].CostUSD != 0.25 {
+		t.Errorf("end line must carry the worker's real turns/cost, got: %+v", entries[1].Subs[0])
+	}
+	if run.Subs[0].Turns != 3 || run.Subs[0].CostUSD != 0.25 {
+		t.Errorf("run-state sub must carry the worker's real turns/cost, got: %+v", run.Subs[0])
+	}
 }
 
 func TestExecuteWorkGarbageOutputIsError(t *testing.T) {
