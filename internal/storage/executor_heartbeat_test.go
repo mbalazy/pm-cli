@@ -2,6 +2,7 @@ package storage
 
 import (
 	"os"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -38,9 +39,12 @@ func TestRunWriterHeartbeatAdvancesUpdated(t *testing.T) {
 		got, err := ReadRunState(dir, "p-1")
 		if err == nil && got.Updated != first.Updated {
 			// The heartbeat stamps the time and NOTHING else - it must never
-			// guess a phase or invent subs.
-			if got.Status != first.Status || got.CurrentSub != first.CurrentSub || len(got.Subs) != len(first.Subs) {
-				t.Fatalf("heartbeat changed state beyond the stamp: %+v vs %+v", got, first)
+			// guess a phase, invent subs or touch a note. Compare the WHOLE
+			// struct with the stamp normalised away.
+			normalised := *got
+			normalised.Updated = first.Updated
+			if !reflect.DeepEqual(&normalised, first) {
+				t.Fatalf("heartbeat changed state beyond the stamp:\n got %+v\nwant %+v", got, first)
 			}
 			return
 		}

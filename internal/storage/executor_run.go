@@ -92,9 +92,12 @@ func WriteRunState(projectDir string, st *RunState) error {
 
 // HeartbeatInterval is how often a live run re-stamps its run-state while a
 // worker is in flight. Deliberately fixed (no flag, no project.yaml knob): the
-// signal exists so an observer can tell a long sub from a hung run, and that
-// only works if it is always on. Short enough that a stalled stamp is obvious
-// well inside the 60m worker timeout, long enough that the writes are noise.
+// signal exists so an observer can tell a long sub from a stopped run, and
+// that only works if it is always on. Short enough that a stalled stamp shows
+// up well inside the 60m worker timeout, long enough that the writes are noise.
+// Note what it proves: the stamp comes from the MANAGER process, so a fresh
+// beat means "the manager is alive and inside a worker" - a worker wedged on a
+// network read still beats. Catching THAT would need transcript-tick stamping.
 const HeartbeatInterval = 30 * time.Second
 
 // RunWriter is the single serialization point for every write of ONE run-state

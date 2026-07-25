@@ -497,6 +497,9 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	}
 	workStart := time.Now()
 	stopHeartbeat := hbw.Heartbeat(workerHeartbeatInterval)
+	// Stopping is idempotent, so the defer only matters if runWorker panics -
+	// without it a panic would leave a goroutine stamping "running" forever.
+	defer stopHeartbeat()
 	res, sessionID, err := runWorker(dir, plan.cmdArgs, opts.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env)
 	stopHeartbeat()
 	if err != nil {

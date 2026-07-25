@@ -16,7 +16,9 @@ func TestExecHeartbeatAge(t *testing.T) {
 	if got := execHeartbeatAge("not-a-time"); got != "" {
 		t.Errorf("unparseable stamp must render empty, got %q", got)
 	}
-	if got := execHeartbeatAge(time.Now().Add(-90 * time.Second).UTC().Format(time.RFC3339)); got != "1m30s ago" {
+	// The stamp is truncated to a second, so the age can land one second later
+	// if the sub-second remainder of now rolls over inside the call.
+	if got := execHeartbeatAge(time.Now().Add(-90 * time.Second).UTC().Format(time.RFC3339)); got != "1m30s ago" && got != "1m31s ago" {
 		t.Errorf("age = %q, want \"1m30s ago\"", got)
 	}
 	// Clock skew between the writing executor and the reading board must not
@@ -26,16 +28,28 @@ func TestExecHeartbeatAge(t *testing.T) {
 	}
 }
 
-func TestDashboardShowsHeartbeatOnlyWhenLive(t *testing.T) {
-	// Live: own pid + status running, stamped a moment ago.
+func TestDashboardShowsHeartbeatOnlyWhileAWorkerRuns(t *testing.T) {
+	// A worker is in flight: own pid, status running, session pinned.
 	live := &storage.RunState{
 		TaskID: "p-1", Kind: "run-epic", Status: storage.RunStatusRunning, PID: os.Getpid(),
-		Started: time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339),
-		Updated: time.Now().Add(-20 * time.Second).UTC().Format(time.RFC3339),
-		Subs:    []storage.SubRun{{ID: "p-1-1", Status: storage.RunStatusRunning}},
+		Started:        time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339),
+		Updated:        time.Now().Add(-20 * time.Second).UTC().Format(time.RFC3339),
+		CurrentSub:     "p-1-1",
+		CurrentSession: "sess-abc",
+		Subs:           []storage.SubRun{{ID: "p-1-1", Status: storage.RunStatusRunning}},
 	}
 	if out := stripANSI(renderExecutorDashboard(live, 100)); !strings.Contains(out, "♥ 20s ago") {
-		t.Errorf("live run should show the heartbeat age\n---\n%s", out)
+		t.Errorf("a run with a worker in flight should show the heartbeat age\n---\n%s", out)
+	}
+
+	// No worker yet: this is the board's seed state, or the manager doing
+	// worktree seeding / executor.prepare / baseline capture. Nothing beats in
+	// that window, so an age here would read as "hung" on a healthy run.
+	noWorker := *live
+	noWorker.CurrentSub = ""
+	noWorker.CurrentSession = ""
+	if out := stripANSI(renderExecutorDashboard(&noWorker, 100)); strings.Contains(out, "♥") {
+		t.Errorf("no worker in flight -> no heartbeat age\n---\n%s", out)
 	}
 
 	// Finished: Updated IS the end stamp there, so showing it as a heartbeat

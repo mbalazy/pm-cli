@@ -320,11 +320,15 @@ func renderExecutorDashboard(run *storage.RunState, width int) string {
 	if run.Started != "" {
 		hdr += helpStyle.Render("  ⏱ " + execElapsed(run.Started, run))
 	}
-	// While a run is live the executor re-stamps Updated every ~30s, so the age
-	// of that stamp separates "long sub in progress" from "hung": a heartbeat
-	// that stops advancing is the tell. Only meaningful on a live run - on a
-	// finished one Updated IS the end stamp.
-	if run.IsLive() {
+	// The executor re-stamps Updated every ~30s, but ONLY while a worker is
+	// actually in flight - so the age is only a signal in that same window, which
+	// CurrentSession marks (it is pinned right before the worker spawns and
+	// cleared when it returns). Rendering it on any live run would read as
+	// "hung" through every legitimate non-worker stretch: the board seeds a
+	// running run-state the moment it launches the process, and the executor
+	// does its worktree seeding, `executor.prepare` and baseline capture (15-min
+	// caps each) before it ever owns the file.
+	if run.IsLive() && run.CurrentSession != "" {
 		if age := execHeartbeatAge(run.Updated); age != "" {
 			hdr += helpStyle.Render("  ♥ " + age)
 		}
