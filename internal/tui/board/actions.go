@@ -79,9 +79,11 @@ func (m *Model) doUndo() {
 
 // showErrorToast surfaces a failed mutation to the user instead of letting it
 // fail silently (the card would otherwise just revert with no explanation).
+// 15s matches the other real-error toasts in the board (e.g. launch_claude.go,
+// launch_executor.go), vs. the 2-5s used for benign info toasts.
 func (m *Model) showErrorToast(prefix string, err error) {
 	m.toastMsg = prefix + ": " + err.Error()
-	m.toastExpiry = time.Now().Add(8 * time.Second)
+	m.toastExpiry = time.Now().Add(15 * time.Second)
 }
 
 // doReorder swaps the selected task with a neighbor in the column.
