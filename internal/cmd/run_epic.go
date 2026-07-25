@@ -569,8 +569,6 @@ func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker,
 
 	// Hand the worker the epic-level writer so it heartbeats THIS run-state
 	// while it runs. opts is a value copy, so this cannot leak to the next sub.
-	// Hand the worker the epic-level writer so it heartbeats THIS run-state
-	// while it runs. opts is a value copy, so this cannot leak to the next sub.
 	opts.runWriter = rw
 	res, err := executeWork(store, sub, plan, opts)
 	if err != nil {

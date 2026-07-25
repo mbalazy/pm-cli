@@ -3,6 +3,7 @@ package storage
 import (
 	"os"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -81,32 +82,43 @@ func TestRunWriterHeartbeatFreezesOnStop(t *testing.T) {
 
 func TestRunWriterConcurrentUpdatesAreSerialized(t *testing.T) {
 	// The point of RunWriter: the heartbeat goroutine and the manager mutate the
-	// SAME struct. Run under -race to catch the field-level race that atomic
-	// file writes alone would not prevent.
+	// SAME struct. `make check` does NOT pass -race, so the writers here are
+	// deliberately CONCURRENT and increment a counter: without the mutex the
+	// read-modify-write interleaves and updates are lost, which fails this test
+	// on the plain suite too (under -race it also reports the race directly).
 	w, dir := newHBWriter(t)
 	stop := w.Heartbeat(time.Millisecond)
 
-	for i := 0; i < 200; i++ {
-		_ = w.Update(func(st *RunState) {
-			st.CurrentSub = "p-1-1"
-			st.CurrentSession = "sess"
-			st.Phase = "running"
-			st.Subs[0].Turns++
-		})
+	const writers, each = 4, 50
+	var wg sync.WaitGroup
+	for g := 0; g < writers; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < each; i++ {
+				_ = w.Update(func(st *RunState) {
+					st.CurrentSub = "p-1-1"
+					st.CurrentSession = "sess"
+					st.Phase = "running"
+					st.Subs[0].Turns++
+				})
+			}
+		}()
 	}
+	wg.Wait()
 	stop()
 
 	got, err := ReadRunState(dir, "p-1")
 	if err != nil {
 		t.Fatalf("ReadRunState: %v", err)
 	}
-	if got.Subs[0].Turns != 200 {
-		t.Errorf("lost updates: Turns = %d, want 200", got.Subs[0].Turns)
+	if got.Subs[0].Turns != writers*each {
+		t.Errorf("lost updates: Turns = %d, want %d", got.Subs[0].Turns, writers*each)
 	}
 	var turns int
 	w.Read(func(st *RunState) { turns = st.Subs[0].Turns })
-	if turns != 200 {
-		t.Errorf("Read saw %d turns, want 200", turns)
+	if turns != writers*each {
+		t.Errorf("Read saw %d turns, want %d", turns, writers*each)
 	}
 }
 

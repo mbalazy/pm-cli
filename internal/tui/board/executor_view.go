@@ -51,15 +51,27 @@ func (m *Model) openExecutorView(t *storage.Task) bool {
 	m.executorSessionIdx = 0
 	m.executorViewport = viewport.New(m.width, executorBodyHeight(m.height))
 	m.refreshExecutorView()
-	// Default to the currently-running session if one is active.
-	for i, s := range m.executorSessions {
-		if st.CurrentSession != "" && s.session == st.CurrentSession {
-			m.executorSessionIdx = i
-		}
-	}
+	m.executorSessionIdx = defaultSessionIdx(m.executorSessions, st.CurrentSession)
 	m.renderExecutorContent()
 	m.executorViewport.GotoBottom()
 	return true
+}
+
+// defaultSessionIdx picks which worker transcript the agent-view opens on: the
+// one in flight when there is one, else the MOST RECENT worker. current is
+// empty whenever no worker is running - between subs, and through the
+// post-worker tail (result recording, merge, push) - and there the sub that
+// just ran is the interesting transcript, not the run's first sub.
+func defaultSessionIdx(sessions []execSession, current string) int {
+	if len(sessions) == 0 {
+		return 0
+	}
+	for i, s := range sessions {
+		if current != "" && s.session == current {
+			return i
+		}
+	}
+	return len(sessions) - 1
 }
 
 // switchExecutorWorker cycles the displayed worker transcript by dir (+1/-1),

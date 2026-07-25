@@ -61,6 +61,28 @@ func TestDashboardShowsHeartbeatOnlyWhileAWorkerRuns(t *testing.T) {
 	}
 }
 
+// Clearing CurrentSession the moment a worker returns (so the heartbeat gate
+// stays honest) must not send the agent-view back to the run's FIRST sub.
+func TestDefaultSessionIdx(t *testing.T) {
+	sessions := []execSession{
+		{subID: "p-1-1", session: "sess-a"},
+		{subID: "p-1-2", session: "sess-b"},
+		{subID: "p-1-3", session: "sess-c"},
+	}
+	if got := defaultSessionIdx(sessions, "sess-b"); got != 1 {
+		t.Errorf("a worker in flight should be selected: got %d, want 1", got)
+	}
+	if got := defaultSessionIdx(sessions, ""); got != 2 {
+		t.Errorf("no worker in flight -> most recent transcript: got %d, want 2", got)
+	}
+	if got := defaultSessionIdx(sessions, "sess-gone"); got != 2 {
+		t.Errorf("unknown session -> most recent transcript: got %d, want 2", got)
+	}
+	if got := defaultSessionIdx(nil, "sess-a"); got != 0 {
+		t.Errorf("no sessions -> 0, got %d", got)
+	}
+}
+
 func TestShortDur(t *testing.T) {
 	tests := []struct {
 		d    time.Duration
