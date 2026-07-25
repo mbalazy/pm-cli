@@ -195,33 +195,41 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool, now 
 		if n == 0 {
 			continue // fully paired run - the counter is just a leftover map key
 		}
-		status := runStatusCrashed
-		if key.pid > 0 && alive != nil && alive(key.pid) && anyRecent(startTS[key], now) {
-			status = runStatusRunning
-			st.Running += n
-		} else {
-			st.Crashes += n
+		stamps := startTS[key]
+		live := key.pid > 0 && alive != nil && alive(key.pid)
+		k := st.kind(key.kind)
+		// Classify each open start SEPARATELY. A pid maps to at most one live
+		// process, so even when the pid is alive only the NEWEST still-open
+		// start can be the run in flight; every older one under the same key is
+		// a crash whose pid was later recycled.
+		for i := 0; i < n; i++ {
+			ts := ""
+			if i < len(stamps) {
+				ts = stamps[i] // oldest first
+			}
+			if live && i == n-1 && recent(ts, now) {
+				st.Running++
+				k.Statuses[runStatusRunning]++
+			} else {
+				st.Crashes++
+				k.Statuses[runStatusCrashed]++
+			}
 		}
-		st.kind(key.kind).Statuses[status] += n
 	}
 	return st
 }
 
-// anyRecent reports whether any of the RFC3339 timestamps is within liveWindow
-// of now. An unparseable or missing timestamp counts as recent: the pid check
-// already passed, and TS is only a tie-breaker against pid reuse - a journal
-// hand-edited into an unreadable TS should not turn a live run into a crash.
-func anyRecent(stamps []string, now time.Time) bool {
-	if len(stamps) == 0 {
+// recent reports whether an RFC3339 stamp is within liveWindow of now. A
+// missing or unparseable stamp counts as recent: AppendJournal always stamps
+// TS, so this only happens on a hand-edited journal, and TS is merely a
+// tie-breaker against pid reuse - it should not on its own turn a run whose pid
+// IS alive into a crash.
+func recent(stamp string, now time.Time) bool {
+	ts, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
 		return true
 	}
-	for _, s := range stamps {
-		ts, err := time.Parse(time.RFC3339, s)
-		if err != nil || now.Sub(ts) < liveWindow {
-			return true
-		}
-	}
-	return false
+	return now.Sub(ts) < liveWindow
 }
 
 // kind returns (creating on demand) the per-kind bucket.

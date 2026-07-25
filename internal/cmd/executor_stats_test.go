@@ -344,6 +344,88 @@ func TestAggregateJournal(t *testing.T) {
 			},
 		},
 		{
+			// Two open starts under ONE key: a pid maps to at most one live
+			// process, so at most one of them can be running. Applying a single
+			// recency verdict to both would report 2 running / 0 crashed.
+			name: "two open starts on one live pid - only the newest is running",
+			entries: []storage.JournalEntry{
+				{
+					Event: storage.JournalEventStart, Kind: "run-epic", TaskID: "app-x", PID: 700,
+					TS: testNow.Add(-30 * 24 * time.Hour).UTC().Format(time.RFC3339), // ancient
+				},
+				{
+					Event: storage.JournalEventStart, Kind: "run-epic", TaskID: "app-x", PID: 700,
+					TS: testNow.Add(-5 * time.Minute).UTC().Format(time.RFC3339), // in flight
+				},
+			},
+			alive: func(pid int) bool { return pid == 700 },
+			want: journalStats{
+				Runs:    2,
+				Running: 1,
+				Crashes: 1,
+				Kinds: map[string]*kindStats{"run-epic": {
+					Runs:     2,
+					Statuses: map[string]int{runStatusRunning: 1, runStatusCrashed: 1},
+				}},
+				SubResults: map[string]int{},
+			},
+		},
+		{
+			// Both open starts are recent, so recency alone cannot separate
+			// them - only the "one pid, at most one live process" rule can.
+			// Without it this reports 2 running for a single live process.
+			name: "two recent open starts on one live pid - still only one running",
+			entries: []storage.JournalEntry{
+				{
+					Event: storage.JournalEventStart, Kind: "run-epic", TaskID: "app-z", PID: 700,
+					TS: testNow.Add(-20 * time.Minute).UTC().Format(time.RFC3339),
+				},
+				{
+					Event: storage.JournalEventStart, Kind: "run-epic", TaskID: "app-z", PID: 700,
+					TS: testNow.Add(-5 * time.Minute).UTC().Format(time.RFC3339),
+				},
+			},
+			alive: func(pid int) bool { return pid == 700 },
+			want: journalStats{
+				Runs:    2,
+				Running: 1,
+				Crashes: 1,
+				Kinds: map[string]*kindStats{"run-epic": {
+					Runs:     2,
+					Statuses: map[string]int{runStatusRunning: 1, runStatusCrashed: 1},
+				}},
+				SubResults: map[string]int{},
+			},
+		},
+		{
+			// Pins the FIFO pop: the end line closes the OLDEST open start, so
+			// what stays open is the RECENT one -> running. A LIFO pop would
+			// leave the ancient start open and report a crash instead.
+			name: "end closes the oldest start, leaving the recent one running",
+			entries: []storage.JournalEntry{
+				{
+					Event: storage.JournalEventStart, Kind: "run-epic", TaskID: "app-y", PID: 700,
+					TS: testNow.Add(-30 * 24 * time.Hour).UTC().Format(time.RFC3339),
+				},
+				{
+					Event: storage.JournalEventStart, Kind: "run-epic", TaskID: "app-y", PID: 700,
+					TS: testNow.Add(-5 * time.Minute).UTC().Format(time.RFC3339),
+				},
+				{Event: storage.JournalEventEnd, Kind: "run-epic", TaskID: "app-y", PID: 700, Status: "done", DurationS: 50},
+			},
+			alive: func(pid int) bool { return pid == 700 },
+			want: journalStats{
+				Runs:    2,
+				Running: 1,
+				Kinds: map[string]*kindStats{"run-epic": {
+					Runs:      2,
+					Statuses:  map[string]int{"done": 1, runStatusRunning: 1},
+					DurationS: numStat{Total: 50, Samples: 1},
+				}},
+				SubResults: map[string]int{},
+			},
+		},
+		{
 			name: "missing status and result degrade to unknown",
 			entries: []storage.JournalEntry{
 				startEntry("work", "app-4", 600),
