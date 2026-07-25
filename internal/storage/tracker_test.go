@@ -57,6 +57,36 @@ func TestBuildTrackersOrderFallsBackToID(t *testing.T) {
 	}
 }
 
+func TestBuildTrackersArchivedParentOrphansChild(t *testing.T) {
+	tasks := []*Task{
+		{Meta: TaskMeta{ID: "p-1", Status: StatusArchived}, Project: "test"},
+		{Meta: TaskMeta{ID: "p-1-1", Parent: "p-1", Status: StatusDoing}, Project: "test"},
+	}
+	trackers, suppressed := BuildTrackers(tasks)
+	if len(trackers) != 0 {
+		t.Fatalf("trackers = %d, want 0 (archived parent emits no tracker block)", len(trackers))
+	}
+	if suppressed["p-1-1"] {
+		t.Error("child of archived parent should NOT be suppressed - it must fall back to the flat list")
+	}
+	if suppressed["p-1"] {
+		t.Error("archived parent itself should NOT be suppressed - no tracker block claims it")
+	}
+}
+
+func TestBuildTrackersMissingParentOrphansChild(t *testing.T) {
+	tasks := []*Task{
+		{Meta: TaskMeta{ID: "p-1-1", Parent: "ghost-99", Status: StatusDoing}, Project: "test"},
+	}
+	trackers, suppressed := BuildTrackers(tasks)
+	if len(trackers) != 0 {
+		t.Fatalf("trackers = %d, want 0 (parent doesn't exist among tasks)", len(trackers))
+	}
+	if suppressed["p-1-1"] {
+		t.Error("child of a nonexistent parent should NOT be suppressed - it must fall back to the flat list")
+	}
+}
+
 func TestLessByOrder(t *testing.T) {
 	cases := []struct {
 		name string

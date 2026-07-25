@@ -71,21 +71,33 @@ func BriefLine(brief string) string {
 }
 
 // BuildTrackers groups tasks by parent. A task is a "tracker" iff at least one
-// other task names it as parent. Returns the rollup for every active tracker
-// plus the set of task IDs that should be suppressed from flat doing lists
-// (every child and every tracker - they belong under the tracker view).
+// other task names it as parent AND that parent task actually exists among
+// tasks and is not archived - only such parents emit a tracker block. Returns
+// the rollup for every active tracker plus the set of task IDs that should be
+// suppressed from flat doing lists (every child of an emitted tracker, plus
+// every tracker itself - they belong under the tracker view). A child whose
+// parent is archived or missing (an orphan) is never suppressed, so it falls
+// back to the flat list like an ordinary task instead of disappearing.
 func BuildTrackers(tasks []*Task) ([]Tracker, map[string]bool) {
+	byID := make(map[string]*Task, len(tasks))
+	for _, t := range tasks {
+		byID[t.Meta.ID] = t
+	}
+
 	childrenByParent := make(map[string][]*Task)
 	for _, t := range tasks {
 		if p := t.Meta.Parent; p != "" {
-			childrenByParent[p] = append(childrenByParent[p], t)
+			if parent, ok := byID[p]; ok && parent.Meta.Status != StatusArchived {
+				childrenByParent[p] = append(childrenByParent[p], t)
+			}
 		}
 	}
 
 	suppressed := make(map[string]bool)
-	for _, t := range tasks {
-		if t.Meta.Parent != "" {
-			suppressed[t.Meta.ID] = true
+	for parentID, kids := range childrenByParent {
+		suppressed[parentID] = true
+		for _, k := range kids {
+			suppressed[k.Meta.ID] = true
 		}
 	}
 
@@ -93,10 +105,6 @@ func BuildTrackers(tasks []*Task) ([]Tracker, map[string]bool) {
 	for _, t := range tasks {
 		kids, ok := childrenByParent[t.Meta.ID]
 		if !ok {
-			continue
-		}
-		suppressed[t.Meta.ID] = true
-		if t.Meta.Status == StatusArchived {
 			continue
 		}
 

@@ -869,9 +869,24 @@ func TestBuildTrackersArchivedTrackerSkipped(t *testing.T) {
 	if len(trackers) != 0 {
 		t.Errorf("trackers = %d, want 0 (archived tracker not rendered)", len(trackers))
 	}
-	// but child + parent still suppressed from flat lists
-	if !suppressed["p-1"] || !suppressed["p-1-1"] {
-		t.Error("archived tracker and its child should still be suppressed")
+	// no tracker block renders for an archived parent, so the child falls back
+	// to the flat list instead of vanishing - neither it nor the archived
+	// parent should be suppressed.
+	if suppressed["p-1"] || suppressed["p-1-1"] {
+		t.Error("archived tracker and its child should NOT be suppressed (orphan falls back to flat list)")
+	}
+}
+
+func TestBuildTrackersNonexistentParentOrphan(t *testing.T) {
+	tasks := []*storage.Task{
+		mkTask("p-1-1", "Child of ghost parent", storage.StatusDoing, "ghost-1", "", ""),
+	}
+	trackers, suppressed := storage.BuildTrackers(tasks)
+	if len(trackers) != 0 {
+		t.Errorf("trackers = %d, want 0 (parent doesn't exist)", len(trackers))
+	}
+	if suppressed["p-1-1"] {
+		t.Error("child of a nonexistent parent should NOT be suppressed (orphan falls back to flat list)")
 	}
 }
 
