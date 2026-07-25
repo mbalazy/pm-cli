@@ -451,7 +451,10 @@ func TestE2EEpicModeAndModel(t *testing.T) {
 	})
 
 	t.Run("invalid epic_mode rejected on add", func(t *testing.T) {
-		before, _ := store.GetTasks("test")
+		before, err := store.GetTasks("test")
+		if err != nil {
+			t.Fatal(err)
+		}
 		text, isErr := call(t, sess, "pm_add_task", map[string]any{
 			"project": "test", "title": "Bad tracker", "epic_mode": "INDEPENDENT",
 		})
@@ -464,14 +467,22 @@ func TestE2EEpicModeAndModel(t *testing.T) {
 		if !strings.Contains(text, "invalid epic_mode") {
 			t.Errorf("error must come from ValidateEpicMode, got: %s", text)
 		}
-		if after, _ := store.GetTasks("test"); len(after) != len(before) {
+		after, err := store.GetTasks("test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(after) != len(before) {
 			t.Errorf("rejected add must not create a task (%d -> %d)", len(before), len(after))
 		}
 	})
 
-	t.Run("invalid epic_mode rejected on update, task untouched", func(t *testing.T) {
+	t.Run("invalid epic_mode rejected on update, whole call rolls back", func(t *testing.T) {
+		// A co-passed field must not sneak through: the handler assigns fields
+		// in order and only writes at the end, so the rejected epic_mode has to
+		// take the brief down with it.
 		text, isErr := call(t, sess, "pm_update_task", map[string]any{
-			"project": "test", "task_id": "t-1", "epic_mode": "batch",
+			"project": "test", "task_id": "t-1",
+			"epic_mode": "batch", "brief": "should not be written",
 		})
 		if !isErr {
 			t.Fatalf("invalid epic_mode must be a tool error, got: %s", text)
@@ -485,6 +496,9 @@ func TestE2EEpicModeAndModel(t *testing.T) {
 		}
 		if reloaded.Meta.EpicMode != "" {
 			t.Errorf("on-disk epic_mode = %q, want empty (write must not go through)", reloaded.Meta.EpicMode)
+		}
+		if reloaded.Meta.Brief == "should not be written" {
+			t.Error("co-passed brief was persisted by a rejected update")
 		}
 	})
 }

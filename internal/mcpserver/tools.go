@@ -432,9 +432,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			return r, nil, nil
 		}
 
-		// Validate epic_mode. Unlike mode there is no writeTask-level check, so
-		// this is the gate that keeps a typo out of the tracker's frontmatter -
-		// otherwise pm run-epic would only reject it at run start.
+		// Validate epic_mode (writeTask also validates, but fail early with a clear MCP error)
 		if err := storage.ValidateEpicMode(in.EpicMode); err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
