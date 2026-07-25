@@ -35,8 +35,9 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 			"(the engine's built-in generic). Phases with no skill but a detectable verify command get a cmd " +
 			"binding. If the project has NO executor block yet, the draft is written as-is. If it already has " +
 			"one, only the detected fields (`phases`, `baseline`) are refreshed - every other hand-set field " +
-			"(base_branch, env, worktrees, prepare, context_repos, seed_exclude, notes, statuses, fix_rounds, " +
-			"gate, ...) is left untouched; the output lists which fields were preserved.",
+			"(enabled, additional_worktree, worktree_path, worktrees, base_branch, env, seed_exclude, " +
+			"prepare, context_repos, start_status, wip_status, done_status, fix_rounds, gate, notes) is left " +
+			"untouched; the output lists which fields were preserved.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var slug string

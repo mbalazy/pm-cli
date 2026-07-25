@@ -187,7 +187,7 @@ func TestMergeExecutor(t *testing.T) {
 		writeFile(t, filepath.Join(dir, "go.mod"), "module x\n")
 
 		existing := &storage.Executor{
-			Enabled:            true,
+			Enabled:            false,
 			AdditionalWorktree: true,
 			WorktreePath:       "../proj-additional",
 			Worktrees: []storage.WorktreeSlot{
@@ -199,9 +199,9 @@ func TestMergeExecutor(t *testing.T) {
 			Prepare:      "yarn install --frozen-lockfile",
 			Baseline:     "stale-hand-tuned-check",
 			ContextRepos: map[string]string{"backend": "../platform"},
-			StartStatus:  "todo",
-			WipStatus:    "doing",
-			DoneStatus:   "merged",
+			StartStatus:  "ready",
+			WipStatus:    "in-progress",
+			DoneStatus:   "shipped",
 			FixRounds:    5,
 			Gate:         storage.Gate{PR: storage.GateAuto, Merge: storage.GateHuman},
 			Phases: map[string]storage.PhaseBinding{
@@ -258,9 +258,16 @@ func TestMergeExecutor(t *testing.T) {
 		if !result.AdditionalWorktree {
 			t.Error("additional_worktree clobbered")
 		}
+		if result.Enabled {
+			t.Error("enabled clobbered")
+		}
+		if result.StartStatus != "ready" || result.WipStatus != "in-progress" || result.DoneStatus != "shipped" {
+			t.Errorf("status fields clobbered: start=%q wip=%q done=%q", result.StartStatus, result.WipStatus, result.DoneStatus)
+		}
 
 		// output says which fields were preserved
 		for _, want := range []string{
+			"preserved existing enabled",
 			"preserved existing additional_worktree",
 			"preserved existing worktree_path",
 			"preserved existing worktrees",
@@ -269,6 +276,9 @@ func TestMergeExecutor(t *testing.T) {
 			"preserved existing seed_exclude",
 			"preserved existing prepare",
 			"preserved existing context_repos",
+			"preserved existing start_status",
+			"preserved existing wip_status",
+			"preserved existing done_status",
 			"preserved existing fix_rounds",
 			"preserved existing gate",
 			"preserved existing notes",
