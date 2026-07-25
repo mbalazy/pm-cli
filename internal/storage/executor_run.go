@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -87,6 +88,93 @@ func WriteRunState(projectDir string, st *RunState) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// HeartbeatInterval is how often a live run re-stamps its run-state while a
+// worker is in flight. Deliberately fixed (no flag, no project.yaml knob): the
+// signal exists so an observer can tell a long sub from a hung run, and that
+// only works if it is always on. Short enough that a stalled stamp is obvious
+// well inside the 60m worker timeout, long enough that the writes are noise.
+const HeartbeatInterval = 30 * time.Second
+
+// RunWriter is the single serialization point for every write of ONE run-state
+// within a process. The file write itself is atomic (tmp+rename), but the
+// hazard is the STRUCT: the main goroutine mutates run fields (CurrentSub,
+// Phase, Subs) right before writing, while the heartbeat goroutine writes the
+// same pointer on a ticker. Both go through the writer's mutex, so there is no
+// race on the fields - a mutex inside WriteRunState alone would not be enough.
+//
+// The zero value is not usable; construct with NewRunWriter. A nil *RunWriter
+// is a no-op on every method, so callers that have no run-state (an epic sub's
+// worker invoked outside a manager) need no branching.
+type RunWriter struct {
+	mu  sync.Mutex
+	dir string
+	st  *RunState
+}
+
+// NewRunWriter binds a writer to st under projectDir. After this call, st must
+// only be read/mutated through the writer.
+func NewRunWriter(projectDir string, st *RunState) *RunWriter {
+	return &RunWriter{dir: projectDir, st: st}
+}
+
+// Update applies fn to the run-state under the lock and persists the result.
+// A nil fn just re-stamps and writes (that is what the heartbeat does - it
+// never guesses a phase or invents subs, it only proves the run is alive).
+func (w *RunWriter) Update(fn func(*RunState)) error {
+	if w == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if fn != nil {
+		fn(w.st)
+	}
+	return WriteRunState(w.dir, w.st)
+}
+
+// Read runs fn against the run-state under the lock, without writing.
+func (w *RunWriter) Read(fn func(*RunState)) {
+	if w == nil || fn == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	fn(w.st)
+}
+
+// Heartbeat starts a goroutine that re-stamps the run-state every interval and
+// returns its stop function. The stop function is idempotent and WAITS for the
+// goroutine to exit, so once it returns nothing can touch the file again - the
+// heartbeat can never outlive the worker it was started for. A nil writer or a
+// non-positive interval yields a no-op stop.
+func (w *RunWriter) Heartbeat(interval time.Duration) func() {
+	if w == nil || interval <= 0 {
+		return func() {}
+	}
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				// Best-effort, same contract as every other run-state write: a
+				// failed stamp only costs a stale dashboard.
+				_ = w.Update(nil)
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() { close(done) })
+		<-exited
+	}
 }
 
 // ReadRunState reads the run-state for taskID under projectDir. Returns an error
