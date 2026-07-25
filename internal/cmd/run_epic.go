@@ -208,6 +208,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			// NEW failures only - instead of every sub re-discovering the same
 			// pre-existing breakage and reporting a false failure. Best-effort: a
 			// baseline that cannot run degrades to no-baseline, never aborts.
+			baselineUsed := ""
 			if bl := strings.TrimSpace(exc.Baseline); bl != "" {
 				ref := epicBranch
 				if independentMode {
@@ -218,6 +219,9 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				} else {
 					fmt.Fprintf(os.Stderr, "pm run-epic: baseline in %s: %s\n", workDir, bl)
 					opts.baseline = captureBaseline(workDir, bl)
+					if opts.baseline != "" {
+						baselineUsed = bl
+					}
 				}
 			}
 
@@ -262,7 +266,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 				Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID,
 				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Independent: independentMode, Branch: journalBranch,
-				WorkDir: journalDir,
+				WorkDir: journalDir, Baseline: baselineUsed,
 			})
 
 			// ID -> sub for the dependency gate. Pointers are shared with the loop,
@@ -321,8 +325,8 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 				Event: storage.JournalEventEnd, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID,
 				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Independent: independentMode, Branch: journalBranch,
-				WorkDir: journalDir,
-				Status:  storage.RunStatusDone, DurationS: int(time.Since(epicStart).Seconds()),
+				WorkDir: journalDir, Baseline: baselineUsed,
+				Status: storage.RunStatusDone, DurationS: int(time.Since(epicStart).Seconds()),
 				Subs: journalSubs(outcomes, subDurations, run),
 			})
 

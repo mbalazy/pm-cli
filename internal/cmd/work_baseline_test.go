@@ -135,6 +135,25 @@ echo '`+envelope("merged", "done")+`'`)
 	mustContain(t, string(prompt), "lint-error-old")
 }
 
+func TestExecuteWorkJournalsBaselineUsage(t *testing.T) {
+	store, task := baselineFixture(t, "true")
+	fakeClaude(t, "echo '"+envelope("merged", "done")+"'")
+
+	opts := workOptions{standalone: true, model: "opus", maxTurns: 10, timeout: 30 * 1e9}
+	plan, err := planWork(store, task, "app", opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executeWork(store, task, plan, opts); err != nil {
+		t.Fatalf("executeWork: %v", err)
+	}
+
+	entries, _ := storage.ReadJournal(store.ProjectDir("app"))
+	if len(entries) != 2 || entries[0].Baseline != "true" || entries[1].Baseline != "true" {
+		t.Fatalf("configured + captured executor.baseline must be recorded on both journal entries: %+v", entries)
+	}
+}
+
 func TestSystemPromptBaselineRules(t *testing.T) {
 	exec := storage.Executor{FixRounds: 3}
 	t.Run("verify gate is baseline-aware in every mode", func(t *testing.T) {

@@ -89,6 +89,9 @@ func TestExecuteWorkMergedRecordsEverything(t *testing.T) {
 	if len(entries) != 2 || entries[0].Event != "start" || entries[1].Event != "end" || entries[1].Status != storage.RunStatusDone {
 		t.Fatalf("journal: %+v", entries)
 	}
+	if entries[0].Baseline != "" || entries[1].Baseline != "" {
+		t.Fatalf("no executor.baseline configured -> journal Baseline must stay empty: %+v", entries)
+	}
 }
 
 func TestExecuteWorkBlockedParksOnWaiting(t *testing.T) {
