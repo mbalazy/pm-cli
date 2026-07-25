@@ -495,6 +495,23 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		return nil, err
 	}
 	if err := applyWorkerResult(store, task, plan.branch, sessionID, res, opts.standalone, opts.independent); err != nil {
+		if run != nil {
+			run.Status = storage.RunStatusFailed
+			run.Phase = ""
+			run.Error = err.Error()
+			if len(run.Subs) > 0 {
+				run.Subs[0].Status = storage.RunStatusFailed
+				run.Subs[0].Note = err.Error()
+			}
+			_ = storage.WriteRunState(stateDir, run)
+			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
+				Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
+				PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
+				WorkDir: journalDir, Baseline: baselineUsed,
+				Status: storage.RunStatusFailed, DurationS: int(time.Since(workStart).Seconds()), Error: err.Error(),
+				Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: "failed", Note: err.Error(), Branch: plan.branch, DurationS: int(time.Since(workStart).Seconds()), Session: sessionID}},
+			})
+		}
 		return nil, err
 	}
 	if run != nil {

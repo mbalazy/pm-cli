@@ -142,6 +142,50 @@ func TestExecuteWorkWorkerCrashRecordsFailure(t *testing.T) {
 	}
 }
 
+// TestExecuteWorkApplyResultErrorStillJournalsEnd covers Bug 1 (pm-cli-37):
+// when the worker itself succeeds but applyWorkerResult fails (a storage-layer
+// error, unrelated to the work outcome), executeWork must still append a
+// journal "end" line before returning - otherwise the "start" line is left
+// without a partner and pm executor stats misreads it as a crashed run.
+// applyWorkerResult is forced to fail by corrupting the task file on disk
+// (directly, bypassing store validation) with an invalid `mode` value: the
+// fresh re-read inside applyWorkerResult picks it up, and the final
+// store.WriteTask rejects it via storage.ValidateMode.
+func TestExecuteWorkApplyResultErrorStillJournalsEnd(t *testing.T) {
+	fakeClaude(t, "echo '"+envelope("merged", "implemented + verified")+"'")
+	store, task, plan, opts := executorFixture(t)
+
+	raw, err := os.ReadFile(task.FilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupted := strings.Replace(string(raw), "---\n", "---\nmode: bogus\n", 1)
+	if err := os.WriteFile(task.FilePath, []byte(corrupted), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := executeWork(store, task, plan, opts); err == nil {
+		t.Fatal("applyWorkerResult failure must surface as an executeWork error")
+	} else if !strings.Contains(err.Error(), "invalid mode") {
+		t.Fatalf("expected the invalid-mode error to propagate, got: %v", err)
+	}
+
+	run, err := storage.ReadRunState(store.ProjectDir("app"), "app-1")
+	if err != nil || run.Status != storage.RunStatusFailed || run.Error == "" {
+		t.Fatalf("run-state must record the failure: %+v err=%v", run, err)
+	}
+	entries, _ := storage.ReadJournal(store.ProjectDir("app"))
+	if len(entries) != 2 || entries[0].Event != "start" || entries[1].Event != "end" {
+		t.Fatalf("expected start+end journal pair (no phantom crash), got: %+v", entries)
+	}
+	if entries[1].Status != storage.RunStatusFailed {
+		t.Fatalf("end line must record the failure, got: %+v", entries[1])
+	}
+	if len(entries[1].Subs) != 1 || entries[1].Subs[0].Result != "failed" {
+		t.Fatalf("end line must carry a failed sub outcome, got: %+v", entries[1].Subs)
+	}
+}
+
 func TestExecuteWorkGarbageOutputIsError(t *testing.T) {
 	fakeClaude(t, "echo 'not json at all'")
 	store, task, plan, opts := executorFixture(t)
