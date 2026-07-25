@@ -432,7 +432,10 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			return r, nil, nil
 		}
 
-		// Validate epic_mode (writeTask also validates, but fail early with a clear MCP error)
+		// Validate epic_mode. writeTask validates too, but this pre-check is
+		// REQUIRED, not just a nicer error: AddTask claims the file with O_EXCL
+		// before writeTask runs, so a validation failure down there would leave a
+		// 0-byte task file behind and make the retry fail as "already exists".
 		if err := storage.ValidateEpicMode(in.EpicMode); err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
