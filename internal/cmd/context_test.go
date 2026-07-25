@@ -297,8 +297,15 @@ func TestContextCmdErrors(t *testing.T) {
 	})
 
 	t.Run("more than one arg is rejected", func(t *testing.T) {
-		if _, err := execContextCmd(t, store, "app", "extra"); err == nil {
+		// Assert the arity error specifically: without MaximumNArgs(1) the
+		// command would fall through to cwd detection and still error, just
+		// with the generic "no project" message.
+		_, err := execContextCmd(t, store, "app", "extra")
+		if err == nil {
 			t.Fatal("expected an error for two args")
+		}
+		if !strings.Contains(err.Error(), "accepts at most 1 arg") {
+			t.Errorf("expected an arity error, got: %v", err)
 		}
 	})
 }
