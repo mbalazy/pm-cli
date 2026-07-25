@@ -2,8 +2,6 @@
 
 Local task tracker. Data: `~/.claude/pm/<project-slug>/`, binary: `pm`.
 
-**Repo location: `~/repos/pm-cli` - deliberately OUTSIDE `~/.claude`.** The data dir stays in `~/.claude/pm/`, but the source must not: Claude Code's sensitive-path guard refuses every Write/Edit/Bash-redirect into the config dir, and a headless worker (`claude -p`, no one to approve a prompt) gets a hard refusal. Moved 2026-07-24 after a 5-sub executor batch burned ~$4.35 producing plans it could not type in - all subs blocked on that guard, zero commits. Don't move the source back under `~/.claude`.
-
 ## Build
 
 ```
@@ -85,6 +83,7 @@ The `maxCardHeight` is computed dynamically: `m.height - overhead` where overhea
 
 ## Gotchas
 
+- **Headless executor workers cannot write anywhere under `~/.claude`** (CC sensitive-path guard; `claude -p` has no one to approve the prompt, so it is a hard refusal, unlike an interactive session which just asks). That is why the source lives in `~/repos/pm-cli` while the data dir stays in `~/.claude/pm/` - and why a worker task that needs to write into the data dir will fail.
 - `storage.DefaultStatuses` is the single source of truth for defaults - don't hardcode `[todo, doing, done]` elsewhere
 - `ParseStatus` returns `TaskStatus`, not `(TaskStatus, error)` - it lowercases any string
 - Task files live next to `project.yaml` in the same dir (not in a subdirectory)
