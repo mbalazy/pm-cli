@@ -59,7 +59,11 @@ type JournalEntry struct {
 	Independent bool `json:"independent,omitempty"`
 	// WorkDir = the worktree slot the run claimed (additional runs only) so
 	// retros can tell WHICH slot served a run once there is more than one.
-	WorkDir   string       `json:"work_dir,omitempty"`
+	WorkDir string `json:"work_dir,omitempty"`
+	// Baseline = the verification baseline command actually captured and
+	// injected into the worker(s) this run, empty if none was used (not
+	// configured, or capture degraded to no-baseline). Records USE, not config.
+	Baseline  string       `json:"baseline,omitempty"`
 	Branch    string       `json:"branch,omitempty"`     // epic integration branch / task branch; "independent:<base>" for batch runs
 	Status    string       `json:"status,omitempty"`     // end only: done | failed (run level)
 	DurationS int          `json:"duration_s,omitempty"` // end only: whole-run wall-clock

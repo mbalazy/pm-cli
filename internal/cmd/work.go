@@ -424,11 +424,13 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// pre-existing breakage. Runs after branch setup + prepare - it measures
 	// exactly the state the work forks from. Standalone runs only; epic subs
 	// carry the manager's once-per-run capture, already baked in by planWork.
+	baselineUsed := ""
 	if plan.baselineCmd != "" {
 		fmt.Fprintf(os.Stderr, "pm work: baseline in %s: %s\n", dir, plan.baselineCmd)
 		if section := captureBaseline(dir, plan.baselineCmd); section != "" {
 			plan.prompt += "\n" + section
 			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo)
+			baselineUsed = plan.baselineCmd
 		}
 	}
 
@@ -464,7 +466,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 			Event: storage.JournalEventStart, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
 			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-			WorkDir: journalDir,
+			WorkDir: journalDir, Baseline: baselineUsed,
 		})
 	}
 
@@ -485,8 +487,8 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 				Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
 				PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-				WorkDir: journalDir,
-				Status:  storage.RunStatusFailed, DurationS: int(time.Since(workStart).Seconds()), Error: err.Error(),
+				WorkDir: journalDir, Baseline: baselineUsed,
+				Status: storage.RunStatusFailed, DurationS: int(time.Since(workStart).Seconds()), Error: err.Error(),
 				Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: "failed", Note: err.Error(), Branch: plan.branch, DurationS: int(time.Since(workStart).Seconds()), Session: plan.sessionID}},
 			})
 		}
@@ -511,8 +513,8 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
 			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-			WorkDir: journalDir,
-			Status:  storage.RunStatusDone, DurationS: int(time.Since(workStart).Seconds()),
+			WorkDir: journalDir, Baseline: baselineUsed,
+			Status: storage.RunStatusDone, DurationS: int(time.Since(workStart).Seconds()),
 			Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: res.Status, Note: strings.TrimSpace(res.Summary), Branch: plan.branch, DurationS: int(time.Since(workStart).Seconds()), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD}},
 		})
 	}
