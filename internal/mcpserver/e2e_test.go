@@ -334,3 +334,151 @@ func TestE2EContextBodyCapped(t *testing.T) {
 		t.Fatalf("short body must be untouched, got %q", out.DoingTasks[0].Body)
 	}
 }
+
+// execFields is the read side of the executor frontmatter: pm_get_task must
+// surface model + epic_mode (and the pre-existing mode) so a prep skill can
+// see what it wrote.
+type execFields struct {
+	ID       string `json:"id"`
+	Mode     string `json:"mode"`
+	Model    string `json:"model"`
+	EpicMode string `json:"epic_mode"`
+}
+
+func getExecFields(t *testing.T, sess *mcp.ClientSession, id string) execFields {
+	t.Helper()
+	text, isErr := call(t, sess, "pm_get_task", map[string]any{"project": "test", "task_id": id})
+	if isErr {
+		t.Fatalf("get_task error: %s", text)
+	}
+	var got execFields
+	mustUnmarshal(t, text, &got)
+	return got
+}
+
+// TestE2EEpicModeAndModel drives the real handlers for the executor fields:
+// epic_mode is settable via add + update (with ValidateEpicMode at write) and
+// both model and epic_mode come back out of pm_get_task.
+func TestE2EEpicModeAndModel(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	t.Run("add sets epic_mode and model, get returns both", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_add_task", map[string]any{
+			"project": "test", "title": "Batch tracker",
+			"epic_mode": storage.EpicModeIndependent,
+			"model":     "sonnet",
+			"mode":      "manual",
+		})
+		if isErr {
+			t.Fatalf("add_task error: %s", text)
+		}
+		var added execFields
+		mustUnmarshal(t, text, &added)
+
+		// on disk (the add handler's own result is not the only witness)
+		onDisk, err := store.FindTask("test", added.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if onDisk.Meta.EpicMode != storage.EpicModeIndependent {
+			t.Errorf("on-disk epic_mode = %q, want %q", onDisk.Meta.EpicMode, storage.EpicModeIndependent)
+		}
+		if onDisk.Meta.Model != "sonnet" {
+			t.Errorf("on-disk model = %q, want sonnet", onDisk.Meta.Model)
+		}
+
+		got := getExecFields(t, sess, added.ID)
+		if got.EpicMode != storage.EpicModeIndependent {
+			t.Errorf("get epic_mode = %q, want %q", got.EpicMode, storage.EpicModeIndependent)
+		}
+		if got.Model != "sonnet" {
+			t.Errorf("get model = %q, want sonnet", got.Model)
+		}
+		if got.Mode != "manual" {
+			t.Errorf("get mode = %q, want manual", got.Mode)
+		}
+	})
+
+	t.Run("update sets, keeps on omit, clears on empty string", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_add_task", map[string]any{
+			"project": "test", "title": "Plain tracker",
+		})
+		if isErr {
+			t.Fatalf("add_task error: %s", text)
+		}
+		var added execFields
+		mustUnmarshal(t, text, &added)
+		if added.EpicMode != "" {
+			t.Fatalf("fresh task epic_mode = %q, want empty", added.EpicMode)
+		}
+
+		// set
+		if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": added.ID,
+			"epic_mode": storage.EpicModeIndependent,
+			"model":     "haiku",
+		}); isErr {
+			t.Fatal("update_task error")
+		}
+		if got := getExecFields(t, sess, added.ID); got.EpicMode != storage.EpicModeIndependent {
+			t.Fatalf("after set, epic_mode = %q", got.EpicMode)
+		}
+
+		// omit = unchanged (an unrelated update must not clear it)
+		if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": added.ID, "brief": "still independent",
+		}); isErr {
+			t.Fatal("update_task error")
+		}
+		got := getExecFields(t, sess, added.ID)
+		if got.EpicMode != storage.EpicModeIndependent {
+			t.Fatalf("omitted epic_mode must be kept, got %q", got.EpicMode)
+		}
+		if got.Model != "haiku" {
+			t.Fatalf("omitted model must be kept, got %q", got.Model)
+		}
+
+		// empty string = clear (back to integration mode)
+		if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": added.ID, "epic_mode": "",
+		}); isErr {
+			t.Fatal("update_task error")
+		}
+		if got := getExecFields(t, sess, added.ID); got.EpicMode != "" {
+			t.Fatalf("empty epic_mode must clear, got %q", got.EpicMode)
+		}
+	})
+
+	t.Run("invalid epic_mode rejected on add", func(t *testing.T) {
+		before, _ := store.GetTasks("test")
+		text, isErr := call(t, sess, "pm_add_task", map[string]any{
+			"project": "test", "title": "Bad tracker", "epic_mode": "INDEPENDENT",
+		})
+		if !isErr {
+			t.Fatalf("invalid epic_mode must be a tool error, got: %s", text)
+		}
+		if !strings.Contains(text, "epic_mode") {
+			t.Errorf("error must name the field, got: %s", text)
+		}
+		if after, _ := store.GetTasks("test"); len(after) != len(before) {
+			t.Errorf("rejected add must not create a task (%d -> %d)", len(before), len(after))
+		}
+	})
+
+	t.Run("invalid epic_mode rejected on update, task untouched", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": "t-1", "epic_mode": "batch",
+		})
+		if !isErr {
+			t.Fatalf("invalid epic_mode must be a tool error, got: %s", text)
+		}
+		reloaded, err := store.FindTask("test", "t-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reloaded.Meta.EpicMode != "" {
+			t.Errorf("on-disk epic_mode = %q, want empty (write must not go through)", reloaded.Meta.EpicMode)
+		}
+	})
+}
