@@ -1,11 +1,27 @@
 package board
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/mbalazy/pm/internal/storage"
 )
+
+// writeRawTask writes a task file directly to disk, bypassing writeTask's
+// validation - simulating a hand-edited frontmatter field (e.g. an invalid
+// epic_mode) that only surfaces as an error once the board tries to move it.
+func writeRawTask(t *testing.T, m *Model, id, status, epicMode string) {
+	t.Helper()
+	dir := m.store.ProjectDir("p")
+	path := filepath.Join(dir, id+"-a.md")
+	content := fmt.Sprintf("---\nid: %s\ntitle: A\nstatus: %s\ncreated: \"2026-07-25\"\nupdated: \"2026-07-25\"\nepic_mode: %s\n---\n", id, status, epicMode)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // newBoardModel builds a Model backed by a real Store on a temp dir with the
 // given tasks persisted in project "p". MoveTask self-locks since 0.23.0, so
@@ -71,6 +87,19 @@ func TestDoMoveForward(t *testing.T) {
 			t.Errorf("status = %q, want todo (wrap)", got)
 		}
 	})
+
+	t.Run("failed write shows a toast instead of silently reverting", func(t *testing.T) {
+		m := newBoardModel(t)
+		writeRawTask(t, m, "p-1", "todo", "bogus")
+		m.reload()
+		m.doMoveForward(m.taskByID("p-1"))
+		if !strings.Contains(m.toastMsg, "move failed") || !strings.Contains(m.toastMsg, "epic_mode") {
+			t.Errorf("toastMsg = %q, want it to mention the move failure and the reason", m.toastMsg)
+		}
+		if got := diskStatus(t, m, "p-1"); got != storage.StatusTodo {
+			t.Errorf("status = %q, want todo (unchanged - write failed)", got)
+		}
+	})
 }
 
 func TestDoMoveBack(t *testing.T) {
@@ -89,44 +118,102 @@ func TestDoMoveBack(t *testing.T) {
 			t.Errorf("status = %q, want done (wrap)", got)
 		}
 	})
+
+	t.Run("failed write shows a toast instead of silently reverting", func(t *testing.T) {
+		m := newBoardModel(t)
+		writeRawTask(t, m, "p-1", "doing", "bogus")
+		m.reload()
+		m.doMoveBack(m.taskByID("p-1"))
+		if !strings.Contains(m.toastMsg, "move failed") || !strings.Contains(m.toastMsg, "epic_mode") {
+			t.Errorf("toastMsg = %q, want it to mention the move failure and the reason", m.toastMsg)
+		}
+		if got := diskStatus(t, m, "p-1"); got != storage.StatusDoing {
+			t.Errorf("status = %q, want doing (unchanged - write failed)", got)
+		}
+	})
 }
 
 func TestDoDone(t *testing.T) {
-	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusTodo}})
-	m.doDone(m.taskByID("p-1"))
-	if got := diskStatus(t, m, "p-1"); got != storage.StatusDone {
-		t.Errorf("status = %q, want done (last column)", got)
-	}
-	if m.lastUndo == nil || m.lastUndo.kind != "done" {
-		t.Errorf("lastUndo kind = %+v, want done", m.lastUndo)
-	}
+	t.Run("marks task with the last status", func(t *testing.T) {
+		m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusTodo}})
+		m.doDone(m.taskByID("p-1"))
+		if got := diskStatus(t, m, "p-1"); got != storage.StatusDone {
+			t.Errorf("status = %q, want done (last column)", got)
+		}
+		if m.lastUndo == nil || m.lastUndo.kind != "done" {
+			t.Errorf("lastUndo kind = %+v, want done", m.lastUndo)
+		}
+	})
+
+	t.Run("failed write shows a toast instead of silently reverting", func(t *testing.T) {
+		m := newBoardModel(t)
+		writeRawTask(t, m, "p-1", "todo", "bogus")
+		m.reload()
+		m.doDone(m.taskByID("p-1"))
+		if !strings.Contains(m.toastMsg, "move failed") {
+			t.Errorf("toastMsg = %q, want it to mention the move failure", m.toastMsg)
+		}
+		if got := diskStatus(t, m, "p-1"); got != storage.StatusTodo {
+			t.Errorf("status = %q, want todo (unchanged - write failed)", got)
+		}
+	})
 }
 
 func TestDoWaiting(t *testing.T) {
-	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusDoing}})
-	m.doWaiting(m.taskByID("p-1"))
-	if got := diskStatus(t, m, "p-1"); got != storage.StatusWaiting {
-		t.Errorf("status = %q, want waiting", got)
-	}
+	t.Run("marks task as waiting", func(t *testing.T) {
+		m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusDoing}})
+		m.doWaiting(m.taskByID("p-1"))
+		if got := diskStatus(t, m, "p-1"); got != storage.StatusWaiting {
+			t.Errorf("status = %q, want waiting", got)
+		}
+	})
+
+	t.Run("failed write shows a toast instead of silently reverting", func(t *testing.T) {
+		m := newBoardModel(t)
+		writeRawTask(t, m, "p-1", "doing", "bogus")
+		m.reload()
+		m.doWaiting(m.taskByID("p-1"))
+		if !strings.Contains(m.toastMsg, "move failed") {
+			t.Errorf("toastMsg = %q, want it to mention the move failure", m.toastMsg)
+		}
+		if got := diskStatus(t, m, "p-1"); got != storage.StatusDoing {
+			t.Errorf("status = %q, want doing (unchanged - write failed)", got)
+		}
+	})
 }
 
 func TestDoArchive(t *testing.T) {
-	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusDone}})
-	m.doArchive(m.taskByID("p-1"))
-	if got := diskStatus(t, m, "p-1"); got != storage.StatusArchived {
-		t.Errorf("status = %q, want archived", got)
-	}
-	if m.lastUndo == nil || m.lastUndo.kind != "archive" {
-		t.Errorf("lastUndo kind = %+v, want archive", m.lastUndo)
-	}
-	// Archived tasks disappear from every board column.
-	for i := range m.statuses {
-		for _, task := range m.columnTasks(i) {
-			if task.Meta.ID == "p-1" {
-				t.Errorf("archived task still visible in column %d", i)
+	t.Run("archives the task", func(t *testing.T) {
+		m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusDone}})
+		m.doArchive(m.taskByID("p-1"))
+		if got := diskStatus(t, m, "p-1"); got != storage.StatusArchived {
+			t.Errorf("status = %q, want archived", got)
+		}
+		if m.lastUndo == nil || m.lastUndo.kind != "archive" {
+			t.Errorf("lastUndo kind = %+v, want archive", m.lastUndo)
+		}
+		// Archived tasks disappear from every board column.
+		for i := range m.statuses {
+			for _, task := range m.columnTasks(i) {
+				if task.Meta.ID == "p-1" {
+					t.Errorf("archived task still visible in column %d", i)
+				}
 			}
 		}
-	}
+	})
+
+	t.Run("failed write shows a toast instead of silently reverting", func(t *testing.T) {
+		m := newBoardModel(t)
+		writeRawTask(t, m, "p-1", "done", "bogus")
+		m.reload()
+		m.doArchive(m.taskByID("p-1"))
+		if !strings.Contains(m.toastMsg, "archive failed") {
+			t.Errorf("toastMsg = %q, want it to mention the archive failure", m.toastMsg)
+		}
+		if got := diskStatus(t, m, "p-1"); got != storage.StatusDone {
+			t.Errorf("status = %q, want done (unchanged - write failed)", got)
+		}
+	})
 }
 
 func TestDoUndo(t *testing.T) {
@@ -154,6 +241,25 @@ func TestDoUndo(t *testing.T) {
 		}
 		if !strings.Contains(m.toastMsg, "undone: done") {
 			t.Errorf("toastMsg = %q, want 'undone: done'", m.toastMsg)
+		}
+	})
+
+	t.Run("failed write shows a toast and keeps lastUndo for a retry", func(t *testing.T) {
+		m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusTodo}})
+		bad := snapshotTask(m.taskByID("p-1"))
+		bad.Meta.EpicMode = "bogus"
+		m.lastUndo = &undoAction{kind: "move", task: bad}
+
+		m.doUndo()
+
+		if !strings.Contains(m.toastMsg, "undo failed") || !strings.Contains(m.toastMsg, "epic_mode") {
+			t.Errorf("toastMsg = %q, want it to mention the undo failure and the reason", m.toastMsg)
+		}
+		if m.lastUndo == nil {
+			t.Error("lastUndo should be preserved after a failed undo so the user can retry")
+		}
+		if got := diskStatus(t, m, "p-1"); got != storage.StatusTodo {
+			t.Errorf("status = %q, want todo (unchanged - write failed)", got)
 		}
 	})
 }
