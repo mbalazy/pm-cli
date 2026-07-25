@@ -458,8 +458,11 @@ func TestE2EEpicModeAndModel(t *testing.T) {
 		if !isErr {
 			t.Fatalf("invalid epic_mode must be a tool error, got: %s", text)
 		}
-		if !strings.Contains(text, "epic_mode") {
-			t.Errorf("error must name the field, got: %s", text)
+		// Pin the message to ValidateEpicMode's own wording: a bare "epic_mode"
+		// substring would also match an SDK-level schema/decode rejection, so the
+		// assertion would survive the validator being dropped.
+		if !strings.Contains(text, "invalid epic_mode") {
+			t.Errorf("error must come from ValidateEpicMode, got: %s", text)
 		}
 		if after, _ := store.GetTasks("test"); len(after) != len(before) {
 			t.Errorf("rejected add must not create a task (%d -> %d)", len(before), len(after))
@@ -472,6 +475,9 @@ func TestE2EEpicModeAndModel(t *testing.T) {
 		})
 		if !isErr {
 			t.Fatalf("invalid epic_mode must be a tool error, got: %s", text)
+		}
+		if !strings.Contains(text, "invalid epic_mode") {
+			t.Errorf("error must come from ValidateEpicMode, got: %s", text)
 		}
 		reloaded, err := store.FindTask("test", "t-1")
 		if err != nil {
