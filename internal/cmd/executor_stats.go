@@ -117,6 +117,9 @@ func aggregateJournal(entries []storage.JournalEntry) journalStats {
 	}
 
 	for key, n := range open {
+		if n <= 0 {
+			continue // fully paired run - the counter is just a leftover map key
+		}
 		st.Crashes += n
 		st.kind(key.kind).Statuses[runStatusCrashed] += n
 	}
@@ -167,14 +170,14 @@ func orderedKeys(counts map[string]int, order []string) []string {
 	seen := make(map[string]bool, len(order))
 	out := make([]string, 0, len(counts))
 	for _, k := range order {
+		seen[k] = true
 		if counts[k] > 0 {
 			out = append(out, k)
-			seen[k] = true
 		}
 	}
 	var rest []string
-	for k := range counts {
-		if !seen[k] {
+	for k, v := range counts {
+		if !seen[k] && v > 0 {
 			rest = append(rest, k)
 		}
 	}
