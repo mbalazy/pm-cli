@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -26,10 +28,15 @@ func startEntry(kind, taskID string, pid int) storage.JournalEntry {
 	return storage.JournalEntry{Event: storage.JournalEventStart, Kind: kind, TaskID: taskID, PID: pid}
 }
 
+// noneAlive is the default liveness probe for the table: every unpaired start
+// is a crash. Cases that want the live-run branch pass their own.
+func noneAlive(int) bool { return false }
+
 func TestAggregateJournal(t *testing.T) {
 	tests := []struct {
 		name    string
 		entries []storage.JournalEntry
+		alive   func(int) bool // nil -> noneAlive
 		want    journalStats
 	}{
 		{
@@ -105,7 +112,10 @@ func TestAggregateJournal(t *testing.T) {
 			},
 		},
 		{
-			name: "same task re-run - PID discriminates, one crashes",
+			// Two starts, one end: FIFO closes one and leaves the other a
+			// crash. (This shape does NOT prove PID discrimination - the case
+			// below does; the counter alone gives the same answer here.)
+			name: "same task run twice, only one terminates",
 			entries: []storage.JournalEntry{
 				startEntry("work", "app-3", 500),
 				startEntry("work", "app-3", 501),
@@ -140,6 +150,126 @@ func TestAggregateJournal(t *testing.T) {
 			},
 		},
 		{
+			// The pairing key includes the PID, so a terminal line whose PID
+			// does NOT match the start cannot close it. Without the PID in the
+			// key this would collapse to 1 run / 0 crashes.
+			name: "terminal line with a different pid does not close the start",
+			entries: []storage.JournalEntry{
+				startEntry("work", "app-3", 500),
+				{Event: storage.JournalEventEnd, Kind: "work", TaskID: "app-3", PID: 501, Status: "failed", DurationS: 120},
+			},
+			want: journalStats{
+				Runs: 2,
+				Kinds: map[string]*kindStats{"work": {
+					Runs:      2,
+					Statuses:  map[string]int{"failed": 1, runStatusCrashed: 1},
+					DurationS: numStat{Total: 120, Samples: 1},
+				}},
+				Crashes:    1,
+				SubResults: map[string]int{},
+			},
+		},
+		{
+			// Live holder pid -> the run is in flight, not a crash. `pm
+			// executor stats` is routinely run mid-epic.
+			name:    "unpaired start with a live pid is running, not crashed",
+			entries: []storage.JournalEntry{startEntry("run-epic", "app-7", 700)},
+			alive:   func(pid int) bool { return pid == 700 },
+			want: journalStats{
+				Runs:       1,
+				Running:    1,
+				Kinds:      map[string]*kindStats{"run-epic": {Runs: 1, Statuses: map[string]int{runStatusRunning: 1}}},
+				SubResults: map[string]int{},
+			},
+		},
+		{
+			// The kill race: run_epic writes "end", then keeps working (PR
+			// creation) and the board kills it, appending "killed" for the SAME
+			// run. That is one run, not two.
+			name: "end followed by killed for the same run counts once",
+			entries: []storage.JournalEntry{
+				startEntry("run-epic", "app-6", 600),
+				{
+					Event: storage.JournalEventEnd, Kind: "run-epic", TaskID: "app-6", PID: 600,
+					Status: "done", DurationS: 3600,
+					Subs: []storage.JournalSub{{ID: "app-6-1", Result: "merged", Turns: 10, CostUSD: 1}},
+				},
+				{Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-6", PID: 600},
+			},
+			want: journalStats{
+				Runs:       1,
+				Kinds:      map[string]*kindStats{"run-epic": {Runs: 1, Statuses: map[string]int{"done": 1}, DurationS: numStat{Total: 3600, Samples: 1}}},
+				Subs:       1,
+				SubResults: map[string]int{"merged": 1},
+				Turns:      numStat{Total: 10, Samples: 1},
+				Cost:       numStat{Total: 1, Samples: 1},
+			},
+		},
+		{
+			// The real orbit journal opens with exactly this shape.
+			name:    "orphan killed line with no start",
+			entries: []storage.JournalEntry{{Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-0", PID: 900}},
+			want: journalStats{
+				Runs:       1,
+				Kinds:      map[string]*kindStats{"run-epic": {Runs: 1, Statuses: map[string]int{runStatusKilled: 1}}},
+				SubResults: map[string]int{},
+			},
+		},
+		{
+			// One journal holding a completed run, a killed run and a crash at
+			// once - the shape where FIFO pairing could mis-attribute.
+			name: "completed, killed and crashed runs in one journal",
+			entries: []storage.JournalEntry{
+				startEntry("work", "app-1", 100),
+				startEntry("run-epic", "app-5", 300),
+				startEntry("work", "app-2", 400), // never terminated -> crash
+				{
+					Event: storage.JournalEventEnd, Kind: "work", TaskID: "app-1", PID: 100,
+					Status: "done", DurationS: 600,
+					Subs: []storage.JournalSub{{ID: "app-1", Result: "merged", DurationS: 590, Turns: 42, CostUSD: 1.5}},
+				},
+				{Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-5", PID: 300},
+			},
+			want: journalStats{
+				Runs:    3,
+				Crashes: 1,
+				Kinds: map[string]*kindStats{
+					"work": {
+						Runs:      2,
+						Statuses:  map[string]int{"done": 1, runStatusCrashed: 1},
+						DurationS: numStat{Total: 600, Samples: 1},
+					},
+					"run-epic": {Runs: 1, Statuses: map[string]int{runStatusKilled: 1}},
+				},
+				Subs:        1,
+				SubResults:  map[string]int{"merged": 1},
+				SubDuration: numStat{Total: 590, Samples: 1},
+				Turns:       numStat{Total: 42, Samples: 1},
+				Cost:        numStat{Total: 1.5, Samples: 1},
+			},
+		},
+		{
+			// A run that failed within a second records DurationS 0. That is a
+			// real measurement and must stay in the run-level denominator,
+			// unlike a sub's absent turns/cost.
+			name: "zero-duration end line still counts as a run duration sample",
+			entries: []storage.JournalEntry{
+				startEntry("work", "app-fast", 800),
+				{Event: storage.JournalEventEnd, Kind: "work", TaskID: "app-fast", PID: 800, Status: "failed", DurationS: 0},
+				startEntry("work", "app-slow", 801),
+				{Event: storage.JournalEventEnd, Kind: "work", TaskID: "app-slow", PID: 801, Status: "done", DurationS: 100},
+			},
+			want: journalStats{
+				Runs: 2,
+				Kinds: map[string]*kindStats{"work": {
+					Runs:      2,
+					Statuses:  map[string]int{"done": 1, "failed": 1},
+					DurationS: numStat{Total: 100, Samples: 2}, // both runs, not just the non-zero one
+				}},
+				SubResults: map[string]int{},
+			},
+		},
+		{
 			name: "missing status and result degrade to unknown",
 			entries: []storage.JournalEntry{
 				startEntry("work", "app-4", 600),
@@ -149,8 +279,13 @@ func TestAggregateJournal(t *testing.T) {
 				},
 			},
 			want: journalStats{
-				Runs:       1,
-				Kinds:      map[string]*kindStats{"work": {Runs: 1, Statuses: map[string]int{runStatusUnknown: 1}}},
+				Runs: 1,
+				Kinds: map[string]*kindStats{"work": {
+					Runs:     1,
+					Statuses: map[string]int{runStatusUnknown: 1},
+					// end line present, so its (absent -> 0) duration is a sample
+					DurationS: numStat{Total: 0, Samples: 1},
+				}},
 				Subs:       1,
 				SubResults: map[string]int{runStatusUnknown: 1},
 			},
@@ -168,7 +303,11 @@ func TestAggregateJournal(t *testing.T) {
 				t.Fatalf("round-trip lost entries: wrote %d, read %d", len(tt.entries), len(entries))
 			}
 
-			got := aggregateJournal(entries)
+			alive := tt.alive
+			if alive == nil {
+				alive = noneAlive
+			}
+			got := aggregateJournal(entries, alive)
 
 			if got.Entries != len(tt.entries) {
 				t.Errorf("Entries = %d, want %d", got.Entries, len(tt.entries))
@@ -178,6 +317,9 @@ func TestAggregateJournal(t *testing.T) {
 			}
 			if got.Crashes != tt.want.Crashes {
 				t.Errorf("Crashes = %d, want %d", got.Crashes, tt.want.Crashes)
+			}
+			if got.Running != tt.want.Running {
+				t.Errorf("Running = %d, want %d", got.Running, tt.want.Running)
 			}
 			if got.Subs != tt.want.Subs {
 				t.Errorf("Subs = %d, want %d", got.Subs, tt.want.Subs)
@@ -256,14 +398,33 @@ func TestOrderedKeysIsDeterministic(t *testing.T) {
 	counts := map[string]int{"weird": 1, "merged": 2, "manual": 1, "blocked": 3, "another": 1}
 	want := []string{"merged", "blocked", "manual", "another", "weird"}
 	for i := 0; i < 20; i++ { // map iteration order varies per run
-		got := orderedKeys(counts, subResultOrder)
+		got := orderedKeys(counts, subResultOrder, false)
 		if strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Fatalf("orderedKeys = %v, want %v", got, want)
 		}
 	}
-	if got := orderedKeys(map[string]int{"merged": 0}, subResultOrder); len(got) != 0 {
-		t.Errorf("zero counts should be omitted, got %v", got)
-	}
+
+	t.Run("keepZero false omits zero counts", func(t *testing.T) {
+		if got := orderedKeys(map[string]int{"merged": 0}, subResultOrder, false); len(got) != 0 {
+			t.Errorf("zero counts should be omitted, got %v", got)
+		}
+	})
+
+	t.Run("keepZero true emits the whole vocabulary", func(t *testing.T) {
+		got := orderedKeys(map[string]int{"merged": 1}, subResultOrder, true)
+		if strings.Join(got, ",") != strings.Join(subResultOrder, ",") {
+			t.Errorf("orderedKeys = %v, want the full order %v", got, subResultOrder)
+		}
+	})
+
+	t.Run("keepZero true still drops zero keys outside the order", func(t *testing.T) {
+		got := orderedKeys(map[string]int{"ghost": 0, "merged": 1}, subResultOrder, true)
+		for _, k := range got {
+			if k == "ghost" {
+				t.Errorf("unknown key with a zero count should not be emitted, got %v", got)
+			}
+		}
+	})
 }
 
 func TestFmtDuration(t *testing.T) {
@@ -296,19 +457,22 @@ func TestRenderJournalStats(t *testing.T) {
 				{ID: "app-9-2", Result: "skipped"},
 			},
 		},
+		// two more run-epic runs so the per-kind status list has >1 entry and
+		// its ORDER is observable
+		startEntry("run-epic", "app-9", 201),
+		{Event: storage.JournalEventEnd, Kind: "run-epic", TaskID: "app-9", PID: 201, Status: "failed", DurationS: 100},
+		startEntry("run-epic", "app-9", 202),
+		{Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-9", PID: 202},
 		startEntry("work", "app-2", 400), // crash
-	})
+	}, noneAlive)
 	out := renderJournalStats("app", "/tmp/app/.executor/journal.jsonl", st)
 
 	for _, want := range []string{
 		"# executor stats: app",
-		"/tmp/app/.executor/journal.jsonl (3 entries)",
-		"## Runs: 2",
-		"run-epic  1 run(s)  [1 done]",
+		"/tmp/app/.executor/journal.jsonl (7 parsed entries)",
+		"## Runs: 4",
 		"crashed:  1",
 		"## Subs: 2",
-		"merged    1",
-		"skipped   1",
 		"turns     60 total, 60.0 avg (1 sub(s))",
 		"cost      $2.00 total, $2.00 avg (1 sub(s))",
 	} {
@@ -316,9 +480,65 @@ func TestRenderJournalStats(t *testing.T) {
 			t.Errorf("output missing %q\n---\n%s", want, out)
 		}
 	}
-	// "work" crashed with no end line -> no duration line for that kind
-	if strings.Contains(out, "work      1 run(s)  [1 crashed]\n            duration") {
-		t.Errorf("crash-only kind should print no duration line\n---\n%s", out)
+
+	// The sub histogram prints the whole vocabulary, in subResultOrder, zeros
+	// included - one contiguous block, so this pins the render's ordering.
+	subBlock := "merged    1\n  blocked   0\n  failed    0\n  conflict  0\n  skipped   1\n  manual    0\n"
+	if !strings.Contains(out, subBlock) {
+		t.Errorf("sub histogram block missing or misordered, want:\n%s\n---got---\n%s", subBlock, out)
+	}
+
+	// Per-kind statuses must follow runStatusOrder too. Re-render rather than
+	// assert once: with only 3 statuses in the map, a single check would let an
+	// unordered walk through ~1 run in 6.
+	for i := 0; i < 30; i++ {
+		got := renderJournalStats("app", "/tmp/j.jsonl", st)
+		if !strings.Contains(got, "[1 done, 1 failed, 1 killed]") {
+			t.Fatalf("per-kind statuses not in runStatusOrder (iteration %d)\n---\n%s", i, got)
+		}
+	}
+
+	// "work" crashed with no end line -> no duration line for that kind. Scoped
+	// by counting instead of matching an exact two-line string, so a future
+	// padding tweak cannot make this pass vacuously.
+	if n := strings.Count(out, "ended run(s)"); n != 1 {
+		t.Errorf("expected exactly 1 per-kind duration line (only run-epic ended), got %d\n---\n%s", n, out)
+	}
+}
+
+func TestRenderJournalStatsAlwaysPrintsTotals(t *testing.T) {
+	// A journal with no subs at all (a killed run + a crash) must still print
+	// the totals section - "0" is the answer, not a reason to omit it.
+	st := aggregateJournal([]storage.JournalEntry{
+		startEntry("run-epic", "app-5", 300),
+		{Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-5", PID: 300},
+		startEntry("work", "app-2", 400),
+	}, noneAlive)
+	out := renderJournalStats("app", "/tmp/j.jsonl", st)
+
+	for _, want := range []string{
+		"## Subs: 0",
+		"## Totals",
+		"duration  0s total, 0s avg (0 sub(s))",
+		"turns     0 total, 0.0 avg (0 sub(s))",
+		"cost      $0.00 total, $0.00 avg (0 sub(s))",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\n---\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderJournalStatsShowsRunningRun(t *testing.T) {
+	st := aggregateJournal([]storage.JournalEntry{startEntry("run-epic", "app-7", 700)},
+		func(pid int) bool { return pid == 700 })
+	out := renderJournalStats("app", "/tmp/j.jsonl", st)
+
+	if !strings.Contains(out, "running:  1") {
+		t.Errorf("a live unpaired start should render as running\n---\n%s", out)
+	}
+	if strings.Contains(out, "crashed:") {
+		t.Errorf("a live run must not be reported as a crash\n---\n%s", out)
 	}
 }
 
@@ -337,6 +557,42 @@ func TestExecutorStatsCmdEmptyJournal(t *testing.T) {
 	}
 	if got := buf.String(); !strings.Contains(got, "no executor runs recorded yet") || !strings.Contains(got, slug) {
 		t.Errorf("expected a readable empty-journal note, got %q", got)
+	}
+}
+
+// The AC says "empty/missing" - a journal file that EXISTS but holds nothing
+// usable is the other half, and takes a different code path (ReadJournal
+// returns no error and no entries rather than short-circuiting on IsNotExist).
+func TestExecutorStatsCmdEmptyAndCorruptJournalFile(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{"existing but empty file", ""},
+		{"only corrupt lines", "not json\n{\"broken\":\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, slug := tempStore(t)
+			path := storage.JournalPath(store.ProjectDir(slug))
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.WriteFile(path, []byte(tc.content), 0644); err != nil {
+				t.Fatalf("write journal: %v", err)
+			}
+
+			cmd := newExecutorStatsCmd(store)
+			var buf bytes.Buffer
+			cmd.SetOut(&buf)
+			cmd.SetErr(&buf)
+			cmd.SetArgs([]string{slug})
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("must not error, got: %v", err)
+			}
+			if got := buf.String(); !strings.Contains(got, "no executor runs recorded yet") {
+				t.Errorf("expected the readable empty-journal note, got %q", got)
+			}
+		})
 	}
 }
 
