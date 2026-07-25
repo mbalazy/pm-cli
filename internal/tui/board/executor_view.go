@@ -320,6 +320,15 @@ func renderExecutorDashboard(run *storage.RunState, width int) string {
 	if run.Started != "" {
 		hdr += helpStyle.Render("  ⏱ " + execElapsed(run.Started, run))
 	}
+	// While a run is live the executor re-stamps Updated every ~30s, so the age
+	// of that stamp separates "long sub in progress" from "hung": a heartbeat
+	// that stops advancing is the tell. Only meaningful on a live run - on a
+	// finished one Updated IS the end stamp.
+	if run.IsLive() {
+		if age := execHeartbeatAge(run.Updated); age != "" {
+			hdr += helpStyle.Render("  ♥ " + age)
+		}
+	}
 
 	var b strings.Builder
 	b.WriteString(hdr + "\n")
@@ -369,7 +378,23 @@ func execElapsed(started string, run *storage.RunState) string {
 			end = t1
 		}
 	}
-	d := end.Sub(t0)
+	return shortDur(end.Sub(t0))
+}
+
+// execHeartbeatAge renders how long ago the run last stamped its run-state
+// (storage.HeartbeatInterval while a worker is in flight). Empty when the stamp
+// is missing or unparseable - an absent heartbeat must not render as "0s ago".
+func execHeartbeatAge(updated string) string {
+	t, err := time.Parse(time.RFC3339, updated)
+	if err != nil {
+		return ""
+	}
+	return shortDur(time.Since(t)) + " ago"
+}
+
+// shortDur renders a duration compactly (1h2m / 3m4s / 5s), clamping negatives
+// to zero (clock skew between the writing executor and the reading board).
+func shortDur(d time.Duration) string {
 	if d < 0 {
 		d = 0
 	}
