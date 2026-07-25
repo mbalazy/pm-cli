@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -14,17 +16,48 @@ import (
 // captureStderr swaps os.Stderr for a pipe, runs fn, and returns what it wrote.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
-	old := os.Stderr
+	return capturePipe(t, &os.Stderr, fn)
+}
+
+// capturePipe points *target at a pipe for the duration of fn and returns what
+// fn wrote. The pipe is drained by a concurrent reader: a fixture writing more
+// than the OS pipe buffer (~64KB) would otherwise block fn forever and hang the
+// whole test binary instead of failing an assertion. Restore + close go through
+// a deferred sync.Once so a t.Fatal or panic inside fn cannot leave the stream
+// pointing at a dead pipe for every later test in the package.
+func capturePipe(t *testing.T, target **os.File, fn func()) string {
+	t.Helper()
+	old := *target
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("pipe: %v", err)
 	}
-	os.Stderr = w
+	drained := make(chan string, 1)
+	go func() {
+		out, _ := io.ReadAll(r)
+		r.Close()
+		drained <- string(out)
+	}()
+
+	var once sync.Once
+	restore := func() {
+		once.Do(func() {
+			*target = old
+			w.Close()
+		})
+	}
+	*target = w
+	defer restore()
 	fn()
-	w.Close()
-	os.Stderr = old
-	out, _ := io.ReadAll(r)
-	return string(out)
+	restore()
+	return <-drained
+}
+
+func TestCapturePipeSurvivesMoreThanThePipeBuffer(t *testing.T) {
+	big := strings.Repeat("x", 200*1024) // > the ~64KB OS pipe buffer
+	if got := captureStdout(t, func() { fmt.Print(big) }); got != big {
+		t.Fatalf("large capture: got %d bytes, want %d", len(got), len(big))
+	}
 }
 
 func TestLogIfErr(t *testing.T) {
@@ -361,17 +394,7 @@ func TestValidateModeRejectedOnWrite(t *testing.T) {
 // captureStdout swaps os.Stdout for a pipe, runs fn, and returns what it wrote.
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	os.Stdout = w
-	fn()
-	w.Close()
-	os.Stdout = old
-	out, _ := io.ReadAll(r)
-	return string(out)
+	return capturePipe(t, &os.Stdout, fn)
 }
 
 func TestPrintEpicPlanLabels(t *testing.T) {
