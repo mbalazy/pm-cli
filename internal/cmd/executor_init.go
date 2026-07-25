@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -32,7 +33,10 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 		Long: "Scans <project>/.claude/skills + .claude/commands and detects the stack to draft an " +
 			"`executor` block for project.yaml. Detected skills map to phase bindings; the rest stay empty " +
 			"(the engine's built-in generic). Phases with no skill but a detectable verify command get a cmd " +
-			"binding. Writes/merges into project.yaml without clobbering other config; re-run updates the draft.",
+			"binding. If the project has NO executor block yet, the draft is written as-is. If it already has " +
+			"one, only the detected fields (`phases`, `baseline`) are refreshed - every other hand-set field " +
+			"(base_branch, env, worktrees, prepare, context_repos, seed_exclude, notes, statuses, fix_rounds, " +
+			"gate, ...) is left untouched; the output lists which fields were preserved.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var slug string
@@ -58,19 +62,21 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 			}
 
 			draft, notes := draftExecutor(proj.Path)
+			result, mergeNotes := mergeExecutor(proj.Executor, draft)
+			notes = append(notes, mergeNotes...)
 
 			fmt.Printf("# drafted executor profile for %s (%s)\n", slug, proj.Path)
 			for _, n := range notes {
 				fmt.Printf("# %s\n", n)
 			}
-			fmt.Println(marshalExecutorBlock(draft))
+			fmt.Println(marshalExecutorBlock(result))
 
 			if dryRun {
 				fmt.Println("# dry-run: not written. Re-run without --dry-run to save to project.yaml.")
 				return nil
 			}
 
-			proj.Executor = draft
+			proj.Executor = result
 			if err := store.UpdateProject(slug, proj); err != nil {
 				return fmt.Errorf("write project.yaml: %w", err)
 			}
@@ -114,6 +120,77 @@ func draftExecutor(projectPath string) (*storage.Executor, []string) {
 		}
 	}
 	return &e, notes
+}
+
+// mergeExecutor combines a freshly drafted profile with the project's existing
+// executor block, if any. The draft's DETECTED fields (phases, baseline) always
+// win so a re-run keeps re-scanning the project - everything else in an
+// existing block is hand-editable config and is preserved untouched. A project
+// with no existing block gets the draft as-is (first `pm executor init`).
+func mergeExecutor(existing *storage.Executor, draft *storage.Executor) (*storage.Executor, []string) {
+	if existing == nil {
+		return draft, nil
+	}
+	merged := *existing
+	merged.Phases = draft.Phases
+	merged.Baseline = draft.Baseline
+	return &merged, preservedFieldNotes(existing)
+}
+
+// preservedFieldNotes lists the existing executor fields (besides phases/baseline,
+// which are always refreshed from the draft) that carry a non-default value and
+// were therefore kept as-is rather than overwritten.
+func preservedFieldNotes(existing *storage.Executor) []string {
+	base := (&storage.Project{}).GetExecutor()
+	var notes []string
+	note := func(field string) { notes = append(notes, "preserved existing "+field) }
+
+	if existing.Enabled != base.Enabled {
+		note("enabled")
+	}
+	if existing.AdditionalWorktree != base.AdditionalWorktree {
+		note("additional_worktree")
+	}
+	if existing.WorktreePath != "" {
+		note("worktree_path")
+	}
+	if len(existing.Worktrees) > 0 {
+		note("worktrees")
+	}
+	if existing.BaseBranch != "" {
+		note("base_branch")
+	}
+	if len(existing.Env) > 0 {
+		note("env")
+	}
+	if len(existing.SeedExclude) > 0 {
+		note("seed_exclude")
+	}
+	if existing.Prepare != "" {
+		note("prepare")
+	}
+	if len(existing.ContextRepos) > 0 {
+		note("context_repos")
+	}
+	if existing.StartStatus != base.StartStatus {
+		note("start_status")
+	}
+	if existing.WipStatus != base.WipStatus {
+		note("wip_status")
+	}
+	if existing.DoneStatus != base.DoneStatus {
+		note("done_status")
+	}
+	if existing.FixRounds != base.FixRounds {
+		note("fix_rounds")
+	}
+	if !reflect.DeepEqual(existing.Gate, base.Gate) {
+		note("gate")
+	}
+	if existing.Notes != "" {
+		note("notes")
+	}
+	return notes
 }
 
 // detectSkillPhases scans .claude/skills + .claude/commands and maps recognised

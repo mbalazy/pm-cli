@@ -170,6 +170,172 @@ func TestMarshalExecutorBlock(t *testing.T) {
 	mustContain(t, out, "fix_rounds: 3")
 }
 
+func TestMergeExecutor(t *testing.T) {
+	t.Run("no existing block -> draft written as-is", func(t *testing.T) {
+		draft, _ := draftExecutor(t.TempDir())
+		result, notes := mergeExecutor(nil, draft)
+		if result != draft {
+			t.Errorf("expected draft to pass through unchanged, got a different pointer/value")
+		}
+		if len(notes) != 0 {
+			t.Errorf("expected no preserved-field notes with no existing block, got %v", notes)
+		}
+	})
+
+	t.Run("existing hand-set fields survive, phases/baseline refresh", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "go.mod"), "module x\n")
+
+		existing := &storage.Executor{
+			Enabled:            true,
+			AdditionalWorktree: true,
+			WorktreePath:       "../proj-additional",
+			Worktrees: []storage.WorktreeSlot{
+				{Path: "../proj-slot-1", Env: map[string]string{"SIM_UDID": "abc"}},
+			},
+			BaseBranch:   "development",
+			Env:          map[string]string{"SIM_UDID": "abc"},
+			SeedExclude:  []string{"node_modules"},
+			Prepare:      "yarn install --frozen-lockfile",
+			Baseline:     "stale-hand-tuned-check",
+			ContextRepos: map[string]string{"backend": "../platform"},
+			StartStatus:  "todo",
+			WipStatus:    "doing",
+			DoneStatus:   "merged",
+			FixRounds:    5,
+			Gate:         storage.Gate{PR: storage.GateAuto, Merge: storage.GateHuman},
+			Phases: map[string]storage.PhaseBinding{
+				storage.PhaseReview: {Skill: "/hand-picked-review"},
+			},
+			Notes: "hand-written notes, do not clobber",
+		}
+
+		draft, _ := draftExecutor(dir)
+		result, notes := mergeExecutor(existing, draft)
+
+		// detected fields refreshed from the draft
+		if result.Baseline != "go test ./... && go vet ./..." {
+			t.Errorf("baseline not refreshed: %q", result.Baseline)
+		}
+		if result.Phase(storage.PhaseVerify).Cmd != "go test ./... && go vet ./..." {
+			t.Errorf("phases not refreshed: %+v", result.Phases)
+		}
+		if _, ok := result.Phases[storage.PhaseReview]; ok {
+			t.Errorf("stale hand-picked phase binding should be replaced by the fresh draft, got %+v", result.Phases)
+		}
+
+		// hand-set fields preserved untouched
+		if result.WorktreePath != "../proj-additional" {
+			t.Errorf("worktree_path clobbered: %q", result.WorktreePath)
+		}
+		if len(result.Worktrees) != 1 || result.Worktrees[0].Path != "../proj-slot-1" {
+			t.Errorf("worktrees clobbered: %+v", result.Worktrees)
+		}
+		if result.BaseBranch != "development" {
+			t.Errorf("base_branch clobbered: %q", result.BaseBranch)
+		}
+		if result.Env["SIM_UDID"] != "abc" {
+			t.Errorf("env clobbered: %+v", result.Env)
+		}
+		if len(result.SeedExclude) != 1 || result.SeedExclude[0] != "node_modules" {
+			t.Errorf("seed_exclude clobbered: %+v", result.SeedExclude)
+		}
+		if result.Prepare != "yarn install --frozen-lockfile" {
+			t.Errorf("prepare clobbered: %q", result.Prepare)
+		}
+		if result.ContextRepos["backend"] != "../platform" {
+			t.Errorf("context_repos clobbered: %+v", result.ContextRepos)
+		}
+		if result.FixRounds != 5 {
+			t.Errorf("fix_rounds clobbered: %d", result.FixRounds)
+		}
+		if result.Gate.PR != storage.GateAuto {
+			t.Errorf("gate clobbered: %+v", result.Gate)
+		}
+		if result.Notes != "hand-written notes, do not clobber" {
+			t.Errorf("notes clobbered: %q", result.Notes)
+		}
+		if !result.AdditionalWorktree {
+			t.Error("additional_worktree clobbered")
+		}
+
+		// output says which fields were preserved
+		for _, want := range []string{
+			"preserved existing additional_worktree",
+			"preserved existing worktree_path",
+			"preserved existing worktrees",
+			"preserved existing base_branch",
+			"preserved existing env",
+			"preserved existing seed_exclude",
+			"preserved existing prepare",
+			"preserved existing context_repos",
+			"preserved existing fix_rounds",
+			"preserved existing gate",
+			"preserved existing notes",
+		} {
+			if !containsNote(notes, want) {
+				t.Errorf("expected note %q, got %v", want, notes)
+			}
+		}
+	})
+}
+
+// TestExecutorInitCmdPreservesExistingConfig runs the real `pm executor init`
+// command (not just the mergeExecutor helper) against a project that already
+// has a hand-tuned executor block, so a regression in the RunE wiring (e.g.
+// reverting to `proj.Executor = draft`) fails this test even if mergeExecutor
+// itself stays correct.
+func TestExecutorInitCmdPreservesExistingConfig(t *testing.T) {
+	store, slug := tempStore(t)
+	proj, _ := store.GetProject(slug)
+	writeFile(t, filepath.Join(proj.Path, "go.mod"), "module x\n")
+
+	proj.Executor = &storage.Executor{
+		Enabled:     true,
+		Baseline:    "stale-hand-tuned-check",
+		BaseBranch:  "development",
+		Env:         map[string]string{"SIM_UDID": "abc"},
+		Prepare:     "yarn install --frozen-lockfile",
+		FixRounds:   7,
+		StartStatus: "todo",
+		WipStatus:   "doing",
+		DoneStatus:  "merged",
+	}
+	if err := store.UpdateProject(slug, proj); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+
+	cmd := newExecutorInitCmd(store)
+	cmd.SetArgs([]string{slug})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("executor init: %v", err)
+	}
+
+	reloaded, err := store.GetProject(slug)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	e := reloaded.GetExecutor()
+	if e.BaseBranch != "development" {
+		t.Errorf("base_branch clobbered: %q", e.BaseBranch)
+	}
+	if e.Env["SIM_UDID"] != "abc" {
+		t.Errorf("env clobbered: %+v", e.Env)
+	}
+	if e.Prepare != "yarn install --frozen-lockfile" {
+		t.Errorf("prepare clobbered: %q", e.Prepare)
+	}
+	if e.FixRounds != 7 {
+		t.Errorf("fix_rounds clobbered: %d", e.FixRounds)
+	}
+	if e.Baseline != "go test ./... && go vet ./..." {
+		t.Errorf("baseline not refreshed: %q", e.Baseline)
+	}
+	if e.Phase(storage.PhaseVerify).Cmd != "go test ./... && go vet ./..." {
+		t.Errorf("phases not refreshed: %+v", e.Phases)
+	}
+}
+
 func TestExecutorInitWritesIdempotently(t *testing.T) {
 	store, slug := tempStore(t)
 	proj, _ := store.GetProject(slug)
