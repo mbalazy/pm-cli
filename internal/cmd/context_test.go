@@ -120,9 +120,9 @@ func contextFixture(t *testing.T, tasks ...*storage.Task) *storage.Store {
 	return store
 }
 
-// runContext executes `pm context <args...>` against the store and returns what
-// the command printed to stdout plus its error.
-func runContext(t *testing.T, store storage.TaskStore, args ...string) (string, error) {
+// execContextCmd executes `pm context <args...>` against the store and returns
+// what the command printed to stdout plus its error.
+func execContextCmd(t *testing.T, store storage.TaskStore, args ...string) (string, error) {
 	t.Helper()
 	var err error
 	out := captureStdout(t, func() {
@@ -151,7 +151,7 @@ func TestContextCmdTrackerRollup(t *testing.T) {
 		&storage.Task{Meta: storage.TaskMeta{ID: "app-10", Title: "Standalone todo", Status: storage.StatusTodo}},
 	)
 
-	out, err := runContext(t, store, "app")
+	out, err := execContextCmd(t, store, "app")
 	if err != nil {
 		t.Fatalf("context: %v", err)
 	}
@@ -178,13 +178,38 @@ func TestContextCmdTrackerRollup(t *testing.T) {
 	}
 
 	// The tracker and its children are suppressed from the flat doing list.
+	// Needles carry the two-space ID/title separator so "app-1" cannot match
+	// the fixture's own app-10.
 	mustContain(t, out, "## Doing (standalone)\n  • app-9  Standalone doing\n")
-	if strings.Contains(out, "• app-1") || strings.Contains(out, "• app-4") {
+	if strings.Contains(out, "• app-1  ") || strings.Contains(out, "• app-4  ") {
 		t.Errorf("tracker/child leaked into the standalone doing list:\n%s", out)
 	}
 
 	// Counts cover every task, tracker and children included.
 	mustContain(t, out, "## Counts: 3 doing, 1 merged, 2 todo\n")
+
+	// Children render in Order (5, 10, 20), NOT in ID or insertion order -
+	// substring assertions alone are position-blind, so pin the whole output.
+	// This also locks the blank-line separators between the sections.
+	want := strings.Join([]string{
+		"# app",
+		"",
+		"📋 app-1  [doing]  (3 total: 1 doing, 1 merged, 1 todo)",
+		"   Tracker epic",
+		"   🔨 app-4         doing   o:5     feat/four",
+		"   ○ app-2         todo    o:10  ",
+		"   🔀 app-3         merged  o:20    feat/three",
+		"        └ Bold first line",
+		"",
+		"## Doing (standalone)",
+		"  • app-9  Standalone doing",
+		"",
+		"## Counts: 3 doing, 1 merged, 2 todo",
+		"",
+	}, "\n")
+	if out != want {
+		t.Errorf("rollup output mismatch\n--- got ---\n%q\n--- want ---\n%q", out, want)
+	}
 }
 
 // TestContextCmdNoTrackers covers the flat path: no parent anywhere means no
@@ -195,7 +220,7 @@ func TestContextCmdNoTrackers(t *testing.T) {
 		&storage.Task{Meta: storage.TaskMeta{ID: "app-2", Title: "Flat todo", Status: storage.StatusTodo}},
 	)
 
-	out, err := runContext(t, store, "app")
+	out, err := execContextCmd(t, store, "app")
 	if err != nil {
 		t.Fatalf("context: %v", err)
 	}
@@ -211,7 +236,7 @@ func TestContextCmdNoTrackers(t *testing.T) {
 func TestContextCmdEmptyProject(t *testing.T) {
 	store := contextFixture(t)
 
-	out, err := runContext(t, store, "app")
+	out, err := execContextCmd(t, store, "app")
 	if err != nil {
 		t.Fatalf("context: %v", err)
 	}
@@ -228,7 +253,7 @@ func TestContextCmdNoDoing(t *testing.T) {
 		&storage.Task{Meta: storage.TaskMeta{ID: "app-2", Title: "Sub", Status: storage.StatusDone, Parent: "app-1"}},
 	)
 
-	out, err := runContext(t, store, "app")
+	out, err := execContextCmd(t, store, "app")
 	if err != nil {
 		t.Fatalf("context: %v", err)
 	}
@@ -246,7 +271,7 @@ func TestContextCmdErrors(t *testing.T) {
 	)
 
 	t.Run("unknown project", func(t *testing.T) {
-		out, err := runContext(t, store, "nosuch")
+		out, err := execContextCmd(t, store, "nosuch")
 		if err == nil {
 			t.Fatalf("expected an error for an unknown project, got output:\n%s", out)
 		}
@@ -257,7 +282,7 @@ func TestContextCmdErrors(t *testing.T) {
 
 	t.Run("no arg and cwd matches no project", func(t *testing.T) {
 		// The fixture project has no Path, so cwd detection cannot match it.
-		out, err := runContext(t, store)
+		out, err := execContextCmd(t, store)
 		if err == nil {
 			t.Fatalf("expected an error without a project, got output:\n%s", out)
 		}
@@ -267,7 +292,7 @@ func TestContextCmdErrors(t *testing.T) {
 	})
 
 	t.Run("more than one arg is rejected", func(t *testing.T) {
-		if _, err := runContext(t, store, "app", "extra"); err == nil {
+		if _, err := execContextCmd(t, store, "app", "extra"); err == nil {
 			t.Fatal("expected an error for two args")
 		}
 	})
