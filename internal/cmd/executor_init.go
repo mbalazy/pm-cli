@@ -98,8 +98,11 @@ func draftExecutor(projectPath string) (*storage.Executor, []string) {
 			phases[storage.PhaseVerify] = storage.PhaseBinding{Cmd: verify}
 			notes = append(notes, "verify -> cmd: "+verify)
 		}
+		e.Baseline = verify
+		notes = append(notes, "baseline -> cmd: "+verify)
 	} else {
 		notes = append(notes, "verify -> generic (no stack verify command detected)")
+		notes = append(notes, "baseline -> unset (no stack verify command detected)")
 	}
 
 	if len(phases) > 0 {

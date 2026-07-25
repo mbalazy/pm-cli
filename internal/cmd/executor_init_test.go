@@ -8,6 +8,15 @@ import (
 	"github.com/mbalazy/pm/internal/storage"
 )
 
+func containsNote(notes []string, want string) bool {
+	for _, n := range notes {
+		if n == want {
+			return true
+		}
+	}
+	return false
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -116,6 +125,9 @@ func TestDraftExecutor(t *testing.T) {
 		if got := e.Phase(storage.PhaseVerify); got.Kind() != storage.BindCmd || got.Cmd != "go test ./... && go vet ./..." {
 			t.Errorf("verify = %+v", got)
 		}
+		if e.Baseline != "go test ./... && go vet ./..." {
+			t.Errorf("baseline = %q, want same as verify cmd", e.Baseline)
+		}
 		// humanizer is not a phase -> must not appear
 		for _, b := range e.Phases {
 			if b.Skill == "/humanizer" {
@@ -124,6 +136,19 @@ func TestDraftExecutor(t *testing.T) {
 		}
 		if len(notes) == 0 {
 			t.Error("expected detection notes")
+		}
+		if !containsNote(notes, "baseline -> cmd: go test ./... && go vet ./...") {
+			t.Errorf("expected baseline detection note, got %v", notes)
+		}
+	})
+
+	t.Run("bare project -> no baseline detected, no guessing", func(t *testing.T) {
+		e, notes := draftExecutor(t.TempDir())
+		if e.Baseline != "" {
+			t.Errorf("baseline = %q, want empty when no verify command detected", e.Baseline)
+		}
+		if !containsNote(notes, "baseline -> unset (no stack verify command detected)") {
+			t.Errorf("expected baseline-unset note, got %v", notes)
 		}
 	})
 
