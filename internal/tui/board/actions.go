@@ -10,7 +10,9 @@ import (
 func (m *Model) doMoveForward(t *storage.Task) {
 	m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
 	idx := m.statusIndex(t.Meta.Status)
-	m.store.MoveTask(t, m.statuses[(idx+1)%len(m.statuses)])
+	if err := m.store.MoveTask(t, m.statuses[(idx+1)%len(m.statuses)]); err != nil {
+		m.showErrorToast("move failed", err)
+	}
 	m.reload()
 }
 
@@ -24,28 +26,36 @@ func (m *Model) doMoveBack(t *storage.Task) {
 	} else {
 		newStatus = m.statuses[len(m.statuses)-1]
 	}
-	m.store.MoveTask(t, newStatus)
+	if err := m.store.MoveTask(t, newStatus); err != nil {
+		m.showErrorToast("move failed", err)
+	}
 	m.reload()
 }
 
 // doDone marks task with the last status (typically "done").
 func (m *Model) doDone(t *storage.Task) {
 	m.lastUndo = &undoAction{kind: "done", task: snapshotTask(t)}
-	m.store.MoveTask(t, m.statuses[len(m.statuses)-1])
+	if err := m.store.MoveTask(t, m.statuses[len(m.statuses)-1]); err != nil {
+		m.showErrorToast("move failed", err)
+	}
 	m.reload()
 }
 
 // doWaiting marks task as waiting.
 func (m *Model) doWaiting(t *storage.Task) {
 	m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
-	m.store.MoveTask(t, storage.StatusWaiting)
+	if err := m.store.MoveTask(t, storage.StatusWaiting); err != nil {
+		m.showErrorToast("move failed", err)
+	}
 	m.reload()
 }
 
 // doArchive archives the task.
 func (m *Model) doArchive(t *storage.Task) {
 	m.lastUndo = &undoAction{kind: "archive", task: snapshotTask(t)}
-	m.store.MoveTask(t, storage.StatusArchived)
+	if err := m.store.MoveTask(t, storage.StatusArchived); err != nil {
+		m.showErrorToast("archive failed", err)
+	}
 	m.reload()
 }
 
@@ -57,11 +67,23 @@ func (m *Model) doUndo() {
 		return
 	}
 	u := m.lastUndo
-	m.store.WriteTask(u.task)
+	if err := m.store.WriteTask(u.task); err != nil {
+		m.showErrorToast("undo failed", err)
+		return
+	}
 	m.lastUndo = nil
 	m.toastMsg = "undone: " + u.kind
 	m.toastExpiry = time.Now().Add(2 * time.Second)
 	m.reload()
+}
+
+// showErrorToast surfaces a failed mutation to the user instead of letting it
+// fail silently (the card would otherwise just revert with no explanation).
+// 15s matches the other real-error toasts in the board (e.g. launch_claude.go,
+// launch_executor.go), vs. the 2-5s used for benign info toasts.
+func (m *Model) showErrorToast(prefix string, err error) {
+	m.toastMsg = prefix + ": " + err.Error()
+	m.toastExpiry = time.Now().Add(15 * time.Second)
 }
 
 // doReorder swaps the selected task with a neighbor in the column.
