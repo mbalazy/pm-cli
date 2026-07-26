@@ -1,4 +1,4 @@
-VERSION ?= 0.27.0
+VERSION ?= 0.27.1
 LDFLAGS = -ldflags "-X github.com/mbalazy/pm/internal/version.Version=$(VERSION)"
 
 .PHONY: install vet staticcheck test check build-pm-linux
