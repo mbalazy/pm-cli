@@ -140,6 +140,14 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool, now 
 	open := make(map[runKey]int)
 	closedBy := make(map[runKey]string)
 	startTS := make(map[runKey][]string)
+	// subsAdded[key] records whether the CURRENT run instance under this key
+	// already contributed non-empty Subs, so a kill-race duplicate line only
+	// folds its payload in when the other terminal line didn't carry any
+	// (either order - see the two kill-race cases below). Reset whenever a
+	// non-duplicate terminal line starts tracking a fresh run instance (a
+	// normal pairing or a reused-key "new run"), since that is a different
+	// physical run, not a continuation of the previous one's duplicate state.
+	subsAdded := make(map[runKey]bool)
 
 	for _, e := range entries {
 		key := runKey{kind: e.Kind, taskID: e.TaskID, pid: e.PID}
@@ -175,14 +183,33 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool, now 
 			if !duplicate {
 				k.Statuses[terminalStatus(e)]++
 			}
-			// Payload is folded in either way: whichever of the two racing
-			// lines carries the subs/duration is the one with the real data,
-			// and a bare "killed" line carries neither, so this is a no-op for
-			// the common order.
+			// Run-level duration is only ever sampled off "end" lines (see
+			// kindStats.DurationS) - there is exactly one such line per
+			// physical run regardless of duplicate, so no double-count risk.
 			if e.Event == storage.JournalEventEnd {
 				k.DurationS.addSample(float64(e.DurationS))
 			}
-			st.addSubs(e.Subs)
+			// Sub payload (subs -> turns/cost), in contrast, can now appear on
+			// BOTH terminal lines of a kill race ("end" and "killed" each carry
+			// Subs). Whichever line closes the run FIRST always folds its subs
+			// in (matching pre-fix behaviour when only "end" ever carried
+			// them); a second, duplicate line folds its subs in ONLY when the
+			// first didn't carry any - covering the reverse race where
+			// "killed" closes first with a stale/empty snapshot and the
+			// manager's own "end" arrives after with the real payload. Either
+			// way, once one line has contributed non-empty subs for this run,
+			// the other never does too - so a run never double-counts.
+			if duplicate {
+				if !subsAdded[key] {
+					st.addSubs(e.Subs)
+					if len(e.Subs) > 0 {
+						subsAdded[key] = true
+					}
+				}
+			} else {
+				st.addSubs(e.Subs)
+				subsAdded[key] = len(e.Subs) > 0
+			}
 		}
 	}
 

@@ -94,10 +94,25 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 	// runs (the defer died with the process). With this, a "start" line with
 	// no "end"/"killed" line means an untracked crash, which the retro flow
 	// can surface separately from deliberate stops. Per-sub outcomes so far
-	// live in the re-read run-state subs.
+	// live in the re-read run-state subs (st.Subs, just updated above) - carry
+	// them into the journal so a killed epic still counts its already-merged
+	// subs towards the histogram/turns/cost totals instead of contributing
+	// nothing despite real token spend.
+	subs := make([]storage.JournalSub, 0, len(st.Subs))
+	for _, sr := range st.Subs {
+		subs = append(subs, storage.JournalSub{
+			ID: sr.ID, Result: sr.Status, Note: sr.Note, Session: sr.Session,
+			Turns: sr.Turns, CostUSD: sr.CostUSD,
+		})
+	}
+	durationS := 0
+	if started, err := time.Parse(time.RFC3339, st.Started); err == nil {
+		durationS = int(time.Since(started).Seconds())
+	}
 	_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 		Event: storage.JournalEventKilled, Kind: st.Kind, Project: proj, TaskID: taskID,
 		PID: pid, Status: storage.RunStatusFailed, Error: "stopped by user",
+		Subs: subs, DurationS: durationS,
 	})
 
 	// Release the worktree lock the killed manager held. The SIGTERM'd process

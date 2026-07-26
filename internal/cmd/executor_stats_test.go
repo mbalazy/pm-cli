@@ -426,6 +426,65 @@ func TestAggregateJournal(t *testing.T) {
 			},
 		},
 		{
+			// pm-cli-37 Bug 2: killRun now carries Subs on a bare "killed"
+			// line (previously always nil). A non-duplicate killed line
+			// must fold those subs in exactly like an "end" line would.
+			name: "killed line carries subs (Bug 2 fix)",
+			entries: []storage.JournalEntry{
+				startEntry("run-epic", "app-11", 250),
+				{
+					Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-11", PID: 250,
+					Status: "failed", Error: "stopped by user", DurationS: 421,
+					Subs: []storage.JournalSub{
+						{ID: "app-11-1", Result: "merged", Turns: 12, CostUSD: 0.3},
+						{ID: "app-11-2", Result: "blocked", Turns: 5, CostUSD: 0.1},
+					},
+				},
+			},
+			want: journalStats{
+				Runs: 1,
+				// killed lines never feed kind-level DurationS (that stat is
+				// sampled off "end" lines only - see kindStats.DurationS).
+				Kinds:      map[string]*kindStats{"run-epic": {Runs: 1, Statuses: map[string]int{runStatusKilled: 1}}},
+				Subs:       2,
+				SubResults: map[string]int{"merged": 1, "blocked": 1},
+				Turns:      numStat{Total: 17, Samples: 2},
+				Cost:       numStat{Total: 0.4, Samples: 2},
+			},
+		},
+		{
+			// pm-cli-37 Bug 2 guard: once "killed" can carry Subs, a run
+			// closed by BOTH "end" and "killed" (the kill race) must not
+			// double its subs/turns/cost - only the non-duplicate line's
+			// payload is folded in.
+			name: "kill race with subs on both terminal lines counts subs once",
+			entries: []storage.JournalEntry{
+				startEntry("run-epic", "app-12", 260),
+				{
+					Event: storage.JournalEventEnd, Kind: "run-epic", TaskID: "app-12", PID: 260,
+					Status: "done", DurationS: 5000,
+					Subs: []storage.JournalSub{{ID: "app-12-1", Result: "merged", Turns: 10, CostUSD: 1}},
+				},
+				{
+					Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-12", PID: 260,
+					Status: "failed", Error: "stopped by user", DurationS: 5010,
+					Subs: []storage.JournalSub{{ID: "app-12-1", Result: "merged", Turns: 10, CostUSD: 1}},
+				},
+			},
+			want: journalStats{
+				Runs: 1,
+				Kinds: map[string]*kindStats{"run-epic": {
+					Runs:      1,
+					Statuses:  map[string]int{"done": 1}, // first closer ("end") wins the status
+					DurationS: numStat{Total: 5000, Samples: 1},
+				}},
+				Subs:       1, // NOT 2 - the killed line's duplicate payload is dropped
+				SubResults: map[string]int{"merged": 1},
+				Turns:      numStat{Total: 10, Samples: 1},
+				Cost:       numStat{Total: 1, Samples: 1},
+			},
+		},
+		{
 			name: "missing status and result degrade to unknown",
 			entries: []storage.JournalEntry{
 				startEntry("work", "app-4", 600),

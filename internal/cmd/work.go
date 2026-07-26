@@ -495,6 +495,29 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		return nil, err
 	}
 	if err := applyWorkerResult(store, task, plan.branch, sessionID, res, opts.standalone, opts.independent); err != nil {
+		if run != nil {
+			run.Status = storage.RunStatusFailed
+			run.Phase = ""
+			run.Error = err.Error()
+			if len(run.Subs) > 0 {
+				run.Subs[0].Status = storage.RunStatusFailed
+				run.Subs[0].Note = err.Error()
+				run.Subs[0].Turns = res.Turns
+				run.Subs[0].CostUSD = res.CostUSD
+			}
+			_ = storage.WriteRunState(stateDir, run)
+			// The worker itself succeeded here (only the post-processing
+			// applyWorkerResult write failed), so res carries real turns/cost
+			// off the claude envelope - unlike the runWorker-failure branch
+			// above, where res is nil and those fields stay zero.
+			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
+				Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
+				PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
+				WorkDir: journalDir, Baseline: baselineUsed,
+				Status: storage.RunStatusFailed, DurationS: int(time.Since(workStart).Seconds()), Error: err.Error(),
+				Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: "failed", Note: err.Error(), Branch: plan.branch, DurationS: int(time.Since(workStart).Seconds()), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD}},
+			})
+		}
 		return nil, err
 	}
 	if run != nil {
