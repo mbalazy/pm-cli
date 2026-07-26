@@ -169,7 +169,7 @@ func (m Model) viewSubtaskPicker() string {
 			prefix = "> "
 			style = lipgloss.NewStyle().Bold(true).Foreground(special)
 		}
-		left := style.Width(leftW).Render(fmt.Sprintf("%s %-7s #%s", statusGlyph(k.Meta.Status), string(k.Meta.Status), k.Meta.ID))
+		left := style.Width(leftW).Render(fmt.Sprintf("%s %-7s #%s", statusGlyphAligned(k.Meta.Status), string(k.Meta.Status), k.Meta.ID))
 		titleBlock := style.Width(titleW).Render(truncLines(k.Meta.Title, titleW, 2))
 		row := lipgloss.JoinHorizontal(lipgloss.Top, style.Render(prefix), left, titleBlock)
 		lines = append(lines, row)

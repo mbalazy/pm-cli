@@ -1,6 +1,33 @@
 package board
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/mbalazy/pm/internal/storage"
+)
+
+// TestStatusGlyphAligned covers pm-cli-46: the subtask picker formats its rows
+// with %-7s after the glyph, which only aligns if every glyph occupies the same
+// number of DISPLAY columns - and "○" (todo) plus "🗄" (archived) are 1 where
+// the other emoji are 2.
+func TestStatusGlyphAligned(t *testing.T) {
+	statuses := []storage.TaskStatus{
+		storage.StatusTodo, storage.StatusDoing, storage.StatusWaiting,
+		storage.StatusDone, storage.StatusArchived, "merged", "some-custom-status",
+	}
+	for _, s := range statuses {
+		if got := lipgloss.Width(statusGlyphAligned(s)); got != 2 {
+			t.Errorf("statusGlyphAligned(%q) is %d display columns, want 2 - the picker's columns go ragged", s, got)
+		}
+	}
+
+	// The unpadded glyph stays unpadded: it goes into running text (the detail
+	// view's "Parent:" line), where padding would read as a stray space.
+	if got := statusGlyph(storage.StatusTodo); got != "○" {
+		t.Errorf("statusGlyph(todo) = %q, want the bare glyph", got)
+	}
+}
 
 func TestTruncLines(t *testing.T) {
 	// explicit, readable assertions instead of the table for the tricky wraps:

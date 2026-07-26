@@ -153,7 +153,7 @@ func renderSubtaskTable(kids []*storage.Task, width int) string {
 		Headers("STATUS", "ID", "TITLE")
 	for _, k := range kids {
 		tbl.Row(
-			statusGlyph(k.Meta.Status)+" "+string(k.Meta.Status),
+			statusGlyphAligned(k.Meta.Status)+" "+string(k.Meta.Status),
 			"#"+k.Meta.ID,
 			truncLines(k.Meta.Title, titleW, 2),
 		)

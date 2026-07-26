@@ -334,6 +334,24 @@ func statusGlyph(status storage.TaskStatus) string {
 	}
 }
 
+// statusGlyphAligned is statusGlyph padded to a fixed two display columns, for
+// the places that lay the glyph out in a column (the subtask picker's aligned
+// rows, the tracker rollup table). statusGlyph itself stays unpadded because
+// its third caller puts it in running text (the detail view's "Parent:"
+// header), where a trailing space just reads as a typo.
+//
+// The width is MEASURED, not assumed, so swapping a glyph cannot silently
+// reintroduce ragged columns: the emoji (✅🔀🔨⏳) are East-Asian Wide at 2
+// columns, while both "○" and the archived "🗄" are 1 - the second of those is
+// why this is a width check rather than a special case for the default branch.
+func statusGlyphAligned(status storage.TaskStatus) string {
+	g := statusGlyph(status)
+	if w := lipgloss.Width(g); w < 2 {
+		return g + strings.Repeat(" ", 2-w)
+	}
+	return g
+}
+
 // cardIDLine builds a card's secondary line: "#id" (or project), prefixed with
 // "↳" when the task is a subtask (has a parent), and suffixed with a tracker
 // progress badge when the task is a parent tracker.
