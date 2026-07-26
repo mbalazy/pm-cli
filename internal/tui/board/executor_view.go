@@ -51,15 +51,27 @@ func (m *Model) openExecutorView(t *storage.Task) bool {
 	m.executorSessionIdx = 0
 	m.executorViewport = viewport.New(m.width, executorBodyHeight(m.height))
 	m.refreshExecutorView()
-	// Default to the currently-running session if one is active.
-	for i, s := range m.executorSessions {
-		if st.CurrentSession != "" && s.session == st.CurrentSession {
-			m.executorSessionIdx = i
-		}
-	}
+	m.executorSessionIdx = defaultSessionIdx(m.executorSessions, st.CurrentSession)
 	m.renderExecutorContent()
 	m.executorViewport.GotoBottom()
 	return true
+}
+
+// defaultSessionIdx picks which worker transcript the agent-view opens on: the
+// one in flight when there is one, else the MOST RECENT worker. current is
+// empty whenever no worker is running - between subs, and through the
+// post-worker tail (result recording, merge, push) - and there the sub that
+// just ran is the interesting transcript, not the run's first sub.
+func defaultSessionIdx(sessions []execSession, current string) int {
+	if len(sessions) == 0 {
+		return 0
+	}
+	for i, s := range sessions {
+		if current != "" && s.session == current {
+			return i
+		}
+	}
+	return len(sessions) - 1
 }
 
 // switchExecutorWorker cycles the displayed worker transcript by dir (+1/-1),
@@ -320,6 +332,19 @@ func renderExecutorDashboard(run *storage.RunState, width int) string {
 	if run.Started != "" {
 		hdr += helpStyle.Render("  ⏱ " + execElapsed(run.Started, run))
 	}
+	// The executor re-stamps Updated every ~30s, but ONLY while a worker is
+	// actually in flight - so the age is only a signal in that same window,
+	// which CurrentSession marks (pinned right before the worker spawns, cleared
+	// the moment it returns, alongside the heartbeat's own stop). Rendering it on
+	// any live run would read as "hung" through every legitimate non-worker
+	// stretch: the board seeds a running run-state the moment it launches the
+	// process, and the executor does its worktree seeding, `executor.prepare` and
+	// baseline capture (15-min caps each) before it ever owns the file.
+	if run.IsLive() && run.CurrentSession != "" {
+		if age := execHeartbeatAge(run.Updated); age != "" {
+			hdr += helpStyle.Render("  ♥ " + age)
+		}
+	}
 
 	var b strings.Builder
 	b.WriteString(hdr + "\n")
@@ -369,7 +394,23 @@ func execElapsed(started string, run *storage.RunState) string {
 			end = t1
 		}
 	}
-	d := end.Sub(t0)
+	return shortDur(end.Sub(t0))
+}
+
+// execHeartbeatAge renders how long ago the run last stamped its run-state
+// (storage.HeartbeatInterval while a worker is in flight). Empty when the stamp
+// is missing or unparseable - an absent heartbeat must not render as "0s ago".
+func execHeartbeatAge(updated string) string {
+	t, err := time.Parse(time.RFC3339, updated)
+	if err != nil {
+		return ""
+	}
+	return shortDur(time.Since(t)) + " ago"
+}
+
+// shortDur renders a duration compactly (1h2m / 3m4s / 5s), clamping negatives
+// to zero (clock skew between the writing executor and the reading board).
+func shortDur(d time.Duration) string {
 	if d < 0 {
 		d = 0
 	}

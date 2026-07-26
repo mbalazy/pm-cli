@@ -250,6 +250,11 @@ type workOptions struct {
 	// (after branch setup + prepare, so it measures exactly what the worker
 	// forked from).
 	baseline string
+	// runWriter: the epic manager's run-state writer, so a sub's worker can
+	// heartbeat the SHARED epic-level run-state while it runs. Nil for
+	// standalone `pm work` (it owns its own run-state, created in executeWork)
+	// and for a bare `pm work --epic` with no manager (no run-state at all).
+	runWriter *storage.RunWriter
 }
 
 // workPlan is the resolved, ready-to-run worker invocation: the project, the
@@ -375,6 +380,11 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 	}, nil
 }
 
+// workerHeartbeatInterval is how often a live worker's run-state is re-stamped.
+// A var, not a const, purely so tests can shrink it - production never changes
+// it (the signal is deliberately invisible to the user: no flag, no config).
+var workerHeartbeatInterval = storage.HeartbeatInterval
+
 // executeWork runs a planned worker and records the result into pm. In
 // standalone mode it owns the branch (clean-tree precondition + checkout); in
 // epic mode the manager has already checked out the branch.
@@ -444,9 +454,9 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	if plan.worktree {
 		journalDir = dir
 	}
-	var run *storage.RunState
+	var runw *storage.RunWriter
 	if opts.standalone {
-		run = &storage.RunState{
+		run := &storage.RunState{
 			TaskID:         task.Meta.ID,
 			Project:        task.Project,
 			Kind:           "work",
@@ -460,7 +470,10 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			Phase:          "running",
 			Subs:           []storage.SubRun{{ID: task.Meta.ID, Status: storage.RunStatusRunning, Session: plan.sessionID}},
 		}
-		_ = storage.WriteRunState(stateDir, run)
+		// From here on the run-state is only touched through the writer - the
+		// heartbeat goroutine below shares this exact struct.
+		runw = storage.NewRunWriter(stateDir, run)
+		_ = runw.Update(nil)
 		// Journal start line (durable cross-run history; epic subs are journaled
 		// by the manager instead). Best-effort like the run-state writes.
 		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
@@ -472,18 +485,41 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 
 	fmt.Fprintf(os.Stderr, "pm work: launching headless worker for %s on %s (%s)...\n", task.Meta.ID, plan.branch, modeLabel(opts.standalone))
 
+	// Heartbeat: while the worker runs, nothing else stamps the run-state, so a
+	// 40-minute sub looks exactly like a hung one to an observer. Re-stamp the
+	// run-state on a ticker for exactly as long as the worker lives - the
+	// standalone run's own state, or (epic) the manager's shared epic-level one.
+	// stopHeartbeat waits for the goroutine to exit, so after it returns nothing
+	// can touch the file again.
+	hbw := opts.runWriter
+	if runw != nil {
+		hbw = runw
+	}
 	workStart := time.Now()
+	stopHeartbeat := hbw.Heartbeat(workerHeartbeatInterval)
+	// Stopping is idempotent, so the defer only matters if runWorker panics -
+	// without it a panic would leave a goroutine stamping "running" forever.
+	defer stopHeartbeat()
 	res, sessionID, err := runWorker(dir, plan.cmdArgs, opts.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env)
+	stopHeartbeat()
+	// The worker is gone and the heartbeat died with it, so drop the in-flight
+	// session marker in the same breath. It is what an observer gates the
+	// heartbeat age on (see renderExecutorDashboard), and the post-worker tail -
+	// applyWorkerResult's project flock, then the manager's merge or `git push` -
+	// can run for minutes; leaving the marker set there would render a frozen
+	// stamp as a live beat, i.e. a healthy run looking hung.
+	_ = hbw.Update(func(run *storage.RunState) { run.CurrentSession = "" })
 	if err != nil {
-		if run != nil {
-			run.Status = storage.RunStatusFailed
-			run.Phase = ""
-			run.Error = err.Error()
-			if len(run.Subs) > 0 {
-				run.Subs[0].Status = storage.RunStatusFailed
-				run.Subs[0].Note = err.Error()
-			}
-			_ = storage.WriteRunState(stateDir, run)
+		if runw != nil {
+			_ = runw.Update(func(run *storage.RunState) {
+				run.Status = storage.RunStatusFailed
+				run.Phase = ""
+				run.Error = err.Error()
+				if len(run.Subs) > 0 {
+					run.Subs[0].Status = storage.RunStatusFailed
+					run.Subs[0].Note = err.Error()
+				}
+			})
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 				Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
 				PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
@@ -520,19 +556,20 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		}
 		return nil, err
 	}
-	if run != nil {
-		run.Status = storage.RunStatusDone
-		run.Phase = ""
-		run.CurrentSub = ""
-		run.CurrentSession = ""
-		if len(run.Subs) > 0 {
-			run.Subs[0].Status = res.Status
-			run.Subs[0].Note = strings.TrimSpace(res.Summary)
-			run.Subs[0].Commits = res.Commits
-			run.Subs[0].Turns = res.Turns
-			run.Subs[0].CostUSD = res.CostUSD
-		}
-		_ = storage.WriteRunState(stateDir, run)
+	if runw != nil {
+		_ = runw.Update(func(run *storage.RunState) {
+			run.Status = storage.RunStatusDone
+			run.Phase = ""
+			run.CurrentSub = ""
+			run.CurrentSession = ""
+			if len(run.Subs) > 0 {
+				run.Subs[0].Status = res.Status
+				run.Subs[0].Note = strings.TrimSpace(res.Summary)
+				run.Subs[0].Commits = res.Commits
+				run.Subs[0].Turns = res.Turns
+				run.Subs[0].CostUSD = res.CostUSD
+			}
+		})
 		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
 			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,

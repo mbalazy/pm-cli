@@ -248,7 +248,11 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				}
 				run.Subs = append(run.Subs, storage.SubRun{ID: s.Meta.ID, Status: init})
 			}
-			_ = storage.WriteRunState(stateDir, run)
+			// From here on the run-state is only touched through the writer: each
+			// sub's worker heartbeats this same struct from its own goroutine, so
+			// every mutation has to be serialized (see storage.RunWriter).
+			rw := storage.NewRunWriter(stateDir, run)
+			_ = rw.Update(nil)
 
 			// Journal: durable cross-run history (retro feedstock). Start line now;
 			// end line with per-sub outcomes after the loop. Best-effort like the
@@ -285,17 +289,17 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				oc, drive, announce := classifySub(sub, byID, startStatus, doneStatus)
 				if !drive {
 					outcomes = append(outcomes, oc)
-					updateSubRun(run, oc.id, oc.result, oc.note)
-					_ = storage.WriteRunState(stateDir, run)
+					_ = rw.Update(func(run *storage.RunState) { updateSubRun(run, oc.id, oc.result, oc.note) })
 					if announce != "" {
 						fmt.Fprintf(os.Stderr, "pm run-epic: %s\n", announce)
 					}
 					continue
 				}
 
-				run.CurrentSub = sub.Meta.ID
-				updateSubRun(run, sub.Meta.ID, storage.RunStatusRunning, "")
-				_ = storage.WriteRunState(stateDir, run)
+				_ = rw.Update(func(run *storage.RunState) {
+					run.CurrentSub = sub.Meta.ID
+					updateSubRun(run, sub.Meta.ID, storage.RunStatusRunning, "")
+				})
 
 				subOpts := opts
 				if sub.Meta.Model != "" {
@@ -305,29 +309,32 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 
 				subStart := time.Now()
 				if independentMode {
-					oc = driveSubIndependent(store, workDir, slug, tracker, sub, baseBranch, doneStatus, subOpts, run, additional)
+					oc = driveSubIndependent(store, workDir, slug, tracker, sub, baseBranch, doneStatus, subOpts, rw, additional)
 				} else {
-					oc = driveSub(store, workDir, slug, tracker, sub, epicBranch, doneStatus, subOpts, run, additional)
+					oc = driveSub(store, workDir, slug, tracker, sub, epicBranch, doneStatus, subOpts, rw, additional)
 				}
 				subDurations[oc.id] = int(time.Since(subStart).Seconds())
 				outcomes = append(outcomes, oc)
 
-				run.CurrentSub = ""
-				run.CurrentSession = ""
-				updateSubRun(run, oc.id, oc.result, oc.note)
-				_ = storage.WriteRunState(stateDir, run)
+				_ = rw.Update(func(run *storage.RunState) {
+					run.CurrentSub = ""
+					run.CurrentSession = ""
+					updateSubRun(run, oc.id, oc.result, oc.note)
+				})
 			}
 
-			run.Status = storage.RunStatusDone
-			_ = storage.WriteRunState(stateDir, run)
+			_ = rw.Update(func(run *storage.RunState) { run.Status = storage.RunStatusDone })
 
 			// Journal end line: the run's durable record (outcome + duration per sub).
+			// The per-sub stats are read through the writer like every other access.
+			var jSubs []storage.JournalSub
+			rw.Read(func(run *storage.RunState) { jSubs = journalSubs(outcomes, subDurations, run) })
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 				Event: storage.JournalEventEnd, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID,
 				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Independent: independentMode, Branch: journalBranch,
 				WorkDir: journalDir, Baseline: baselineUsed,
 				Status: storage.RunStatusDone, DurationS: int(time.Since(epicStart).Seconds()),
-				Subs: journalSubs(outcomes, subDurations, run),
+				Subs: jSubs,
 			})
 
 			if independentMode {
@@ -450,7 +457,7 @@ func logIfErr(context string, err error) {
 // driveSub runs one ready sub: branch off the integration branch, run the
 // worker, and on verify-green merge back -> done status. Blocked/failed/conflict
 // subs are parked (status + reason in pm) and the manager moves on.
-func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *storage.Task, epicBranch string, doneStatus storage.TaskStatus, opts workOptions, run *storage.RunState, worktree bool) subOutcome {
+func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *storage.Task, epicBranch string, doneStatus storage.TaskStatus, opts workOptions, rw *storage.RunWriter, worktree bool) subOutcome {
 	dir := workDir // worktree in worktree mode, else the main checkout
 	branch := resolveWorkBranch(sub)
 
@@ -481,14 +488,11 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 
 	// Surface the worker's session up front so the live agent-view knows which
 	// transcript to tail (claude --session-id pins it before any output).
-	run.CurrentSession = plan.sessionID
-	for i := range run.Subs {
-		if run.Subs[i].ID == sub.Meta.ID {
-			run.Subs[i].Session = plan.sessionID
-		}
-	}
-	_ = storage.WriteRunState(store.ProjectDir(slug), run)
+	_ = rw.Update(func(run *storage.RunState) { setSubSession(run, sub.Meta.ID, plan.sessionID) })
 
+	// Hand the worker the epic-level writer so it heartbeats THIS run-state
+	// while it runs. opts is a value copy, so this cannot leak to the next sub.
+	opts.runWriter = rw
 	res, err := executeWork(store, sub, plan, opts)
 	if err != nil {
 		logIfErr("park "+sub.Meta.ID, store.MoveTask(sub, storage.StatusWaiting))
@@ -497,12 +501,7 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 
 	// Stamp the worker's envelope stats onto the sub's run-state entry so the
 	// dashboard and the journal (journalSubs) can weigh the outcome by effort.
-	for i := range run.Subs {
-		if run.Subs[i].ID == sub.Meta.ID {
-			run.Subs[i].Turns = res.Turns
-			run.Subs[i].CostUSD = res.CostUSD
-		}
-	}
+	_ = rw.Update(func(run *storage.RunState) { setSubStats(run, sub.Meta.ID, res.Turns, res.CostUSD) })
 
 	if res.Status != "merged" {
 		// applyWorkerResult already parked a blocked sub on waiting; make sure a
@@ -545,7 +544,7 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 // the batch gets a human follow-up on its own branch, so a non-green sub simply
 // stays on its WIP status with the reason in the handoff (brief/log + Manager
 // Notes).
-func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker, sub *storage.Task, baseBranch string, doneStatus storage.TaskStatus, opts workOptions, run *storage.RunState, worktree bool) subOutcome {
+func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker, sub *storage.Task, baseBranch string, doneStatus storage.TaskStatus, opts workOptions, rw *storage.RunWriter, worktree bool) subOutcome {
 	dir := workDir
 	branch := resolveWorkBranch(sub)
 
@@ -566,14 +565,11 @@ func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker,
 		return subOutcome{sub.Meta.ID, "failed", err.Error(), branch}
 	}
 
-	run.CurrentSession = plan.sessionID
-	for i := range run.Subs {
-		if run.Subs[i].ID == sub.Meta.ID {
-			run.Subs[i].Session = plan.sessionID
-		}
-	}
-	_ = storage.WriteRunState(store.ProjectDir(slug), run)
+	_ = rw.Update(func(run *storage.RunState) { setSubSession(run, sub.Meta.ID, plan.sessionID) })
 
+	// Hand the worker the epic-level writer so it heartbeats THIS run-state
+	// while it runs. opts is a value copy, so this cannot leak to the next sub.
+	opts.runWriter = rw
 	res, err := executeWork(store, sub, plan, opts)
 	if err != nil {
 		// Worker died (timeout/crash). Push whatever it committed before dying so
@@ -585,12 +581,7 @@ func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker,
 		return subOutcome{sub.Meta.ID, "failed", note, branch}
 	}
 
-	for i := range run.Subs {
-		if run.Subs[i].ID == sub.Meta.ID {
-			run.Subs[i].Turns = res.Turns
-			run.Subs[i].CostUSD = res.CostUSD
-		}
-	}
+	_ = rw.Update(func(run *storage.RunState) { setSubStats(run, sub.Meta.ID, res.Turns, res.CostUSD) })
 
 	// Push regardless of outcome - in best-effort mode partial work on origin
 	// beats perfect work lost to the next branch wipe.
@@ -636,6 +627,28 @@ func updateSubRun(run *storage.RunState, id, status, note string) {
 		}
 	}
 	run.Subs = append(run.Subs, storage.SubRun{ID: id, Status: status, Note: note})
+}
+
+// setSubSession pins the worker's session on the run and on sub id, so the live
+// agent-view can tail the right transcript. Called under the run writer's lock.
+func setSubSession(run *storage.RunState, id, session string) {
+	run.CurrentSession = session
+	for i := range run.Subs {
+		if run.Subs[i].ID == id {
+			run.Subs[i].Session = session
+		}
+	}
+}
+
+// setSubStats records the worker envelope's effort stats on sub id. Called
+// under the run writer's lock.
+func setSubStats(run *storage.RunState, id string, turns int, cost float64) {
+	for i := range run.Subs {
+		if run.Subs[i].ID == id {
+			run.Subs[i].Turns = turns
+			run.Subs[i].CostUSD = cost
+		}
+	}
 }
 
 // journalSubs converts the manager's outcomes into journal sub records,
