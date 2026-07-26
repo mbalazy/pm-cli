@@ -18,10 +18,10 @@ func TestStatusMark(t *testing.T) {
 		{"merged", "merged", "🔀"},
 		{"doing", "doing", "🔨"},
 		{"waiting", "waiting", "⏳"},
-		{"todo falls through to the default", "todo", "○"},
-		{"unknown project status falls through", "review", "○"},
-		{"empty falls through", "", "○"},
-		{"marks are case-sensitive", "Done", "○"},
+		{"todo falls through to the default", "todo", "○ "},
+		{"unknown project status falls through", "review", "○ "},
+		{"empty falls through", "", "○ "},
+		{"marks are case-sensitive", "Done", "○ "},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -169,7 +169,7 @@ func TestContextCmdTrackerRollup(t *testing.T) {
 
 	// Child lines: mark, padded ID/status/order, branch appended only when set.
 	mustContain(t, out, "   🔨 app-4         doing   o:5     feat/four\n")
-	mustContain(t, out, "   ○ app-2         todo    o:10  \n")
+	mustContain(t, out, "   ○  app-2         todo    o:10  \n")
 	mustContain(t, out, "   🔀 app-3         merged  o:20    feat/three\n")
 
 	// Only a child with a brief gets the continuation line, bold-stripped and
@@ -202,7 +202,7 @@ func TestContextCmdTrackerRollup(t *testing.T) {
 		"📋 app-1  [doing]  (3 total: 1 doing, 1 merged, 1 todo)",
 		"   Tracker epic",
 		"   🔨 app-4         doing   o:5     feat/four",
-		"   ○ app-2         todo    o:10  ",
+		"   ○  app-2         todo    o:10  ",
 		"   🔀 app-3         merged  o:20    feat/three",
 		"        └ Bold first line",
 		"",
