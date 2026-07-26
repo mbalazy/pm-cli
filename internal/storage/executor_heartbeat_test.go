@@ -100,7 +100,16 @@ func TestRunWriterConcurrentUpdatesAreSerialized(t *testing.T) {
 					st.CurrentSub = "p-1-1"
 					st.CurrentSession = "sess"
 					st.Phase = "running"
-					st.Subs[0].Turns++
+					// Read-modify-write with a forced reschedule in the middle.
+					// Under the lock this is still exact; without it the window
+					// is wide enough that the writers lose updates on every run
+					// rather than roughly half of them (a bare `st.Turns++`
+					// only detects a deleted mutex ~50% of the time, and this
+					// test is the ONLY guard on the plain suite - `make check`
+					// does not pass -race).
+					n := st.Subs[0].Turns
+					time.Sleep(10 * time.Microsecond)
+					st.Subs[0].Turns = n + 1
 				})
 			}
 		}()
