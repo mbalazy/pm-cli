@@ -81,77 +81,32 @@ func (m Model) updateSelectMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Bulk actions
 	case key.Matches(msg, common.Keys.Move):
-		tasks := m.markedTasks()
-		if len(tasks) > 0 {
-			for _, t := range tasks {
-				idx := m.statusIndex(t.Meta.Status)
-				m.store.MoveTask(t, m.statuses[(idx+1)%len(m.statuses)])
-			}
-			m.selecting = false
-			m.selected = make(map[string]bool)
-			m.reload()
-			m.toastMsg = fmt.Sprintf("Moved %d tasks forward", len(tasks))
-			m.toastExpiry = time.Now().Add(2 * time.Second)
-		}
+		m.bulkStatusMove(m.markedTasks(), "Moved", "forward", func(t *storage.Task) storage.TaskStatus {
+			return m.statuses[(m.statusIndex(t.Meta.Status)+1)%len(m.statuses)]
+		})
 
 	case key.Matches(msg, common.Keys.MoveBack):
-		tasks := m.markedTasks()
-		if len(tasks) > 0 {
-			for _, t := range tasks {
-				idx := m.statusIndex(t.Meta.Status)
-				var newStatus storage.TaskStatus
-				if idx > 0 {
-					newStatus = m.statuses[idx-1]
-				} else {
-					newStatus = m.statuses[len(m.statuses)-1]
-				}
-				m.store.MoveTask(t, newStatus)
+		m.bulkStatusMove(m.markedTasks(), "Moved", "back", func(t *storage.Task) storage.TaskStatus {
+			if idx := m.statusIndex(t.Meta.Status); idx > 0 {
+				return m.statuses[idx-1]
 			}
-			m.selecting = false
-			m.selected = make(map[string]bool)
-			m.reload()
-			m.toastMsg = fmt.Sprintf("Moved %d tasks back", len(tasks))
-			m.toastExpiry = time.Now().Add(2 * time.Second)
-		}
+			return m.statuses[len(m.statuses)-1]
+		})
 
 	case key.Matches(msg, common.Keys.Done):
-		tasks := m.markedTasks()
-		if len(tasks) > 0 {
-			for _, t := range tasks {
-				m.store.MoveTask(t, m.statuses[len(m.statuses)-1])
-			}
-			m.selecting = false
-			m.selected = make(map[string]bool)
-			m.reload()
-			m.toastMsg = fmt.Sprintf("Marked %d tasks done", len(tasks))
-			m.toastExpiry = time.Now().Add(2 * time.Second)
-		}
+		m.bulkStatusMove(m.markedTasks(), "Marked", "done", func(*storage.Task) storage.TaskStatus {
+			return m.statuses[len(m.statuses)-1]
+		})
 
 	case key.Matches(msg, common.Keys.Waiting):
-		tasks := m.markedTasks()
-		if len(tasks) > 0 {
-			for _, t := range tasks {
-				m.store.MoveTask(t, storage.StatusWaiting)
-			}
-			m.selecting = false
-			m.selected = make(map[string]bool)
-			m.reload()
-			m.toastMsg = fmt.Sprintf("Marked %d tasks waiting", len(tasks))
-			m.toastExpiry = time.Now().Add(2 * time.Second)
-		}
+		m.bulkStatusMove(m.markedTasks(), "Marked", "waiting", func(*storage.Task) storage.TaskStatus {
+			return storage.StatusWaiting
+		})
 
 	case key.Matches(msg, common.Keys.Archive):
-		tasks := m.markedTasks()
-		if len(tasks) > 0 {
-			for _, t := range tasks {
-				m.store.MoveTask(t, storage.StatusArchived)
-			}
-			m.selecting = false
-			m.selected = make(map[string]bool)
-			m.reload()
-			m.toastMsg = fmt.Sprintf("Archived %d tasks", len(tasks))
-			m.toastExpiry = time.Now().Add(2 * time.Second)
-		}
+		m.bulkStatusMove(m.markedTasks(), "Archived", "", func(*storage.Task) storage.TaskStatus {
+			return storage.StatusArchived
+		})
 
 	case key.Matches(msg, common.Keys.Delete):
 		if len(m.selected) > 0 {
@@ -247,7 +202,9 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
 			statuses := m.store.GetProjectStatuses(t.Project)
-			m.store.MoveTask(t, statuses[0])
+			if err := m.store.MoveTask(t, statuses[0]); err != nil {
+				m.showErrorToast("restore failed", err)
+			}
 			m.reload()
 			m.fixArchiveCursor()
 		}

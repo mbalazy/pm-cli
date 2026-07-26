@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mbalazy/pm/internal/storage"
 )
@@ -214,6 +215,110 @@ func TestDoArchive(t *testing.T) {
 			t.Errorf("status = %q, want done (unchanged - write failed)", got)
 		}
 	})
+}
+
+// TestBulkStatusMove covers pm-cli-45: the bulk (select-mode) actions used to
+// discard MoveTask's error and still report full success.
+func TestBulkStatusMove(t *testing.T) {
+	forward := func(m *Model) func(*storage.Task) storage.TaskStatus {
+		return func(t *storage.Task) storage.TaskStatus {
+			return m.statuses[(m.statusIndex(t.Meta.Status)+1)%len(m.statuses)]
+		}
+	}
+
+	t.Run("moves every marked task and reports the count", func(t *testing.T) {
+		m := newBoardModel(t,
+			&storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusTodo}},
+			&storage.Task{Meta: storage.TaskMeta{ID: "p-2", Title: "B", Status: storage.StatusTodo}},
+		)
+		m.selecting = true
+		m.selected = map[string]bool{"p-1": true, "p-2": true}
+		m.bulkStatusMove(m.markedTasks(), "Moved", "forward", forward(m))
+
+		for _, id := range []string{"p-1", "p-2"} {
+			if got := diskStatus(t, m, id); got != storage.StatusDoing {
+				t.Errorf("%s status = %q, want doing", id, got)
+			}
+		}
+		if m.toastMsg != "Moved 2 tasks forward" {
+			t.Errorf("toastMsg = %q, want the plain success message", m.toastMsg)
+		}
+		if m.selecting || len(m.selected) != 0 {
+			t.Errorf("select mode should be cleared, got selecting=%v selected=%v", m.selecting, m.selected)
+		}
+	})
+
+	t.Run("partial failure moves the rest and reports the split with a reason", func(t *testing.T) {
+		m := newBoardModel(t,
+			&storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusTodo}},
+			&storage.Task{Meta: storage.TaskMeta{ID: "p-2", Title: "B", Status: storage.StatusTodo}},
+		)
+		writeRawTask(t, m, "p-3", "todo", "bogus")
+		m.reload()
+		m.selecting = true
+		m.selected = map[string]bool{"p-1": true, "p-2": true, "p-3": true}
+		m.bulkStatusMove(m.markedTasks(), "Moved", "forward", forward(m))
+
+		// One bad task must not strand the good ones.
+		for _, id := range []string{"p-1", "p-2"} {
+			if got := diskStatus(t, m, id); got != storage.StatusDoing {
+				t.Errorf("%s status = %q, want doing (a sibling failure must not block it)", id, got)
+			}
+		}
+		if got := diskStatus(t, m, "p-3"); got != storage.StatusTodo {
+			t.Errorf("p-3 status = %q, want todo (unchanged - write failed)", got)
+		}
+		if !strings.Contains(m.toastMsg, "Moved 2 of 3 tasks forward") ||
+			!strings.Contains(m.toastMsg, "1 failed") ||
+			!strings.Contains(m.toastMsg, "epic_mode") {
+			t.Errorf("toastMsg = %q, want the split, the failure count and the real reason", m.toastMsg)
+		}
+		// Error timing, not the 2s success timing.
+		if time.Until(m.toastExpiry) < 10*time.Second {
+			t.Errorf("failure toast expires in %v, want the ~15s error timing", time.Until(m.toastExpiry))
+		}
+	})
+
+	t.Run("archive reads without a suffix", func(t *testing.T) {
+		m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusDone}})
+		m.selected = map[string]bool{"p-1": true}
+		m.bulkStatusMove(m.markedTasks(), "Archived", "", func(*storage.Task) storage.TaskStatus {
+			return storage.StatusArchived
+		})
+		if m.toastMsg != "Archived 1 tasks" {
+			t.Errorf("toastMsg = %q, want no stray spacing from the empty suffix", m.toastMsg)
+		}
+	})
+
+	t.Run("no marked tasks is a no-op", func(t *testing.T) {
+		m := newBoardModel(t)
+		m.toastMsg = "untouched"
+		m.bulkStatusMove(nil, "Moved", "forward", forward(m))
+		if m.toastMsg != "untouched" {
+			t.Errorf("toastMsg = %q, want no toast for an empty selection", m.toastMsg)
+		}
+	})
+}
+
+// TestArchiveRestoreSurfacesErrors covers the other pm-cli-45 call site: the
+// archive view's `r` (unarchive), which discarded its MoveTask error too.
+func TestArchiveRestoreSurfacesErrors(t *testing.T) {
+	m := newBoardModel(t)
+	writeRawTask(t, m, "p-1", "archived", "bogus")
+	m.reload()
+	m.currentView = viewArchive
+
+	result, _ := m.updateArchive(keyMsg("r"))
+	got, ok := result.(Model)
+	if !ok {
+		t.Fatalf("updateArchive returned %T, want Model", result)
+	}
+	if !strings.Contains(got.toastMsg, "restore failed") || !strings.Contains(got.toastMsg, "epic_mode") {
+		t.Errorf("toastMsg = %q, want it to mention the restore failure and the reason", got.toastMsg)
+	}
+	if s := diskStatus(t, m, "p-1"); s != storage.StatusArchived {
+		t.Errorf("status = %q, want archived (unchanged - write failed)", s)
+	}
 }
 
 func TestDoUndo(t *testing.T) {

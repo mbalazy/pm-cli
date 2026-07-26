@@ -1,10 +1,58 @@
 package board
 
 import (
+	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/mbalazy/pm/internal/storage"
 )
+
+// bulkStatusMove moves every marked task to next(t), then clears select mode
+// and reports what happened.
+//
+// It exists because the five bulk actions used to drop MoveTask's error and
+// toast "Moved 5 tasks forward" even when some of them never moved - the same
+// silent failure the single-task actions above fixed, one keybinding away.
+// Partial success is normal here (one task can fail validation while the rest
+// are fine), so a failure does not abort the loop: the remaining tasks still
+// move, and the toast states the split and carries the first real reason on the
+// 15s error timing rather than the 2s success one.
+func (m *Model) bulkStatusMove(tasks []*storage.Task, verb, suffix string, next func(*storage.Task) storage.TaskStatus) {
+	if len(tasks) == 0 {
+		return
+	}
+	var firstErr error
+	failed := 0
+	for _, t := range tasks {
+		if err := m.store.MoveTask(t, next(t)); err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	m.selecting = false
+	m.selected = make(map[string]bool)
+	m.reload()
+
+	// Suffix is empty for actions that read fine without one ("Archived 5
+	// tasks"), so it is appended rather than formatted in - otherwise every
+	// such message carries a stray double space.
+	label := func(count string) string {
+		if suffix == "" {
+			return verb + " " + count + " tasks"
+		}
+		return verb + " " + count + " tasks " + suffix
+	}
+	if failed > 0 {
+		m.showErrorToast(fmt.Sprintf("%s (%d failed)",
+			label(fmt.Sprintf("%d of %d", len(tasks)-failed, len(tasks))), failed), firstErr)
+		return
+	}
+	m.toastMsg = label(strconv.Itoa(len(tasks)))
+	m.toastExpiry = time.Now().Add(2 * time.Second)
+}
 
 // doMoveForward cycles task to next status column.
 func (m *Model) doMoveForward(t *storage.Task) {
