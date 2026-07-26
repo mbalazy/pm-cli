@@ -3,6 +3,8 @@ package storage
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -44,6 +46,70 @@ func TestRunStateRoundTrip(t *testing.T) {
 	all := ReadRunStates(dir)
 	if all["p-1"] == nil {
 		t.Error("ReadRunStates should include p-1")
+	}
+}
+
+// TestWriteRunStateTmpIsPerProcess pins the pm-cli-48 fix: the scratch file
+// WriteRunState writes through is named per WRITER, so two processes updating
+// the same run-state (the board's seed/killRun against the manager's heartbeat)
+// cannot interleave inside one os.WriteFile and rename a torn mixture. A
+// foreign process's scratch file is the observable proxy - if this writer still
+// used a shared name it would have written straight through it.
+func TestWriteRunStateTmpIsPerProcess(t *testing.T) {
+	dir := t.TempDir()
+	st := &RunState{TaskID: "p-1", Project: "p", Kind: "work", Status: RunStatusRunning}
+	if err := WriteRunState(dir, st); err != nil {
+		t.Fatalf("seed WriteRunState: %v", err)
+	}
+
+	// Stand in for another process mid-write on the same run-state.
+	foreign := ExecutorRunPath(dir, "p-1") + ".tmp.999999"
+	if err := os.WriteFile(foreign, []byte("half-written by another pid"), 0644); err != nil {
+		t.Fatalf("write foreign tmp: %v", err)
+	}
+
+	st.Phase = "implement"
+	if err := WriteRunState(dir, st); err != nil {
+		t.Fatalf("WriteRunState: %v", err)
+	}
+
+	data, err := os.ReadFile(foreign)
+	if err != nil {
+		t.Fatalf("foreign tmp should be untouched: %v", err)
+	}
+	if string(data) != "half-written by another pid" {
+		t.Errorf("foreign tmp was written through: %q", data)
+	}
+	got, err := ReadRunState(dir, "p-1")
+	if err != nil || got.Phase != "implement" {
+		t.Errorf("own write should still land whole: %+v err=%v", got, err)
+	}
+}
+
+// TestWriteRunStateCleansUpTmpOnFailure pins the other half of pm-cli-48: with
+// per-pid names a failed write no longer overwrites a single fixed scratch
+// file, so every failure would leak one unless it is cleaned up. The publish is
+// forced to fail by parking a non-empty directory where the run-state file
+// goes - os.Rename cannot replace that.
+func TestWriteRunStateCleansUpTmpOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := ExecutorRunPath(dir, "p-1")
+	if err := os.MkdirAll(filepath.Join(path, "blocker"), 0755); err != nil {
+		t.Fatalf("mkdir blocker: %v", err)
+	}
+
+	if err := WriteRunState(dir, &RunState{TaskID: "p-1", Project: "p"}); err == nil {
+		t.Fatal("WriteRunState should fail when the target cannot be replaced")
+	}
+
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp") {
+			t.Errorf("failed write left a scratch file behind: %s", e.Name())
+		}
 	}
 }
 

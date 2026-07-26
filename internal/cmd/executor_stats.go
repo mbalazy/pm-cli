@@ -114,7 +114,7 @@ type runKey struct {
 // append-only and spans months, while macOS recycles its ~100k pid space in
 // days - without a bound, one old crash whose pid got reused reads as "running"
 // forever and is silently missing from the crash count. Generous enough to
-// cover any real run (the executor's own timeout defaults to 45m).
+// cover any real run (the executor's own timeout defaults to 60m).
 const liveWindow = 24 * time.Hour
 
 // aggregateJournal folds journal entries into the rollup. Start lines are
