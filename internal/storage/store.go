@@ -213,7 +213,15 @@ func (s *Store) AddTask(projectSlug string, t *Task) error {
 	f.Close()
 
 	// File claimed; now write content atomically (temp+rename)
-	return writeTask(t)
+	if err := writeTask(t); err != nil {
+		// writeTask rejected before touching the claimed file (e.g. mode/epic_mode
+		// validation) - remove it so it doesn't linger as a 0-byte phantom task and
+		// block a retry with "task file already exists". Only ever removes the file
+		// THIS call just created via O_EXCL, never a pre-existing one.
+		os.Remove(t.FilePath)
+		return err
+	}
+	return nil
 }
 
 // ProjectPrefix returns the task ID prefix for a project.

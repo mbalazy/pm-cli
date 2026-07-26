@@ -548,6 +548,64 @@ func TestAddTaskAtomicDuplicate(t *testing.T) {
 	})
 }
 
+func TestAddTaskCleansUpPhantomFileOnValidationFailure(t *testing.T) {
+	store, _ := setupTestStore(t)
+
+	t.Run("invalid epic_mode leaves no file and retry succeeds", func(t *testing.T) {
+		task := NewTask("a-20", "Bad epic mode", "alpha")
+		task.Meta.EpicMode = "Independent" // wrong case - only "independent" (or empty) is valid
+		err := store.AddTask("alpha", task)
+		if err == nil {
+			t.Fatal("expected error for invalid epic_mode")
+		}
+		if !strings.Contains(err.Error(), "invalid epic_mode") {
+			t.Errorf("error should mention 'invalid epic_mode', got: %v", err)
+		}
+
+		if _, statErr := os.Stat(task.FilePath); !os.IsNotExist(statErr) {
+			t.Fatalf("expected no phantom file at %s, stat err: %v", task.FilePath, statErr)
+		}
+
+		tasks, err := store.GetTasks("alpha")
+		if err != nil {
+			t.Fatalf("GetTasks failed: %v", err)
+		}
+		for _, tk := range tasks {
+			if tk.Meta.ID == "a-20" {
+				t.Fatalf("phantom task a-20 should not be visible via GetTasks")
+			}
+		}
+
+		retry := NewTask("a-20", "Bad epic mode", "alpha")
+		retry.Meta.EpicMode = "independent"
+		if err := store.AddTask("alpha", retry); err != nil {
+			t.Fatalf("retry with valid epic_mode should succeed, got: %v", err)
+		}
+	})
+
+	t.Run("invalid mode leaves no file and retry succeeds", func(t *testing.T) {
+		task := NewTask("a-21", "Bad mode", "alpha")
+		task.Meta.Mode = "sometimes"
+		err := store.AddTask("alpha", task)
+		if err == nil {
+			t.Fatal("expected error for invalid mode")
+		}
+		if !strings.Contains(err.Error(), "invalid mode") {
+			t.Errorf("error should mention 'invalid mode', got: %v", err)
+		}
+
+		if _, statErr := os.Stat(task.FilePath); !os.IsNotExist(statErr) {
+			t.Fatalf("expected no phantom file at %s, stat err: %v", task.FilePath, statErr)
+		}
+
+		retry := NewTask("a-21", "Bad mode", "alpha")
+		retry.Meta.Mode = "manual"
+		if err := store.AddTask("alpha", retry); err != nil {
+			t.Fatalf("retry with valid mode should succeed, got: %v", err)
+		}
+	})
+}
+
 func TestWriteTaskAtomicRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	task := &Task{
