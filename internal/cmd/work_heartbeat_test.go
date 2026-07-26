@@ -230,6 +230,7 @@ func TestDriveSubIndependentHeartbeatsTheEpicRunState(t *testing.T) {
 	if writes < 20 {
 		t.Errorf("epic run-state only saw %d distinct writes - the manager is not passing its writer to the worker (the driver alone writes ~3)", writes)
 	}
+	assertSessionMarkerCleared(t, rw)
 }
 
 // Same guard for integration mode: driveSub must hand its worker the writer too.
@@ -270,6 +271,22 @@ func TestDriveSubHeartbeatsTheEpicRunState(t *testing.T) {
 	}
 	if writes < 20 {
 		t.Errorf("epic run-state only saw %d distinct writes - the manager is not passing its writer to the worker (the driver alone writes ~3)", writes)
+	}
+	assertSessionMarkerCleared(t, rw)
+}
+
+// assertSessionMarkerCleared checks the half of the heartbeat contract the
+// board depends on: CurrentSession is pinned before the worker spawns and must
+// be dropped the moment it returns, because that marker is what gates the
+// dashboard's heartbeat age. The driver's post-worker tail (result recording,
+// then the merge or `git push`) runs for minutes with the stamp frozen, so a
+// marker left set there renders a healthy run as hung.
+func assertSessionMarkerCleared(t *testing.T, rw *storage.RunWriter) {
+	t.Helper()
+	var sess string
+	rw.Read(func(st *storage.RunState) { sess = st.CurrentSession })
+	if sess != "" {
+		t.Errorf("CurrentSession still %q after the worker returned - the board would render the frozen stamp as a live beat", sess)
 	}
 }
 
