@@ -236,6 +236,42 @@ func TestContextCmdNoTrackers(t *testing.T) {
 	mustContain(t, out, "## Counts: 1 doing, 1 todo\n")
 }
 
+// TestContextCmdOrphanChildren covers pm-cli-39: a child whose parent is
+// archived, and a child whose parent ID doesn't exist at all, must NOT vanish
+// from pm context - they fall back to the flat doing list like ordinary
+// tasks, and the counts line must agree with what's actually listed (no "3
+// doing" while only 1 is visible).
+func TestContextCmdOrphanChildren(t *testing.T) {
+	store := contextFixture(t,
+		// StatusArchived is system-level and rejected by AddTask's status
+		// validation - create as todo, then archive via MoveTask (which
+		// doesn't validate) like the mcpserver tests do.
+		&storage.Task{Meta: storage.TaskMeta{ID: "app-1", Title: "Archived parent", Status: storage.StatusTodo}},
+		&storage.Task{Meta: storage.TaskMeta{ID: "app-2", Title: "Child of archived parent", Status: storage.StatusDoing, Parent: "app-1"}},
+		&storage.Task{Meta: storage.TaskMeta{ID: "app-3", Title: "Child of missing parent", Status: storage.StatusDoing, Parent: "app-ghost"}},
+	)
+	parent, err := store.FindTask("app", "app-1")
+	if err != nil {
+		t.Fatalf("FindTask: %v", err)
+	}
+	if err := store.MoveTask(parent, storage.StatusArchived); err != nil {
+		t.Fatalf("MoveTask archive: %v", err)
+	}
+
+	out, err := execContextCmd(t, store, "app")
+	if err != nil {
+		t.Fatalf("context: %v", err)
+	}
+	if strings.Contains(out, "📋") {
+		t.Errorf("expected no tracker block (parent archived/missing), got:\n%s", out)
+	}
+	mustContain(t, out, "• app-2  Child of archived parent")
+	mustContain(t, out, "• app-3  Child of missing parent")
+	// The archived parent itself stays out of the doing list (its own status
+	// isn't doing), but its count still shows up under "archived".
+	mustContain(t, out, "## Counts: 1 archived, 2 doing\n")
+}
+
 // TestContextCmdEmptyProject: a project with no tasks still prints a heading
 // and an (empty) counts line, and skips both optional sections.
 func TestContextCmdEmptyProject(t *testing.T) {
