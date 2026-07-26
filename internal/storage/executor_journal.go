@@ -44,11 +44,17 @@ type JournalSub struct {
 
 // JournalEntry is one line in the executor journal.
 type JournalEntry struct {
-	Event      string `json:"event"` // start | end | killed
-	TS         string `json:"ts"`    // RFC3339, stamped by AppendJournal if empty
-	Kind       string `json:"kind"`  // "work" | "run-epic"
-	Project    string `json:"project"`
-	TaskID     string `json:"task_id"` // task (work) or tracker (run-epic) id
+	Event   string `json:"event"` // start | end | killed
+	TS      string `json:"ts"`    // RFC3339, stamped by AppendJournal if empty
+	Kind    string `json:"kind"`  // "work" | "run-epic"
+	Project string `json:"project"`
+	TaskID  string `json:"task_id"` // task (work) or tracker (run-epic) id
+	// RunID ties every line of ONE physical run together (see NewRunID). All
+	// three producers stamp it: the manager's own start/end lines and the
+	// board's killed line, which lifts it off the run-state. Empty on lines
+	// written before 0.27.0 - consumers must keep pairing those the old way,
+	// by {kind, task_id, pid}.
+	RunID      string `json:"run_id,omitempty"`
 	PID        int    `json:"pid,omitempty"`
 	Model      string `json:"model,omitempty"`
 	Additional bool   `json:"additional,omitempty"`

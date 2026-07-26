@@ -26,7 +26,12 @@ const (
 // under the project's `.executor/` dir. The executor owns the file; the TUI
 // only reads it.
 type RunState struct {
-	TaskID   string `json:"task_id"` // task (work) or tracker (run-epic) id
+	TaskID string `json:"task_id"` // task (work) or tracker (run-epic) id
+	// RunID identifies this physical run (see NewRunID). Carried here so an
+	// observer that journals on the manager's behalf - the board's killRun,
+	// which never shares the manager's process - can stamp the same id the
+	// manager wrote on its own journal lines.
+	RunID    string `json:"run_id,omitempty"`
 	Project  string `json:"project"`
 	Kind     string `json:"kind"`   // "work" | "run-epic"
 	Status   string `json:"status"` // running | done | failed
@@ -270,3 +275,13 @@ func NewSessionID() string {
 	rand.Read(b)
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
+
+// NewRunID returns a random identifier for ONE physical executor run, stamped
+// on the run-state and on every journal line that run appends. It exists
+// because {kind, task_id, pid} does NOT identify a run: pids are recycled, so
+// two runs of the same task can share a key, and `pm executor stats` then has
+// to guess whether a second terminal line is a kill race (one run) or a
+// distinct run whose `start` append was lost - guessing wrong either drops a
+// run's subs/turns/cost or double-counts them. Same shape as a session id; the
+// two are independent (a run drives many workers, each with its own session).
+func NewRunID() string { return NewSessionID() }

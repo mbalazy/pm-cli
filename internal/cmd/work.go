@@ -455,9 +455,14 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		journalDir = dir
 	}
 	var runw *storage.RunWriter
+	// One id for this physical run, stamped on the run-state and on every
+	// journal line below (see storage.NewRunID). Epic subs are journaled by the
+	// manager under ITS run id, so this only matters standalone.
+	runID := storage.NewRunID()
 	if opts.standalone {
 		run := &storage.RunState{
 			TaskID:         task.Meta.ID,
+			RunID:          runID,
 			Project:        task.Project,
 			Kind:           "work",
 			Status:         storage.RunStatusRunning,
@@ -477,7 +482,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		// Journal start line (durable cross-run history; epic subs are journaled
 		// by the manager instead). Best-effort like the run-state writes.
 		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
-			Event: storage.JournalEventStart, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
+			Event: storage.JournalEventStart, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
 			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
 			WorkDir: journalDir, Baseline: baselineUsed,
 		})
@@ -521,7 +526,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 				}
 			})
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
-				Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
+				Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
 				PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
 				WorkDir: journalDir, Baseline: baselineUsed,
 				Status: storage.RunStatusFailed, DurationS: int(time.Since(workStart).Seconds()), Error: err.Error(),
@@ -548,7 +553,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			// off the claude envelope - unlike the runWorker-failure branch
 			// above, where res is nil and those fields stay zero.
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
-				Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
+				Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
 				PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
 				WorkDir: journalDir, Baseline: baselineUsed,
 				Status: storage.RunStatusFailed, DurationS: int(time.Since(workStart).Seconds()), Error: err.Error(),
@@ -572,7 +577,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			}
 		})
 		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
-			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID,
+			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
 			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
 			WorkDir: journalDir, Baseline: baselineUsed,
 			Status: storage.RunStatusDone, DurationS: int(time.Since(workStart).Seconds()),

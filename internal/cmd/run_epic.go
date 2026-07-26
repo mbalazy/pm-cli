@@ -231,8 +231,13 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			// WriteRunState below is best-effort observability: a failed write only
 			// costs a stale dashboard, never correctness, so the error is dropped.
 			stateDir := store.ProjectDir(slug)
+			// One id for this physical run, stamped on the run-state and on
+			// every journal line below, so `pm executor stats` can tell this run
+			// apart from any other that happens to reuse the pid.
+			runID := storage.NewRunID()
 			run := &storage.RunState{
 				TaskID:   tracker.Meta.ID,
+				RunID:    runID,
 				Project:  slug,
 				Kind:     "run-epic",
 				Status:   storage.RunStatusRunning,
@@ -268,7 +273,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			}
 			epicStart := time.Now()
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
-				Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID,
+				Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID, RunID: runID,
 				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Independent: independentMode, Branch: journalBranch,
 				WorkDir: journalDir, Baseline: baselineUsed,
 			})
@@ -330,7 +335,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			var jSubs []storage.JournalSub
 			rw.Read(func(run *storage.RunState) { jSubs = journalSubs(outcomes, subDurations, run) })
 			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
-				Event: storage.JournalEventEnd, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID,
+				Event: storage.JournalEventEnd, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID, RunID: runID,
 				PID: os.Getpid(), Model: model, Additional: additional, Yolo: yolo, Independent: independentMode, Branch: journalBranch,
 				WorkDir: journalDir, Baseline: baselineUsed,
 				Status: storage.RunStatusDone, DurationS: int(time.Since(epicStart).Seconds()),

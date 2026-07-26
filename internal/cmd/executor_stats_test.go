@@ -327,6 +327,105 @@ func TestAggregateJournal(t *testing.T) {
 			},
 		},
 		{
+			// pm-cli-47 scenario 1, measured on the pre-fix code: run B reused
+			// A's pid, its `start` append was lost, and its terminal line is a
+			// DIFFERENT event type than A's - so the legacy heuristic read it as
+			// A's kill-race twin and dropped it entirely (Runs=1, Turns=7,
+			// Cost=0.7). With per-run ids the two keys can no longer collide.
+			name: "reused pid with a dropped start counts both runs when ids differ",
+			entries: []storage.JournalEntry{
+				{Event: storage.JournalEventStart, Kind: "work", TaskID: "app-1", PID: 100, RunID: "run-a"},
+				{
+					Event: storage.JournalEventEnd, Kind: "work", TaskID: "app-1", PID: 100, RunID: "run-a",
+					Status: "done", DurationS: 60,
+					Subs: []storage.JournalSub{{ID: "app-1", Result: "merged", Turns: 7, CostUSD: 0.5}},
+				},
+				// run B: start line lost, killed instead of ended, same pid.
+				{
+					Event: storage.JournalEventKilled, Kind: "work", TaskID: "app-1", PID: 100, RunID: "run-b",
+					Status: "failed", Error: "stopped by user",
+					Subs: []storage.JournalSub{{ID: "app-1", Result: "blocked", Turns: 3, CostUSD: 0.25}},
+				},
+			},
+			want: journalStats{
+				Runs: 2,
+				Kinds: map[string]*kindStats{"work": {
+					Runs:      2,
+					Statuses:  map[string]int{"done": 1, runStatusKilled: 1},
+					DurationS: numStat{Total: 60, Samples: 1},
+				}},
+				Subs:       2,
+				SubResults: map[string]int{"merged": 1, "blocked": 1},
+				Turns:      numStat{Total: 10, Samples: 2},
+				Cost:       numStat{Total: 0.75, Samples: 2},
+			},
+		},
+		{
+			// pm-cli-47 scenario 2: K pressed twice before the run-state caught
+			// up appends two `killed` lines for ONE run. Same event type twice
+			// fell into the "reused pid" branch and double-counted the run and
+			// (after pm-cli-37 put subs on killed lines) its subs/turns/cost:
+			// measured Runs=2, Turns=8, Cost=0.6. The shared run id settles it.
+			name: "double kill with one run id counts the run once",
+			entries: []storage.JournalEntry{
+				{Event: storage.JournalEventStart, Kind: "run-epic", TaskID: "app-9", PID: 300, RunID: "run-c"},
+				{
+					Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-9", PID: 300, RunID: "run-c",
+					Status: "failed", Error: "stopped by user", DurationS: 120,
+					Subs: []storage.JournalSub{{ID: "app-9-1", Result: "merged", Turns: 4, CostUSD: 0.3}},
+				},
+				{
+					Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-9", PID: 300, RunID: "run-c",
+					Status: "failed", Error: "stopped by user", DurationS: 121,
+					Subs: []storage.JournalSub{{ID: "app-9-1", Result: "merged", Turns: 4, CostUSD: 0.3}},
+				},
+			},
+			want: journalStats{
+				Runs: 1,
+				Kinds: map[string]*kindStats{"run-epic": {
+					Runs:     1,
+					Statuses: map[string]int{runStatusKilled: 1},
+				}},
+				Subs:       1,
+				SubResults: map[string]int{"merged": 1},
+				Turns:      numStat{Total: 4, Samples: 1},
+				Cost:       numStat{Total: 0.3, Samples: 1},
+			},
+		},
+		{
+			// Backward compat: a journal written before run ids existed keeps
+			// pairing by {kind, taskID, pid} and keeps the end-vs-killed race
+			// heuristic - the same expectations as the pre-0.27.0 kill-race case
+			// above, restated here so a future change to the id path cannot
+			// quietly take the legacy path with it.
+			name: "legacy entries without run ids still pair by kind/task/pid",
+			entries: []storage.JournalEntry{
+				startEntry("run-epic", "app-13", 400),
+				{
+					Event: storage.JournalEventEnd, Kind: "run-epic", TaskID: "app-13", PID: 400,
+					Status: "done", DurationS: 300,
+					Subs: []storage.JournalSub{{ID: "app-13-1", Result: "merged", Turns: 5, CostUSD: 0.5}},
+				},
+				{
+					Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-13", PID: 400,
+					Status: "failed", Error: "stopped by user", DurationS: 305,
+					Subs: []storage.JournalSub{{ID: "app-13-1", Result: "merged", Turns: 5, CostUSD: 0.5}},
+				},
+			},
+			want: journalStats{
+				Runs: 1,
+				Kinds: map[string]*kindStats{"run-epic": {
+					Runs:      1,
+					Statuses:  map[string]int{"done": 1},
+					DurationS: numStat{Total: 300, Samples: 1},
+				}},
+				Subs:       1,
+				SubResults: map[string]int{"merged": 1},
+				Turns:      numStat{Total: 5, Samples: 1},
+				Cost:       numStat{Total: 0.5, Samples: 1},
+			},
+		},
+		{
 			// A live-looking pid on an ancient start is pid REUSE, not a run in
 			// flight. Without the liveWindow bound this reports running:1 and
 			// silently loses a crash.

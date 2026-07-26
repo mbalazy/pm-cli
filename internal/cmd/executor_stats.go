@@ -93,10 +93,17 @@ type journalStats struct {
 	Cost        numStat
 }
 
-// runKey identifies a run across its start/terminal lines. The PID
-// discriminates repeated runs of the same task, and the board's killed line
-// carries the manager's PID + kind, so it pairs with the right start.
+// runKey identifies a run across its start/terminal lines.
+//
+// id is the run-instance identifier (JournalEntry.RunID, since 0.27.0) and is
+// the only field that identifies a run EXACTLY: with it, two lines share a key
+// iff they describe the same physical run. Without it - lines written by an
+// older binary - the key degrades to {kind, taskID, pid}, which is ambiguous
+// because pids get recycled; kind/taskID/pid are therefore kept in the key even
+// when id is set, so the leftover-start pass below can still read a holder pid
+// and a kind off the key.
 type runKey struct {
+	id     string
 	kind   string
 	taskID string
 	pid    int
@@ -113,6 +120,11 @@ const liveWindow = 24 * time.Hour
 // aggregateJournal folds journal entries into the rollup. Start lines are
 // paired FIFO with their terminal (end/killed) line by runKey; leftover starts
 // are crashes (or still-running runs, when the pid is alive and recent).
+//
+// Entries carrying a run id pair EXACTLY (see runKey). The heuristics below
+// exist for pre-0.27.0 lines, which have no id and can only be paired by
+// {kind, taskID, pid} - a key two different runs can share once a pid is
+// recycled.
 //
 // alive reports whether a pid still belongs to a live process and now is the
 // reference time for liveWindow; both are parameters so tests can pin them
@@ -150,7 +162,7 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool, now 
 	subsAdded := make(map[runKey]bool)
 
 	for _, e := range entries {
-		key := runKey{kind: e.Kind, taskID: e.TaskID, pid: e.PID}
+		key := runKey{id: e.RunID, kind: e.Kind, taskID: e.TaskID, pid: e.PID}
 		switch e.Event {
 		case storage.JournalEventStart:
 			st.Runs++
@@ -166,9 +178,15 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool, now 
 					startTS[key] = ts[1:] // FIFO: the oldest start is the one closed
 				}
 				closedBy[key] = e.Event
-			case closedBy[key] != "" && closedBy[key] != e.Event:
-				// Second terminal line for a run already closed by the OTHER
-				// event type - the kill race. One run, not two.
+			case closedBy[key] != "" && (key.id != "" || closedBy[key] != e.Event):
+				// Second terminal line for a run that is already closed. With a
+				// run id the key IS the run, so this is unambiguously the same
+				// physical run whatever the event types are - which is what
+				// makes a double kill (two "killed" lines, board hit twice
+				// before the run-state caught up) count once instead of twice.
+				// Without an id, only a DIFFERENT event type can be trusted to
+				// mean one run (the end-vs-killed race); the same type twice
+				// falls through to the reused-pid case below.
 				duplicate = true
 			default:
 				// Terminal line whose start is missing (a best-effort start

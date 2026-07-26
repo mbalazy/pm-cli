@@ -110,7 +110,12 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 		durationS = int(time.Since(started).Seconds())
 	}
 	_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
-		Event: storage.JournalEventKilled, Kind: st.Kind, Project: proj, TaskID: taskID,
+		// RunID off the re-read run-state: it makes this line provably the same
+		// physical run the manager started, so `pm executor stats` never has to
+		// guess whether it is the manager's own "end" line raced (one run) or a
+		// second run that reused the pid. A pre-0.27.0 manager wrote no id -
+		// the entry then falls back to {kind, task_id, pid} pairing.
+		Event: storage.JournalEventKilled, Kind: st.Kind, Project: proj, TaskID: taskID, RunID: st.RunID,
 		PID: pid, Status: storage.RunStatusFailed, Error: "stopped by user",
 		Subs: subs, DurationS: durationS,
 	})
