@@ -228,9 +228,30 @@ func checkHandoff(e storage.Executor, projPath string) []check {
 		return out
 	}
 	text := string(data)
+	out = append(out, checkPlaybookTODOs(h.PlaybookPath, text)...)
 	out = append(out, checkScriptsMentioned(h, text)...)
 	out = append(out, checkRuntimeDrift(e, projPath, h.PlaybookPath, text)...)
 	return out
+}
+
+// checkPlaybookTODOs warns while the scaffold's unfilled slots survive.
+//
+// Without this the generator would defeat its own purpose: `pm executor init`
+// writes a playbook that NAMES every script, so checkScriptsMentioned falls
+// silent, while the prose saying what those scripts are FOR is still empty -
+// which is precisely the gap the handoff contract exists to close. The names
+// are the scaffold; the judgement is the document.
+//
+// One finding for the file, not one per slot: a fresh scaffold has a dozen and
+// listing them all would bury every other check.
+func checkPlaybookTODOs(path, playbook string) []check {
+	n := strings.Count(playbook, playbookTODO)
+	if n == 0 {
+		return nil
+	}
+	return []check{{levelWarn,
+		fmt.Sprintf("playbook has %d unfilled %s slot(s): %s", n, playbookTODO, path),
+		"a scaffold naming the scripts satisfies the mention check while saying nothing about what they are FOR - fill the slots or delete the ones that do not apply"}}
 }
 
 // checkScriptsMentioned warns about a runtime-skill script the playbook never

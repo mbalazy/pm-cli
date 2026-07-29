@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/spf13/cobra"
@@ -35,11 +36,16 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 		Long: "Scans <project>/.claude/skills + .claude/commands and detects the stack to draft an " +
 			"`executor` block for project.yaml. Detected skills map to phase bindings; the rest stay empty " +
 			"(the engine's built-in generic). Phases with no skill but a detectable verify command get a cmd " +
-			"binding. If the project has NO executor block yet, the draft is written as-is. If it already has " +
-			"one, only the detected fields (`phases`, `baseline`) are refreshed - every other hand-set field " +
-			"(enabled, additional_worktree, worktree_path, worktrees, base_branch, env, seed_exclude, " +
-			"prepare, context_repos, handoff, start_status, wip_status, done_status, fix_rounds, gate, notes) is left " +
-			"untouched; the output lists which fields were preserved.",
+			"binding. A skill named after a runtime (simulator/device/browser) becomes `handoff.runtime_skill`, " +
+			"and `handoff.playbook` is scaffolded from what pm can derive - the script inventory of that skill, " +
+			"the context repos, the baseline command - with an explicit TODO slot everywhere the answer is a " +
+			"judgement rather than a fact on disk.\n\n" +
+			"If the project has NO executor block yet, the draft is written as-is. If it already has one, the " +
+			"detected fields (`phases`, `baseline`) are refreshed, `handoff` is filled in ONLY when that block " +
+			"is empty (its playbook is hand-written prose, never regenerated), and every other hand-set field " +
+			"(enabled, additional_worktree, worktree_path, worktrees, base_branch, env, seed_exclude, prepare, " +
+			"context_repos, start_status, wip_status, done_status, fix_rounds, gate, notes) is left untouched; " +
+			"the output lists which fields were preserved. An existing playbook file is never rewritten.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var slug string
@@ -74,8 +80,17 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 			}
 			fmt.Println(marshalExecutorBlock(result))
 
+			plan := planPlaybook(proj.Path, slug, result)
+			switch {
+			case plan == nil:
+			case plan.Exists:
+				fmt.Printf("# playbook: %s already exists - left untouched\n", plan.Path)
+			default:
+				fmt.Printf("# playbook: %s will be scaffolded (fill in every %s slot)\n", plan.Path, playbookTODO)
+			}
+
 			if dryRun {
-				fmt.Println("# dry-run: not written. Re-run without --dry-run to save to project.yaml.")
+				fmt.Println("# dry-run: nothing written. Re-run without --dry-run to save.")
 				return nil
 			}
 
@@ -84,6 +99,16 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 				return fmt.Errorf("write project.yaml: %w", err)
 			}
 			fmt.Printf("# saved to %s\n", store.ProjectYAML(slug))
+
+			// After project.yaml, and never fatal: the profile is the command's
+			// job, the scaffold is a convenience. A project.yaml that points at
+			// a playbook nobody could create is a `doctor` finding, not a
+			// reason to fail a write that already succeeded.
+			if err := plan.write(); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: could not scaffold %s: %v\n", plan.Path, err)
+			} else if plan != nil && plan.Content != "" {
+				fmt.Printf("# scaffolded %s\n", plan.Path)
+			}
 			return nil
 		},
 	}
@@ -122,14 +147,33 @@ func draftExecutor(projectPath string) (*storage.Executor, []string) {
 			notes = append(notes, p+" -> generic (built-in)")
 		}
 	}
+
+	// The odbiór half of the profile. The playbook path is set unconditionally
+	// (its evidence map and verification command are worth having even when no
+	// runtime skill exists) and `init` scaffolds the file, so a declared path is
+	// never a dangling one - `pm executor doctor` treats that as a hard error.
+	e.Handoff.Playbook = defaultPlaybookPath
+	notes = append(notes, "handoff.playbook -> "+defaultPlaybookPath)
+	runtimeSkill, runtimeNote := detectRuntimeSkill(projectPath)
+	e.Handoff.RuntimeSkill = runtimeSkill
+	notes = append(notes, runtimeNote)
+
 	return &e, notes
 }
 
 // mergeExecutor combines a freshly drafted profile with the project's existing
-// executor block, if any. The draft's DETECTED fields (phases, baseline) always
-// win so a re-run keeps re-scanning the project - everything else in an
-// existing block is hand-editable config and is preserved untouched. A project
-// with no existing block gets the draft as-is (first `pm executor init`).
+// executor block, if any. A project with no existing block gets the draft as-is
+// (first `pm executor init`).
+//
+// Three categories, not two:
+//
+//   - phases, baseline - DETECTED. The draft always wins, so a re-run keeps
+//     re-scanning the project.
+//   - handoff - FILLED IF EMPTY. Detection can propose the path and the runtime
+//     skill, but the playbook's actual content is hand-written prose about what
+//     each tool is FOR, and re-running init must never imply that prose is
+//     regenerable. So: proposed into an empty block, never over a set one.
+//   - everything else - HAND-SET. Preserved untouched.
 func mergeExecutor(existing *storage.Executor, draft *storage.Executor) (*storage.Executor, []string) {
 	if existing == nil {
 		return draft, nil
@@ -137,7 +181,13 @@ func mergeExecutor(existing *storage.Executor, draft *storage.Executor) (*storag
 	merged := *existing
 	merged.Phases = draft.Phases
 	merged.Baseline = draft.Baseline
-	return &merged, preservedFieldNotes(existing)
+
+	notes := preservedFieldNotes(existing)
+	if existing.Handoff.IsZero() && !draft.Handoff.IsZero() {
+		merged.Handoff = draft.Handoff
+		notes = append(notes, "handoff -> filled in (the block was empty)")
+	}
+	return &merged, notes
 }
 
 // preservedFieldNotes lists the existing executor fields (besides phases/baseline,
@@ -228,6 +278,14 @@ func detectSkillPhases(projectPath string) (map[string]storage.PhaseBinding, []s
 
 // skillNames returns the skill directory names under dir (skills are dirs with a
 // SKILL.md).
+//
+// The test is "does <name>/SKILL.md resolve", deliberately NOT "is <name> a
+// directory": os.ReadDir reports a SYMLINK to a directory as a non-directory,
+// so an IsDir() gate here made every linked-in skill invisible. Skills shared
+// across repos are commonly installed as links to one checkout (that is how
+// mobile-claude-toolkit distributes them), and those must be detected like any
+// other. os.Stat follows the link, so the SKILL.md probe is the whole check -
+// a plain file called `foo` cannot pass it.
 func skillNames(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -235,9 +293,6 @@ func skillNames(dir string) []string {
 	}
 	var names []string
 	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
 		if _, err := os.Stat(filepath.Join(dir, e.Name(), "SKILL.md")); err == nil {
 			names = append(names, e.Name())
 		}
@@ -263,9 +318,109 @@ func commandNames(dir string) []string {
 	return names
 }
 
+// runtimeSkillTiers ranks the name segments that mark a skill as the project's
+// RUNTIME verification skill: the one that drives a real simulator, device or
+// browser, and therefore the one an odbiór (acceptance) session has to read in
+// full rather than by its one-line description.
+//
+// Tiers rather than a flat list, because the signals are not equally strong.
+// "simulator" says what the skill is; "verify" appears in plenty of names that
+// have nothing to do with a runtime, so it only wins when nothing better exists.
+//
+// Matching is on name SEGMENTS (split on any non-alphanumeric), never on raw
+// substrings - a substring rule makes the segment "sim" match "simplify". Long
+// keywords still match inside a segment so "simulatorverify" is not missed.
+var runtimeSkillTiers = [][]string{
+	{"simulator", "sim"},
+	{"device", "emulator"},
+	{"runtime", "browser", "e2e"},
+	{"verify"},
+}
+
+// runtimeSkillTier returns the best (lowest) tier the name matches, or -1.
+func runtimeSkillTier(name string) int {
+	segments := strings.FieldsFunc(strings.ToLower(name), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	for tier, keywords := range runtimeSkillTiers {
+		for _, kw := range keywords {
+			for _, seg := range segments {
+				if seg == kw || (len(kw) >= 6 && strings.Contains(seg, kw)) {
+					return tier
+				}
+			}
+		}
+	}
+	return -1
+}
+
+// detectRuntimeSkill picks the project's runtime verification skill by name.
+//
+// Skills are scanned before commands because only a skill directory can carry
+// a scripts/ dir, and those scripts are the concrete diagnostic tools the
+// handoff contract exists to surface. A name that phaseForName() already
+// recognises is skipped outright: an inner-loop phase skill is not a runtime
+// driver, and letting one land in both places would bind the same skill to two
+// unrelated jobs.
+func detectRuntimeSkill(projectPath string) (string, string) {
+	skillsDir := filepath.Join(projectPath, ".claude", "skills")
+
+	name, tier, scripts := "", -1, false
+	// Lower tier wins; within a tier, a skill shipping scripts/ wins; otherwise
+	// the first (alphabetical) match stands.
+	better := func(t int, s bool) bool {
+		switch {
+		case tier < 0:
+			return true
+		case t != tier:
+			return t < tier
+		case s != scripts:
+			return s
+		default:
+			return false
+		}
+	}
+
+	for _, n := range skillNames(skillsDir) {
+		t := runtimeSkillTier(n)
+		if t < 0 || phaseForName(n) != "" {
+			continue
+		}
+		s := dirExists(filepath.Join(skillsDir, n, "scripts"))
+		if better(t, s) {
+			name, tier, scripts = n, t, s
+		}
+	}
+	if name == "" {
+		for _, n := range commandNames(filepath.Join(projectPath, ".claude", "commands")) {
+			t := runtimeSkillTier(n)
+			if t < 0 || phaseForName(n) != "" {
+				continue
+			}
+			if better(t, false) {
+				name, tier = n, t
+			}
+		}
+	}
+
+	if name == "" {
+		return "", "handoff.runtime_skill -> none detected (no skill named after a simulator/device/browser runtime)"
+	}
+	note := "handoff.runtime_skill -> " + name
+	if scripts {
+		note += " (ships scripts/)"
+	}
+	return name, note
+}
+
 // phaseForName maps a skill/command name to a phase, or "" if it is not a
 // recognised inner-loop phase. Order matters: review is checked before pr so
 // "review-pr" binds to review.
+//
+// Deliberately does NOT know `verify`: the verify phase is bound from the
+// stack's own command by detectVerifyCmd, and the word is claimed by
+// runtimeSkillTiers instead - a skill called "simulator-verify" is a runtime
+// driver, not the inner-loop verify step.
 func phaseForName(name string) string {
 	n := strings.ToLower(name)
 	switch {
@@ -347,6 +502,11 @@ func readPackageScripts(pkgPath string) map[string]string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func dirExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.IsDir()
 }
 
 // marshalExecutorBlock renders just the executor block for previewing.

@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -343,6 +344,388 @@ func TestExecutorInitCmdPreservesExistingConfig(t *testing.T) {
 	}
 	if e.Phase(storage.PhaseVerify).Cmd != "go test ./... && go vet ./..." {
 		t.Errorf("phases not refreshed: %+v", e.Phases)
+	}
+}
+
+func TestRuntimeSkillTier(t *testing.T) {
+	tests := []struct {
+		name string
+		want int
+	}{
+		{"simulator-verify", 0},
+		{"sim", 0},
+		{"sim-ui", 0},
+		{"iossimulator", 0}, // long keyword still matches inside a segment
+		{"device-check", 1},
+		{"android-emulator", 1},
+		{"browser-drive", 2},
+		{"e2e", 2},
+		{"verify", 3},
+		{"verify-ui", 3},
+		// The trap: "sim" is a substring of these, and a substring rule would
+		// bind an unrelated skill as the project's runtime driver.
+		{"simplify", -1},
+		{"similar-things", -1},
+		{"simple", -1},
+		{"figma-pp", -1},
+		{"humanizer", -1},
+	}
+	for _, tt := range tests {
+		if got := runtimeSkillTier(tt.name); got != tt.want {
+			t.Errorf("runtimeSkillTier(%q) = %d, want %d", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestDetectRuntimeSkill(t *testing.T) {
+	skill := func(t *testing.T, dir, name string, scripts ...string) {
+		writeFile(t, filepath.Join(dir, ".claude", "skills", name, "SKILL.md"), "# "+name+"\n")
+		for _, s := range scripts {
+			writeFile(t, filepath.Join(dir, ".claude", "skills", name, "scripts", s), "#!/bin/sh\n")
+		}
+	}
+
+	t.Run("no candidates -> empty with a note saying so", func(t *testing.T) {
+		dir := t.TempDir()
+		skill(t, dir, "implement-feature")
+		skill(t, dir, "simplify")
+		got, note := detectRuntimeSkill(dir)
+		if got != "" {
+			t.Errorf("got %q, want empty (simplify must not read as a simulator skill)", got)
+		}
+		if !strings.Contains(note, "none detected") {
+			t.Errorf("note = %q", note)
+		}
+	})
+
+	t.Run("stronger tier wins over weaker", func(t *testing.T) {
+		dir := t.TempDir()
+		skill(t, dir, "verify-things")
+		skill(t, dir, "simulator-verify")
+		if got, _ := detectRuntimeSkill(dir); got != "simulator-verify" {
+			t.Errorf("got %q, want simulator-verify", got)
+		}
+	})
+
+	t.Run("within a tier, the one shipping scripts wins", func(t *testing.T) {
+		dir := t.TempDir()
+		// "a-sim" sorts first, so only the scripts/ tie-break can flip this.
+		skill(t, dir, "a-sim")
+		skill(t, dir, "z-simulator", "sim-ui.sh")
+		got, note := detectRuntimeSkill(dir)
+		if got != "z-simulator" {
+			t.Errorf("got %q, want z-simulator (it ships scripts/)", got)
+		}
+		if !strings.Contains(note, "ships scripts/") {
+			t.Errorf("note should mention the scripts dir, got %q", note)
+		}
+	})
+
+	t.Run("a name already claimed by a phase is never a runtime skill", func(t *testing.T) {
+		dir := t.TempDir()
+		// Contains "test" -> phaseForName binds it to the test phase, so it must
+		// not ALSO be proposed as the runtime driver.
+		skill(t, dir, "test-on-device")
+		if got, _ := detectRuntimeSkill(dir); got != "" {
+			t.Errorf("got %q, want empty - the name belongs to the test phase", got)
+		}
+	})
+
+	t.Run("falls back to commands when no skill matches", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, ".claude", "commands", "simulator.md"), "drive the sim\n")
+		if got, _ := detectRuntimeSkill(dir); got != "simulator" {
+			t.Errorf("got %q, want simulator", got)
+		}
+	})
+
+	t.Run("a skill beats a command even on a weaker tier", func(t *testing.T) {
+		dir := t.TempDir()
+		skill(t, dir, "verify-screen")
+		writeFile(t, filepath.Join(dir, ".claude", "commands", "simulator.md"), "drive the sim\n")
+		if got, _ := detectRuntimeSkill(dir); got != "verify-screen" {
+			t.Errorf("got %q, want verify-screen (only a skill can carry scripts/)", got)
+		}
+	})
+}
+
+// TestSkillNamesFollowsSymlinks guards the distribution mechanism, not just the
+// helper: skills shared between repos are installed as symlinks into one
+// checkout, and os.ReadDir reports a symlinked directory as a NON-directory. An
+// IsDir() gate here therefore made every linked-in skill invisible to both
+// phase detection and runtime-skill detection - found by running the real
+// installer against a synthetic project and watching runtime_skill come back
+// unset even though the skill was right there.
+func TestSkillNamesFollowsSymlinks(t *testing.T) {
+	real := t.TempDir()
+	writeFile(t, filepath.Join(real, "simulator-verify", "SKILL.md"), "# sim\n")
+	writeFile(t, filepath.Join(real, "simulator-verify", "scripts", "sim-ui.sh"), "#!/bin/sh\n")
+
+	proj := t.TempDir()
+	skills := filepath.Join(proj, ".claude", "skills")
+	if err := os.MkdirAll(skills, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(real, "simulator-verify"), filepath.Join(skills, "simulator-verify")); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := skillNames(skills); len(got) != 1 || got[0] != "simulator-verify" {
+		t.Fatalf("skillNames = %v, want [simulator-verify] - a linked-in skill must be found", got)
+	}
+	name, note := detectRuntimeSkill(proj)
+	if name != "simulator-verify" {
+		t.Errorf("detectRuntimeSkill = %q, want simulator-verify", name)
+	}
+	if !strings.Contains(note, "ships scripts/") {
+		t.Errorf("scripts/ behind the link should be seen too, note = %q", note)
+	}
+}
+
+func TestDraftExecutorHandoff(t *testing.T) {
+	t.Run("playbook always proposed, runtime skill only when found", func(t *testing.T) {
+		dir := t.TempDir()
+		e, notes := draftExecutor(dir)
+		if e.Handoff.Playbook != defaultPlaybookPath {
+			t.Errorf("playbook = %q, want %q", e.Handoff.Playbook, defaultPlaybookPath)
+		}
+		if e.Handoff.RuntimeSkill != "" {
+			t.Errorf("runtime_skill = %q, want empty on a bare project", e.Handoff.RuntimeSkill)
+		}
+		if !containsNote(notes, "handoff.playbook -> "+defaultPlaybookPath) {
+			t.Errorf("notes = %v", notes)
+		}
+	})
+
+	t.Run("detected runtime skill lands in the block", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, ".claude", "skills", "simulator-verify", "SKILL.md"), "x\n")
+		e, _ := draftExecutor(dir)
+		if e.Handoff.RuntimeSkill != "simulator-verify" {
+			t.Errorf("runtime_skill = %q", e.Handoff.RuntimeSkill)
+		}
+	})
+}
+
+func TestMergeExecutorHandoff(t *testing.T) {
+	t.Run("filled in when the existing block is empty", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, ".claude", "skills", "simulator-verify", "SKILL.md"), "x\n")
+		draft, _ := draftExecutor(dir)
+
+		result, notes := mergeExecutor(&storage.Executor{Prepare: "yarn install"}, draft)
+		if result.Handoff.RuntimeSkill != "simulator-verify" {
+			t.Errorf("runtime_skill = %q, want the detected one", result.Handoff.RuntimeSkill)
+		}
+		if !containsNote(notes, "handoff -> filled in (the block was empty)") {
+			t.Errorf("notes = %v", notes)
+		}
+	})
+
+	t.Run("a hand-set handoff is never overwritten", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, ".claude", "skills", "simulator-verify", "SKILL.md"), "x\n")
+		draft, _ := draftExecutor(dir)
+
+		existing := &storage.Executor{Handoff: storage.Handoff{
+			Playbook:     "docs/my-own-playbook.md",
+			RuntimeSkill: "hand-picked-runtime",
+		}}
+		result, notes := mergeExecutor(existing, draft)
+		if result.Handoff.Playbook != "docs/my-own-playbook.md" {
+			t.Errorf("playbook clobbered: %q", result.Handoff.Playbook)
+		}
+		if result.Handoff.RuntimeSkill != "hand-picked-runtime" {
+			t.Errorf("runtime_skill clobbered: %q", result.Handoff.RuntimeSkill)
+		}
+		if !containsNote(notes, "preserved existing handoff") {
+			t.Errorf("notes = %v", notes)
+		}
+	})
+}
+
+func TestPlaybookSkeleton(t *testing.T) {
+	e := &storage.Executor{
+		Baseline:     "yarn validate",
+		ContextRepos: map[string]string{"backend": "/repos/platform"},
+	}
+	h := storage.ResolvedHandoff{
+		Declared:     true,
+		RuntimeSkill: "simulator-verify",
+		SkillPath:    "/repo/.claude/skills/simulator-verify/SKILL.md",
+		Scripts:      []string{"measure-element.py", "sim-ui.sh"},
+	}
+	out := playbookSkeleton("myproj", e, h)
+
+	t.Run("derived facts are filled in", func(t *testing.T) {
+		for _, want := range []string{
+			"myproj",
+			"simulator-verify",
+			"/repo/.claude/skills/simulator-verify/SKILL.md",
+			"yarn validate",
+			"/repos/platform",
+			"pm executor show myproj",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("skeleton missing derived fact %q", want)
+			}
+		}
+	})
+
+	t.Run("every script gets its own what-for slot", func(t *testing.T) {
+		// The pm-cli-49 lesson: naming the scripts is not documenting them.
+		// Each one must carry an explicit, unfilled slot for its purpose.
+		for _, s := range h.Scripts {
+			if !strings.Contains(out, "`"+s+"`") {
+				t.Errorf("skeleton never names %q", s)
+			}
+		}
+		if got := strings.Count(out, playbookTODO+" what it is FOR"); got != len(h.Scripts) {
+			t.Errorf("got %d what-for slots, want one per script (%d)", got, len(h.Scripts))
+		}
+		if !strings.Contains(out, playbookTODO+" WHEN to reach for it") {
+			t.Error("skeleton must ask when to reach for a tool, not just what it is")
+		}
+	})
+
+	t.Run("no fabricated purpose text", func(t *testing.T) {
+		// A generated guess about what a script does is worse than a blank,
+		// because nobody goes back to check it.
+		if strings.Contains(out, "measures the") || strings.Contains(out, "drives the simulator (tap") {
+			t.Error("skeleton invented a purpose for a script")
+		}
+	})
+
+	t.Run("slot count is reported honestly", func(t *testing.T) {
+		if n := strings.Count(out, playbookTODO); n < 10 {
+			t.Errorf("expected the scaffold to leave many slots, got %d", n)
+		}
+	})
+
+	t.Run("bare project still gets a usable scaffold", func(t *testing.T) {
+		bare := playbookSkeleton("bare", &storage.Executor{}, storage.ResolvedHandoff{})
+		for _, want := range []string{
+			"no runtime skill is declared",
+			"executor.baseline",
+			"## PR conventions",
+		} {
+			if !strings.Contains(bare, want) {
+				t.Errorf("bare scaffold missing %q", want)
+			}
+		}
+	})
+}
+
+func TestPlanPlaybook(t *testing.T) {
+	t.Run("scaffolds when absent", func(t *testing.T) {
+		dir := t.TempDir()
+		e := &storage.Executor{Handoff: storage.Handoff{Playbook: defaultPlaybookPath}}
+		plan := planPlaybook(dir, "p", e)
+		if plan == nil || plan.Exists || plan.Content == "" {
+			t.Fatalf("plan = %+v, want a scaffold", plan)
+		}
+		if err := plan.write(); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if !fileExists(filepath.Join(dir, defaultPlaybookPath)) {
+			t.Error("playbook not written")
+		}
+	})
+
+	t.Run("an existing playbook is left alone", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, defaultPlaybookPath)
+		writeFile(t, path, "# hand-written, do not touch\n")
+
+		e := &storage.Executor{Handoff: storage.Handoff{Playbook: defaultPlaybookPath}}
+		plan := planPlaybook(dir, "p", e)
+		if plan == nil || !plan.Exists {
+			t.Fatalf("plan = %+v, want Exists", plan)
+		}
+		if plan.Content != "" {
+			t.Error("must not prepare content for an existing playbook")
+		}
+		if err := plan.write(); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != "# hand-written, do not touch\n" {
+			t.Errorf("existing playbook was rewritten: %q", got)
+		}
+	})
+
+	t.Run("no playbook declared -> no plan", func(t *testing.T) {
+		if plan := planPlaybook(t.TempDir(), "p", &storage.Executor{}); plan != nil {
+			t.Errorf("plan = %+v, want nil", plan)
+		}
+	})
+}
+
+// TestExecutorInitThenDoctorIsClean is the acceptance criterion for pm-cli-51:
+// a fresh project set up by `pm executor init` alone must not make
+// `pm executor doctor` report a single ERROR. Warnings are expected and
+// correct - the scaffold's slots are still empty, and that is exactly what the
+// warning level is for.
+func TestExecutorInitThenDoctorIsClean(t *testing.T) {
+	store, slug := tempStore(t)
+	proj, _ := store.GetProject(slug)
+	writeFile(t, filepath.Join(proj.Path, "go.mod"), "module x\n")
+	writeFile(t, filepath.Join(proj.Path, ".claude", "skills", "simulator-verify", "SKILL.md"), "# sim\n")
+	writeFile(t, filepath.Join(proj.Path, ".claude", "skills", "simulator-verify", "scripts", "sim-ui.sh"), "#!/bin/sh\n")
+
+	cmd := newExecutorInitCmd(store)
+	cmd.SetArgs([]string{slug})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("executor init: %v", err)
+	}
+
+	reloaded, err := store.GetProject(slug)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	e := reloaded.GetExecutor()
+	if e.Handoff.RuntimeSkill != "simulator-verify" {
+		t.Errorf("runtime_skill = %q, want simulator-verify", e.Handoff.RuntimeSkill)
+	}
+	if e.Handoff.Playbook != defaultPlaybookPath {
+		t.Errorf("playbook = %q", e.Handoff.Playbook)
+	}
+
+	playbook := filepath.Join(proj.Path, defaultPlaybookPath)
+	body, err := os.ReadFile(playbook)
+	if err != nil {
+		t.Fatalf("init did not scaffold the playbook: %v", err)
+	}
+	// The derived inventory has to be there, or doctor's mention check would be
+	// warning about scripts the scaffold was supposed to introduce.
+	if !strings.Contains(string(body), "sim-ui.sh") {
+		t.Error("scaffold does not name the runtime skill's script")
+	}
+
+	checks := runExecutorDoctor(reloaded)
+	for _, c := range checks {
+		if c.Level == levelError {
+			t.Errorf("doctor reported an ERROR after a bare init: %s", c.Msg)
+		}
+	}
+	if failed(checks, false) {
+		t.Error("doctor should exit 0 after a bare init")
+	}
+	// ...but it must still say the prose is missing.
+	if !failed(checks, true) {
+		t.Error("doctor --strict should flag the unfilled scaffold")
+	}
+	var sawTODO bool
+	for _, c := range checks {
+		if strings.Contains(c.Msg, playbookTODO) {
+			sawTODO = true
+		}
+	}
+	if !sawTODO {
+		t.Error("doctor must warn about the scaffold's unfilled slots")
 	}
 }
 
