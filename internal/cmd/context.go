@@ -50,6 +50,9 @@ func newContextCmd(store storage.TaskStore) *cobra.Command {
 				for _, tr := range trackers {
 					fmt.Printf("📋 %s  [%s]  (%s)\n", tr.ID, tr.Status, progressLine(tr))
 					fmt.Printf("   %s\n", tr.Title)
+					if tr.ChildrenOmitted {
+						fmt.Println("   (finished - children collapsed)")
+					}
 					for _, c := range tr.Children {
 						mark := statusMark(c.Status)
 						line := fmt.Sprintf("   %s %-13s %-7s o:%-4d", mark, c.ID, c.Status, c.Order)

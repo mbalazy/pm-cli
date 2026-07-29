@@ -1,6 +1,10 @@
 package storage
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func orderTask(id, parent string, order int) *Task {
 	return &Task{Meta: TaskMeta{ID: id, Parent: parent, Order: order}, Project: "test"}
@@ -103,5 +107,98 @@ func TestLessByOrder(t *testing.T) {
 				t.Errorf("LessByOrder = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// statusTask is orderTask's sibling for the rollup-shaping tests: what matters
+// there is the status of parent and children, not their order.
+func statusTask(id, parent string, status TaskStatus, brief string) *Task {
+	return &Task{Meta: TaskMeta{ID: id, Parent: parent, Status: status, Brief: brief}, Project: "test"}
+}
+
+func TestBuildTrackersCompressesParentBrief(t *testing.T) {
+	long := "**first line of the parent brief**\nsecond line\nthird line"
+	tasks := []*Task{
+		statusTask("p-3", "", StatusDoing, long),
+		statusTask("p-3-1", "p-3", StatusTodo, "child line one\nchild line two"),
+	}
+	trackers, _ := BuildTrackers(tasks)
+	if got := trackers[0].BriefLine; got != "first line of the parent brief" {
+		t.Errorf("parent BriefLine = %q, want the first line stripped of bold markers", got)
+	}
+	if got := trackers[0].Children[0].BriefLine; got != "child line one" {
+		t.Errorf("child BriefLine = %q, want the first line", got)
+	}
+}
+
+func TestBuildTrackersParentBriefTruncatedAt120(t *testing.T) {
+	tasks := []*Task{
+		statusTask("p-4", "", StatusDoing, strings.Repeat("x", 500)),
+		statusTask("p-4-1", "p-4", StatusTodo, ""),
+	}
+	trackers, _ := BuildTrackers(tasks)
+	if got := len([]rune(trackers[0].BriefLine)); got != 121 {
+		t.Errorf("parent BriefLine = %d runes, want 121 (120 + ellipsis)", got)
+	}
+}
+
+func TestBuildTrackersCollapsesFinishedTracker(t *testing.T) {
+	cases := []struct {
+		name         string
+		parent       TaskStatus
+		kids         []TaskStatus
+		wantCollapse bool
+	}{
+		{"closed parent, all children done", StatusDone, []TaskStatus{StatusDone, StatusDone}, true},
+		{"closed parent, children merged", StatusDone, []TaskStatus{"merged", "merged"}, true},
+		{"closed parent, mixed terminal", StatusDone, []TaskStatus{"merged", StatusDone, StatusArchived}, true},
+		{"closed parent, one child still waiting", StatusDone, []TaskStatus{StatusDone, StatusWaiting}, false},
+		{"closed parent, one child still todo", StatusDone, []TaskStatus{StatusDone, StatusTodo}, false},
+		{"open parent, all children done", StatusDoing, []TaskStatus{StatusDone, StatusDone}, false},
+		{"open parent, open children", StatusTodo, []TaskStatus{StatusTodo}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tasks := []*Task{statusTask("p-5", "", c.parent, "")}
+			for i, ks := range c.kids {
+				tasks = append(tasks, statusTask(fmt.Sprintf("p-5-%d", i+1), "p-5", ks, "kid brief"))
+			}
+			trackers, _ := BuildTrackers(tasks)
+			tr := trackers[0]
+			if tr.ChildrenOmitted != c.wantCollapse {
+				t.Fatalf("ChildrenOmitted = %v, want %v", tr.ChildrenOmitted, c.wantCollapse)
+			}
+			if c.wantCollapse && len(tr.Children) != 0 {
+				t.Errorf("collapsed tracker still lists %d children", len(tr.Children))
+			}
+			if !c.wantCollapse && len(tr.Children) != len(c.kids) {
+				t.Errorf("children = %d, want %d", len(tr.Children), len(c.kids))
+			}
+			// Progress/Total survive the collapse - they are what a finished
+			// tracker still has to say.
+			if tr.Total != len(c.kids) {
+				t.Errorf("Total = %d, want %d", tr.Total, len(c.kids))
+			}
+			sum := 0
+			for _, n := range tr.Progress {
+				sum += n
+			}
+			if sum != len(c.kids) {
+				t.Errorf("progress sums to %d, want %d", sum, len(c.kids))
+			}
+		})
+	}
+}
+
+func TestBuildTrackersCollapseDoesNotAffectSuppression(t *testing.T) {
+	// A collapsed tracker's children are still suppressed from flat lists -
+	// they are finished, not orphaned.
+	tasks := []*Task{
+		statusTask("p-6", "", StatusDone, ""),
+		statusTask("p-6-1", "p-6", StatusDone, ""),
+	}
+	_, suppressed := BuildTrackers(tasks)
+	if !suppressed["p-6"] || !suppressed["p-6-1"] {
+		t.Errorf("suppressed = %v, want both parent and child", suppressed)
 	}
 }

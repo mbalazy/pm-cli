@@ -44,14 +44,22 @@ func LessByOrder(a, b *Task) bool {
 }
 
 // Tracker is a parent task plus a computed rollup of its children.
+//
+// The rollup is a SUMMARY, so every brief in it is compressed to one line - the
+// parent's like the children's. The full brief is one pm_get_task away. This is
+// load-bearing for the MCP side: pm_context is the session-start call, and full
+// parent briefs alone were a third of a large project's payload (pm-cli-50).
 type Tracker struct {
-	ID       string         `json:"id"`
-	Title    string         `json:"title"`
-	Status   string         `json:"status"`
-	Brief    string         `json:"brief,omitempty"`
-	Total    int            `json:"total"`
-	Progress map[string]int `json:"progress"`
-	Children []TrackerChild `json:"children"`
+	ID        string         `json:"id"`
+	Title     string         `json:"title"`
+	Status    string         `json:"status"`
+	BriefLine string         `json:"brief_line,omitempty"`
+	Total     int            `json:"total"`
+	Progress  map[string]int `json:"progress"`
+	Children  []TrackerChild `json:"children,omitempty"`
+	// ChildrenOmitted marks a finished tracker whose child list was collapsed
+	// to Progress/Total. See trackerFinished.
+	ChildrenOmitted bool `json:"children_omitted,omitempty"`
 }
 
 // BriefLine returns the first non-empty line of a brief, stripped of bold
@@ -68,6 +76,31 @@ func BriefLine(brief string) string {
 		return ln
 	}
 	return ""
+}
+
+// terminalStatus reports whether a task is closed for good. "merged" is a
+// per-project status (the epic lifecycle todo -> doing -> merged -> done), so
+// it is matched by name here the same way the board's progress badge does.
+func terminalStatus(s TaskStatus) bool {
+	switch s {
+	case StatusDone, StatusArchived, "merged":
+		return true
+	}
+	return false
+}
+
+// trackerFinished reports whether a tracker is done being watched: the parent
+// itself is closed AND every child reached a terminal status.
+func trackerFinished(parent *Task, kids []*Task) bool {
+	if !terminalStatus(parent.Meta.Status) {
+		return false
+	}
+	for _, k := range kids {
+		if !terminalStatus(k.Meta.Status) {
+			return false
+		}
+	}
+	return true
 }
 
 // BuildTrackers groups tasks by parent. A task is a "tracker" iff at least one
@@ -123,15 +156,26 @@ func BuildTrackers(tasks []*Task) ([]Tracker, map[string]bool) {
 			})
 		}
 
-		trackers = append(trackers, Tracker{
-			ID:       t.Meta.ID,
-			Title:    t.Meta.Title,
-			Status:   string(t.Meta.Status),
-			Brief:    t.Meta.Brief,
-			Total:    len(kids),
-			Progress: progress,
-			Children: children,
-		})
+		tr := Tracker{
+			ID:        t.Meta.ID,
+			Title:     t.Meta.Title,
+			Status:    string(t.Meta.Status),
+			BriefLine: BriefLine(t.Meta.Brief),
+			Total:     len(kids),
+			Progress:  progress,
+			Children:  children,
+		}
+		// A finished tracker has nothing left to look at, so its children
+		// collapse to the progress counts. Session context is re-read at the
+		// start of every session while finished epics accumulate forever, which
+		// makes their child lists the one part of the rollup that grows without
+		// bound. Anything still open (e.g. a waiting child under a closed
+		// parent) keeps the full list.
+		if trackerFinished(t, kids) {
+			tr.Children = nil
+			tr.ChildrenOmitted = true
+		}
+		trackers = append(trackers, tr)
 	}
 	sort.Slice(trackers, func(i, j int) bool { return trackers[i].ID < trackers[j].ID })
 	return trackers, suppressed

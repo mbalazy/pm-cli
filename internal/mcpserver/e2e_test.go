@@ -506,3 +506,147 @@ func TestE2EEpicModeAndModel(t *testing.T) {
 		}
 	})
 }
+
+// writeTaskFor is a terse task writer for the payload-shape tests.
+func writeTaskFor(t *testing.T, store *storage.Store, id, parent string, status storage.TaskStatus, brief string) {
+	t.Helper()
+	task := &storage.Task{
+		Meta: storage.TaskMeta{
+			ID: id, Title: "Task " + id, Status: status, Parent: parent,
+			Created: "2025-01-01", Updated: "2025-01-02", Brief: brief,
+		},
+		Body:     strings.Repeat("body ", 200),
+		FilePath: filepath.Join(store.Root, "test", id+".md"),
+		Project:  "test",
+	}
+	if err := storage.WriteTask(task); err != nil {
+		t.Fatalf("write %s: %v", id, err)
+	}
+}
+
+// TestE2EContextRollupIsCompressed pins the pm_context size contract (pm-cli-50:
+// the MCP payload hit 61k chars and blew the tool's token limit while the same
+// rollup from the terminal was 15k). The rollup is a summary: every brief in it
+// is one line and a finished tracker drops its children. Full briefs stay one
+// pm_get_task away.
+func TestE2EContextRollupIsCompressed(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	fatBrief := "**headline of the brief**\n" + strings.Repeat("padding line that must never reach pm_context\n", 60)
+
+	// An open tracker: children stay, briefs compress.
+	writeTaskFor(t, store, "t-10", "", storage.StatusDoing, fatBrief)
+	for i := 1; i <= 3; i++ {
+		writeTaskFor(t, store, fmt.Sprintf("t-10-%d", i), "t-10", storage.StatusTodo, fatBrief)
+	}
+	// A finished tracker: children collapse entirely.
+	writeTaskFor(t, store, "t-20", "", storage.StatusDone, fatBrief)
+	for i := 1; i <= 4; i++ {
+		writeTaskFor(t, store, fmt.Sprintf("t-20-%d", i), "t-20", storage.StatusDone, fatBrief)
+	}
+
+	// A focus plan pointing at a fat-brief task.
+	storage.WriteFocusPlan(store.Root, storage.FocusPlan{Date: storage.Today(), Tasks: []string{"t-10"}})
+
+	sess := startMCP(t, store)
+	text, isErr := call(t, sess, "pm_context", map[string]any{"project": "test"})
+	if isErr {
+		t.Fatalf("pm_context error: %s", text)
+	}
+
+	var out struct {
+		Trackers []struct {
+			ID              string `json:"id"`
+			BriefLine       string `json:"brief_line"`
+			Total           int    `json:"total"`
+			ChildrenOmitted bool   `json:"children_omitted"`
+			Children        []struct {
+				ID        string `json:"id"`
+				BriefLine string `json:"brief_line"`
+			} `json:"children"`
+		} `json:"trackers"`
+		FocusTasks []struct {
+			ID    string `json:"id"`
+			Brief string `json:"brief"`
+		} `json:"focus_tasks"`
+	}
+	mustUnmarshal(t, text, &out)
+
+	byID := map[string]int{}
+	for i, tr := range out.Trackers {
+		byID[tr.ID] = i
+		if strings.Contains(tr.BriefLine, "\n") {
+			t.Errorf("tracker %s brief_line is multi-line: %q", tr.ID, tr.BriefLine)
+		}
+		if tr.BriefLine != "headline of the brief" {
+			t.Errorf("tracker %s brief_line = %q, want the compressed headline", tr.ID, tr.BriefLine)
+		}
+		for _, c := range tr.Children {
+			if strings.Contains(c.BriefLine, "\n") {
+				t.Errorf("child %s brief_line is multi-line: %q", c.ID, c.BriefLine)
+			}
+		}
+	}
+
+	open := out.Trackers[byID["t-10"]]
+	if len(open.Children) != 3 || open.ChildrenOmitted {
+		t.Errorf("open tracker: children=%d omitted=%v, want 3 and false", len(open.Children), open.ChildrenOmitted)
+	}
+	done := out.Trackers[byID["t-20"]]
+	if len(done.Children) != 0 || !done.ChildrenOmitted {
+		t.Errorf("finished tracker: children=%d omitted=%v, want 0 and true", len(done.Children), done.ChildrenOmitted)
+	}
+	if done.Total != 4 {
+		t.Errorf("finished tracker Total = %d, want 4 (progress survives the collapse)", done.Total)
+	}
+
+	if len(out.FocusTasks) != 1 || strings.Contains(out.FocusTasks[0].Brief, "\n") {
+		t.Errorf("focus task brief must be one line, got %q", out.FocusTasks[0].Brief)
+	}
+
+	// The padding text exists on 9 tasks; not one line of it may reach the rollup.
+	if n := strings.Count(text, "padding line"); n != 0 {
+		t.Errorf("payload leaks %d padding lines - a full brief reached pm_context", n)
+	}
+
+	// pm_get_task is the escape hatch: it still returns the whole brief.
+	full, isErr := call(t, sess, "pm_get_task", map[string]any{"project": "test", "task_id": "t-10"})
+	if isErr {
+		t.Fatalf("pm_get_task error: %s", full)
+	}
+	var detail struct {
+		Brief string `json:"brief"`
+	}
+	mustUnmarshal(t, full, &detail)
+	if detail.Brief != fatBrief {
+		t.Errorf("pm_get_task must return the full brief, got %d of %d chars", len(detail.Brief), len(fatBrief))
+	}
+}
+
+// TestE2ECrossProjectContextCompressesBriefs: the no-project branch of
+// pm_context spans every active project, so its doing-task briefs compress like
+// any other listing (the project-scoped branch keeps them whole on purpose).
+func TestE2ECrossProjectContextCompressesBriefs(t *testing.T) {
+	store, task := setupMCPTestStore(t)
+	task.Meta.Brief = "headline\nrest of the brief"
+	storage.WriteTask(task)
+
+	sess := startMCP(t, store)
+	text, isErr := call(t, sess, "pm_context", nil)
+	if isErr {
+		t.Fatalf("pm_context error: %s", text)
+	}
+	var out struct {
+		Projects []struct {
+			DoingTasks []struct {
+				Brief string `json:"brief"`
+			} `json:"doing_tasks"`
+		} `json:"projects"`
+	}
+	mustUnmarshal(t, text, &out)
+	if len(out.Projects) != 1 || len(out.Projects[0].DoingTasks) != 1 {
+		t.Fatalf("want 1 project with 1 doing task, got %+v", out.Projects)
+	}
+	if got := out.Projects[0].DoingTasks[0].Brief; got != "headline" {
+		t.Errorf("cross-project brief = %q, want the compressed first line", got)
+	}
+}

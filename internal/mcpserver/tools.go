@@ -183,7 +183,11 @@ func focusTaskSummaries(store storage.TaskStore) []taskSummary {
 	var result []taskSummary
 	for _, id := range fp.Tasks {
 		if t, ok := lookup[id]; ok && t.Meta.Status != storage.StatusDone && t.Meta.Status != storage.StatusArchived {
-			result = append(result, toSummary(t))
+			s := toSummary(t)
+			// A listing, so the same one-line rule as pm_list_tasks: the focus
+			// plan points at tasks, it is not the place to read them.
+			s.Brief = storage.BriefLine(s.Brief)
+			result = append(result, s)
 		}
 	}
 	return result
@@ -318,7 +322,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	// pm_context
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_context",
-		Description: "Get project context for session start. Auto-detects project from cwd. Returns project info, active tasks, and task counts.",
+		Description: "Get project context for session start. Auto-detects project from cwd. Returns project info, active tasks, and task counts. Doing tasks carry their full brief; briefs in the tracker rollup and focus list are compressed to one line and finished trackers omit their children - use pm_get_task for full detail.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in contextInput) (*mcp.CallToolResult, any, error) {
 		// Resolve project
 		projectSlug := ""
@@ -935,7 +939,12 @@ func crossProjectContext(store storage.TaskStore) (*mcp.CallToolResult, any, err
 		for _, t := range tasks {
 			ps.TaskCounts[string(t.Meta.Status)]++
 			if t.Meta.Status == storage.StatusDoing && !suppressed[t.Meta.ID] {
-				ps.DoingTasks = append(ps.DoingTasks, toSummary(t))
+				s := toSummary(t)
+				// Cross-project view = a scan across every active project, so
+				// briefs compress like any other listing. The project-scoped
+				// branch keeps them whole (see projectContext).
+				s.Brief = storage.BriefLine(s.Brief)
+				ps.DoingTasks = append(ps.DoingTasks, s)
 			}
 		}
 		sort.Slice(ps.DoingTasks, func(i, j int) bool {
