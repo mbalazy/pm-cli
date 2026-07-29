@@ -76,6 +76,55 @@ func TestDetectVerifyCmd(t *testing.T) {
 		}
 	})
 
+	// The real app.orbit shape: an aggregate called `validate`, no
+	// verify/check/ci, and a HYPHENATED type-check. Before this was fixed,
+	// detection fell through to `yarn test && yarn lint` - a command the
+	// project's own playbook calls wrong (jest is not part of its verification)
+	// and one that silently dropped type checking because pm only looked for
+	// `typecheck`. That string becomes the executor baseline, so it decides
+	// whether workers can tell new failures from old ones.
+	t.Run("validate counts as an aggregate", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "package.json"), `{"scripts":{
+			"validate":"npm run type-check && npm run lint && npm run format:check",
+			"test":"jest","lint":"eslint .","type-check":"tsc --noEmit"}}`)
+		writeFile(t, filepath.Join(dir, "yarn.lock"), "")
+		if got := detectVerifyCmd(dir); got != "yarn validate" {
+			t.Errorf("got %q, want yarn validate", got)
+		}
+	})
+
+	t.Run("hyphenated type-check is the same step as typecheck", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "package.json"),
+			`{"scripts":{"test":"jest","lint":"eslint .","type-check":"tsc --noEmit"}}`)
+		writeFile(t, filepath.Join(dir, "yarn.lock"), "")
+		want := "yarn test && yarn lint && yarn type-check"
+		if got := detectVerifyCmd(dir); got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+
+	t.Run("one spelling per step, never both", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "package.json"),
+			`{"scripts":{"typecheck":"tsc","type-check":"tsc --noEmit","tsc":"tsc"}}`)
+		writeFile(t, filepath.Join(dir, "yarn.lock"), "")
+		if got := detectVerifyCmd(dir); got != "yarn typecheck" {
+			t.Errorf("got %q, want just yarn typecheck (first spelling wins)", got)
+		}
+	})
+
+	t.Run("verify still beats validate", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "package.json"),
+			`{"scripts":{"verify":"make all","validate":"npm run lint"}}`)
+		writeFile(t, filepath.Join(dir, "yarn.lock"), "")
+		if got := detectVerifyCmd(dir); got != "yarn verify" {
+			t.Errorf("got %q, want yarn verify", got)
+		}
+	})
+
 	t.Run("unknown stack returns empty", func(t *testing.T) {
 		if got := detectVerifyCmd(t.TempDir()); got != "" {
 			t.Errorf("got %q, want empty", got)

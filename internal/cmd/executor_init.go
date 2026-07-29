@@ -451,6 +451,31 @@ func detectVerifyCmd(projectPath string) string {
 	return ""
 }
 
+// nodeVerifyAggregates are the script names that already mean "run everything",
+// tried in order. `validate` is here because it is the common spelling in the
+// React Native / Expo world, and missing it is not cosmetic: whatever this
+// function returns becomes the executor's BASELINE, injected into every worker
+// prompt as "any failure you see is NEW". Get it wrong and a worker either
+// blames pre-existing breakage on itself or walks past a real regression - the
+// exact failure 0.25.0 introduced baselines to stop.
+//
+// Measured on app.orbit, which has `validate` (type-check + lint +
+// format:check) and none of the other three: detection used to fall through to
+// `yarn test && yarn lint`, a command the project's own playbook says is wrong
+// (jest is deliberately NOT part of its verification and explodes in a fresh
+// worktree on a missing perf baseline).
+var nodeVerifyAggregates = []string{"verify", "validate", "check", "ci"}
+
+// nodeVerifyParts are the individual steps to compose when no aggregate script
+// exists. Each entry holds the accepted spellings of ONE step, tried in order:
+// projects disagree on hyphenation, and treating `typecheck` and `type-check`
+// as different steps silently dropped type checking from the composed command.
+var nodeVerifyParts = [][]string{
+	{"test"},
+	{"lint"},
+	{"typecheck", "type-check", "tsc"},
+}
+
 func nodeVerifyCmd(projectPath, pkgPath string) string {
 	scripts := readPackageScripts(pkgPath)
 	if len(scripts) == 0 {
@@ -458,15 +483,18 @@ func nodeVerifyCmd(projectPath, pkgPath string) string {
 	}
 	run := nodeRunner(projectPath)
 	// Prefer a single aggregate script if the project already has one.
-	for _, agg := range []string{"verify", "check", "ci"} {
+	for _, agg := range nodeVerifyAggregates {
 		if _, ok := scripts[agg]; ok {
 			return run(agg)
 		}
 	}
 	var parts []string
-	for _, s := range []string{"test", "lint", "typecheck"} {
-		if _, ok := scripts[s]; ok {
-			parts = append(parts, run(s))
+	for _, spellings := range nodeVerifyParts {
+		for _, s := range spellings {
+			if _, ok := scripts[s]; ok {
+				parts = append(parts, run(s))
+				break // one spelling per step, never both
+			}
 		}
 	}
 	return strings.Join(parts, " && ")
