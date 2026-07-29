@@ -1,0 +1,293 @@
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/mbalazy/pm/internal/storage"
+	"github.com/spf13/cobra"
+)
+
+// checkLevel separates the two kinds of finding the doctor can produce, because
+// they deserve different consequences.
+//
+// levelError is a BINARY FACT about the filesystem: a declared playbook that
+// does not exist, a context repo pointing at nothing. There is no reading of
+// the project under which those are fine, so they may fail the command.
+//
+// levelWarn is a HEURISTIC over prose or config style: "the playbook never
+// names measure-element.py" is a guess - the playbook may describe the same
+// technique in different words. Warnings must not fail by default: one false
+// alarm is how a validator gets switched off permanently. --strict promotes
+// them for anyone who has decided the heuristics earn their keep.
+type checkLevel int
+
+const (
+	levelOK checkLevel = iota
+	levelWarn
+	levelError
+)
+
+func (l checkLevel) tag() string {
+	switch l {
+	case levelError:
+		return "ERROR"
+	case levelWarn:
+		return "WARN "
+	default:
+		return "ok   "
+	}
+}
+
+type check struct {
+	Level checkLevel
+	Msg   string
+	Hint  string
+}
+
+func newExecutorDoctorCmd(store storage.TaskStore) *cobra.Command {
+	var strict bool
+
+	cmd := &cobra.Command{
+		Use:   "doctor [project]",
+		Short: "Check the executor profile for completeness and drift",
+		Long: "Validates COMPLETENESS, not YAML syntax: that a declared playbook and runtime skill really " +
+			"exist, that context repos and worktree slot paths are usable, that the playbook mentions every " +
+			"script the runtime skill ships, and that it does not hardcode runtime identifiers (simulator " +
+			"ids, ports) pm already resolves from the worktree slots - the copy that silently drifts the " +
+			"first time a slot changes.\n\n" +
+			"Exit code: 1 on ERROR (a binary fact - a declared file that is not there), 0 on WARN (a " +
+			"heuristic over prose, which can be a false alarm). --strict fails on warnings too.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			slug, proj, err := resolveProjectArg(store, args)
+			if err != nil {
+				return err
+			}
+			checks := runExecutorDoctor(proj)
+			fmt.Print(renderDoctor(slug, checks, strict))
+
+			// Exit directly rather than returning an error: the report IS the
+			// output, and a cobra error would print usage text over it.
+			if failed(checks, strict) {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&strict, "strict", false, "treat warnings as failures (exit 1)")
+	return cmd
+}
+
+func failed(checks []check, strict bool) bool {
+	for _, c := range checks {
+		if c.Level == levelError || (strict && c.Level == levelWarn) {
+			return true
+		}
+	}
+	return false
+}
+
+func renderDoctor(slug string, checks []check, strict bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# executor doctor: %s\n\n", slug)
+	var errs, warns int
+	for _, c := range checks {
+		fmt.Fprintf(&b, "  [%s] %s\n", c.Level.tag(), c.Msg)
+		if c.Hint != "" {
+			fmt.Fprintf(&b, "          -> %s\n", c.Hint)
+		}
+		switch c.Level {
+		case levelError:
+			errs++
+		case levelWarn:
+			warns++
+		}
+	}
+	fmt.Fprintf(&b, "\n%d error(s), %d warning(s)", errs, warns)
+	if strict {
+		b.WriteString(" [--strict: warnings fail]")
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// runExecutorDoctor produces the findings for a project. Pure apart from the
+// filesystem it deliberately inspects, so it is table-testable.
+func runExecutorDoctor(proj *storage.Project) []check {
+	var out []check
+	add := func(l checkLevel, msg, hint string) { out = append(out, check{Level: l, Msg: msg, Hint: hint}) }
+
+	if !proj.HasExecutor() {
+		add(levelWarn, "no `executor` block in project.yaml",
+			"`pm executor init` drafts one by scanning the repo's skills and stack")
+		return out
+	}
+	if proj.Path == "" {
+		add(levelError, "project has no `path` - nothing in the executor block can be resolved",
+			"set `path` in project.yaml")
+		return out
+	}
+	if st, err := os.Stat(proj.Path); err != nil || !st.IsDir() {
+		add(levelError, "project path does not exist: "+proj.Path, "fix `path` in project.yaml")
+		return out
+	}
+
+	e := proj.GetExecutor()
+	out = append(out, checkContextRepos(e)...)
+	out = append(out, checkSlots(e, proj.Path)...)
+	out = append(out, checkHandoff(e, proj.Path)...)
+	return out
+}
+
+func checkContextRepos(e storage.Executor) []check {
+	var out []check
+	for _, name := range sortedKeys(e.ContextRepos) {
+		path := e.ContextRepos[name]
+		if st, err := os.Stat(path); err != nil || !st.IsDir() {
+			out = append(out, check{levelError,
+				fmt.Sprintf("context_repos[%s] does not exist: %s", name, path),
+				"a worker is told it may read this repo - a dead path makes the promise a lie"})
+			continue
+		}
+		out = append(out, check{levelOK, fmt.Sprintf("context_repos[%s] -> %s", name, path), ""})
+	}
+	return out
+}
+
+func checkSlots(e storage.Executor, projPath string) []check {
+	slots := e.ResolveWorktrees(projPath)
+	if len(slots) == 0 {
+		return nil
+	}
+	var out []check
+	for i, s := range slots {
+		switch {
+		case !pathExists(s.Path):
+			// Absent is fine: EnsureWorktree creates it on the first
+			// --additional run.
+			out = append(out, check{levelOK,
+				fmt.Sprintf("slot %d not created yet: %s", i+1, s.Path),
+				""})
+		case !storage.IsGitWorktree(s.Path):
+			out = append(out, check{levelError,
+				fmt.Sprintf("slot %d path exists but is not a git worktree: %s", i+1, s.Path),
+				"every --additional run claiming this slot will fail; remove it or `git worktree prune`"})
+		default:
+			out = append(out, check{levelOK, fmt.Sprintf("slot %d ok: %s", i+1, s.Path), ""})
+		}
+		if len(s.Env) == 0 && len(slots) > 1 {
+			out = append(out, check{levelWarn,
+				fmt.Sprintf("slot %d has no env", i+1),
+				"with several slots, per-slot env (port, device id) is what keeps two runs from colliding"})
+		}
+	}
+	return out
+}
+
+func checkHandoff(e storage.Executor, projPath string) []check {
+	h := e.ResolveHandoff(projPath)
+	if !h.Declared {
+		return []check{{levelWarn,
+			"no `executor.handoff` block - the odbiór has no declared playbook or runtime skill",
+			"add handoff.playbook + handoff.runtime_skill so an acceptance session can ask pm instead of guessing"}}
+	}
+
+	var out []check
+	switch {
+	case h.PlaybookPath == "":
+		out = append(out, check{levelWarn, "handoff.playbook is unset",
+			"without it the odbiór skill has no map from evidence category to a real command here"})
+	case !h.PlaybookExists:
+		out = append(out, check{levelError, "handoff.playbook does not exist: " + h.PlaybookPath,
+			"create it or fix the path"})
+	default:
+		out = append(out, check{levelOK, "playbook -> " + h.PlaybookPath, ""})
+	}
+
+	switch {
+	case h.RuntimeSkill == "":
+		out = append(out, check{levelWarn, "handoff.runtime_skill is unset",
+			"name the skill that drives the real runtime (simulator/device/browser)"})
+	case h.SkillPath == "":
+		out = append(out, check{levelError,
+			fmt.Sprintf("handoff.runtime_skill %q not found under .claude/skills or .claude/commands", h.RuntimeSkill),
+			"fix the name or add the skill"})
+	default:
+		out = append(out, check{levelOK,
+			fmt.Sprintf("runtime skill /%s -> %s (%d script(s))", h.RuntimeSkill, h.SkillPath, len(h.Scripts)), ""})
+	}
+
+	if !h.PlaybookExists {
+		return out
+	}
+	data, err := os.ReadFile(h.PlaybookPath)
+	if err != nil {
+		out = append(out, check{levelError, "cannot read playbook: " + err.Error(), ""})
+		return out
+	}
+	text := string(data)
+	out = append(out, checkScriptsMentioned(h, text)...)
+	out = append(out, checkRuntimeDrift(e, projPath, h.PlaybookPath, text)...)
+	return out
+}
+
+// checkScriptsMentioned warns about a runtime-skill script the playbook never
+// names. This is the exact gap that produced this feature: the scripts exist,
+// the playbook does not mention them, so an odbiór session redoes their work by
+// hand. Heuristic on purpose - a playbook may describe a technique without
+// naming the file, hence WARN, never ERROR.
+func checkScriptsMentioned(h storage.ResolvedHandoff, playbook string) []check {
+	var out []check
+	for _, s := range h.Scripts {
+		if strings.Contains(playbook, s) {
+			continue
+		}
+		out = append(out, check{levelWarn,
+			fmt.Sprintf("playbook never mentions %s (from /%s scripts)", s, h.RuntimeSkill),
+			"config says WHAT exists; the playbook has to say what it is FOR and when to reach for it"})
+	}
+	return out
+}
+
+// checkRuntimeDrift warns when the playbook hardcodes a runtime identifier that
+// pm already resolves from the worktree slots (a simulator id, a Metro port).
+// The copy is correct exactly until a slot changes, and then it sends an odbiór
+// at a device that no longer exists.
+//
+// Matching is on the VERBATIM value, never on the key or a pattern, which keeps
+// false alarms to values that really do appear in the text; short values are
+// skipped because "1" or "true" would match anything. The finding names the
+// line so a human can judge it - it is still a guess about prose.
+func checkRuntimeDrift(e storage.Executor, projPath, playbookPath, playbook string) []check {
+	lines := strings.Split(playbook, "\n")
+	seen := make(map[string]bool)
+	var out []check
+
+	for i, s := range e.ResolveWorktrees(projPath) {
+		for _, kv := range s.Env {
+			key, value, ok := strings.Cut(kv, "=")
+			if !ok || len(value) < 4 || seen[value] {
+				continue
+			}
+			for n, line := range lines {
+				if !strings.Contains(line, value) {
+					continue
+				}
+				seen[value] = true
+				out = append(out, check{levelWarn,
+					fmt.Sprintf("playbook hardcodes %s (slot %d) at %s:%d", key, i+1, playbookPath, n+1),
+					fmt.Sprintf("%q - point at `pm executor show` instead; this copy goes stale the moment the slot changes",
+						strings.TrimSpace(line))})
+				break
+			}
+		}
+	}
+	return out
+}
+
+func pathExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}

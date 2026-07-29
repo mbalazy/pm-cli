@@ -889,6 +889,15 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 		result["trackers"] = trackers
 	}
 
+	// A POINTER, not the profile. pm_context is the session-start call, so its
+	// output sits in every session's window - the executor/handoff profile is
+	// only worth its size to the session that actually runs or accepts work,
+	// and `pm executor show` charges it to that session alone.
+	if proj != nil && proj.HasExecutor() {
+		result["executor_profile"] = "run `pm executor show " + slug +
+			"` for phase bindings, worktree slot runtimes (ports/device ids), context repos and the handoff playbook"
+	}
+
 	if focus := focusTaskSummaries(store); len(focus) > 0 {
 		result["focus_tasks"] = focus
 	}

@@ -74,6 +74,12 @@ func newContextCmd(store storage.TaskStore) *cobra.Command {
 			}
 
 			fmt.Printf("## Counts: %s\n", countsLine(counts))
+			// One line, only when there is a profile to point at. `pm context`
+			// runs at the start of EVERY session, so the full profile belongs in
+			// `pm executor show` - only whoever needs it pays for it.
+			if proj, err := store.GetProject(slug); err == nil && proj.HasExecutor() {
+				fmt.Printf("## Executor: pm executor show %s\n", slug)
+			}
 			return nil
 		},
 	}

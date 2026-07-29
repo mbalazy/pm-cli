@@ -81,14 +81,19 @@ type Executor struct {
 	// for cross-repo context (e.g. backend: ../platform.orbit to check an
 	// endpoint's real shape). Listed in the worker prompt as read-only reference
 	// repos; pm itself never touches them.
-	ContextRepos map[string]string       `yaml:"context_repos,omitempty"`
-	StartStatus  string                  `yaml:"start_status,omitempty"` // sub status meaning "ready to pick up"
-	WipStatus    string                  `yaml:"wip_status,omitempty"`
-	DoneStatus   string                  `yaml:"done_status,omitempty"` // where a verified sub lands
-	FixRounds    int                     `yaml:"fix_rounds,omitempty"`  // review->fix loop cap before escalating
-	Gate         Gate                    `yaml:"gate,omitempty"`
-	Phases       map[string]PhaseBinding `yaml:"phases,omitempty"`
-	Notes        string                  `yaml:"notes,omitempty"`
+	ContextRepos map[string]string `yaml:"context_repos,omitempty"`
+	// Handoff is the ODBIÓR (acceptance) contract: where the evidence playbook
+	// and the runtime-driving skill live. Unlike every other field here it is
+	// consumed AFTER a run, by a human or a CC session (`pm executor show`),
+	// not by a worker prompt - pm never spawns the odbiór. See handoff.go.
+	Handoff     Handoff                 `yaml:"handoff,omitempty"`
+	StartStatus string                  `yaml:"start_status,omitempty"` // sub status meaning "ready to pick up"
+	WipStatus   string                  `yaml:"wip_status,omitempty"`
+	DoneStatus  string                  `yaml:"done_status,omitempty"` // where a verified sub lands
+	FixRounds   int                     `yaml:"fix_rounds,omitempty"`  // review->fix loop cap before escalating
+	Gate        Gate                    `yaml:"gate,omitempty"`
+	Phases      map[string]PhaseBinding `yaml:"phases,omitempty"`
+	Notes       string                  `yaml:"notes,omitempty"`
 }
 
 // WorktreeSlot is one entry of the executor's worktree pool: where the

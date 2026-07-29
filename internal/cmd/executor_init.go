@@ -20,6 +20,8 @@ func newExecutorCmd(store storage.TaskStore) *cobra.Command {
 		Short: "Executor profile tooling",
 	}
 	cmd.AddCommand(newExecutorInitCmd(store))
+	cmd.AddCommand(newExecutorShowCmd(store))
+	cmd.AddCommand(newExecutorDoctorCmd(store))
 	cmd.AddCommand(newExecutorStatsCmd(store))
 	return cmd
 }
@@ -36,7 +38,7 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 			"binding. If the project has NO executor block yet, the draft is written as-is. If it already has " +
 			"one, only the detected fields (`phases`, `baseline`) are refreshed - every other hand-set field " +
 			"(enabled, additional_worktree, worktree_path, worktrees, base_branch, env, seed_exclude, " +
-			"prepare, context_repos, start_status, wip_status, done_status, fix_rounds, gate, notes) is left " +
+			"prepare, context_repos, handoff, start_status, wip_status, done_status, fix_rounds, gate, notes) is left " +
 			"untouched; the output lists which fields were preserved.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -172,6 +174,9 @@ func preservedFieldNotes(existing *storage.Executor) []string {
 	}
 	if len(existing.ContextRepos) > 0 {
 		note("context_repos")
+	}
+	if !existing.Handoff.IsZero() {
+		note("handoff")
 	}
 	if existing.StartStatus != base.StartStatus {
 		note("start_status")

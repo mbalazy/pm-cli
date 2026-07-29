@@ -121,6 +121,12 @@ func EnsureWorktree(mainRepo, worktreePath string) error {
 	return nil
 }
 
+// IsGitWorktree reports whether dir is a usable git working tree - the same
+// test EnsureWorktree uses to decide between reusing a slot and refusing it, so
+// `pm executor doctor` can predict that refusal instead of waiting for a run to
+// hit it.
+func IsGitWorktree(dir string) bool { return isInsideWorkTree(dir) }
+
 func isInsideWorkTree(dir string) bool {
 	c := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree")
 	out, err := c.Output()
