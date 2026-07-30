@@ -14,10 +14,29 @@ func newMigrateIDsCmd(store storage.TaskStore) *cobra.Command {
 	return &cobra.Command{
 		Use:   "migrate-ids",
 		Short: "Migrate task IDs to sequential project-prefixed format (e.g. orbit2-1, atlas-2)",
+		// One-shot legacy migration from before project-prefixed IDs existed.
+		// Hidden so nobody reaches for it on a modern store by accident.
+		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			projects, err := store.ListProjects()
 			if err != nil {
 				return err
+			}
+
+			// This tool predates parent/depends_on. It renumbers IDs WITHOUT
+			// rewriting the references pointing at them, so on a store that
+			// uses trackers or dependency gates it would silently sever every
+			// parent link and depends_on entry. Refuse instead of corrupting.
+			for _, slug := range projects {
+				tasks, err := store.GetTasks(slug)
+				if err != nil {
+					continue
+				}
+				for _, t := range tasks {
+					if t.Meta.Parent != "" || len(t.Meta.DependsOn) > 0 {
+						return fmt.Errorf("refusing to migrate: %s/%s carries parent/depends_on references, which this legacy tool does not rewrite - renumbering would sever every tracker and dependency gate", slug, t.Meta.ID)
+					}
+				}
 			}
 
 			for _, slug := range projects {

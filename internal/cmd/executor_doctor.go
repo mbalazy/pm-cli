@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -46,6 +47,10 @@ type check struct {
 	Hint  string
 }
 
+// errFound is doctor's exit-1 signal when the report contains failures. main
+// prints it as the one trailer line under the report.
+var errFound = errors.New("executor doctor found errors (see report above)")
+
 func newExecutorDoctorCmd(store storage.TaskStore) *cobra.Command {
 	var strict bool
 
@@ -60,18 +65,21 @@ func newExecutorDoctorCmd(store storage.TaskStore) *cobra.Command {
 			"Exit code: 1 on ERROR (a binary fact - a declared file that is not there), 0 on WARN (a " +
 			"heuristic over prose, which can be a false alarm). --strict fails on warnings too.",
 		Args: cobra.MaximumNArgs(1),
+		// The report IS the output; the returned error only sets the exit code.
+		// Silenced so neither cobra nor the report gains an "Error:" banner -
+		// and no os.Exit in RunE, which would skip deferred cleanups and make
+		// the command untestable.
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slug, proj, err := resolveProjectArg(store, args)
 			if err != nil {
+				cmd.SilenceErrors = false // real failures should still print
 				return err
 			}
 			checks := runExecutorDoctor(proj)
 			fmt.Print(renderDoctor(slug, checks, strict))
-
-			// Exit directly rather than returning an error: the report IS the
-			// output, and a cobra error would print usage text over it.
 			if failed(checks, strict) {
-				os.Exit(1)
+				return errFound
 			}
 			return nil
 		},

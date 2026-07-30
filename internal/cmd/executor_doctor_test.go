@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -199,5 +200,30 @@ func TestRenderDoctorCounts(t *testing.T) {
 	}
 	if !strings.Contains(renderDoctor("demo", checks, true), "[--strict: warnings fail]") {
 		t.Error("expected the strict note")
+	}
+}
+
+// TestDoctorCmdReturnsErrorInsteadOfExiting: a failing report must surface as
+// a returned error (exit code via main), never an os.Exit inside RunE - that
+// skipped deferred cleanups and made the command untestable.
+func TestDoctorCmdReturnsErrorInsteadOfExiting(t *testing.T) {
+	store, slug := tempStore(t)
+	proj, _ := store.GetProject(slug)
+	proj.Executor = &storage.Executor{
+		Enabled: true,
+		Handoff: storage.Handoff{Playbook: ".claude/does-not-exist.md"},
+	}
+	if err := store.UpdateProject(slug, proj); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newExecutorDoctorCmd(store)
+	cmd.SetArgs([]string{slug})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("doctor with a dangling playbook must return an error")
+	}
+	if !errors.Is(err, errFound) {
+		t.Fatalf("want errFound, got %v", err)
 	}
 }
