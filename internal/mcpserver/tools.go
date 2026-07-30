@@ -496,7 +496,17 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		}
 
 		if in.Status != "" {
-			task.Meta.Status = storage.ParseStatus(in.Status)
+			// Same rule as MoveTask: an unlisted status renders on no board column
+			// (the task vanishes), so reject it here; archived is system-level and
+			// always legal.
+			st := storage.ParseStatus(in.Status)
+			if st != storage.StatusArchived {
+				if err := storage.ValidateStatus(st, store.GetProjectStatuses(slug)); err != nil {
+					r, _ := toolError(err.Error())
+					return r, nil, nil
+				}
+			}
+			task.Meta.Status = st
 		}
 		if in.Title != "" {
 			task.Meta.Title = in.Title

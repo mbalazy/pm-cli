@@ -145,6 +145,34 @@ func TestE2EErrorsAreToolErrors(t *testing.T) {
 	}
 }
 
+// TestE2EInvalidStatusRejected: a status outside the project's set renders on
+// no board column (the task vanishes), so both mutation paths must reject it -
+// while system-level "archived" always passes.
+func TestE2EInvalidStatusRejected(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_move_task", map[string]any{"project": "test", "task_id": "t-1", "new_status": "dnoe"})
+	if !isErr {
+		t.Fatalf("pm_move_task with a typo'd status must be a tool error, got: %s", text)
+	}
+	text, isErr = call(t, sess, "pm_update_task", map[string]any{"project": "test", "task_id": "t-1", "status": "bogus"})
+	if !isErr {
+		t.Fatalf("pm_update_task with an unknown status must be a tool error, got: %s", text)
+	}
+	after, err := store.FindTask("test", "t-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Meta.Status != storage.StatusDoing {
+		t.Fatalf("rejected writes must not change the status, got %s", after.Meta.Status)
+	}
+
+	if text, isErr = call(t, sess, "pm_move_task", map[string]any{"project": "test", "task_id": "t-1", "new_status": "archived"}); isErr {
+		t.Fatalf("archived must always be movable to: %s", text)
+	}
+}
+
 func TestE2EContextAndListTasks(t *testing.T) {
 	store, _ := setupMCPTestStore(t)
 	sess := startMCP(t, store)

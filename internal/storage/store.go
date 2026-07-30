@@ -163,6 +163,16 @@ func (s *Store) GetAllTasks() ([]*Task, error) {
 // caller's copy in place. Callers must NOT hold the project lock themselves
 // (a second flock in the same process deadlocks); release before calling.
 func (s *Store) MoveTask(t *Task, newStatus TaskStatus) error {
+	// Validate BEFORE touching the file: a status outside the project's set
+	// (a typo'd `pm mv`, an MCP call with another project's status) renders on
+	// no board column - the task just vanishes until someone hand-edits the
+	// file. AddTask already validates; the mutation path must too. Archived is
+	// the one exception: it is system-level, never listed in project statuses.
+	if newStatus != StatusArchived {
+		if err := ValidateStatus(newStatus, s.GetProjectStatuses(t.Project)); err != nil {
+			return err
+		}
+	}
 	if release, err := s.LockProject(t.Project); err == nil {
 		defer release()
 	}

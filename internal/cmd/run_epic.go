@@ -126,8 +126,12 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				return nil
 			}
 
+			// Hard gate, not a warning: MoveTask validates statuses, so with an
+			// unlisted done status every "mark merged" move would fail AFTER the
+			// work merged into the integration branch - and the re-entrant done
+			// check would re-drive those subs on the next run.
 			if !statusAllowed(doneStatus, store.GetProjectStatuses(slug)) {
-				fmt.Fprintf(os.Stderr, "warning: done status %q is not in project %s statuses - add it to project.yaml so merged subs show on the board\n", doneStatus, slug)
+				return fmt.Errorf("done status %q is not in project %s statuses - add it to project.yaml (statuses: [todo, doing, %s, ...]) before running the epic", doneStatus, slug, doneStatus)
 			}
 
 			// Additional mode: the whole epic runs in ONE claimed worktree slot

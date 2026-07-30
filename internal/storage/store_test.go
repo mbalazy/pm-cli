@@ -405,6 +405,48 @@ func TestMoveTask(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects a status outside the project's set", func(t *testing.T) {
+		store, _ := setupTestStore(t)
+		task, _ := store.FindTask("alpha", "a-1")
+		before := task.Meta.Status
+
+		err := store.MoveTask(task, TaskStatus("dnoe")) // the classic typo
+		if err == nil {
+			t.Fatal("expected an invalid-status error")
+		}
+		reloaded, _ := store.FindTask("alpha", "a-1")
+		if reloaded.Meta.Status != before {
+			t.Errorf("rejected move must not touch the file: status = %q", reloaded.Meta.Status)
+		}
+	})
+
+	t.Run("archived is always allowed (system-level)", func(t *testing.T) {
+		store, _ := setupTestStore(t)
+		task, _ := store.FindTask("alpha", "a-1")
+		if err := store.MoveTask(task, StatusArchived); err != nil {
+			t.Fatalf("archived must bypass project-status validation: %v", err)
+		}
+	})
+
+	t.Run("custom project statuses are honored", func(t *testing.T) {
+		store, dir := setupTestStore(t)
+		projDir := filepath.Join(dir, "custom")
+		os.MkdirAll(projDir, 0755)
+		WriteProject(filepath.Join(projDir, "project.yaml"), &Project{
+			Name: "Custom", Statuses: []string{"backlog", "shipped"},
+		})
+		task := &Task{Meta: TaskMeta{ID: "c-1", Title: "T", Status: "backlog"}}
+		if err := store.AddTask("custom", task); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.MoveTask(task, TaskStatus("shipped")); err != nil {
+			t.Fatalf("listed custom status must pass: %v", err)
+		}
+		if err := store.MoveTask(task, StatusDoing); err == nil {
+			t.Fatal("default status not in the custom set must be rejected")
+		}
+	})
+
 	t.Run("preserves brief on done", func(t *testing.T) {
 		store, _ := setupTestStore(t)
 		task, _ := store.FindTask("alpha", "a-2") // has brief "working on it"
