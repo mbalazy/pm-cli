@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -682,8 +683,9 @@ func runPrepare(dir, command string) error {
 }
 
 // baselineTimeout caps the executor.baseline capture (a full verification run
-// is minutes; a hang must not eat the worker's budget).
-const baselineTimeout = 15 * time.Minute
+// is minutes; a hang must not eat the worker's budget). A var, not a const,
+// purely so tests can shrink it.
+var baselineTimeout = 15 * time.Minute
 
 // baselineOutputCap bounds how much captured output lands in the prompt. The
 // TAIL is kept - test/lint runners print summaries and totals last.
@@ -697,15 +699,29 @@ const baselineOutputCap = 8000
 func captureBaseline(dir, command string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), baselineTimeout)
 	defer cancel()
-	c := exec.CommandContext(ctx, "sh", "-c", command)
+	// Same process-group enforcement as the worker: a baseline command that
+	// backgrounds anything (a dev server, a watcher) would otherwise outlive its
+	// own cap and hold the output pipe open past it.
+	c := groupCmd(ctx, "sh", "-c", command)
 	c.Dir = dir
-	out, err := c.CombinedOutput()
+	var combined bytes.Buffer
+	c.Stdout = &combined
+	c.Stderr = &combined // one writer for both: exec dedups it onto a single fd
+	err := runGroupCmd(c)
+	out := combined.Bytes()
 	if ctx.Err() == context.DeadlineExceeded {
 		fmt.Fprintf(os.Stderr, "pm work: baseline cmd timed out after %s - continuing without a baseline\n", baselineTimeout)
 		return ""
 	}
 	if err == nil {
 		return baselineSection(command, 0, "")
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// Exit status unknowable - the command's own descendants held its output
+		// open past WaitDelay. Reporting an invented verdict to the worker is
+		// worse than no baseline at all.
+		fmt.Fprintf(os.Stderr, "pm work: baseline cmd left background processes holding its output - killed them; continuing without a baseline\n")
+		return ""
 	}
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
@@ -727,20 +743,32 @@ func runWorker(dir string, args []string, timeout time.Duration, configDir strin
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	c := exec.CommandContext(ctx, "claude", args...)
+	c := groupCmd(ctx, "claude", args...)
 	c.Dir = dir
 	// Project-defined env (e.g. Metro port, simulator UDID) is appended last so
 	// it wins over any inherited value. pm passes these through opaquely.
 	c.Env = append(workerEnv(configDir), extraEnv...)
+	var stdout bytes.Buffer
+	c.Stdout = &stdout
 	c.Stderr = os.Stderr
-	out, err := c.Output()
+	err := runGroupCmd(c)
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, "", fmt.Errorf("worker timed out after %s (raise --timeout if the task legitimately needs longer)", timeout)
 	}
 	if err != nil {
+		// The worker exited but something it spawned kept the inherited stdout
+		// pipe open, so WaitDelay had to unblock us (the group is dead by now).
+		// If the envelope made it through first, the run really did finish -
+		// honour the result instead of discarding a completed worker's work.
+		if errors.Is(err, exec.ErrWaitDelay) {
+			if res, sessionID, perr := parseClaudeResult(stdout.Bytes()); perr == nil {
+				fmt.Fprintf(os.Stderr, "pm work: worker left background processes holding stdout - killed them after %s\n", procWaitDelay)
+				return res, sessionID, nil
+			}
+		}
 		return nil, "", fmt.Errorf("claude worker failed: %w", err)
 	}
-	return parseClaudeResult(out)
+	return parseClaudeResult(stdout.Bytes())
 }
 
 // workerEnv returns the worker's environment with ANTHROPIC_API_KEY /
