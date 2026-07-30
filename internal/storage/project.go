@@ -1,8 +1,10 @@
 package storage
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -85,10 +87,124 @@ func WriteProject(path string, p *Project) error {
 	return writeProject(path, p)
 }
 
+// knownProjectKeys are the top-level project.yaml keys the Project struct
+// owns. On write, keys OUTSIDE this set found in a hand-edited file are
+// preserved verbatim instead of being silently dropped by a struct round-trip.
+var knownProjectKeys = map[string]bool{
+	"name": true, "prefix": true, "path": true, "repo": true, "stack": true,
+	"links": true, "tags": true, "statuses": true, "notes": true,
+	"archived": true, "executor": true, "claude_config_dir": true,
+}
+
+// writeProject persists a project WITHOUT destroying what a plain struct
+// round-trip cannot represent: comments and unknown keys in a hand-tuned
+// project.yaml (executor blocks are exactly the place people annotate). The
+// fresh marshal of p is merged INTO the existing file's YAML node tree -
+// unchanged subtrees keep their original nodes (and thus their comments) -
+// and the result is written atomically (tmp+rename), so a concurrent reader
+// never sees a truncated file.
 func writeProject(path string, p *Project) error {
 	data, err := yaml.Marshal(p)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	if old, rerr := os.ReadFile(path); rerr == nil {
+		if merged, merr := mergeProjectYAML(old, data); merr == nil {
+			data = merged
+		}
+		// A merge failure (corrupt existing YAML) falls back to the plain
+		// marshal - the write must not be blocked by an unparseable old file.
+	}
+	return atomicWriteFile(path, data, 0644)
+}
+
+// mergeProjectYAML merges freshly marshaled project data into the existing
+// file's node tree. Top level: known keys follow the new marshal (present ->
+// updated in place, absent -> the field was cleared, so dropped), unknown keys
+// are preserved verbatim. Below the top level every key is struct-owned, so
+// the new marshal decides the key set - but any subtree whose content is
+// unchanged keeps its ORIGINAL node, preserving the comments inside it.
+func mergeProjectYAML(oldData, newData []byte) ([]byte, error) {
+	var oldDoc, newDoc yaml.Node
+	if err := yaml.Unmarshal(oldData, &oldDoc); err != nil {
+		return nil, err
+	}
+	if err := yaml.Unmarshal(newData, &newDoc); err != nil {
+		return nil, err
+	}
+	oldMap, newMap := docMapping(&oldDoc), docMapping(&newDoc)
+	if oldMap == nil || newMap == nil {
+		return newData, nil
+	}
+
+	merged := mergeMappingNodes(oldMap, newMap, knownProjectKeys)
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(merged); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// docMapping unwraps a document node to its top-level mapping, or nil.
+func docMapping(doc *yaml.Node) *yaml.Node {
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) == 1 && doc.Content[0].Kind == yaml.MappingNode {
+		return doc.Content[0]
+	}
+	return nil
+}
+
+// mergeMappingNodes merges the new mapping into the old one, keeping the old
+// file's key order and key nodes (which carry head comments). known limits
+// which absent keys may be dropped: at the top level an absent UNKNOWN key is
+// user data to preserve; below the top level (known == nil) the new marshal
+// owns the key set entirely.
+func mergeMappingNodes(old, new *yaml.Node, known map[string]bool) *yaml.Node {
+	newPairs := make(map[string]*yaml.Node, len(new.Content)/2)
+	for i := 0; i+1 < len(new.Content); i += 2 {
+		newPairs[new.Content[i].Value] = new.Content[i+1]
+	}
+
+	out := *old
+	out.Content = nil
+	seen := make(map[string]bool)
+	for i := 0; i+1 < len(old.Content); i += 2 {
+		key, val := old.Content[i], old.Content[i+1]
+		seen[key.Value] = true
+		newVal, inNew := newPairs[key.Value]
+		if !inNew {
+			if known != nil && !known[key.Value] {
+				out.Content = append(out.Content, key, val) // unknown key: preserve
+			}
+			continue // known key cleared: drop
+		}
+		out.Content = append(out.Content, key, mergeValueNodes(val, newVal))
+	}
+	// New keys the old file did not have, in the new marshal's order.
+	for i := 0; i+1 < len(new.Content); i += 2 {
+		if !seen[new.Content[i].Value] {
+			out.Content = append(out.Content, new.Content[i], new.Content[i+1])
+		}
+	}
+	return &out
+}
+
+// mergeValueNodes picks the node for one key's value: recursive merge for
+// mappings; otherwise the ORIGINAL node when the content is unchanged (so its
+// comments and style survive), else the new one. Equality is on the DECODED
+// value, never the serialized node - marshaling a node renders its comments
+// too, which would make every commented-but-unchanged value read as changed.
+func mergeValueNodes(old, new *yaml.Node) *yaml.Node {
+	if old.Kind == yaml.MappingNode && new.Kind == yaml.MappingNode {
+		return mergeMappingNodes(old, new, nil)
+	}
+	var a, b any
+	if old.Decode(&a) == nil && new.Decode(&b) == nil && reflect.DeepEqual(a, b) {
+		return old
+	}
+	return new
 }

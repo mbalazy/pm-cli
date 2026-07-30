@@ -3,6 +3,7 @@ package storage
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -156,5 +157,121 @@ func TestDefaultStatusesDoNotContainArchived(t *testing.T) {
 		if s == StatusArchived {
 			t.Error("DefaultStatuses must not contain StatusArchived - it is a system-level status")
 		}
+	}
+}
+
+// TestWriteProjectPreservesHandTunedYAML: writeProject must not destroy what a
+// struct round-trip cannot represent - comments and unknown keys in a
+// hand-tuned project.yaml. `pm executor init` re-writes the whole file to
+// refresh two detected fields; before this, every comment and any key pm does
+// not know about vanished, contradicting init's own "hand-set fields
+// untouched" promise.
+func TestWriteProjectPreservesHandTunedYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "project.yaml")
+	handTuned := `name: App
+# main checkout of the RN app
+path: /repos/app
+my_custom_key: keep-me
+executor:
+  enabled: true
+  # slot 2 talks to the blue simulator
+  env:
+    SIM_UDID: ABC-123
+  baseline: yarn validate
+notes: hand-written notes
+`
+	if err := os.WriteFile(path, []byte(handTuned), 0644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := ReadProject(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The typical `pm executor init` write: refresh baseline, keep the rest.
+	p.Executor.Baseline = "yarn verify"
+	if err := WriteProject(path, p); err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(out)
+
+	for _, want := range []string{
+		"# main checkout of the RN app",
+		"# slot 2 talks to the blue simulator",
+		"my_custom_key: keep-me",
+		"baseline: yarn verify",
+		"SIM_UDID: ABC-123",
+		"notes: hand-written notes",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("write dropped %q; file now:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "yarn validate") {
+		t.Errorf("stale baseline survived:\n%s", text)
+	}
+
+	// The result must still round-trip through the struct reader.
+	got, err := ReadProject(path)
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if got.Executor == nil || got.Executor.Baseline != "yarn verify" || got.Executor.Env["SIM_UDID"] != "ABC-123" {
+		t.Fatalf("re-read executor: %+v", got.Executor)
+	}
+}
+
+// TestWriteProjectClearsRemovedKnownFields: a known field the struct no longer
+// carries must disappear from the file (it was cleared, not "unknown data").
+func TestWriteProjectClearsRemovedKnownFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "project.yaml")
+	if err := os.WriteFile(path, []byte("name: App\nnotes: obsolete\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := ReadProject(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Notes = ""
+	if err := WriteProject(path, p); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := os.ReadFile(path)
+	if strings.Contains(string(out), "obsolete") {
+		t.Errorf("cleared field must be dropped, file:\n%s", out)
+	}
+}
+
+// TestWriteProjectFreshFile: no existing file -> plain marshal, no error.
+func TestWriteProjectFreshFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "project.yaml")
+	if err := WriteProject(path, &Project{Name: "New"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadProject(path)
+	if err != nil || got.Name != "New" {
+		t.Fatalf("got %+v err=%v", got, err)
+	}
+}
+
+// TestWriteProjectCorruptExistingFallsBack: an unparseable existing file must
+// not block the write - it degrades to the plain marshal.
+func TestWriteProjectCorruptExistingFallsBack(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "project.yaml")
+	if err := os.WriteFile(path, []byte(":: not yaml ["), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteProject(path, &Project{Name: "Recovered"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadProject(path)
+	if err != nil || got.Name != "Recovered" {
+		t.Fatalf("got %+v err=%v", got, err)
 	}
 }
