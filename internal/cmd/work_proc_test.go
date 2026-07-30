@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -12,189 +13,357 @@ import (
 	"github.com/mbalazy/pm/internal/storage"
 )
 
-// spawnGrandchild is a shell snippet that starts a DETACHED grandchild which
-// records its own pid in pidFile and then holds the stdout it inherited open
-// for minutes. This is the shape that used to wedge pm forever: killing the
-// direct child never reached it, and Wait blocked on the pipe it kept open.
-func spawnGrandchild(pidFile string) string {
-	return "sh -c 'echo $$ > " + pidFile + "; exec sleep 300' &\n"
+// hangGuard bounds every wait in this file. It only has to beat the 300s sleeps
+// the fixtures hold open, so it is generous on purpose: these cases run
+// alongside hundreds of git forks in this package, and a budget tuned to the
+// happy path would turn `make check` red under load rather than on a bug.
+const hangGuard = 60 * time.Second
+
+// procFixture is the shared harness for the hang paths: it runs the subject off
+// the test goroutine (a regression fails the guard instead of wedging the whole
+// suite) and guarantees that neither a leaked `sleep 300` nor a still-running
+// subject outlives the case - including when the case FAILS.
+type procFixture struct {
+	t   *testing.T
+	dir string
+	// pid files the fake writes; recorded up front so a case that never reaches
+	// awaitPid still cleans up whatever did get spawned.
+	files []string
+	done  chan struct{}
 }
 
-// shrinkProcWaitDelay keeps the pipe-holder tests to seconds instead of the
-// production 5s per case.
-func shrinkProcWaitDelay(t *testing.T, d time.Duration) {
+// newProcFixture shrinks the tuning knobs and registers cleanup. Cleanup order
+// is LIFO and load-bearing: kill the spawned tree -> join the subject goroutine
+// (the kill is what unblocks it) -> only then restore the knobs, so a failing
+// case cannot race the restore.
+func newProcFixture(t *testing.T, waitDelay time.Duration) *procFixture {
 	t.Helper()
-	old := procWaitDelay
-	procWaitDelay = d
-	t.Cleanup(func() { procWaitDelay = old })
+	oldDelay, oldBaseline, oldGrace := procWaitDelay, baselineTimeout, procKillGrace
+	procWaitDelay = waitDelay
+	t.Cleanup(func() {
+		procWaitDelay, baselineTimeout, procKillGrace = oldDelay, oldBaseline, oldGrace
+	})
+
+	f := &procFixture{t: t, dir: t.TempDir(), done: make(chan struct{})}
+	t.Cleanup(f.killSpawned)
+	t.Cleanup(func() {
+		select {
+		case <-f.done:
+		case <-time.After(hangGuard):
+			t.Error("subject never returned - leaked goroutine")
+		}
+	})
+	return f
+}
+
+// pidFile reserves a path the fake shell script writes a pid to.
+func (f *procFixture) pidFile(name string) string {
+	p := filepath.Join(f.dir, name+".pid")
+	f.files = append(f.files, p)
+	return p
+}
+
+func (f *procFixture) killSpawned() {
+	for _, p := range f.files {
+		if pid, err := readPidFile(p); err == nil {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
+}
+
+// run starts the subject on its own goroutine; wait blocks until it returns.
+func (f *procFixture) run(subject func()) {
+	go func() {
+		defer close(f.done)
+		subject()
+	}()
+}
+
+func (f *procFixture) wait(what string) {
+	f.t.Helper()
+	select {
+	case <-f.done:
+	case <-time.After(hangGuard):
+		f.t.Fatalf("%s hung past its deadline - something held the output pipe and blocked Wait", what)
+	}
+}
+
+// awaitPid waits for the fake to register a process. Deliberately does NOT
+// assert the process is still alive: production is racing to kill it, and that
+// race is the point of the test, not an invariant.
+func (f *procFixture) awaitPid(path string) int {
+	f.t.Helper()
+	deadline := time.Now().Add(hangGuard)
+	for time.Now().Before(deadline) {
+		if pid, err := readPidFile(path); err == nil {
+			return pid
+		}
+		select {
+		case <-f.done:
+			f.t.Fatalf("subject finished before the fake registered a pid in %s", path)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	f.t.Fatalf("nothing ever recorded a pid in %s", path)
+	return 0
+}
+
+func readPidFile(path string) (int, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(b)))
 }
 
 func pidAlive(pid int) bool { return syscall.Kill(pid, 0) == nil }
 
-// awaitGrandchild waits for the fake's grandchild to register itself, asserts it
-// is really running, and makes sure it cannot outlive a failing test.
-func awaitGrandchild(t *testing.T, pidFile string) int {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if b, err := os.ReadFile(pidFile); err == nil {
-			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 0 {
-				t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
-				if !pidAlive(pid) {
-					t.Fatalf("fixture broken: grandchild %d already gone", pid)
-				}
-				return pid
-			}
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("grandchild never recorded its pid in %s", pidFile)
-	return 0
+func (f *procFixture) requireGone(pid int, what string) {
+	f.t.Helper()
+	requirePidGone(f.t, pid, what)
 }
 
-func requirePidGone(t *testing.T, pid int, within time.Duration) {
+func requirePidGone(t *testing.T, pid int, what string) {
 	t.Helper()
-	deadline := time.Now().Add(within)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if !pidAlive(pid) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("descendant %d survived the run - the process group was not killed", pid)
+	t.Fatalf("%s (pid %d) survived the run - the process group was not killed", what, pid)
+}
+
+// spawnGrandchild starts a DETACHED grandchild that records its own pid and
+// holds the stdout it inherited open for minutes. This is the shape that used
+// to wedge pm forever: killing the direct child never reached it, and Wait
+// blocked on the pipe it kept open.
+func spawnGrandchild(pidFile string) string {
+	return "sh -c 'echo $$ > " + pidFile + "; exec sleep 300' &\n"
+}
+
+// holdOpen makes the fake itself linger (recording the pid of its own child) so
+// a test can assert the DIRECT child dies too, not just the detached one.
+func holdOpen(pidFile string) string {
+	return "sleep 300 & echo $! > " + pidFile + "\nwait\n"
 }
 
 func TestRunWorkerTimeoutKillsWholeWorkerTree(t *testing.T) {
-	shrinkProcWaitDelay(t, 500*time.Millisecond)
-	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+	f := newProcFixture(t, 500*time.Millisecond)
+	grandchild, child := f.pidFile("grandchild"), f.pidFile("child")
 	// The worker itself also hangs, so the deadline - not a clean exit - is what
 	// has to take the tree down.
-	fakeClaude(t, spawnGrandchild(pidFile)+"sleep 300\n")
+	fakeClaude(t, spawnGrandchild(grandchild)+holdOpen(child))
 
-	type outcome struct {
-		res *workerResult
-		err error
+	var res *workerResult
+	var err error
+	f.run(func() { res, _, err = runWorker(t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil) })
+
+	gcPid, cPid := f.awaitPid(grandchild), f.awaitPid(child)
+	f.wait("runWorker")
+
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("want the timeout error, got res=%+v err=%v", res, err)
 	}
-	done := make(chan outcome, 1)
-	go func() {
-		res, _, err := runWorker(t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil)
-		done <- outcome{res, err}
-	}()
-
-	pid := awaitGrandchild(t, pidFile)
-
-	select {
-	case got := <-done:
-		if got.err == nil || !strings.Contains(got.err.Error(), "timed out") {
-			t.Fatalf("want the timeout error, got res=%+v err=%v", got.res, got.err)
-		}
-		if got.res != nil {
-			t.Fatalf("timed-out worker must not yield a result: %+v", got.res)
-		}
-	case <-time.After(20 * time.Second):
-		t.Fatal("runWorker hung far past its 1.5s timeout - a descendant holding the stdout pipe blocked Wait")
+	if res != nil {
+		t.Fatalf("timed-out worker must not yield a result: %+v", res)
 	}
-	requirePidGone(t, pid, 5*time.Second)
+	f.requireGone(cPid, "the worker's direct child")
+	f.requireGone(gcPid, "the worker's detached grandchild")
+}
+
+func TestRunWorkerTimeoutKillsWorkerIgnoringSIGTERM(t *testing.T) {
+	f := newProcFixture(t, 500*time.Millisecond)
+	procKillGrace = 300 * time.Millisecond
+	grandchild := f.pidFile("grandchild")
+	// A worker tree that swallows SIGTERM - the escalation to SIGKILL is the
+	// only thing that can end it.
+	fakeClaude(t, "trap '' TERM\n"+spawnGrandchild(grandchild)+"trap '' TERM; sleep 300\n")
+
+	var err error
+	f.run(func() { _, _, err = runWorker(t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil) })
+
+	pid := f.awaitPid(grandchild)
+	f.wait("runWorker")
+
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("want the timeout error, got %v", err)
+	}
+	f.requireGone(pid, "the SIGTERM-ignoring worker tree")
 }
 
 func TestRunWorkerOrphanHoldingStdoutDoesNotHang(t *testing.T) {
-	shrinkProcWaitDelay(t, 500*time.Millisecond)
-	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
-	// Worker finishes cleanly, but leaves a background process on the inherited
+	f := newProcFixture(t, 2*time.Second)
+	grandchild := f.pidFile("grandchild")
+	// Worker finishes cleanly but leaves a background process on the inherited
 	// stdout: Wait must be bounded by WaitDelay rather than by that process, and
 	// the completed run's envelope must survive.
-	fakeClaude(t, spawnGrandchild(pidFile)+"echo '"+envelope("merged", "done")+"'\n")
+	fakeClaude(t, spawnGrandchild(grandchild)+"echo '"+envelope("merged", "done")+"'\n")
 
-	type outcome struct {
-		res *workerResult
-		err error
+	var res *workerResult
+	var err error
+	f.run(func() { res, _, err = runWorker(t.TempDir(), []string{"-p", "x"}, time.Minute, "", nil) })
+
+	pid := f.awaitPid(grandchild)
+	f.wait("runWorker")
+
+	if err != nil {
+		t.Fatalf("a finished worker's result must survive its background leftovers: %v", err)
 	}
-	done := make(chan outcome, 1)
-	go func() {
-		// A generous timeout: only the WaitDelay bound can end this run.
-		res, _, err := runWorker(t.TempDir(), []string{"-p", "x"}, time.Minute, "", nil)
-		done <- outcome{res, err}
-	}()
-
-	pid := awaitGrandchild(t, pidFile)
-
-	select {
-	case got := <-done:
-		if got.err != nil {
-			t.Fatalf("a finished worker's result must survive its background leftovers: %v", got.err)
-		}
-		if got.res == nil || got.res.Status != "merged" {
-			t.Fatalf("result not parsed: %+v", got.res)
-		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("runWorker hung after the worker exited - a descendant still held the stdout pipe")
+	if res == nil || res.Status != "merged" {
+		t.Fatalf("result not parsed: %+v", res)
 	}
-	requirePidGone(t, pid, 5*time.Second)
+	f.requireGone(pid, "the orphan holding stdout")
 }
 
 func TestCaptureBaselineCapKillsWholeTree(t *testing.T) {
-	shrinkProcWaitDelay(t, 500*time.Millisecond)
-	old := baselineTimeout
+	f := newProcFixture(t, 500*time.Millisecond)
 	baselineTimeout = 1500 * time.Millisecond
-	t.Cleanup(func() { baselineTimeout = old })
+	grandchild, child := f.pidFile("grandchild"), f.pidFile("child")
+
+	var got string
+	f.run(func() { got = captureBaseline(f.dir, spawnGrandchild(grandchild)+holdOpen(child)) })
+
+	gcPid, cPid := f.awaitPid(grandchild), f.awaitPid(child)
+	f.wait("captureBaseline")
+
+	if got != "" {
+		t.Fatalf("a baseline that blew its cap must degrade to no baseline, got %q", got)
+	}
+	f.requireGone(cPid, "the baseline's direct child")
+	f.requireGone(gcPid, "the baseline's detached grandchild")
+}
+
+func TestCaptureBaselineGreenSurvivesOrphanHoldingOutput(t *testing.T) {
+	f := newProcFixture(t, 2*time.Second)
+	grandchild := f.pidFile("grandchild")
+
+	// Wait reports ErrWaitDelay ONLY when the command itself exited 0, so a
+	// baseline whose leftovers held the pipe open is still green - degrading to
+	// "no baseline" would cost every worker in the run its pre-existing-failure
+	// reference.
+	var got string
+	f.run(func() { got = captureBaseline(f.dir, spawnGrandchild(grandchild)+"echo all-good\nexit 0\n") })
+
+	pid := f.awaitPid(grandchild)
+	f.wait("captureBaseline")
+
+	mustContain(t, got, "GREEN")
+	f.requireGone(pid, "the orphan holding the baseline output")
+}
+
+// forwardChildEnv puts the re-exec'd test binary into "manager" mode.
+const forwardChildEnv = "PM_TEST_FORWARD_CHILD"
+
+// TestForwardedSignalTakesTheWorkerTreeDown covers the half of the design that
+// no in-process test can reach: because the worker leads its OWN group, the
+// board's killRun (which signals the MANAGER's group) no longer reaches it, and
+// the manager forwarding the signal onwards is the only thing that still takes
+// the worker tree down. A manager that just died would leave a headless worker
+// running for the rest of its timeout in a worktree the board has already
+// unlocked - so this re-execs the test binary as a stand-in manager, SIGTERMs
+// it the way killRun does, and checks the worker's descendants died with it.
+func TestForwardedSignalTakesTheWorkerTreeDown(t *testing.T) {
+	if dir := os.Getenv(forwardChildEnv); dir != "" {
+		// Manager role: block on a worker that would otherwise run for 10m.
+		_, _, _ = runWorker(dir, []string{"-p", "x"}, 10*time.Minute, "", nil)
+		return
+	}
 
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "grandchild.pid")
+	childFile := filepath.Join(dir, "child.pid")
+	// Both pids are recorded so cleanup can reap the tree even when the case
+	// FAILS - which is exactly when the worker survives.
+	script := "#!/bin/sh\n" + spawnGrandchild(pidFile) + holdOpen(childFile)
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
 
-	done := make(chan string, 1)
-	go func() { done <- captureBaseline(dir, spawnGrandchild(pidFile)+"sleep 300\n") }()
+	child := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.timeout=5m")
+	env := []string{forwardChildEnv + "=" + dir, "PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")}
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "PATH=") || strings.HasPrefix(kv, forwardChildEnv+"=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	child.Env = env
+	if err := child.Start(); err != nil {
+		t.Fatalf("re-exec: %v", err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- child.Wait() }()
+	t.Cleanup(func() {
+		_ = child.Process.Kill()
+		for _, f := range []string{pidFile, childFile} {
+			if pid, err := readPidFile(f); err == nil {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
 
-	pid := awaitGrandchild(t, pidFile)
+	// Wait for the manager's worker tree to be up, then stop the manager.
+	var pid int
+	deadline := time.Now().Add(hangGuard)
+	for pid == 0 && time.Now().Before(deadline) {
+		if p, err := readPidFile(pidFile); err == nil {
+			pid = p
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatal("the re-exec'd manager never launched a worker")
+	}
+	if err := child.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("signal manager: %v", err)
+	}
 
 	select {
-	case got := <-done:
-		if got != "" {
-			t.Fatalf("a baseline that blew its cap must degrade to no baseline, got %q", got)
-		}
-	case <-time.After(20 * time.Second):
-		t.Fatal("captureBaseline hung far past its cap - a descendant holding the output pipe blocked Wait")
+	case <-waited: // the manager must still die on a SIGTERM it forwards
+	case <-time.After(hangGuard):
+		t.Fatal("the manager survived the SIGTERM it was supposed to forward and re-raise")
 	}
-	requirePidGone(t, pid, 5*time.Second)
+	requirePidGone(t, pid, "the worker tree of a SIGTERM'd manager")
 }
 
 func TestExecuteWorkRecordsTimeoutOutcome(t *testing.T) {
-	shrinkProcWaitDelay(t, 500*time.Millisecond)
-	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
-	fakeClaude(t, spawnGrandchild(pidFile)+"sleep 300\n")
+	f := newProcFixture(t, 500*time.Millisecond)
+	grandchild := f.pidFile("grandchild")
+	fakeClaude(t, spawnGrandchild(grandchild)+"sleep 300\n")
 	store, task, plan, opts := executorFixture(t)
 	opts.timeout = 1500 * time.Millisecond
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := executeWork(store, task, plan, opts)
-		done <- err
-	}()
+	var err error
+	f.run(func() { _, err = executeWork(store, task, plan, opts) })
 
-	pid := awaitGrandchild(t, pidFile)
+	pid := f.awaitPid(grandchild)
+	f.wait("executeWork")
 
-	select {
-	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "timed out") {
-			t.Fatalf("executeWork must surface the timeout, got %v", err)
-		}
-	case <-time.After(20 * time.Second):
-		t.Fatal("executeWork hung past the worker timeout")
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("executeWork must surface the timeout, got %v", err)
 	}
-	requirePidGone(t, pid, 5*time.Second)
+	f.requireGone(pid, "the worker's grandchild")
 
-	run, err := storage.ReadRunState(store.ProjectDir("app"), "app-1")
-	if err != nil {
-		t.Fatalf("run-state: %v", err)
+	run, rerr := storage.ReadRunState(store.ProjectDir("app"), "app-1")
+	if rerr != nil {
+		t.Fatalf("run-state: %v", rerr)
 	}
 	if run.Status != storage.RunStatusFailed || !strings.Contains(run.Error, "timed out") {
 		t.Fatalf("timeout outcome not recorded on the run-state: %+v", run)
 	}
-	if len(run.Subs) != 1 || run.Subs[0].Status != storage.RunStatusFailed {
+	if len(run.Subs) != 1 || run.Subs[0].Status != storage.RunStatusFailed ||
+		!strings.Contains(run.Subs[0].Note, "timed out") {
 		t.Fatalf("in-flight sub not marked failed: %+v", run.Subs)
 	}
 	entries, _ := storage.ReadJournal(store.ProjectDir("app"))
 	if len(entries) != 2 || entries[1].Event != "end" || entries[1].Status != storage.RunStatusFailed ||
 		!strings.Contains(entries[1].Error, "timed out") {
 		t.Fatalf("timeout outcome not journaled: %+v", entries)
+	}
+	if len(entries[1].Subs) != 1 || entries[1].Subs[0].Result != "failed" {
+		t.Fatalf("journal sub outcome not recorded: %+v", entries[1].Subs)
 	}
 }

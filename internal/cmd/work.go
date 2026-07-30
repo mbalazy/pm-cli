@@ -707,7 +707,7 @@ func captureBaseline(dir, command string) string {
 	var combined bytes.Buffer
 	c.Stdout = &combined
 	c.Stderr = &combined // one writer for both: exec dedups it onto a single fd
-	err := runGroupCmd(c)
+	err := runGroupCmd(ctx, c)
 	out := combined.Bytes()
 	if ctx.Err() == context.DeadlineExceeded {
 		fmt.Fprintf(os.Stderr, "pm work: baseline cmd timed out after %s - continuing without a baseline\n", baselineTimeout)
@@ -717,11 +717,14 @@ func captureBaseline(dir, command string) string {
 		return baselineSection(command, 0, "")
 	}
 	if errors.Is(err, exec.ErrWaitDelay) {
-		// Exit status unknowable - the command's own descendants held its output
-		// open past WaitDelay. Reporting an invented verdict to the worker is
-		// worse than no baseline at all.
-		fmt.Fprintf(os.Stderr, "pm work: baseline cmd left background processes holding its output - killed them; continuing without a baseline\n")
-		return ""
+		// The command left something holding its output open, so WaitDelay had
+		// to unblock us (the leftovers are killed by now). Wait only reports
+		// ErrWaitDelay when the command itself exited 0 - a non-zero exit always
+		// wins as *ExitError - so this baseline is GREEN. Degrading to "no
+		// baseline" here would cost every worker in the run the one section that
+		// tells it which failures are pre-existing.
+		fmt.Fprintf(os.Stderr, "pm work: baseline cmd left background processes holding its output - killed them after %s\n", procWaitDelay)
+		return baselineSection(command, 0, "")
 	}
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
@@ -751,7 +754,7 @@ func runWorker(dir string, args []string, timeout time.Duration, configDir strin
 	var stdout bytes.Buffer
 	c.Stdout = &stdout
 	c.Stderr = os.Stderr
-	err := runGroupCmd(c)
+	err := runGroupCmd(ctx, c)
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, "", fmt.Errorf("worker timed out after %s (raise --timeout if the task legitimately needs longer)", timeout)
 	}

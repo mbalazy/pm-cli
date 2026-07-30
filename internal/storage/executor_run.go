@@ -255,8 +255,11 @@ func (st *RunState) IsLive() bool {
 
 // Kill signals the run's whole process group, falling back to the bare pid.
 // Background runs are started detached (Setsid), so the manager leads its own
-// process group; signalling -pgid takes the manager AND its `claude -p` worker
-// down together (killing the manager alone would orphan the worker). Returns an
+// process group. The `claude -p` worker is NOT in it - the worker gets its own
+// group (cmd.groupCmd) so that its own descendants are killable - so what takes
+// the worker down is the manager forwarding this signal to the worker's group
+// (cmd.forwardTerminalSignals) before it dies. Use a catchable signal:
+// SIGKILLing the manager cannot be forwarded and orphans the worker. Returns an
 // error when there is no pid to signal.
 func (st *RunState) Kill(sig syscall.Signal) error {
 	if st == nil || st.PID <= 0 {
