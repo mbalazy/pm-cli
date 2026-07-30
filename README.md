@@ -46,14 +46,25 @@ claude mcp add --transport stdio --scope user pm -- ~/.local/share/go/bin/pm mcp
 
 ## Quick start
 
+**The primary interface is a conversation.** With the MCP server registered, you don't operate pm by hand - you just talk to Claude Code and it drives the tools:
+
+> "create a pm project for this repo" → `pm_create_project`
+> "add a task: fix the login flow" → `pm_add_task`
+> "what am I working on?" / "co dziś?" → `pm_context` (the session-start rollup)
+> "save a brief, I'm done for today" → `pm_update_task` with a where-we-left-off summary
+> "done, close it" → `pm_move_task`
+
+Claude reads the context at session start, records decisions into the task as you work, and leaves a brief for the next session - the tracker maintains itself as a side effect of the conversation.
+
+The CLI and TUI cover the moments a conversation doesn't:
+
 ```sh
-pm init my-app                 # create a project (slug, path, stack, statuses)
-pm add my-app "Fix login flow" # add a task
-pm board                       # open the kanban board (or just `pm`)
-pm context                     # print the session-start rollup for the cwd's project
+pm board       # the kanban TUI: overview, reordering, launching sessions and executor runs
+pm context     # the same rollup as pm_context, offline
+pm work / pm run-epic   # hand tasks to autonomous workers (see The executor)
 ```
 
-Data lands in `~/.claude/pm/<project>/` - one `project.yaml` plus one `.md` file per task, side by side.
+Direct CLI equivalents exist for everything (`pm init`, `pm add`, `pm mv`, ... - see [CLI reference](#cli-reference)). Data lands in `~/.claude/pm/<project>/` - one `project.yaml` plus one `.md` file per task, side by side.
 
 ## Concepts
 
