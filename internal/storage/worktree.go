@@ -352,10 +352,18 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 				continue // vanished between EEXIST and read (released/stolen) - retry
 			}
 			if existing.PID == pid {
-				// Our own re-entrant lock: refresh the payload in place (the task
-				// id changes as the epic manager re-enters per sub). No race - only
-				// this process writes a lock it owns.
-				return os.WriteFile(path, data, 0644)
+				// Our own re-entrant lock: refresh the payload (the task id changes
+				// as the epic manager re-enters per sub). Only this process WRITES a
+				// lock it owns, but others READ it concurrently (the board's slot
+				// indicator, a rival's busy check) - an in-place write here has a
+				// truncated-file window, and a rival reading that torn state as
+				// corrupt would steal a LIVE holder's lock. Write-tmp + rename keeps
+				// the refresh atomic like every other lock transition.
+				refresh := fmt.Sprintf("%s.%d.refresh", path, pid)
+				if err := os.WriteFile(refresh, data, 0644); err != nil {
+					return err
+				}
+				return os.Rename(refresh, path)
 			}
 			if ProcessAlive(existing.PID) {
 				return &WorktreeBusyError{Holder: existing}

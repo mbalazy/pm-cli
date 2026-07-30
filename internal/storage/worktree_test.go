@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -147,6 +148,54 @@ func TestWorktreeLockLifecycle(t *testing.T) {
 	// Idempotent release on a free worktree.
 	if err := ReleaseWorktreeLock(dir, livePID); err != nil {
 		t.Fatalf("idempotent release: %v", err)
+	}
+}
+
+// TestWorktreeLockRefreshIsAtomic hammers the same-pid refresh path (the epic
+// manager re-entering per sub with a new task id) against a concurrent reader.
+// The refresh MUST be tmp+rename: an in-place write has a truncated-file window
+// in which the reader sees a corrupt lock - and AcquireWorktreeLock treats
+// corrupt as stealable, so a rival could take over a LIVE holder's slot.
+func TestWorktreeLockRefreshIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	pid := os.Getpid()
+	if err := AcquireWorktreeLock(dir, "task-0", "run-epic", pid); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 1; i <= 200; i++ {
+			if err := AcquireWorktreeLock(dir, fmt.Sprintf("task-%d", i), "run-epic", pid); err != nil {
+				t.Errorf("refresh %d: %v", i, err)
+				return
+			}
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			// Refresh scratch files must not linger next to the lock.
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range entries {
+				if e.Name() != worktreeLockFile {
+					t.Fatalf("scratch file left behind: %s", e.Name())
+				}
+			}
+			return
+		default:
+			lk, err := ReadWorktreeLock(dir)
+			if err != nil {
+				t.Fatalf("reader saw a torn lock: %v", err)
+			}
+			if lk == nil || lk.PID != pid {
+				t.Fatalf("reader saw a wrong/missing lock: %+v", lk)
+			}
+		}
 	}
 }
 
