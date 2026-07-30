@@ -44,9 +44,13 @@ func (m Model) runForTask(t *storage.Task) *storage.RunState {
 // execKillCheckMsg fires a short while after a kill so we can escalate to
 // SIGKILL if the process group survived the SIGTERM.
 type execKillCheckMsg struct {
-	pid     int
-	project string
-	taskID  string
+	pid int
+	// workerPGID is the in-flight worker's own process group (it is not in the
+	// manager's - see storage.RunState.WorkerPGID). Escalating against the
+	// manager alone would kill the one process able to forward to the worker.
+	workerPGID int
+	project    string
+	taskID     string
 }
 
 // killRun stops the executor run st: SIGTERM to its process group, then stamps
@@ -58,20 +62,25 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 		return nil
 	}
 	stateDir := m.store.ProjectDir(st.Project)
-	pid := st.PID
 	taskID := st.TaskID
 	proj := st.Project
+	// Re-read the freshest run-state BEFORE signalling: the board's copy is up
+	// to a tick old, and WorkerPGID moves with every sub - signalling a stale
+	// one would miss the live worker (and, once its pid is recycled, could
+	// reach an unrelated group).
+	if fresh, err := storage.ReadRunState(stateDir, taskID); err == nil {
+		st = fresh
+	}
+	pid := st.PID
+	workerPGID := st.WorkerPGID
 	// Errors here are intentionally dropped: this is a TUI (bubbletea owns the
 	// screen, so stderr would corrupt the render), and the SIGTERM may legitimately
 	// fail because the process is already gone - the execKillCheckMsg follow-up
 	// re-checks liveness and escalates to SIGKILL if needed.
 	_ = st.Kill(syscall.SIGTERM)
 
-	// Re-read the freshest run-state (the manager may have advanced it), then
-	// stamp it stopped + park the in-flight sub.
-	if fresh, err := storage.ReadRunState(stateDir, taskID); err == nil {
-		st = fresh
-	}
+	// From here on st is the freshest state; stamp it stopped + park the
+	// in-flight sub.
 	st.Status = storage.RunStatusFailed
 	if st.Error == "" {
 		st.Error = "stopped by user"
@@ -140,7 +149,7 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 	m.toastMsg = "Stopped executor run " + taskID + " (parked " + inFlight + " on waiting)"
 	m.toastExpiry = time.Now().Add(5 * time.Second)
 	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-		return execKillCheckMsg{pid: pid, project: proj, taskID: taskID}
+		return execKillCheckMsg{pid: pid, workerPGID: workerPGID, project: proj, taskID: taskID}
 	})
 }
 
