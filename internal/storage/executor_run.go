@@ -45,6 +45,15 @@ type RunState struct {
 	CurrentSub     string `json:"current_sub,omitempty"`
 	CurrentSession string `json:"current_session,omitempty"` // worker session id -> transcript .jsonl
 	Phase          string `json:"phase,omitempty"`           // free-form ("running", "implement", ...)
+	// WorkerPGID is the process-group id of the in-flight `claude -p` worker
+	// (cmd.groupCmd gives it its own group so ITS descendants are killable), set
+	// while a worker is live and cleared when it returns. The worker is NOT in
+	// the manager's group, so this is the only handle an outside observer has on
+	// it: the manager forwards catchable signals itself, but a manager that is
+	// SIGKILLed - or killed before its forwarding finishes - would otherwise
+	// leave an unreachable worker running for the rest of its timeout. Kill
+	// signals it alongside the manager's own group.
+	WorkerPGID int `json:"worker_pgid,omitempty"`
 
 	Subs  []SubRun `json:"subs,omitempty"` // per-sub progress (run-epic); single entry for work
 	Error string   `json:"error,omitempty"`
@@ -253,17 +262,24 @@ func (st *RunState) IsLive() bool {
 	return ProcessAlive(st.PID)
 }
 
-// Kill signals the run's whole process group, falling back to the bare pid.
-// Background runs are started detached (Setsid), so the manager leads its own
-// process group. The `claude -p` worker is NOT in it - the worker gets its own
-// group (cmd.groupCmd) so that its own descendants are killable - so what takes
-// the worker down is the manager forwarding this signal to the worker's group
-// (cmd.forwardTerminalSignals) before it dies. Use a catchable signal:
-// SIGKILLing the manager cannot be forwarded and orphans the worker. Returns an
-// error when there is no pid to signal.
+// Kill signals the run's whole process group, falling back to the bare pid, AND
+// the in-flight worker's group. Background runs are started detached (Setsid),
+// so the manager leads its own process group - but the `claude -p` worker is NOT
+// in it: the worker gets its own group (cmd.groupCmd) so that ITS descendants
+// are killable. A live manager forwards catchable signals to the worker itself,
+// which is why WorkerPGID is signalled here too rather than instead: it is the
+// backstop for the manager dying before it can forward (this call escalating to
+// SIGKILL, an OOM kill, a crash), which would otherwise leave a headless worker
+// running for the rest of its timeout in a worktree the caller is about to
+// unlock. Signalling both is safe - the worker group send is best-effort and its
+// error is intentionally not reported. Returns an error when there is no manager
+// pid to signal.
 func (st *RunState) Kill(sig syscall.Signal) error {
 	if st == nil || st.PID <= 0 {
 		return fmt.Errorf("no pid to signal")
+	}
+	if st.WorkerPGID > 0 && st.WorkerPGID != st.PID {
+		_ = syscall.Kill(-st.WorkerPGID, sig)
 	}
 	// Negative pid targets the process group (pgid == manager pid for a detached
 	// run). Fall back to the bare pid if the process isn't a group leader.

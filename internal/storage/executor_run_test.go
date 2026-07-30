@@ -164,6 +164,43 @@ func TestRunStateKill(t *testing.T) {
 	}
 }
 
+// TestRunStateKillReachesTheWorkerGroup pins the backstop half of Kill: the
+// worker is NOT in the manager's process group, so signalling the manager alone
+// only takes the worker down while the manager is alive to forward it. Once the
+// caller escalates to SIGKILL, that forwarding is gone - WorkerPGID is what
+// still reaches the worker tree.
+func TestRunStateKillReachesTheWorkerGroup(t *testing.T) {
+	spawnGroup := func() *exec.Cmd {
+		t.Helper()
+		c := exec.Command("sleep", "30")
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // never this test's group
+		if err := c.Start(); err != nil {
+			t.Fatalf("start sleep: %v", err)
+		}
+		t.Cleanup(func() { _ = c.Process.Kill(); _, _ = c.Process.Wait() })
+		return c
+	}
+	manager, worker := spawnGroup(), spawnGroup()
+
+	st := &RunState{Status: RunStatusRunning, PID: manager.Process.Pid, WorkerPGID: worker.Process.Pid}
+	if err := st.Kill(syscall.SIGKILL); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	// Liveness is read through Wait, not ProcessAlive: an unreaped kill leaves a
+	// zombie that still answers signal 0, so polling would pass either way. A
+	// signalled process is reaped in milliseconds; one that was missed sits in
+	// its `sleep 30`.
+	for _, c := range []*exec.Cmd{manager, worker} {
+		reaped := make(chan struct{})
+		go func(c *exec.Cmd) { _, _ = c.Process.Wait(); close(reaped) }(c)
+		select {
+		case <-reaped:
+		case <-time.After(5 * time.Second):
+			t.Errorf("pid %d survived Kill", c.Process.Pid)
+		}
+	}
+}
+
 func TestReadRunStatesMissingDir(t *testing.T) {
 	// No .executor dir -> empty map, no panic.
 	if got := ReadRunStates(t.TempDir()); len(got) != 0 {

@@ -550,7 +550,12 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// Stopping is idempotent, so the defer only matters if runWorker panics -
 	// without it a panic would leave a goroutine stamping "running" forever.
 	defer stopHeartbeat()
-	res, sessionID, err := runWorker(dir, plan.cmdArgs, opts.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env)
+	// The worker leads its own process group, so this pgid is the only handle
+	// anything outside this process has on it. Publishing it lets the board kill
+	// the worker tree directly when it has to SIGKILL the manager - a signal the
+	// manager cannot forward (see storage.RunState.Kill).
+	res, sessionID, err := runWorker(dir, plan.cmdArgs, opts.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env,
+		func(pgid int) { _ = hbw.Update(func(run *storage.RunState) { run.WorkerPGID = pgid }) })
 	stopHeartbeat()
 	// The worker is gone and the heartbeat died with it, so drop the in-flight
 	// session marker in the same breath. It is what an observer gates the
@@ -558,7 +563,12 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// applyWorkerResult's project flock, then the manager's merge or `git push` -
 	// can run for minutes; leaving the marker set there would render a frozen
 	// stamp as a live beat, i.e. a healthy run looking hung.
-	_ = hbw.Update(func(run *storage.RunState) { run.CurrentSession = "" })
+	// WorkerPGID goes with it: the group is gone, and a stale pgid left on the
+	// run-state is a pid the board would signal on the next kill.
+	_ = hbw.Update(func(run *storage.RunState) {
+		run.CurrentSession = ""
+		run.WorkerPGID = 0
+	})
 	if err != nil {
 		if runw != nil {
 			_ = runw.Update(func(run *storage.RunState) {
@@ -707,7 +717,9 @@ func captureBaseline(dir, command string) string {
 	var combined bytes.Buffer
 	c.Stdout = &combined
 	c.Stderr = &combined // one writer for both: exec dedups it onto a single fd
-	err := runGroupCmd(ctx, c)
+	// No onStart: the baseline runs before any run-state exists to publish to,
+	// and its cap is enforced entirely inside this process.
+	err := runGroupCmd(ctx, c, nil)
 	out := combined.Bytes()
 	if ctx.Err() == context.DeadlineExceeded {
 		fmt.Fprintf(os.Stderr, "pm work: baseline cmd timed out after %s - continuing without a baseline\n", baselineTimeout)
@@ -742,7 +754,9 @@ func captureBaseline(dir, command string) string {
 // runWorker invokes claude headless in dir under a wall-clock deadline, parses
 // the result envelope, and returns the worker result + the session id. A hung
 // claude is killed when the timeout elapses rather than blocking pm forever.
-func runWorker(dir string, args []string, timeout time.Duration, configDir string, extraEnv []string) (*workerResult, string, error) {
+// onSpawn (optional) receives the worker group's pgid once it is up; see
+// runGroupCmd.
+func runWorker(dir string, args []string, timeout time.Duration, configDir string, extraEnv []string, onSpawn func(pgid int)) (*workerResult, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -754,7 +768,7 @@ func runWorker(dir string, args []string, timeout time.Duration, configDir strin
 	var stdout bytes.Buffer
 	c.Stdout = &stdout
 	c.Stderr = os.Stderr
-	err := runGroupCmd(ctx, c)
+	err := runGroupCmd(ctx, c, onSpawn)
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, "", fmt.Errorf("worker timed out after %s (raise --timeout if the task legitimately needs longer)", timeout)
 	}

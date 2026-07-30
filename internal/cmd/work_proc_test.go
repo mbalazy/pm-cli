@@ -158,7 +158,7 @@ func TestRunWorkerTimeoutKillsWholeWorkerTree(t *testing.T) {
 
 	var res *workerResult
 	var err error
-	f.run(func() { res, _, err = runWorker(t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil) })
+	f.run(func() { res, _, err = runWorker(t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil, nil) })
 
 	gcPid, cPid := f.awaitPid(grandchild), f.awaitPid(child)
 	f.wait("runWorker")
@@ -182,7 +182,7 @@ func TestRunWorkerTimeoutKillsWorkerIgnoringSIGTERM(t *testing.T) {
 	fakeClaude(t, "trap '' TERM\n"+spawnGrandchild(grandchild)+"trap '' TERM; sleep 300\n")
 
 	var err error
-	f.run(func() { _, _, err = runWorker(t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil) })
+	f.run(func() { _, _, err = runWorker(t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil, nil) })
 
 	pid := f.awaitPid(grandchild)
 	f.wait("runWorker")
@@ -203,7 +203,7 @@ func TestRunWorkerOrphanHoldingStdoutDoesNotHang(t *testing.T) {
 
 	var res *workerResult
 	var err error
-	f.run(func() { res, _, err = runWorker(t.TempDir(), []string{"-p", "x"}, time.Minute, "", nil) })
+	f.run(func() { res, _, err = runWorker(t.TempDir(), []string{"-p", "x"}, time.Minute, "", nil, nil) })
 
 	pid := f.awaitPid(grandchild)
 	f.wait("runWorker")
@@ -267,7 +267,7 @@ const forwardChildEnv = "PM_TEST_FORWARD_CHILD"
 func TestForwardedSignalTakesTheWorkerTreeDown(t *testing.T) {
 	if dir := os.Getenv(forwardChildEnv); dir != "" {
 		// Manager role: block on a worker that would otherwise run for 10m.
-		_, _, _ = runWorker(dir, []string{"-p", "x"}, 10*time.Minute, "", nil)
+		_, _, _ = runWorker(dir, []string{"-p", "x"}, 10*time.Minute, "", nil, nil)
 		return
 	}
 
@@ -327,6 +327,62 @@ func TestForwardedSignalTakesTheWorkerTreeDown(t *testing.T) {
 		t.Fatal("the manager survived the SIGTERM it was supposed to forward and re-raise")
 	}
 	requirePidGone(t, pid, "the worker tree of a SIGTERM'd manager")
+}
+
+// TestExecuteWorkPublishesTheWorkerGroup covers the handle an outside observer
+// needs: Setpgid moved the worker out of the manager's group, so the board can
+// no longer reach it by signalling the manager - and the manager's own
+// forwarding dies with a SIGKILL. The pgid on the run-state is what is left, so
+// it has to be published while the worker runs, name the group the worker's
+// DESCENDANTS are in, and be gone once the worker is.
+func TestExecuteWorkPublishesTheWorkerGroup(t *testing.T) {
+	f := newProcFixture(t, 500*time.Millisecond)
+	grandchild := f.pidFile("grandchild")
+	fakeClaude(t, spawnGrandchild(grandchild)+"sleep 300\n")
+	store, task, plan, opts := executorFixture(t)
+	opts.timeout = 3 * time.Second
+
+	f.run(func() { _, _ = executeWork(store, task, plan, opts) })
+
+	gcPid := f.awaitPid(grandchild)
+	stateDir := store.ProjectDir("app")
+	var pgid int
+	deadline := time.Now().Add(hangGuard)
+	for time.Now().Before(deadline) && pgid == 0 {
+		if run, err := storage.ReadRunState(stateDir, "app-1"); err == nil {
+			pgid = run.WorkerPGID
+		}
+		if pgid == 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	if pgid == 0 {
+		t.Fatal("the worker's pgid was never published to the run-state")
+	}
+	if pgid == os.Getpid() {
+		t.Fatal("the manager published its OWN pid - signalling that group is a self-kill")
+	}
+	// The published pgid is only useful if the worker's descendants are actually
+	// in it: that is what makes a kill(-pgid) reach the tree.
+	gcGroup, err := syscall.Getpgid(gcPid)
+	if err != nil {
+		t.Fatalf("getpgid(%d): %v", gcPid, err)
+	}
+	if gcGroup != pgid {
+		t.Fatalf("published pgid %d is not the worker tree's group %d", pgid, gcGroup)
+	}
+
+	f.wait("executeWork")
+	f.requireGone(gcPid, "the worker's grandchild")
+	run, rerr := storage.ReadRunState(stateDir, "app-1")
+	if rerr != nil {
+		t.Fatalf("run-state: %v", rerr)
+	}
+	// A pgid left behind is a pid the board would signal on the next kill, by
+	// which time the kernel may have handed it to something unrelated.
+	if run.WorkerPGID != 0 {
+		t.Fatalf("stale worker pgid %d left on the run-state after the worker exited", run.WorkerPGID)
+	}
 }
 
 func TestExecuteWorkRecordsTimeoutOutcome(t *testing.T) {

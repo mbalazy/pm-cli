@@ -53,7 +53,12 @@ func groupCmd(ctx context.Context, name string, args ...string) *exec.Cmd {
 // group leaves nothing behind. Wait's error is returned verbatim - callers
 // distinguish a plain non-zero exit (*exec.ExitError) from exec.ErrWaitDelay,
 // which means "the process exited 0 but a descendant still held its output".
-func runGroupCmd(ctx context.Context, c *exec.Cmd) error {
+//
+// onStart, when non-nil, is called with the new group's pgid once the child is
+// up. Setpgid makes that pgid the only handle anything outside this process has
+// on the worker tree, so a caller that wants the group to stay reachable after
+// it dies (see storage.RunState.WorkerPGID) publishes it from here.
+func runGroupCmd(ctx context.Context, c *exec.Cmd, onStart func(pgid int)) error {
 	// Armed BEFORE the fork: between Start and Notify there would otherwise be a
 	// window where a terminal signal kills pm with the default disposition and
 	// leaves a brand-new worker - already in its own group - unreachable. The
@@ -67,6 +72,10 @@ func runGroupCmd(ctx context.Context, c *exec.Cmd) error {
 		return err
 	}
 	pid.Store(int64(c.Process.Pid))
+	// The child is its own group leader (Setpgid), so its pid IS the pgid.
+	if onStart != nil {
+		onStart(c.Process.Pid)
+	}
 
 	err := c.Wait()
 	// Only the abnormal paths can leave descendants that are ours to collect:
