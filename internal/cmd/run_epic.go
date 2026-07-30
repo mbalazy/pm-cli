@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -612,15 +613,27 @@ func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker,
 // pushIfAhead pushes branch to origin when it carries commits base does not
 // have. Returns a short human note for the outcome ("" when there was nothing
 // to push). Never fatal - a failed push only means the work stays local.
+//
+// A FAILED ahead-check (typo'd base branch, detached ref) is not "nothing to
+// push": that silent 0 was exactly the partial-work-dies-at-next-wipe scenario
+// this mechanism exists to prevent. When in doubt, push anyway and say why.
 func pushIfAhead(dir, branch, base string) string {
-	if gitAheadCount(dir, branch, base) == 0 {
+	ahead, err := gitAheadCount(dir, branch, base)
+	if err == nil && ahead == 0 {
 		return ""
 	}
 	if !gitHasRemote(dir) {
 		return "no remote - branch " + branch + " stays local"
 	}
-	if err := gitPush(dir, branch); err != nil {
-		return "push failed (" + err.Error() + ") - branch " + branch + " stays local"
+	if perr := gitPush(dir, branch); perr != nil {
+		note := "push failed (" + perr.Error() + ") - branch " + branch + " stays local"
+		if err != nil {
+			note += "; ahead-check also failed (" + err.Error() + ")"
+		}
+		return note
+	}
+	if err != nil {
+		return "pushed " + branch + " (ahead-check failed: " + err.Error() + " - pushed to be safe)"
 	}
 	return "pushed " + branch
 }
@@ -794,14 +807,23 @@ func openEpicPR(dir, epicBranch string, tracker *storage.Task) {
 	}
 	title := fmt.Sprintf("Epic %s: %s", tracker.Meta.ID, tracker.Meta.Title)
 	body := fmt.Sprintf("Integration PR for epic %s. Subs were implemented + reviewed + verified on isolated branches and merged into `%s`.\n\nReview and merge when ready - this PR is intentionally a draft.", tracker.Meta.ID, epicBranch)
-	c := exec.Command("gh", "pr", "create", "--draft", "--base", "main", "--head", epicBranch, "--title", title, "--body", body)
+	// Deadline like every other network step: a wedged gh (auth prompt on a
+	// headless box, API hang) must not hang the manager at the very end of an
+	// otherwise finished run.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	c := exec.CommandContext(ctx, "gh", "pr", "create", "--draft", "--base", "main", "--head", epicBranch, "--title", title, "--body", body)
 	c.Dir = dir
-	if out, err := c.CombinedOutput(); err != nil {
+	out, err := c.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		fmt.Fprintf(os.Stderr, "\ngh pr create timed out after 2m\nopen the epic->main PR manually.\n")
+		return
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "\ngh pr create failed: %s\nopen the epic->main PR manually.\n", strings.TrimSpace(string(out)))
 		return
-	} else {
-		fmt.Fprintf(os.Stderr, "\nopened draft PR: %s\n", strings.TrimSpace(string(out)))
 	}
+	fmt.Fprintf(os.Stderr, "\nopened draft PR: %s\n", strings.TrimSpace(string(out)))
 }
 
 // describeSlotPool renders the worktree pool for dry-run display: the single

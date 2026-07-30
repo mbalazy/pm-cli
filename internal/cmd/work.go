@@ -519,6 +519,22 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 
 	fmt.Fprintf(os.Stderr, "pm work: launching headless worker for %s on %s (%s)...\n", task.Meta.ID, plan.branch, modeLabel(opts.standalone))
 
+	workStart := time.Now()
+	// journalEnd pairs the start line above with exactly one terminal line; the
+	// three exit paths below differ only in status/error and the sub's stats.
+	journalEnd := func(status, errMsg string, sub storage.JournalSub) {
+		sub.ID = task.Meta.ID
+		sub.Branch = plan.branch
+		sub.DurationS = int(time.Since(workStart).Seconds())
+		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
+			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
+			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
+			WorkDir: journalDir, Baseline: baselineUsed,
+			Status: status, DurationS: sub.DurationS, Error: errMsg,
+			Subs: []storage.JournalSub{sub},
+		})
+	}
+
 	// Heartbeat: while the worker runs, nothing else stamps the run-state, so a
 	// 40-minute sub looks exactly like a hung one to an observer. Re-stamp the
 	// run-state on a ticker for exactly as long as the worker lives - the
@@ -529,7 +545,6 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	if runw != nil {
 		hbw = runw
 	}
-	workStart := time.Now()
 	stopHeartbeat := hbw.Heartbeat(workerHeartbeatInterval)
 	// Stopping is idempotent, so the defer only matters if runWorker panics -
 	// without it a panic would leave a goroutine stamping "running" forever.
@@ -554,13 +569,8 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 					run.Subs[0].Note = err.Error()
 				}
 			})
-			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
-				Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
-				PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-				WorkDir: journalDir, Baseline: baselineUsed,
-				Status: storage.RunStatusFailed, DurationS: int(time.Since(workStart).Seconds()), Error: err.Error(),
-				Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: "failed", Note: err.Error(), Branch: plan.branch, DurationS: int(time.Since(workStart).Seconds()), Session: plan.sessionID}},
-			})
+			journalEnd(storage.RunStatusFailed, err.Error(),
+				storage.JournalSub{Result: "failed", Note: err.Error(), Session: plan.sessionID})
 		}
 		return nil, err
 	}
@@ -581,13 +591,8 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			// applyWorkerResult write failed), so res carries real turns/cost
 			// off the claude envelope - unlike the runWorker-failure branch
 			// above, where res is nil and those fields stay zero.
-			_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
-				Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
-				PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-				WorkDir: journalDir, Baseline: baselineUsed,
-				Status: storage.RunStatusFailed, DurationS: int(time.Since(workStart).Seconds()), Error: err.Error(),
-				Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: "failed", Note: err.Error(), Branch: plan.branch, DurationS: int(time.Since(workStart).Seconds()), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD}},
-			})
+			journalEnd(storage.RunStatusFailed, err.Error(),
+				storage.JournalSub{Result: "failed", Note: err.Error(), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD})
 		}
 		return nil, err
 	}
@@ -605,13 +610,8 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 				run.Subs[0].CostUSD = res.CostUSD
 			}
 		})
-		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
-			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
-			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-			WorkDir: journalDir, Baseline: baselineUsed,
-			Status: storage.RunStatusDone, DurationS: int(time.Since(workStart).Seconds()),
-			Subs: []storage.JournalSub{{ID: task.Meta.ID, Result: res.Status, Note: strings.TrimSpace(res.Summary), Branch: plan.branch, DurationS: int(time.Since(workStart).Seconds()), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD}},
-		})
+		journalEnd(storage.RunStatusDone, "",
+			storage.JournalSub{Result: res.Status, Note: strings.TrimSpace(res.Summary), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD})
 	}
 	return res, nil
 }
@@ -815,6 +815,10 @@ func parseClaudeResult(data []byte) (*workerResult, string, error) {
 func applyWorkerResult(store storage.TaskStore, t *storage.Task, branch, sessionID string, res *workerResult, standalone, independent bool) error {
 	release, lockErr := store.LockProject(t.Project)
 	if lockErr != nil {
+		// Degrade to an unlocked write rather than dropping the worker's result,
+		// but say so - a silent degrade hides that a concurrent session's edit
+		// may get clobbered.
+		fmt.Fprintf(os.Stderr, "pm work: project lock unavailable (%v) - recording result without it\n", lockErr)
 		release = func() {}
 	}
 	defer release()

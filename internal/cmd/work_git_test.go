@@ -135,8 +135,8 @@ func TestGitAheadCountAndPushIfAhead(t *testing.T) {
 	gitT(t, repo, "commit", "-q", "-m", "base")
 
 	gitT(t, repo, "checkout", "-q", "-b", "feat/empty", "development")
-	if n := gitAheadCount(repo, "feat/empty", "development"); n != 0 {
-		t.Errorf("gitAheadCount(empty branch) = %d, want 0", n)
+	if n, err := gitAheadCount(repo, "feat/empty", "development"); n != 0 || err != nil {
+		t.Errorf("gitAheadCount(empty branch) = %d, %v, want 0, nil", n, err)
 	}
 	if note := pushIfAhead(repo, "feat/empty", "development"); note != "" {
 		t.Errorf("pushIfAhead(empty branch) = %q, want no-op", note)
@@ -148,8 +148,8 @@ func TestGitAheadCountAndPushIfAhead(t *testing.T) {
 	gitT(t, repo, "commit", "-q", "-m", "work 1")
 	os.WriteFile(filepath.Join(repo, "b.txt"), []byte("work 2\n"), 0644)
 	gitT(t, repo, "commit", "-q", "-am", "work 2")
-	if n := gitAheadCount(repo, "feat/work", "development"); n != 2 {
-		t.Errorf("gitAheadCount(2 commits) = %d, want 2", n)
+	if n, err := gitAheadCount(repo, "feat/work", "development"); n != 2 || err != nil {
+		t.Errorf("gitAheadCount(2 commits) = %d, %v, want 2, nil", n, err)
 	}
 	if note := pushIfAhead(repo, "feat/work", "development"); !strings.Contains(note, "no remote") {
 		t.Errorf("pushIfAhead without remote = %q, want a 'no remote' note", note)
@@ -167,7 +167,14 @@ func TestGitAheadCountAndPushIfAhead(t *testing.T) {
 		t.Errorf("feat/work not present on the remote after push: %v", err)
 	}
 
-	if n := gitAheadCount(repo, "feat/work", "missing-base"); n != 0 {
-		t.Errorf("gitAheadCount with unknown base = %d, want 0 (error swallowed)", n)
+	// A broken ahead-check (typo'd base) must SURFACE the error - and
+	// pushIfAhead must respond by pushing anyway rather than silently
+	// dropping the work as "0 commits ahead".
+	if _, err := gitAheadCount(repo, "feat/work", "missing-base"); err == nil {
+		t.Error("gitAheadCount with unknown base must return an error, not a silent 0")
+	}
+	note := pushIfAhead(repo, "feat/work", "missing-base")
+	if !strings.Contains(note, "pushed feat/work") || !strings.Contains(note, "ahead-check failed") {
+		t.Errorf("pushIfAhead with a broken ahead-check = %q, want push-to-be-safe with the reason", note)
 	}
 }

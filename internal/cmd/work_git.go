@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // isGitRepo reports whether dir is inside a git work tree.
@@ -116,19 +118,21 @@ func gitDeleteBranch(dir, branch string) error {
 	return exec.Command("git", "-C", dir, "branch", "-d", branch).Run()
 }
 
-// gitAheadCount returns how many commits branch carries that base does not
-// (0 on any git error). Independent mode uses it to decide whether a sub's
-// branch is worth pushing.
-func gitAheadCount(dir, branch, base string) int {
-	out, err := exec.Command("git", "-C", dir, "rev-list", "--count", base+".."+branch).Output()
+// gitAheadCount returns how many commits branch carries that base does not.
+// Independent mode uses it to decide whether a sub's branch is worth pushing.
+// The error is surfaced, never folded into 0: "could not count" (a typo'd
+// base, a detached ref) must not read as "nothing to push" - that is exactly
+// the partial work the push exists to save from the next branch wipe.
+func gitAheadCount(dir, branch, base string) (int, error) {
+	out, err := exec.Command("git", "-C", dir, "rev-list", "--count", base+".."+branch).CombinedOutput()
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("rev-list %s..%s: %s", base, branch, strings.TrimSpace(string(out)))
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("rev-list %s..%s: unparseable count %q", base, branch, out)
 	}
-	return n
+	return n, nil
 }
 
 // gitHasRemote reports whether the repo has at least one configured remote.
@@ -137,10 +141,22 @@ func gitHasRemote(dir string) bool {
 	return err == nil && strings.TrimSpace(string(out)) != ""
 }
 
+// gitPushTimeout caps a push: every other long-running executor step (worker,
+// prepare, baseline) has a deadline, and a wedged network here used to hang
+// the whole manager - with the heartbeat already stopped, so it LOOKED hung
+// too, just for the wrong reason.
+const gitPushTimeout = 5 * time.Minute
+
 // gitPush pushes branch to origin, setting upstream.
 func gitPush(dir, branch string) error {
-	c := exec.Command("git", "-C", dir, "push", "-u", "origin", branch)
-	if out, err := c.CombinedOutput(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), gitPushTimeout)
+	defer cancel()
+	c := exec.CommandContext(ctx, "git", "-C", dir, "push", "-u", "origin", branch)
+	out, err := c.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("push %s timed out after %s", branch, gitPushTimeout)
+	}
+	if err != nil {
 		return fmt.Errorf("push %s failed: %s", branch, strings.TrimSpace(string(out)))
 	}
 	return nil

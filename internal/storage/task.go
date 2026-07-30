@@ -149,14 +149,20 @@ func Slugify(s string) string {
 }
 
 func ReadTask(path string) (*Task, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	// A .md with no frontmatter block is NOT a task (a stray README, a note
+	// dropped into the data dir): frontmatter.Parse would happily return the
+	// whole file as body with a zero meta, creating a phantom task with an
+	// empty ID that half the code paths cannot address.
+	if !strings.HasPrefix(strings.TrimLeft(string(data), "\n"), "---") {
+		return nil, fmt.Errorf("parse %s: no frontmatter block", path)
+	}
 
 	var meta TaskMeta
-	body, err := frontmatter.Parse(f, &meta)
+	body, err := frontmatter.Parse(strings.NewReader(string(data)), &meta)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
@@ -258,7 +264,11 @@ func ReadTasksFromDir(dir string) ([]*Task, error) {
 		}
 		t, err := ReadTask(filepath.Join(dir, e.Name()))
 		if err != nil {
-			continue // skip unreadable files
+			// Skip, but never SILENTLY: a hand-edit that broke the YAML used to
+			// make the task vanish from every list/board/rollup with no trace -
+			// indistinguishable from deletion until someone opened the file.
+			fmt.Fprintf(os.Stderr, "pm: skipping unreadable task file: %v\n", err)
+			continue
 		}
 		tasks = append(tasks, t)
 	}

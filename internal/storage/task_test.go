@@ -367,12 +367,22 @@ func TestReadTasksFromDir(t *testing.T) {
 	})
 
 	t.Run("skips malformed md files", func(t *testing.T) {
+		// No frontmatter at all: a stray README/note in the data dir must not
+		// become a phantom task with an empty ID.
 		os.WriteFile(filepath.Join(dir, "bad.md"), []byte("no frontmatter here"), 0644)
-		tasks, _ := ReadTasksFromDir(dir)
-		// bad.md may or may not parse depending on frontmatter lib behavior with no frontmatter
-		// The key invariant: no crash
-		if tasks == nil {
-			t.Error("should return slice, not nil on partial errors")
+		// Broken YAML inside the frontmatter block: a hand-edit gone wrong.
+		os.WriteFile(filepath.Join(dir, "broken.md"), []byte("---\nid: [unclosed\n---\nbody"), 0644)
+		tasks, err := ReadTasksFromDir(dir)
+		if err != nil {
+			t.Fatalf("partial errors must not fail the whole dir: %v", err)
+		}
+		if len(tasks) != 2 {
+			t.Errorf("got %d tasks, want 2 (bad.md and broken.md skipped, valid ones kept)", len(tasks))
+		}
+		for _, tk := range tasks {
+			if tk.Meta.ID == "" {
+				t.Errorf("phantom task with empty ID leaked in: %+v", tk.Meta)
+			}
 		}
 	})
 
