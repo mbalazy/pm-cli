@@ -8,7 +8,23 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 )
+
+// truncateWidth shortens s to at most max display cells, appending "…" when it
+// cuts. It measures display width (runewidth), never byte length: a byte slice
+// like s[:n] can split a UTF-8 sequence (Polish diacritics, emoji) into
+// mojibake, and double-width emoji make byte counts overshoot columns. A
+// too-small max clamps instead of producing a negative slice bound.
+func truncateWidth(s string, max int) string {
+	if max < 2 {
+		max = 2
+	}
+	if runewidth.StringWidth(s) <= max {
+		return s
+	}
+	return runewidth.Truncate(s, max, "…")
+}
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"

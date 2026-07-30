@@ -221,8 +221,12 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, common.Keys.JumpTop):
-		m.cursors[m.activeCol] = 0
-		m.fixScrollOffsets()
+		// With every column hidden m.cursors is empty and m.activeCol is 0 -
+		// unguarded indexing here panicked the whole board.
+		if len(m.statuses) > 0 {
+			m.cursors[m.activeCol] = 0
+			m.fixScrollOffsets()
+		}
 
 	case key.Matches(msg, common.Keys.JumpBottom):
 		tasks := m.columnTasks(m.activeCol)
@@ -239,8 +243,10 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, common.Keys.HalfUp):
-		m.cursors[m.activeCol] = max(m.cursors[m.activeCol]-5, 0)
-		m.fixScrollOffsets()
+		if len(m.statuses) > 0 {
+			m.cursors[m.activeCol] = max(m.cursors[m.activeCol]-5, 0)
+			m.fixScrollOffsets()
+		}
 
 	case msg.String() == "r":
 		m.refreshProjects()

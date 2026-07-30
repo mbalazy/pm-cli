@@ -382,9 +382,7 @@ func renderCard(t *storage.Task, width int, selected bool, selectMark, badge str
 	if selectMark != "" {
 		title = selectMark + title
 	}
-	if len(title) > width-2 {
-		title = title[:width-5] + "..."
-	}
+	title = truncateWidth(title, width-2)
 	lines = append(lines, cardTitleStyle.Render(title))
 	lines = append(lines, cardProjectStyle.Render(cardIDLine(t, badge)))
 
@@ -436,11 +434,7 @@ func renderZoomCard(t *storage.Task, width int, selected bool, selectMark, badge
 	}
 
 	if t.Meta.Brief != "" {
-		brief := t.Meta.Brief
-		maxLen := width * 2 // ~2 lines worth
-		if len(brief) > maxLen {
-			brief = brief[:maxLen-3] + "..."
-		}
+		brief := truncateWidth(t.Meta.Brief, width*2) // ~2 lines worth
 		lines = append(lines, "")
 		lines = append(lines, helpStyle.Render(brief))
 	}

@@ -596,12 +596,12 @@ func firstLine(s string) string {
 	return s
 }
 
+// truncate is the executor view's historical name for display-width-safe
+// truncation; the byte-slicing it used to do split UTF-8 sequences (Polish
+// diacritics, emoji) into mojibake.
 func truncate(s string, max int) string {
 	if max < 4 {
 		max = 4
 	}
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-1] + "…"
+	return truncateWidth(s, max)
 }

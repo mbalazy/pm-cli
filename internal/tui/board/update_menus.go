@@ -193,13 +193,18 @@ func (m Model) updateSessionMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.sessionCursor++
 			m.confirmAction = ""
 		}
+	// NOTE: every task lookup below MUST be menuTask(), not selectedTask().
+	// The session menu opens from the DETAIL view on m.detailTask, which after
+	// a relation jump (p: subtask <-> parent) or a stale board cursor is a
+	// different task than the one under the board cursor - selectedTask() here
+	// resumed/yanked/DELETED sessions on that other task.
 	case key.Matches(msg, common.Keys.Enter), msg.String() == "r":
 		if m.sessionCursor < len(m.sessionMenuItems) {
 			m.resumeSessionID = m.sessionMenuItems[m.sessionCursor].sessionID
 			m.sessionMenu = false
 			m.resumeOnly = true
 			m.forkMode = false
-			t := m.selectedTask()
+			t := m.menuTask()
 			if t != nil {
 				m.openClaudeMenu(t)
 			}
@@ -211,7 +216,7 @@ func (m Model) updateSessionMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.sessionMenu = false
 			m.resumeOnly = true
 			m.forkMode = true
-			t := m.selectedTask()
+			t := m.menuTask()
 			if t != nil {
 				m.openClaudeMenu(t)
 			}
@@ -223,7 +228,7 @@ func (m Model) updateSessionMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.yankItems = nil
 			m.yankCursor = 0
 			m.yankItems = append(m.yankItems, yankItem{"id", sid})
-			t := m.selectedTask()
+			t := m.menuTask()
 			if t != nil {
 				var projDir string
 				if proj, err := m.store.GetProject(t.Project); err == nil && proj.Path != "" {
@@ -242,7 +247,7 @@ func (m Model) updateSessionMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.confirmAction == "delete-session" {
 			// Second press - confirmed
 			m.confirmAction = ""
-			t := m.selectedTask()
+			t := m.menuTask()
 			if t == nil {
 				break
 			}
@@ -309,10 +314,7 @@ func (m *Model) copyToClipboard(value string) {
 	c := exec.Command("pbcopy")
 	c.Stdin = strings.NewReader(value)
 	c.Start()
-	display := value
-	if len(display) > 40 {
-		display = display[:37] + "..."
-	}
+	display := truncateWidth(value, 40)
 	m.toastMsg = "Copied: " + display
 	m.toastExpiry = time.Now().Add(2 * time.Second)
 }

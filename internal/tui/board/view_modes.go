@@ -93,6 +93,9 @@ func (m Model) viewArchive() string {
 		if cardWidth > 100 {
 			cardWidth = 100
 		}
+		if cardWidth < 20 {
+			cardWidth = 20 // a very narrow terminal clips, but must not panic
+		}
 		for i, t := range tasks {
 			if i >= listHeight {
 				break
@@ -146,6 +149,9 @@ func (m Model) viewFocus() string {
 		cardWidth := m.width - 8
 		if cardWidth > 100 {
 			cardWidth = 100
+		}
+		if cardWidth < 20 {
+			cardWidth = 20 // a very narrow terminal clips, but must not panic
 		}
 		for i, t := range tasks {
 			if i >= listHeight {
@@ -203,12 +209,9 @@ func (m Model) viewProjectPicker() string {
 			style = hiddenDimStyle
 		}
 
-		label := item.name
 		count := fmt.Sprintf(" %d", item.taskCount)
 		maxName := leftWidth - 4 - len(count) // prefix + count + margin
-		if len(label) > maxName {
-			label = label[:maxName-3] + "..."
-		}
+		label := truncateWidth(item.name, maxName)
 
 		line := style.Render(prefix+label) + dimStyle.Render(count)
 		leftLines = append(leftLines, line)
@@ -335,8 +338,10 @@ func (m Model) viewProjectPicker() string {
 	for i, l := range rightLines {
 		plain := stripANSI(l)
 		if len(plain) > rightWidth {
-			// truncate long lines
-			rightLines[i] = l[:rightWidth-3] + "..."
+			// Truncate the PLAIN text (styling is dropped for this line): slicing
+			// the styled string by a plain-text index cuts mid-ANSI-sequence and
+			// bleeds garbage into the rest of the panel.
+			rightLines[i] = truncateWidth(plain, rightWidth)
 		} else {
 			pad := rightWidth - len(plain)
 			if pad > 0 {
