@@ -99,7 +99,7 @@ func TestBuildWorkerPrompt(t *testing.T) {
 	}}
 
 	t.Run("standalone includes parent spec, AC, child spec, bindings", func(t *testing.T) {
-		got := buildWorkerPrompt(task, parent, proj, "atlas", exec, "feat/streaks", true)
+		got := buildWorkerPrompt(task, parent, proj, "atlas", exec, "feat/streaks", proj.Path, true)
 		mustContain(t, got, "#atlas-64-3 Streaks")
 		mustContain(t, got, "must work offline")
 		mustContain(t, got, "child current truth")
@@ -114,14 +114,14 @@ func TestBuildWorkerPrompt(t *testing.T) {
 	})
 
 	t.Run("epic mode skips pr phase", func(t *testing.T) {
-		got := buildWorkerPrompt(task, parent, proj, "atlas", exec, "feat/streaks", false)
+		got := buildWorkerPrompt(task, parent, proj, "atlas", exec, "feat/streaks", proj.Path, false)
 		mustContain(t, got, "pr: skip (epic mode")
 		mustContain(t, got, "Mode: epic")
 	})
 
 	t.Run("missing AC states none", func(t *testing.T) {
 		noAC := &storage.Task{Meta: storage.TaskMeta{ID: "x-1", Title: "T"}, Body: "body"}
-		got := buildWorkerPrompt(noAC, nil, proj, "atlas", exec, "feat/t", true)
+		got := buildWorkerPrompt(noAC, nil, proj, "atlas", exec, "feat/t", proj.Path, true)
 		mustContain(t, got, "(none stated")
 		if strings.Contains(got, "Parent epic spec") {
 			t.Error("no parent -> should not render parent spec section")
@@ -131,7 +131,7 @@ func TestBuildWorkerPrompt(t *testing.T) {
 	t.Run("falls back to AC section in spec body when frontmatter ac empty", func(t *testing.T) {
 		bodyAC := &storage.Task{Meta: storage.TaskMeta{ID: "x-2", Title: "T"},
 			Body: "<!-- spec:start -->\n## Description\nbuild it\n\n## Acceptance criteria\n- works offline\n- under 2s\n<!-- spec:end -->"}
-		got := buildWorkerPrompt(bodyAC, nil, proj, "atlas", exec, "feat/t", true)
+		got := buildWorkerPrompt(bodyAC, nil, proj, "atlas", exec, "feat/t", proj.Path, true)
 		mustContain(t, got, "- works offline")
 		mustContain(t, got, "- under 2s")
 		if strings.Contains(got, "(none stated") {
@@ -145,7 +145,7 @@ func TestBuildWorkerPrompt(t *testing.T) {
 			"backend": "../platform.orbit",
 			"api":     "~/repos/api-docs",
 		}
-		got := buildWorkerPrompt(task, nil, proj, "atlas", withRepos, "feat/t", true)
+		got := buildWorkerPrompt(task, nil, proj, "atlas", withRepos, "feat/t", proj.Path, true)
 		mustContain(t, got, "## Reference repos (READ-ONLY)")
 		mustContain(t, got, "- api: ~/repos/api-docs")
 		mustContain(t, got, "- backend: ../platform.orbit")
@@ -156,7 +156,7 @@ func TestBuildWorkerPrompt(t *testing.T) {
 	})
 
 	t.Run("no context repos -> no section", func(t *testing.T) {
-		got := buildWorkerPrompt(task, nil, proj, "atlas", exec, "feat/t", true)
+		got := buildWorkerPrompt(task, nil, proj, "atlas", exec, "feat/t", proj.Path, true)
 		if strings.Contains(got, "Reference repos") {
 			t.Error("empty context_repos must not render the section")
 		}

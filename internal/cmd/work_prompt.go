@@ -11,7 +11,13 @@ import (
 // buildWorkerPrompt assembles the user prompt for a worker: task identity, the
 // child SPEC + parent SPEC (shared decisions/seams), the AC (hard-bound), and
 // the resolved per-phase bindings.
-func buildWorkerPrompt(t *storage.Task, parent *storage.Task, proj *storage.Project, slug string, exec storage.Executor, branch string, standalone bool) string {
+//
+// workDir is the directory the worker actually runs in - the claimed
+// "additional" worktree slot when the run opted in, else the main checkout.
+// The prompt MUST state that path, not proj.Path: printing the main checkout
+// to a worker running in a slot hands it an absolute path into the very
+// checkout the additional mode exists to isolate.
+func buildWorkerPrompt(t *storage.Task, parent *storage.Task, proj *storage.Project, slug string, exec storage.Executor, branch, workDir string, standalone bool) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "# Task: #%s %s\n", t.Meta.ID, t.Meta.Title)
@@ -20,7 +26,7 @@ func buildWorkerPrompt(t *storage.Task, parent *storage.Task, proj *storage.Proj
 		fmt.Fprintf(&sb, " | Stack: %s", proj.Stack)
 	}
 	sb.WriteString("\n")
-	fmt.Fprintf(&sb, "Repo path: %s\n", proj.Path)
+	fmt.Fprintf(&sb, "Repo path: %s\n", workDir)
 	fmt.Fprintf(&sb, "Git branch: %s  (commit here; do NOT switch branches)\n", branch)
 	fmt.Fprintf(&sb, "Mode: %s\n", modeLabel(standalone))
 	fmt.Fprintf(&sb, "Review->fix rounds before escalating: %d\n", exec.FixRounds)

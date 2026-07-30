@@ -87,6 +87,15 @@ func isInsideWorkTreeCmd(t *testing.T, dir string) bool {
 // --additional a run targets the main checkout unchanged; with --additional it
 // switches to the configured worktree; and --additional on an unconfigured
 // project is a clear error.
+// firstLines returns the first n lines of s, for compact failure messages.
+func firstLines(s string, n int) string {
+	lines := strings.SplitN(s, "\n", n+1)
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.Join(lines, "\n")
+}
+
 func TestPlanWorkAdditionalGating(t *testing.T) {
 	root := t.TempDir()
 	store := &storage.Store{Root: root}
@@ -144,6 +153,48 @@ func TestPlanWorkAdditionalGating(t *testing.T) {
 		}
 		if len(plan.env) != 1 || plan.env[0] != "ADDITIONAL_METRO_PORT=8090" {
 			t.Fatalf("env = %v", plan.env)
+		}
+	})
+
+	t.Run("prompt states the dir the worker runs in, not the main checkout", func(t *testing.T) {
+		// --additional: the plan (provisionally slot 1) must already state the
+		// slot path - printing proj.Path would hand the isolated worker an
+		// absolute path back into the main checkout.
+		plan, err := planWork(store, task, "app", workOptions{standalone: true, additional: true})
+		if err != nil {
+			t.Fatalf("planWork: %v", err)
+		}
+		wt := resolveWorktreePath(proj, *proj.Executor)
+		if !strings.Contains(plan.prompt, "Repo path: "+wt) {
+			t.Fatalf("prompt must state the slot path %q, got:\n%s", wt, firstLines(plan.prompt, 6))
+		}
+		if strings.Contains(plan.prompt, "Repo path: "+repo) {
+			t.Fatal("prompt must not leak the main checkout path")
+		}
+
+		// retarget (the standalone claim landing on a different slot) must
+		// re-render both the prompt and the argv it is embedded in.
+		plan.retarget("/claimed/slot-2", []string{"K=V"})
+		if !strings.Contains(plan.prompt, "Repo path: /claimed/slot-2") {
+			t.Fatalf("retargeted prompt must state the claimed slot, got:\n%s", firstLines(plan.prompt, 6))
+		}
+		if plan.cmdArgs[1] != plan.prompt {
+			t.Fatal("retarget must rebuild cmdArgs from the new prompt")
+		}
+		if plan.workDir != "/claimed/slot-2" || len(plan.env) != 1 {
+			t.Fatalf("retarget must move workDir/env: %q %v", plan.workDir, plan.env)
+		}
+	})
+
+	t.Run("epic sub with a pre-claimed slot states that slot", func(t *testing.T) {
+		plan, err := planWork(store, task, "app", workOptions{
+			standalone: false, additional: true, slotDir: "/mgr/claimed", slotEnv: []string{"A=1"},
+		})
+		if err != nil {
+			t.Fatalf("planWork: %v", err)
+		}
+		if !strings.Contains(plan.prompt, "Repo path: /mgr/claimed") {
+			t.Fatalf("epic sub prompt must state the manager's claimed slot, got:\n%s", firstLines(plan.prompt, 6))
 		}
 	})
 

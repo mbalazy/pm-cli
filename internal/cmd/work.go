@@ -143,8 +143,9 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 					return err
 				}
 				defer release()
-				plan.workDir = slot.Path
-				plan.env = slot.Env
+				// Re-render prompt+argv for the claimed slot - the plan was built
+				// against the provisional slot 1 and the prompt states the repo path.
+				plan.retarget(slot.Path, slot.Env)
 				if len(plan.slots) > 1 {
 					fmt.Fprintf(os.Stderr, "pm work: claimed worktree slot %s\n", slot.Path)
 				}
@@ -286,6 +287,11 @@ type workPlan struct {
 	// prepare = executor.prepare, run in the claimed worktree after branch setup
 	// and before the worker (worktree mode only). Empty = skip.
 	prepare string
+	// buildPrompt re-renders the worker prompt for a given work dir; opts are
+	// the options the plan was assembled with. Together they let retarget()
+	// rebuild prompt+argv after the standalone slot claim lands.
+	buildPrompt func(dir string) string
+	opts        workOptions
 	// baselineCmd = executor.baseline to capture in executeWork right before the
 	// worker (standalone runs only - epic subs receive the manager's shared
 	// capture via opts.baseline instead, already baked into prompt/cmdArgs).
@@ -321,19 +327,12 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 
 	branch := resolveWorkBranch(task)
 	sessionID := storage.NewSessionID()
-	prompt := buildWorkerPrompt(task, parent, proj, slug, exec, branch, opts.standalone)
-	// Epic subs: the manager captured the baseline once for the whole run -
-	// bake its section into this sub's prompt here.
-	if opts.baseline != "" {
-		prompt += "\n" + opts.baseline
-	}
-	sysPrompt := buildWorkerSystemPrompt(exec, opts.standalone, opts.independent)
-	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo)
 
 	// An isolated "additional" worktree slot is opt-in PER RUN via --additional;
 	// the default is the main checkout (unchanged pre-worktree behaviour). No
 	// side effects here - the slot is claimed + locked in acquireWorktreeSlot at
-	// run time (not on the dry-run path).
+	// run time (not on the dry-run path). Resolved BEFORE the prompt is built,
+	// because the prompt states the repo path the worker runs in.
 	workDir := proj.Path
 	base := ""
 	env := []string(nil)
@@ -358,6 +357,23 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		}
 	}
 
+	// The prompt states the dir the worker runs in. For a standalone
+	// --additional run the real slot is claimed AFTER planning (workDir here is
+	// provisionally slot 1), so the plan carries a rebuild closure and the
+	// caller re-renders the prompt once the claim lands (see retarget).
+	buildPrompt := func(dir string) string {
+		p := buildWorkerPrompt(task, parent, proj, slug, exec, branch, dir, opts.standalone)
+		// Epic subs: the manager captured the baseline once for the whole run -
+		// bake its section into this sub's prompt here.
+		if opts.baseline != "" {
+			p += "\n" + opts.baseline
+		}
+		return p
+	}
+	prompt := buildPrompt(workDir)
+	sysPrompt := buildWorkerSystemPrompt(exec, opts.standalone, opts.independent)
+	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo)
+
 	// Standalone only: the epic manager runs prepare ITSELF, once per run,
 	// right after claiming the slot - not per sub (5 subs must not mean 5
 	// dependency installs). Same split for the baseline capture.
@@ -377,7 +393,20 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs,
 		workDir: workDir, worktree: opts.additional, base: base, env: env, slots: slots,
 		prepare: prepare, baselineCmd: baselineCmd,
+		buildPrompt: buildPrompt, opts: opts,
 	}, nil
+}
+
+// retarget points the plan at the worktree slot the run actually claimed and
+// re-renders everything derived from the work dir (prompt + argv). Without
+// this, a worker in slot N would be told "Repo path: <main checkout>" (or
+// slot 1's path) and could follow that absolute path straight out of its
+// isolation.
+func (p *workPlan) retarget(dir string, env []string) {
+	p.workDir = dir
+	p.env = env
+	p.prompt = p.buildPrompt(dir)
+	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.maxTurns, p.opts.yolo)
 }
 
 // workerHeartbeatInterval is how often a live worker's run-state is re-stamped.
