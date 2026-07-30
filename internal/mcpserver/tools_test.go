@@ -696,6 +696,65 @@ func TestResolveProjectFromCwd(t *testing.T) {
 			t.Error("expected error - project without path should not match")
 		}
 	})
+
+	t.Run("sibling dir with shared name prefix does not match", func(t *testing.T) {
+		slug, err := resolveProjectFromCwd(store, "/home/user/code/myproject-old/src")
+		if err == nil {
+			t.Errorf("expected no match, got slug %q", slug)
+		}
+	})
+
+	t.Run("longest matching project wins over a shallower one", func(t *testing.T) {
+		dir2 := t.TempDir()
+		store2 := &storage.Store{Root: dir2}
+
+		shallowDir := filepath.Join(dir2, "code")
+		os.MkdirAll(shallowDir, 0755)
+		storage.WriteProject(filepath.Join(shallowDir, "project.yaml"), &storage.Project{
+			Name: "Code",
+			Path: "/home/user/code",
+		})
+
+		deepDir := filepath.Join(dir2, "pmcli")
+		os.MkdirAll(deepDir, 0755)
+		storage.WriteProject(filepath.Join(deepDir, "project.yaml"), &storage.Project{
+			Name: "PM CLI",
+			Path: "/home/user/code/pm-cli",
+		})
+
+		slug, err := resolveProjectFromCwd(store2, "/home/user/code/pm-cli/internal")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if slug != "pmcli" {
+			t.Errorf("got %q, want %q (deepest/longest match)", slug, "pmcli")
+		}
+	})
+
+	t.Run("tilde-expanded project path matches", func(t *testing.T) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("no home directory available")
+		}
+
+		dir3 := t.TempDir()
+		store3 := &storage.Store{Root: dir3}
+
+		projDir := filepath.Join(dir3, "tildeproj")
+		os.MkdirAll(projDir, 0755)
+		storage.WriteProject(filepath.Join(projDir, "project.yaml"), &storage.Project{
+			Name: "Tilde Project",
+			Path: "~/repos/tildeproj",
+		})
+
+		slug, err := resolveProjectFromCwd(store3, filepath.Join(home, "repos", "tildeproj", "src"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if slug != "tildeproj" {
+			t.Errorf("got %q, want %q", slug, "tildeproj")
+		}
+	})
 }
 
 func TestUpdateProjectArchived(t *testing.T) {
