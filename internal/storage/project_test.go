@@ -152,6 +152,70 @@ func TestReadWriteProjectRoundtrip(t *testing.T) {
 	})
 }
 
+func TestPhaseSkipBindingSurvivesRoundtrip(t *testing.T) {
+	// Regression for pm-cli-55: PhaseBinding.Skip had no MarshalYAML, so a
+	// plain struct marshal rendered `pr: false` as `{}` (BindGeneric) on ANY
+	// writeProject call - even one only touching an unrelated field like
+	// Notes. Simulates that exact sequence: a hand-authored project.yaml with
+	// a skip binding, read in, rewritten (as pm_update_project would for a
+	// notes-only edit), then read back.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "project.yaml")
+	const initial = `
+name: Atlas
+executor:
+  enabled: true
+  phases:
+    pr: false
+    review: { skill: "/review-pr" }
+`
+	if err := os.WriteFile(path, []byte(initial), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	p, err := ReadProject(path)
+	if err != nil {
+		t.Fatalf("ReadProject (initial): %v", err)
+	}
+	if kind := p.GetExecutor().Phase("pr").Kind(); kind != BindSkip {
+		t.Fatalf("initial read: pr phase = %v, want skip", kind)
+	}
+
+	// Simulate an unrelated field update (e.g. pm_update_project editing notes).
+	p.Notes = "updated notes"
+	if err := WriteProject(path, p); err != nil {
+		t.Fatalf("WriteProject: %v", err)
+	}
+
+	reread, err := ReadProject(path)
+	if err != nil {
+		t.Fatalf("ReadProject (after write): %v", err)
+	}
+	e := reread.GetExecutor()
+	if kind := e.Phase("pr").Kind(); kind != BindSkip {
+		t.Errorf("after roundtrip: pr phase = %v, want skip", kind)
+	}
+	if kind := e.Phase("review").Kind(); kind != BindSkill {
+		t.Errorf("after roundtrip: review phase = %v, want skill", kind)
+	}
+	if got := e.Phase("review").Skill; got != "/review-pr" {
+		t.Errorf("after roundtrip: review skill = %q, want /review-pr", got)
+	}
+
+	// A second write (no-op) must keep the skip binding stable, not just
+	// survive the first merge by luck.
+	if err := WriteProject(path, reread); err != nil {
+		t.Fatalf("WriteProject (second): %v", err)
+	}
+	twice, err := ReadProject(path)
+	if err != nil {
+		t.Fatalf("ReadProject (twice): %v", err)
+	}
+	if kind := twice.GetExecutor().Phase("pr").Kind(); kind != BindSkip {
+		t.Errorf("after second roundtrip: pr phase = %v, want skip", kind)
+	}
+}
+
 func TestDefaultStatusesDoNotContainArchived(t *testing.T) {
 	for _, s := range DefaultStatuses {
 		if s == StatusArchived {
