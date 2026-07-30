@@ -15,7 +15,7 @@ func Run(store storage.TaskStore) error {
 			Version: version.Version,
 		},
 		&mcp.ServerOptions{
-			Instructions: "Project manager for freelance tasks. Use pm_context at session start to see current work.",
+			Instructions: "Local project manager and AI-agent control plane. Use pm_context at session start to see current work.",
 		},
 	)
 

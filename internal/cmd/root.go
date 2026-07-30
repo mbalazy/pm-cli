@@ -15,8 +15,8 @@ func NewRootCmd() *cobra.Command {
 
 	root := &cobra.Command{
 		Use:     "pm",
-		Short:   "Local project manager for freelancers",
-		Long:    "A local, file-based project manager with interactive TUI board. Integrates with Claude Code.",
+		Short:   "Local project manager and control plane for AI coding agents",
+		Long:    "A local, file-based project manager with an interactive TUI board, an MCP server for Claude Code, and an autonomous executor that runs tasks through headless workers.",
 		Version: version.Version,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// default: open board, auto-detect project from cwd
