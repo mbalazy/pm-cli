@@ -43,6 +43,7 @@ func NewRootCmd() *cobra.Command {
 		newMcpCmd(store),
 		newMigrateIDsCmd(store),
 		newSessionIDCmd(),
+		newDocsCmd(),
 	)
 
 	return root

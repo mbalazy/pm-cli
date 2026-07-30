@@ -12,7 +12,7 @@ make install VERSION=X.Y.Z  # override version
 
 Git hooks live in `githooks/` (versioned; `git config core.hooksPath githooks` - already set locally). `pre-commit` runs gofmt-check + vet + staticcheck + tests and unsets the `GIT_*` env git exports into hooks (test-spawned git repos would inherit the hook's index and explode). Both the hook and `make check` resolve the `staticcheck` binary via PATH → `go env GOBIN` → `GOPATH/bin` and fail with an install hint when missing (`go install honnef.co/go/tools/cmd/staticcheck@latest`). Fix failures - never bypass with `-n`.
 
-IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.29.2**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN).
+IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.30.0**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN).
 
 ## Tests
 
@@ -100,6 +100,10 @@ The `maxCardHeight` is computed dynamically: `m.height - overhead` where overhea
 - Branch: `main` only (no feature branches for solo project)
 - Commit messages: imperative, concise, prefix with feat/fix/refactor
 - Always bump version in build command when releasing
+
+## Agent docs (`pm docs`)
+
+The canonical agent-facing usage contract lives in `docs/agent-guide.md` (a CLAUDE.md-shaped block wrapped in `pm:agent-guide` markers) + `docs/task-authoring.md`, embedded into the binary via the root-level `docs` package (go:embed) and printed by `pm docs claude` / `pm docs authoring`. Install = `pm docs claude >> ~/.claude/CLAUDE.md`; a user's CLAUDE.md is a CONSUMER of that output, never a second copy to hand-sync. **When tool semantics or the usage contract change, update `docs/agent-guide.md` in the same PR** - it ships with the release, so drift = a binary that contradicts its own guide.
 
 ## MCP server (`pm mcp`)
 

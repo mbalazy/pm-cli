@@ -135,6 +135,17 @@ Notable behaviors:
 
 The same rollup is available offline via `pm context [project]` - useful when a long-lived MCP process holds a stale binary.
 
+### Teaching your agent
+
+Tool semantics travel with the MCP server, but the fuller usage contract - when to proactively record things, the brief format, the Spec/Log write rules, how to author tasks - ships **embedded in the binary**:
+
+```sh
+pm docs claude >> ~/.claude/CLAUDE.md   # install the agent guide into Claude Code's global memory
+pm docs authoring                       # task-authoring rules (referenced by the guide)
+```
+
+The guide is wrapped in `<!-- pm:agent-guide:start/end -->` markers - to refresh after an upgrade, delete the block and append again. Source of truth: [docs/agent-guide.md](docs/agent-guide.md) and [docs/task-authoring.md](docs/task-authoring.md), versioned with the code so the contract can never drift from the tools.
+
 ## The executor
 
 The executor runs pm tasks autonomously through **isolated headless `claude -p` workers**, so a multi-subtask epic executes without blowing one session's context. Two commands:

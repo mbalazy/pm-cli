@@ -1,0 +1,34 @@
+<!-- pm:agent-guide:start (installed via `pm docs claude`; to refresh after an upgrade, delete this block and append again) -->
+# Project Manager (`pm`)
+
+Local task tracker and control plane for AI coding agents. Data lives in `~/.claude/pm/` as markdown files with YAML frontmatter. CLI binary: `pm`. MCP server: `pm mcp` (stdio, registered as `pm`). TUI: `pm board` (the user runs it).
+
+**MCP tools** (preferred over CLI): `pm_context` (session start / overview, auto-detects project from cwd), `pm_list_tasks`, `pm_get_task`, `pm_add_task`, `pm_update_task`, `pm_move_task`, `pm_update_project`, `pm_create_project`, `pm_list_projects`, `pm_delete_task`. CLI fallback `pm context [project]` prints the same rollup when the running MCP holds a stale binary.
+
+**Proactively use pm when:**
+- The user starts working on a new task/feature/bug → `pm_add_task` (read the task-authoring rules first: `pm docs authoring`)
+- The user finishes work or merges a PR → suggest moving the task to done (never move it yourself - see Closing)
+- The user switches projects, starts a session, or asks "what am I working on?" → `pm_context` (recent first, flag tasks stale 7+ days, short bullets per project)
+- The user mentions project setup, links, stack or path changes → `pm_update_project`
+- The user asks to attach/link the session to a task → run `pm session-id` for the UUID, then `pm_update_task` with `sessions: ["<uuid>"]`
+- The user is blocked on someone else (review, client, an answer) → status `waiting`
+
+**Brief field** (`brief` param) - "where we left off" cold-start summary; overwrites each time; returned by `pm_context`. Format: **Goal** → **Decisions** (+ rejected alternatives) → **Dead ends** (what failed + WHY) → **Status** → **Files** (key paths + why). Include PR numbers, branches, error messages, line numbers - it is the only context the next session gets. **Proactive save**: if a "doing" task relates to the conversation, save the brief (+ `branch`, + `body_append` session notes if significant) before the conversation ends - don't ask. Update at natural checkpoints, not just session end.
+
+**Spec / Log body zones** - two zones, opposite rules (solves append-only rot):
+- **Spec** (current truth) - between `<!-- spec:start/end -->` markers, set via the `spec` param. Rewritten wholesale so it always reads as "state now"; resolved questions get folded in, not appended.
+- **Log** (history) - everything outside the markers, via `body_append`. Append-only audit trail; never rewrite.
+- Canonical flow on change: rewrite the Spec AND append a one-line pointer to the Log ("Session 3: Q3 resolved -> see Spec"). Brief = one-paragraph TL;DR; Spec = the full living document.
+
+**Key rules:** links merge (never removed). Spec edits in place; Log appends; brief and ac overwrite. Statuses are per-project; `archived` is system-level. **task_id is always the full ID** (e.g. `my-app-3`) - never strip the project prefix. Subtasks link to a tracker via `parent`.
+
+**Working on a task** (the user says "let's do X"; the task moves to doing): read the brief + body FIRST; create/checkout a feature branch; commit early and often (small logical commits - uncommitted work dies with a crashed session); don't open PRs automatically - wait for the user's explicit go; after each commit link it to the task (`branch` + commit hash in `links`; after a PR, `links: {"pr": ...}`).
+
+**Parent + subtask flow** - a parent is a TRACKER, not a unit of work; children carry `parent:`. The status rollup is GENERATED (`pm_context` / `pm context`) - do not hand-maintain status tables in the parent body (they desync); the parent body carries the durable spec, decisions and open TODOs only. Subtask lifecycle: `todo → doing → merged → done` (`merged` = in the integration branch; per-project status). Subtasks of an active epic may move through this lifecycle autonomously once merged AND verified.
+
+**Closing tasks - never move a standalone task or a parent tracker to done on your own.** Only the user decides. On an explicit "done": check the Acceptance Criteria (flag anything unaddressed), save a final brief (branch, PR, key decisions), then `pm_move_task`.
+
+**Executor** (`pm work` / `pm run-epic`) - runs tasks/epics autonomously via isolated headless workers (implement → test → review → verify). `pm work <task>` = one task; `pm run-epic <tracker>` = drives a parent's subs. Two epic modes: INTEGRATION (default - subs merge into an `epic/<tracker>` branch, one epic PR) and INDEPENDENT batch (`epic_mode: independent` - unrelated tickets, each sub best-effort on its own branch off the base, pushed, nothing merged, a human finishes each). Sub gates: `depends_on`, `mode: auto|manual` (manual = a permanent human gate, skipped every run), per-sub `model:` override (trivial subs on a cheaper model). `--additional` = run in an isolated worktree slot instead of the main checkout. The executor never merges to main and never closes the parent. Don't launch runs yourself - suggest them; the user launches from `pm board` or the CLI.
+
+**Task authoring: before `pm_add_task` (or restructuring tasks mid-session), read the output of `pm docs authoring`** - spec/body/brief/links content rules, the ONLY-VERIFIED-FACTS rule, task hygiene. Core invariants: capture ALL conversation context (the next session sees only the task); record facts and decisions, never invented implementation plans; no sparse title-only tasks.
+<!-- pm:agent-guide:end -->
