@@ -50,7 +50,7 @@ claude mcp add --transport stdio --scope user pm -- ~/.local/share/go/bin/pm mcp
 
 > "create a pm project for this repo" → `pm_create_project`
 > "add a task: fix the login flow" → `pm_add_task`
-> "what am I working on?" / "co dziś?" → `pm_context` (the session-start rollup)
+> "what am I working on?" → `pm_context` (the session-start rollup)
 > "save a brief, I'm done for today" → `pm_update_task` with a where-we-left-off summary
 > "done, close it" → `pm_move_task`
 
