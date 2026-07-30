@@ -29,24 +29,36 @@ Everything lives in plain markdown files with YAML frontmatter under `~/.claude/
 - **Autonomous executor** - `pm work` runs one task end-to-end (implement → test → review → fix → verify) in a fresh headless worker; `pm run-epic` drives a whole parent+subtasks epic, merging verified subs into an integration branch or pushing independent branches for a batch of unrelated tickets.
 - **Learning loop built in** - every run appends to a durable journal; `pm executor stats` rolls it up, and lessons from real failures are baked back into the worker prompts (see [Design notes](#design-notes)).
 
-## Install
+## Setup
 
 Requirements: Go 1.24+, git. For the executor: the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI (`claude`) and optionally `gh` for PRs.
+
+**1. Build and install:**
 
 ```sh
 git clone <this repo> && cd pm-cli
 make install          # builds with version ldflags, installs to GOBIN
 ```
 
-Register the MCP server with Claude Code (user scope, available in every project):
+**2. Register the MCP server** with Claude Code (user scope, available in every project; adjust the path to your GOBIN):
 
 ```sh
 claude mcp add --transport stdio --scope user pm -- ~/.local/share/go/bin/pm mcp
 ```
 
+**3. Teach your agent** - install the usage contract into Claude Code's global memory:
+
+```sh
+pm docs claude >> ~/.claude/CLAUDE.md
+```
+
+This step is not optional. The MCP server gives the agent the *tools*; the guide gives it the *workflow* - when to proactively record things, the brief format, the Spec/Log write rules, task-authoring discipline (`pm docs authoring`), and the rule that only the human closes tasks. Without it the agent drives the tools blind. The guide is embedded in the binary and wrapped in `<!-- pm:agent-guide:start/end -->` markers - to refresh after an upgrade, delete the block and append again. Source of truth, versioned with the code: [docs/agent-guide.md](docs/agent-guide.md) and [docs/task-authoring.md](docs/task-authoring.md).
+
+Using the executor? One more step, once per project: `pm executor init <project>` (see [The executor](#the-executor)).
+
 ## Quick start
 
-**The primary interface is a conversation.** With the MCP server registered, you don't operate pm by hand - you just talk to Claude Code and it drives the tools:
+**The primary interface is a conversation.** With the setup above done, you don't operate pm by hand - you just talk to Claude Code and it drives the tools:
 
 > "create a pm project for this repo" → `pm_create_project`
 > "add a task: fix the login flow" → `pm_add_task`
@@ -133,22 +145,22 @@ Notable behaviors:
 - `pm_list_tasks` defaults to the 50 newest with an explicit `{total, shown, note}` wrapper; briefs compress to one line in listings.
 - Update semantics mirror the field rules above: links merge, `body_append` appends to the Log, `spec` rewrites the Spec zone, brief/ac overwrite. Tri-state params (`*string`/`*int`) distinguish "omit" from "clear".
 
-The same rollup is available offline via `pm context [project]` - useful when a long-lived MCP process holds a stale binary.
-
-### Teaching your agent
-
-Tool semantics travel with the MCP server, but the fuller usage contract - when to proactively record things, the brief format, the Spec/Log write rules, how to author tasks - ships **embedded in the binary**:
-
-```sh
-pm docs claude >> ~/.claude/CLAUDE.md   # install the agent guide into Claude Code's global memory
-pm docs authoring                       # task-authoring rules (referenced by the guide)
-```
-
-The guide is wrapped in `<!-- pm:agent-guide:start/end -->` markers - to refresh after an upgrade, delete the block and append again. Source of truth: [docs/agent-guide.md](docs/agent-guide.md) and [docs/task-authoring.md](docs/task-authoring.md), versioned with the code so the contract can never drift from the tools.
+The same rollup is available offline via `pm context [project]` - useful when a long-lived MCP process holds a stale binary. The fuller usage contract the agent needs on top of the tool schemas ships via `pm docs claude` (see [Setup](#setup)).
 
 ## The executor
 
-The executor runs pm tasks autonomously through **isolated headless `claude -p` workers**, so a multi-subtask epic executes without blowing one session's context. Two commands:
+The executor runs pm tasks autonomously through **isolated headless `claude -p` workers**, so a multi-subtask epic executes without blowing one session's context.
+
+First run:
+
+```sh
+pm executor init my-app       # once per project: detect skills/stack, draft the profile
+pm work my-app-12 --dry-run   # inspect the full worker prompt + argv, zero tokens
+pm work my-app-12             # run one task end-to-end → draft PR
+pm run-epic my-app-10         # drive a whole tracker's subtasks
+```
+
+Two commands do the work:
 
 ### `pm work [project] <task>` - the atom
 
@@ -222,6 +234,7 @@ pm executor stats [project]   # journal rollup
 | `pm run-epic [project] <tracker>` | drive a whole epic |
 | `pm executor init/show/doctor/stats` | executor profile management |
 | `pm mcp` | run the stdio MCP server |
+| `pm docs claude` / `pm docs authoring` | print the embedded agent guide / task-authoring rules |
 | `pm session-id` | print the current Claude Code session UUID |
 
 Common executor flags: `--dry-run`, `--model`, `--max-turns`, `--timeout`, `--yolo`, `--additional` (+ `--slot N`, `--base`), `--independent`, `--allow-dirty`, `--no-pr`.
