@@ -140,7 +140,9 @@ func mergeProjectYAML(oldData, newData []byte) ([]byte, error) {
 	merged := mergeMappingNodes(oldMap, newMap, knownProjectKeys)
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
+	// 4 = yaml.Marshal's default indent, which every existing project.yaml was
+	// written with - keeping it makes a no-op write byte-identical.
+	enc.SetIndent(4)
 	if err := enc.Encode(merged); err != nil {
 		return nil, err
 	}
