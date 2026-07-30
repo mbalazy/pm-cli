@@ -41,13 +41,14 @@ func (m Model) updateSelectMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Navigation - same as board
 	case key.Matches(msg, common.Keys.Up):
-		if m.cursors[m.activeCol] > 0 {
+		tasks := m.columnTasks(m.activeCol)
+		if len(tasks) > 0 && m.cursors[m.activeCol] > 0 {
 			m.cursors[m.activeCol]--
 			m.fixScrollOffsets()
 		}
 	case key.Matches(msg, common.Keys.Down):
 		tasks := m.columnTasks(m.activeCol)
-		if m.cursors[m.activeCol] < len(tasks)-1 {
+		if len(tasks) > 0 && m.cursors[m.activeCol] < len(tasks)-1 {
 			m.cursors[m.activeCol]++
 			m.fixScrollOffsets()
 		}
@@ -60,8 +61,13 @@ func (m Model) updateSelectMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.activeCol++
 		}
 	case key.Matches(msg, common.Keys.JumpTop):
-		m.cursors[m.activeCol] = 0
-		m.fixScrollOffsets()
+		// With every column hidden m.cursors is empty and m.activeCol is 0 -
+		// unguarded indexing here panicked select mode the same way it did
+		// updateBoard (see update.go).
+		if len(m.statuses) > 0 {
+			m.cursors[m.activeCol] = 0
+			m.fixScrollOffsets()
+		}
 	case key.Matches(msg, common.Keys.JumpBottom):
 		tasks := m.columnTasks(m.activeCol)
 		if len(tasks) > 0 {
