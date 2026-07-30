@@ -259,4 +259,4 @@ A few principles this codebase holds onto, learned from real runs:
 
 ## License
 
-Personal project; no license granted yet.
+[MIT](LICENSE)
