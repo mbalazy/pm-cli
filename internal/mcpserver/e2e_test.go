@@ -121,7 +121,16 @@ func TestE2EAddGetUpdateMoveDelete(t *testing.T) {
 		t.Fatalf("status = %s", moved.Meta.Status)
 	}
 
-	// delete
+	// delete: a fuzzy/title query must NOT delete anything
+	text, isErr = call(t, sess, "pm_delete_task", map[string]any{"project": "test", "task_id": "New feature"})
+	if !isErr {
+		t.Fatalf("delete_task with fuzzy title query should error, got: %s", text)
+	}
+	if _, err := store.FindTask("test", added.ID); err != nil {
+		t.Fatalf("task must survive a fuzzy delete query, got: %v", err)
+	}
+
+	// delete: exact ID removes the task
 	_, isErr = call(t, sess, "pm_delete_task", map[string]any{"project": "test", "task_id": added.ID})
 	if isErr {
 		t.Fatal("delete_task error")
