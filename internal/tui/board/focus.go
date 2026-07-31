@@ -14,14 +14,21 @@ func (m *Model) rebuildFocusSet() {
 	}
 }
 
-func (m *Model) loadFocusPlan() {
+// loadFocusPlan reloads the focus plan from disk. It reports whether the
+// load succeeded - callers that follow up with a mutation + saveFocusPlan
+// (reload's cleanup pass, handleStalePlan's carry-over) MUST skip that save
+// on failure: m.focusPlan is left at its last-known-good value below, and
+// saving it back would silently overwrite a corrupt focus.yaml with stale
+// data instead of surfacing the read error.
+func (m *Model) loadFocusPlan() bool {
 	fp, err := storage.ReadFocusPlan(m.store.RootDir())
 	if err != nil {
 		m.showErrorToast("focus plan", err)
-		return
+		return false
 	}
 	m.focusPlan = fp
 	m.rebuildFocusSet()
+	return true
 }
 
 func (m *Model) saveFocusPlan() {

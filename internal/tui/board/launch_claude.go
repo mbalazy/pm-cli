@@ -414,8 +414,11 @@ func sessionLockScript(projDir string, slot int, sessionID string) string {
 		sessionID, slot, time.Now().UTC().Format(time.RFC3339))
 	quotedLock := shellQuote(lock)
 	tmp := quotedLock + `.tmp.$$`
-	return fmt.Sprintf("mkdir -p %s && printf %s \"$$\" > %s 2>/dev/null && mv %s %s 2>/dev/null; ",
-		shellQuote(filepath.Dir(lock)), shellQuote(payload), tmp, tmp, quotedLock)
+	// "|| rm -f tmp" cleans up a leftover tmp file if either the printf or the
+	// mv step failed (both silenced above) - mirrors atomicWriteFile removing
+	// its scratch file on every failure path. A no-op when the write succeeds.
+	return fmt.Sprintf("mkdir -p %s && printf %s \"$$\" > %s 2>/dev/null && mv %s %s 2>/dev/null || rm -f %s 2>/dev/null; ",
+		shellQuote(filepath.Dir(lock)), shellQuote(payload), tmp, tmp, quotedLock, tmp)
 }
 
 func buildClaudePrompt(t *storage.Task, store storage.TaskStore) string {

@@ -2,6 +2,8 @@ package board
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -31,6 +33,38 @@ func TestSaveAndLoadFocusPlan(t *testing.T) {
 	}
 	if !m.focusSet["p-2"] || !m.focusSet["p-1"] || m.focusSet["p-3"] {
 		t.Errorf("focusSet not rebuilt from plan: %v", m.focusSet)
+	}
+}
+
+// TestReloadDoesNotClobberCorruptFocusPlan guards the exact failure mode the
+// atomic-write fix exists for: reload() always follows loadFocusPlan() with
+// a Cleanup + conditional save, so a naive fix that only made ReadFocusPlan
+// return an error (without reload() checking it) would still let a stale
+// in-memory plan get saved straight over a corrupt focus.yaml on the very
+// next board tick.
+func TestReloadDoesNotClobberCorruptFocusPlan(t *testing.T) {
+	m := focusFixture(t)
+	// p-3 is done, so Cleanup() has work to do once reload() reloads a good plan.
+	m.focusPlan = storage.FocusPlan{Date: storage.Today(), Tasks: []string{"p-1", "p-3"}}
+	m.saveFocusPlan()
+
+	path := filepath.Join(m.store.RootDir(), "focus.yaml")
+	corrupt := []byte("not: [valid: yaml")
+	if err := os.WriteFile(path, corrupt, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m.reload()
+
+	if m.toastMsg == "" {
+		t.Error("expected an error toast surfacing the corrupt focus plan")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(corrupt) {
+		t.Errorf("reload() must not overwrite a corrupt focus.yaml, got %q", got)
 	}
 }
 

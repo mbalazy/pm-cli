@@ -190,9 +190,11 @@ func (m *Model) reload() {
 	m.loadProjectCounts(allTasks)
 	m.fixCursors()
 
-	// refresh focus plan: remove done/archived/deleted tasks
-	m.loadFocusPlan()
-	if m.focusPlan.Cleanup(allTasks) {
+	// refresh focus plan: remove done/archived/deleted tasks. Skip the
+	// cleanup+save on a failed load - m.focusPlan is left at its last-known-
+	// good value, and saving it would silently overwrite a corrupt
+	// focus.yaml instead of surfacing the read error (see loadFocusPlan).
+	if m.loadFocusPlan() && m.focusPlan.Cleanup(allTasks) {
 		m.saveFocusPlan()
 	}
 }
