@@ -3,6 +3,7 @@ package board
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -205,5 +206,48 @@ func TestSessionLockScript(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "; ") {
 		t.Errorf("script must end with '; ' so a failed lock write never blocks the launch, got %q", got)
+	}
+}
+
+// TestSessionLockScriptWritesParseableLock runs the ACTUAL production
+// snippet (not a reimplementation) through a real shell and parses the
+// result through storage.ReadSessionLock, binding the test to whatever
+// format the snippet really emits - renaming a JSON tag here breaks it,
+// unlike a fixture built with json.Marshal in the test itself.
+func TestSessionLockScriptWritesParseableLock(t *testing.T) {
+	dir := t.TempDir()
+	script := sessionLockScript(dir, 3, "sess-xyz")
+
+	cmd := exec.Command("sh", "-c", script+"true")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("script failed: %v\noutput: %s\nscript: %s", err, out, script)
+	}
+
+	lk, err := storage.ReadSessionLock(dir, 3)
+	if err != nil {
+		t.Fatalf("ReadSessionLock: %v", err)
+	}
+	if lk == nil {
+		t.Fatal("expected the lock file to be written")
+	}
+	if lk.SessionID != "sess-xyz" || lk.Slot != 3 {
+		t.Fatalf("lock = %+v, want session_id=sess-xyz slot=3", lk)
+	}
+	if lk.PID == 0 {
+		t.Fatalf("lock pid must be the writing shell's pid, got %+v", lk)
+	}
+	if lk.Started == "" {
+		t.Fatalf("lock started must be set, got %+v", lk)
+	}
+
+	sessionsDir := filepath.Dir(storage.SessionLockPath(dir, 3))
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp.") {
+			t.Fatalf("leftover tmp file after script ran: %s", e.Name())
+		}
 	}
 }
