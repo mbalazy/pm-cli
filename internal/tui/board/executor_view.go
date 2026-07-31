@@ -3,6 +3,7 @@ package board
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -128,6 +129,20 @@ func (m *Model) refreshExecutorView() {
 	m.renderExecutorContent()
 }
 
+// decodedTranscript decodes path via this Model's per-path incremental cache,
+// so repeated ticks on the same transcript only pay for newly appended bytes.
+func (m *Model) decodedTranscript(path string, width int, verbose bool) string {
+	if m.transcriptCaches == nil {
+		m.transcriptCaches = make(map[string]*transcriptCache)
+	}
+	c := m.transcriptCaches[path]
+	if c == nil {
+		c = &transcriptCache{}
+		m.transcriptCaches[path] = c
+	}
+	return c.render(path, width, verbose)
+}
+
 // renderExecutorContent decodes the selected session's transcript into the
 // viewport, preserving scroll position unless following.
 func (m *Model) renderExecutorContent() {
@@ -148,7 +163,7 @@ func (m *Model) renderExecutorContent() {
 		m.executorViewport.SetContent(helpStyle.Render("\n  Waiting for the worker transcript...\n  session " + cur.session))
 		return
 	}
-	content := decodeTranscript(path, m.executorViewport.Width-2, m.executorVerbose)
+	content := m.decodedTranscript(path, m.executorViewport.Width-2, m.executorVerbose)
 	if strings.TrimSpace(content) == "" {
 		content = helpStyle.Render("  (transcript empty so far)")
 	}
@@ -448,70 +463,138 @@ type tBlock struct {
 // Compact (verbose=false): assistant text, tool calls (name + key arg), and the
 // first line of each tool result. Full (verbose=true): the whole conversation -
 // untruncated tool args/commands and complete, wrapped tool results.
+//
+// This always reads and re-parses the whole file - it exists for one-shot
+// callers (tests) and as the building block for transcriptCache, which is what
+// the live agent-view actually uses to avoid doing this on every tick.
 func decodeTranscript(path string, width int, verbose bool) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
+	c := &transcriptCache{}
+	return c.render(path, width, verbose)
+}
+
+// appendTranscriptLine decodes one .jsonl line and, if it renders to visible
+// output (assistant text/tool-use, or a user tool_result), writes it to b.
+func appendTranscriptLine(b *strings.Builder, line string, width int, verbose bool) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
 	}
-	if width < 20 {
-		width = 20
+	var ev tEvent
+	if json.Unmarshal([]byte(line), &ev) != nil {
+		return
 	}
-	var b strings.Builder
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	switch ev.Type {
+	case "assistant":
+		for _, blk := range parseBlocks(ev.Message.Content) {
+			switch blk.Type {
+			case "text":
+				if txt := strings.TrimSpace(blk.Text); txt != "" {
+					b.WriteString(execAssistantStyle.Width(width).Render("● " + txt))
+					b.WriteString("\n")
+				}
+			case "tool_use":
+				arg := toolSummary(blk.Name, blk.Input)
+				if verbose && blk.Name == "Bash" {
+					if c, ok := blk.Input["command"].(string); ok {
+						arg = strings.TrimSpace(c)
+					}
+				}
+				row := "  🔧 " + blk.Name
+				if arg != "" {
+					row += "  " + arg
+				}
+				if verbose {
+					b.WriteString(execToolStyle.Width(width).Render(row))
+				} else {
+					b.WriteString(execToolStyle.Render(truncate(row, width)))
+				}
+				b.WriteString("\n")
+			}
 		}
-		var ev tEvent
-		if json.Unmarshal([]byte(line), &ev) != nil {
-			continue
-		}
-		switch ev.Type {
-		case "assistant":
-			for _, blk := range parseBlocks(ev.Message.Content) {
-				switch blk.Type {
-				case "text":
-					if txt := strings.TrimSpace(blk.Text); txt != "" {
-						b.WriteString(execAssistantStyle.Width(width).Render("● " + txt))
+	case "user":
+		for _, blk := range parseBlocks(ev.Message.Content) {
+			if blk.Type == "tool_result" {
+				res := blockResultText(blk)
+				if verbose {
+					if r := strings.TrimSpace(res); r != "" {
+						b.WriteString(execResultStyle.Width(width).Render("     ⮑ " + r))
 						b.WriteString("\n")
 					}
-				case "tool_use":
-					arg := toolSummary(blk.Name, blk.Input)
-					if verbose && blk.Name == "Bash" {
-						if c, ok := blk.Input["command"].(string); ok {
-							arg = strings.TrimSpace(c)
-						}
-					}
-					row := "  🔧 " + blk.Name
-					if arg != "" {
-						row += "  " + arg
-					}
-					if verbose {
-						b.WriteString(execToolStyle.Width(width).Render(row))
-					} else {
-						b.WriteString(execToolStyle.Render(truncate(row, width)))
-					}
+				} else if r := firstLine(res); r != "" {
+					b.WriteString(execResultStyle.Render(truncate("     ⮑ "+r, width)))
 					b.WriteString("\n")
 				}
 			}
-		case "user":
-			for _, blk := range parseBlocks(ev.Message.Content) {
-				if blk.Type == "tool_result" {
-					res := blockResultText(blk)
-					if verbose {
-						if r := strings.TrimSpace(res); r != "" {
-							b.WriteString(execResultStyle.Width(width).Render("     ⮑ " + r))
-							b.WriteString("\n")
-						}
-					} else if r := firstLine(res); r != "" {
-						b.WriteString(execResultStyle.Render(truncate("     ⮑ "+r, width)))
-						b.WriteString("\n")
-					}
-				}
-			}
 		}
 	}
-	return strings.TrimRight(b.String(), "\n")
+}
+
+// transcriptCache incrementally decodes a growing worker transcript: a tick
+// with an unchanged file (same size + mtime) skips the read entirely, and an
+// appended file re-reads/re-parses only the bytes written since the last call
+// - never the whole file. width/verbose changes, or the file shrinking
+// (rotated/truncated), force a full reset and re-decode from byte 0.
+type transcriptCache struct {
+	width    int
+	verbose  bool
+	size     int64
+	modTime  time.Time
+	pending  []byte // unterminated trailing line bytes from the last read
+	rendered strings.Builder
+}
+
+// render returns the decoded feed for path, reading/parsing only what changed
+// since the previous call on this cache.
+func (c *transcriptCache) render(path string, width int, verbose bool) string {
+	if width < 20 {
+		width = 20
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	if c.width != width || c.verbose != verbose || info.Size() < c.size {
+		*c = transcriptCache{width: width, verbose: verbose}
+	}
+	if info.Size() == c.size && info.ModTime().Equal(c.modTime) {
+		return strings.TrimRight(c.rendered.String(), "\n")
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return strings.TrimRight(c.rendered.String(), "\n")
+	}
+	defer f.Close()
+	readFrom := c.size
+	if _, err := f.Seek(readFrom, io.SeekStart); err != nil {
+		return strings.TrimRight(c.rendered.String(), "\n")
+	}
+	newData, err := io.ReadAll(f)
+	if err != nil {
+		return strings.TrimRight(c.rendered.String(), "\n")
+	}
+
+	buf := append(c.pending, newData...)
+	parts := strings.Split(string(buf), "\n")
+	complete, leftover := parts[:len(parts)-1], parts[len(parts)-1]
+	for _, line := range complete {
+		appendTranscriptLine(&c.rendered, line, width, verbose)
+	}
+	c.pending = []byte(leftover)
+	// The file may have grown further between the Stat above and this read
+	// finishing (a live worker still writing) - ReadAll reads to the ACTUAL
+	// EOF at read time, which can exceed info.Size(). Deriving the new offset
+	// from bytes actually consumed (not the stale pre-read Stat) is what makes
+	// this safe to re-seek from on the next tick; stamping info.Size() here
+	// would understate it and cause the next call to re-decode (duplicate)
+	// the tail this call already rendered.
+	c.size = readFrom + int64(len(newData))
+	if post, err := f.Stat(); err == nil {
+		c.modTime = post.ModTime()
+	} else {
+		c.modTime = info.ModTime()
+	}
+	return strings.TrimRight(c.rendered.String(), "\n")
 }
 
 func parseBlocks(raw json.RawMessage) []tBlock {

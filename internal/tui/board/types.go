@@ -122,6 +122,11 @@ type execView struct {
 	executorFollow     bool              // auto-scroll to the latest activity
 	executorVerbose    bool              // full conversation (untruncated) vs compact feed
 	executorPrevView   view              // where to return on esc (kept separate from previousView)
+	// transcriptCaches: one incremental decode cache per transcript path, so
+	// re-rendering on tick only re-reads/re-parses appended bytes (never a full
+	// re-decode of an unchanged or already-seen prefix). Keyed by path rather
+	// than session so switching worker tabs and back stays cheap too.
+	transcriptCaches map[string]*transcriptCache
 }
 
 // launchMenu is the launch overlay (Claude / Codex / executor) and the

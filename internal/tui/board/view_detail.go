@@ -109,15 +109,26 @@ func bodyToDisplayMarkdown(body string) string {
 	return b.String()
 }
 
+// glamourRenderers caches one dark-style TermRenderer per wrap width: building
+// one costs ~864us, and renderTaskDetail calls glamourRender twice per render -
+// every tick while a live run sits in the detail view, and on every n/N search
+// step. The TUI's Update/View run on a single goroutine, so no lock is needed.
+var glamourRenderers = map[int]*glamour.TermRenderer{}
+
 // glamourRender renders markdown to ANSI at the given wrap width, falling back
 // to the raw markdown on error.
 func glamourRender(md string, contentWidth int) string {
-	r, err := glamour.NewTermRenderer(
-		glamour.WithStylePath("dark"),
-		glamour.WithWordWrap(contentWidth),
-	)
-	if err != nil {
-		return md
+	r, ok := glamourRenderers[contentWidth]
+	if !ok {
+		var err error
+		r, err = glamour.NewTermRenderer(
+			glamour.WithStylePath("dark"),
+			glamour.WithWordWrap(contentWidth),
+		)
+		if err != nil {
+			return md
+		}
+		glamourRenderers[contentWidth] = r
 	}
 	out, err := r.Render(md)
 	if err != nil {
