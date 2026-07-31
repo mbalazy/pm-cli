@@ -128,6 +128,11 @@ type execView struct {
 // per-launch choices made in it. resumeSessionID/resumeOnly/forkMode live here
 // rather than with the session menu: the session menu only seeds them, the
 // launch overlay and launchLLM are what consume them.
+//
+// Grouping is by concern, NOT by lifetime: the three openers in launch_menu.go
+// deliberately reset different subsets (openClaudeMenu keeps the resume/fork
+// choice the session menu just made, openExecutorMenu clears it), so do not
+// "simplify" them into a single `m.launchMenu = launchMenu{...}`.
 type launchMenu struct {
 	claudeMenu          bool
 	claudeMenuItems     []claudeMenuItem

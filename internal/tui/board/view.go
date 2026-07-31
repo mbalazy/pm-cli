@@ -14,7 +14,7 @@ import (
 func (m Model) View() string {
 	// Overlay menus take priority over all views - which overlay wins is
 	// decided in ONE place (overlayLadder), shared with Update's dispatch.
-	if ov := m.activeOverlay(); ov != nil {
+	if ov, ok := m.activeOverlay(); ok {
 		return ov.view(m)
 	}
 	switch m.currentView {

@@ -1,6 +1,7 @@
 package board
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -71,7 +72,7 @@ func setOverlay(m *Model, name string) {
 func isOpen(m Model, name string) bool {
 	for _, spec := range overlayLadder {
 		if spec.name == name {
-			return spec.open(m)
+			return spec.open(&m)
 		}
 	}
 	panic("unknown overlay " + name)
@@ -84,9 +85,9 @@ func TestActiveOverlayResolvesEachFlag(t *testing.T) {
 	for _, spec := range overlayLadder {
 		t.Run(spec.name, func(t *testing.T) {
 			m := overlayModel(t, func(m *Model) { setOverlay(m, spec.name) })
-			got := m.activeOverlay()
-			if got == nil {
-				t.Fatalf("%s is open but activeOverlay returned nil", spec.name)
+			got, ok := m.activeOverlay()
+			if !ok {
+				t.Fatalf("%s is open but activeOverlay reported none", spec.name)
 			}
 			if got.name != spec.name {
 				t.Errorf("activeOverlay = %q, want %q", got.name, spec.name)
@@ -95,8 +96,8 @@ func TestActiveOverlayResolvesEachFlag(t *testing.T) {
 	}
 	t.Run("none open", func(t *testing.T) {
 		m := overlayModel(t, func(*Model) {})
-		if got := m.activeOverlay(); got != nil {
-			t.Errorf("activeOverlay = %q with nothing open, want nil", got.name)
+		if got, ok := m.activeOverlay(); ok {
+			t.Errorf("activeOverlay = %q with nothing open, want none", got.name)
 		}
 	})
 }
@@ -128,9 +129,9 @@ func TestOverlayPrecedence(t *testing.T) {
 					setOverlay(m, o)
 				}
 			})
-			got := m.activeOverlay()
-			if got == nil || got.name != c.want {
-				t.Fatalf("activeOverlay = %v, want %q", got, c.want)
+			got, ok := m.activeOverlay()
+			if !ok || got.name != c.want {
+				t.Fatalf("activeOverlay = %q (open=%v), want %q", got.name, ok, c.want)
 			}
 		})
 	}
@@ -138,6 +139,25 @@ func TestOverlayPrecedence(t *testing.T) {
 
 // baseViews are the views an overlay can be opened on top of.
 var baseViews = []view{viewBoard, viewDetail, viewArchive, viewFocus, viewExecutor}
+
+// viewName labels a base view for subtest names and failure messages.
+func viewName(v view) string {
+	switch v {
+	case viewBoard:
+		return "board"
+	case viewDetail:
+		return "detail"
+	case viewArchive:
+		return "archive"
+	case viewFocus:
+		return "focus"
+	case viewExecutor:
+		return "executor"
+	case viewProjectInfo:
+		return "project-info"
+	}
+	return fmt.Sprintf("view-%d", int(v))
+}
 
 // expectedRenderer names the renderer each overlay MUST be drawn by. It is
 // written out by hand on purpose: comparing View() against overlayLadder's own
@@ -179,7 +199,7 @@ func TestViewRendersActiveOverlay(t *testing.T) {
 				m.detailTask = &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "T"}}
 			})
 			if got, want := m.View(), expectedRenderer(t, spec.name, m); got != want {
-				t.Errorf("view %d with %s open: View() did not render that overlay's renderer", v, spec.name)
+				t.Errorf("%s view with %s open: View() did not render that overlay's renderer", viewName(v), spec.name)
 			}
 		}
 	}
@@ -193,7 +213,7 @@ func TestViewRendersActiveOverlay(t *testing.T) {
 func TestUpdateDispatchesToActiveOverlay(t *testing.T) {
 	for _, spec := range overlayLadder {
 		for _, v := range baseViews {
-			t.Run(spec.name, func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/%s", spec.name, viewName(v)), func(t *testing.T) {
 				m := overlayModel(t, func(m *Model) {
 					setOverlay(m, spec.name)
 					m.currentView = v
@@ -201,7 +221,7 @@ func TestUpdateDispatchesToActiveOverlay(t *testing.T) {
 				})
 				next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 				if isOpen(next.(Model), spec.name) {
-					t.Errorf("view %d: esc did not reach the %s handler (overlay still open)", v, spec.name)
+					t.Errorf("esc did not reach the %s handler (overlay still open)", spec.name)
 				}
 			})
 		}

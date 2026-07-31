@@ -9,7 +9,7 @@ import (
 // that draws it, and the handler that owns the keyboard while it is up.
 type overlaySpec struct {
 	name   string
-	open   func(Model) bool
+	open   func(*Model) bool
 	view   func(Model) string
 	update func(Model, tea.KeyMsg) (tea.Model, tea.Cmd)
 }
@@ -46,64 +46,71 @@ type overlaySpec struct {
 // Overlays always win over the base views. That is not a new rule: every
 // overlay is reachable only from a view that already dispatched to it, and the
 // ladders this table replaces resolved that way in each reachable combination.
+// What makes it safe is an invariant this table now DEPENDS on: no overlay flag
+// survives a change of currentView - every opener either runs with no overlay
+// up or clears the one underneath first, and no overlay handler switches views
+// without clearing its own flag. Keep it that way: a flag left set across a
+// view switch would hand this table the whole screen and keyboard in a view
+// that never opened it.
 var overlayLadder = []overlaySpec{
 	{
 		name:   "launch-menu",
-		open:   func(m Model) bool { return m.claudeMenu },
+		open:   func(m *Model) bool { return m.claudeMenu },
 		view:   Model.viewClaudeMenu,
 		update: Model.updateClaudeMenu,
 	},
 	{
 		name:   "yank-menu",
-		open:   func(m Model) bool { return m.yankMenu },
+		open:   func(m *Model) bool { return m.yankMenu },
 		view:   Model.viewYankMenu,
 		update: Model.updateYankMenu,
 	},
 	{
 		name:   "links-menu",
-		open:   func(m Model) bool { return m.linksMenu },
+		open:   func(m *Model) bool { return m.linksMenu },
 		view:   Model.viewLinksMenu,
 		update: Model.updateLinksMenu,
 	},
 	{
 		name:   "session-menu",
-		open:   func(m Model) bool { return m.sessionMenu },
+		open:   func(m *Model) bool { return m.sessionMenu },
 		view:   Model.viewSessionMenu,
 		update: Model.updateSessionMenu,
 	},
 	{
 		name:   "subtask-picker",
-		open:   func(m Model) bool { return m.subtaskPicker },
+		open:   func(m *Model) bool { return m.subtaskPicker },
 		view:   Model.viewSubtaskPicker,
 		update: Model.updateSubtaskPicker,
 	},
 	{
 		name:   "column-visibility",
-		open:   func(m Model) bool { return m.colVisMenu },
+		open:   func(m *Model) bool { return m.colVisMenu },
 		view:   Model.viewColVisMenu,
 		update: Model.updateColVisMenu,
 	},
 	{
 		name:   "project-picker",
-		open:   func(m Model) bool { return m.projectPicker },
+		open:   func(m *Model) bool { return m.projectPicker },
 		view:   Model.viewProjectPicker,
 		update: Model.updateProjectPicker,
 	},
 	{
 		name:   "help",
-		open:   func(m Model) bool { return m.showHelp },
+		open:   func(m *Model) bool { return m.showHelp },
 		view:   Model.viewHelp,
 		update: Model.updateHelp,
 	},
 }
 
-// activeOverlay returns the highest-precedence open overlay, or nil when the
-// base view owns the screen and the keyboard.
-func (m Model) activeOverlay() *overlaySpec {
+// activeOverlay returns the highest-precedence open overlay. ok is false when
+// the base view owns the screen and the keyboard. The spec is returned by
+// value: a pointer would hand callers a handle into the package-level ladder.
+func (m Model) activeOverlay() (overlaySpec, bool) {
 	for i := range overlayLadder {
-		if overlayLadder[i].open(m) {
-			return &overlayLadder[i]
+		if overlayLadder[i].open(&m) {
+			return overlayLadder[i], true
 		}
 	}
-	return nil
+	return overlaySpec{}, false
 }

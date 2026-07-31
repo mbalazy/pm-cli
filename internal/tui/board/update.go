@@ -109,7 +109,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// An open overlay owns the keyboard, and which one wins is decided in
 		// ONE place (overlayLadder) shared with View - so the layer the user
 		// is looking at is always the layer handling the key.
-		if ov := m.activeOverlay(); ov != nil {
+		if ov, ok := m.activeOverlay(); ok {
 			return ov.update(m, msg)
 		}
 		if m.currentView == viewExecutor {
@@ -136,33 +136,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateBoard(msg)
 	}
 	return m, nil
-}
-
-// updateHelp owns the keyboard while the help overlay is up. helpSearch is a
-// mode INSIDE the overlay (like detailSearching inside the detail view), not a
-// ladder entry of its own.
-func (m Model) updateHelp(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.helpSearch {
-		return m.updateHelpSearch(msg)
-	}
-	switch {
-	case key.Matches(msg, common.Keys.Search):
-		m.helpSearch = true
-		m.helpInput.SetValue(m.helpFilter)
-		m.helpInput.Focus()
-		return m, m.helpInput.Cursor.BlinkCmd()
-	case key.Matches(msg, common.Keys.Escape):
-		if m.helpFilter != "" {
-			m.helpFilter = ""
-			return m, nil
-		}
-		m.showHelp = false
-		return m, nil
-	default:
-		m.showHelp = false
-		m.helpFilter = ""
-		return m, nil
-	}
 }
 
 func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

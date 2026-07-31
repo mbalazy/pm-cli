@@ -70,12 +70,11 @@ func TestSessionMenuActsOnDetailTask(t *testing.T) {
 	}
 
 	m := Model{
-		store:    store,
-		projects: []string{"all", "p"},
-		tasks:    []*storage.Task{cursorTask, detailTask},
-		statuses: []storage.TaskStatus{storage.StatusTodo},
-		cursors:  []int{0},
-		// board cursor sits on p-1
+		store:       store,
+		projects:    []string{"all", "p"},
+		tasks:       []*storage.Task{cursorTask, detailTask},
+		statuses:    []storage.TaskStatus{storage.StatusTodo},
+		cursors:     []int{0}, // board cursor sits on p-1
 		currentView: viewDetail,
 		width:       80,
 		height:      24,
