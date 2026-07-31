@@ -185,6 +185,22 @@ func (b PhaseBinding) Kind() BindKind {
 	}
 }
 
+// MarshalYAML is the round-trip counterpart of UnmarshalYAML: a skip binding
+// renders back as the scalar `false`, everything else as a mapping. Without
+// this, Skip's `yaml:"-"` tag makes a plain struct marshal emit `{}` for a
+// skip binding - indistinguishable from generic - so ANY writeProject rewrite
+// (e.g. an unrelated notes-only pm_update_project call) silently flips a
+// `pr: false` binding back to generic on the next read (pm-cli-55).
+func (b PhaseBinding) MarshalYAML() (any, error) {
+	if b.Skip {
+		return false, nil
+	}
+	return struct {
+		Skill string `yaml:"skill,omitempty"`
+		Cmd   string `yaml:"cmd,omitempty"`
+	}{Skill: b.Skill, Cmd: b.Cmd}, nil
+}
+
 // UnmarshalYAML accepts either a scalar bool (false=skip, true=generic) or a
 // mapping with skill/cmd keys.
 func (b *PhaseBinding) UnmarshalYAML(node *yaml.Node) error {
