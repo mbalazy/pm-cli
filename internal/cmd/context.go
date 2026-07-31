@@ -15,7 +15,7 @@ func newContextCmd(store storage.TaskStore) *cobra.Command {
 		Short: "Show session context: trackers (parent+subtask rollup), active tasks, counts",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slug, _, err := resolveProjectArg(store, args)
+			slug, err := resolveProjectSlugArg(store, args)
 			if err != nil {
 				return err
 			}

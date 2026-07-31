@@ -462,7 +462,7 @@ func newExecutorStatsCmd(store storage.TaskStore) *cobra.Command {
 			"averages. Read-only; an empty or missing journal prints a note, not an error.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slug, _, err := resolveProjectArg(store, args)
+			slug, err := resolveProjectSlugArg(store, args)
 			if err != nil {
 				return err
 			}

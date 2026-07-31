@@ -30,21 +30,33 @@ func newExecutorShowCmd(store storage.TaskStore) *cobra.Command {
 	}
 }
 
-// resolveProjectArg resolves the optional [project] argument shared by the
-// executor subcommands: explicit arg, else cwd detection, and loads the project.
-func resolveProjectArg(store storage.TaskStore, args []string) (string, *storage.Project, error) {
+// resolveProjectSlugArg resolves the optional [project] argument shared by the
+// commands that take one: explicit arg, else cwd detection.
+func resolveProjectSlugArg(store storage.TaskStore, args []string) (string, error) {
 	var slug string
 	if len(args) == 1 {
 		s, err := store.ResolveProject(args[0])
 		if err != nil {
-			return "", nil, err
+			return "", err
 		}
 		slug = s
 	} else {
 		slug = detectProjectFromCwd(store)
 	}
 	if slug == "" {
-		return "", nil, fmt.Errorf("no project (pass a project or run inside a project dir)")
+		return "", fmt.Errorf("no project (pass a project or run inside a project dir)")
+	}
+	return slug, nil
+}
+
+// resolveProjectArg additionally loads the project, for the commands that need
+// the project struct. Commands that only need the slug must call
+// resolveProjectSlugArg instead: an unreadable project.yaml is fatal here, and
+// inheriting that failure would break commands that work fine without it.
+func resolveProjectArg(store storage.TaskStore, args []string) (string, *storage.Project, error) {
+	slug, err := resolveProjectSlugArg(store, args)
+	if err != nil {
+		return "", nil, err
 	}
 	proj, err := store.GetProject(slug)
 	if err != nil {
