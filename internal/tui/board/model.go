@@ -41,8 +41,10 @@ func New(store storage.TaskStore, filterProject string) Model {
 		}
 	}
 
+	// reload() already loads the focus plan (guarded against a failed read);
+	// a second unguarded m.loadFocusPlan() here would defeat that guard right
+	// before handleStalePlan()'s own mutate+save.
 	m.reload()
-	m.loadFocusPlan()
 	m.handleStalePlan()
 
 	ti := textinput.New()
