@@ -94,8 +94,9 @@ func (m Model) updateSelectMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		})
 
 	case key.Matches(msg, common.Keys.Done):
-		m.bulkStatusMove(m.markedTasks(), "Marked", "done", func(*storage.Task) storage.TaskStatus {
-			return m.statuses[len(m.statuses)-1]
+		m.bulkStatusMove(m.markedTasks(), "Marked", "done", func(t *storage.Task) storage.TaskStatus {
+			statuses := m.store.GetProjectStatuses(t.Project)
+			return statuses[len(statuses)-1]
 		})
 
 	case key.Matches(msg, common.Keys.Waiting):

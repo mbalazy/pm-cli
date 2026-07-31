@@ -80,10 +80,13 @@ func (m *Model) doMoveBack(t *storage.Task) {
 	m.reload()
 }
 
-// doDone marks task with the last status (typically "done").
+// doDone marks task with the project's real last status (typically "done").
+// Resolved from the store rather than m.statuses, which applyColumnVisibility
+// may have filtered down to only the visible columns.
 func (m *Model) doDone(t *storage.Task) {
 	m.lastUndo = &undoAction{kind: "done", task: snapshotTask(t)}
-	if err := m.store.MoveTask(t, m.statuses[len(m.statuses)-1]); err != nil {
+	statuses := m.store.GetProjectStatuses(t.Project)
+	if err := m.store.MoveTask(t, statuses[len(statuses)-1]); err != nil {
 		m.showErrorToast("move failed", err)
 	}
 	m.reload()

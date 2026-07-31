@@ -158,6 +158,22 @@ func TestDoDone(t *testing.T) {
 			t.Errorf("status = %q, want todo (unchanged - write failed)", got)
 		}
 	})
+
+	// Regression for pm-cli-53: applyColumnVisibility overwrites m.statuses to
+	// hold only the VISIBLE columns, so a naive m.statuses[len-1] silently wrote
+	// the last visible status instead of the project's real done status.
+	t.Run("hidden done column still writes the project's real done status", func(t *testing.T) {
+		m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusTodo}})
+		m.hiddenStatuses[storage.StatusDone] = true
+		m.reload()
+		if got := m.statuses[len(m.statuses)-1]; got == storage.StatusDone {
+			t.Fatalf("precondition: done column should be hidden from m.statuses, got last visible = %q", got)
+		}
+		m.doDone(m.taskByID("p-1"))
+		if got := diskStatus(t, m, "p-1"); got != storage.StatusDone {
+			t.Errorf("status = %q, want done even with the done column hidden", got)
+		}
+	})
 }
 
 func TestDoWaiting(t *testing.T) {
