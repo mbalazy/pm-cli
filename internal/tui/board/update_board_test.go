@@ -70,14 +70,18 @@ func TestSessionMenuActsOnDetailTask(t *testing.T) {
 	}
 
 	m := Model{
-		store:       store,
-		projects:    []string{"all", "p"},
-		tasks:       []*storage.Task{cursorTask, detailTask},
-		statuses:    []storage.TaskStatus{storage.StatusTodo},
-		cursors:     []int{0}, // board cursor sits on p-1
+		store:    store,
+		projects: []string{"all", "p"},
+		tasks:    []*storage.Task{cursorTask, detailTask},
+		statuses: []storage.TaskStatus{storage.StatusTodo},
+		cursors:  []int{0},
+		// board cursor sits on p-1
 		currentView: viewDetail,
-		detailTask:  detailTask,
-		width:       80, height: 24,
+		width:       80,
+		height:      24,
+		detailState: detailState{
+			detailTask: detailTask,
+		},
 	}
 	if got := m.selectedTask(); got == nil || got.Meta.ID != "p-1" {
 		t.Fatalf("fixture: board cursor should sit on p-1, got %v", got)
