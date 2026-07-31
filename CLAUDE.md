@@ -6,11 +6,14 @@ Local task tracker. Data: `~/.claude/pm/<project-slug>/`, binary: `pm`.
 
 ```
 make install              # build + install (uses VERSION from Makefile)
-make check                # go vet + staticcheck + go test
+make check                # gofmt-check + vet + staticcheck + go test ./...
+make test-race             # go test -race ./... (also run by CI, not part of check)
 make install VERSION=X.Y.Z  # override version
 ```
 
-Git hooks live in `githooks/` (versioned; `git config core.hooksPath githooks` - already set locally). `pre-commit` runs gofmt-check + vet + staticcheck + tests and unsets the `GIT_*` env git exports into hooks (test-spawned git repos would inherit the hook's index and explode). Both the hook and `make check` resolve the `staticcheck` binary via PATH → `go env GOBIN` → `GOPATH/bin` and fail with an install hint when missing (`go install honnef.co/go/tools/cmd/staticcheck@latest`). Fix failures - never bypass with `-n`.
+Git hooks live in `githooks/` (versioned; `git config core.hooksPath githooks` - already set locally). `pre-commit` just runs `make check`, so the hook, `make check`, and CI share one target set and can't drift apart. `staticcheck` is resolved via PATH → `go env GOBIN` → `GOPATH/bin` and fails with an install hint when missing (`go install honnef.co/go/tools/cmd/staticcheck@latest`). Fix failures - never bypass with `-n`.
+
+CI (`.github/workflows/ci.yml`) runs on push to `main` and on every PR: `make fmt-check`, `make vet`, `make staticcheck`, `make test-race` - the same Makefile targets used locally, plus the race detector (deliberately not part of `make check`, which stays fast for the local commit-time gate).
 
 IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.30.1**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN).
 
@@ -34,7 +37,7 @@ Always add tests when implementing new features or fixing bugs. Conventions:
 
 ## Verification
 
-- After code changes: `make check` (runs vet + test)
+- After code changes: `make check` (runs fmt-check + vet + staticcheck + test); run `make test-race` too before pushing anything touching concurrency/locking
 - After TUI changes: `make install` + run `pm board` and test interactively
 - After MCP changes: `make install` + test with `pm_context` / `pm_list_tasks` in Claude Code
 - After storage changes: verify task files in `~/.claude/pm/` have correct frontmatter
@@ -54,7 +57,7 @@ Always add tests when implementing new features or fixing bugs. Conventions:
 
 ## TUI patterns
 
-- **`internal/tui/board` file map** (the package is split by concern; symbols moved freely, so grep by name, but for orientation): `update.go` = core `Update` dispatch + `updateBoard`; per-view key handlers in `update_picker.go` / `update_detail.go` / `update_modes.go` (select/archive/focus) / `update_menus.go` (overlays + add). Rendering: `view.go` = board render; `view_detail.go`, `view_menus.go`, `view_modes.go`. State/data: `model.go` = constructor + query/state methods; `types.go` = `view` enum + `Model` struct + item/message types; `focus.go` = focus-plan; `scroll.go` = cursor/scroll geometry; `actions.go` = status mutations + `snapshotTask`. Process launching: `launch_menu.go` (claude/executor overlay), `launch_claude.go`, `launch_codex.go`, `launch_executor.go`, `tmux.go`, `worktree.go`, `session.go`, `run_control.go` (executor run-state observe/kill), `util.go`.
+- **`internal/tui/board` file map** (the package is split by concern; symbols moved freely, so grep by name, but for orientation): `update.go` = core `Update` dispatch + `updateBoard`; per-view key handlers in `update_picker.go` / `update_detail.go` / `update_modes.go` (select/archive/focus) / `update_menus.go` (overlays + add). Rendering: `view.go` = board render; `view_detail.go`, `view_menus.go`, `view_modes.go`. State/data: `model.go` = constructor + query/state methods; `types.go` = `view` enum + `Model` struct (with the `detailState` / `execView` / `launchMenu` / `pickerState` clusters it embeds - embedded, so every field stays reachable as `m.<field>`; only composite literals need the nested form) + item/message types; `overlay.go` = `overlayLadder`, the ONE ordered table of {open flag, view fn, update fn} that both `View` and `Update`'s key dispatch resolve through (add a new overlay there, not in a per-view if-ladder); `focus.go` = focus-plan; `scroll.go` = cursor/scroll geometry; `actions.go` = status mutations + `snapshotTask`. Process launching: `launch_menu.go` (claude/executor overlay), `launch_claude.go`, `launch_codex.go`, `launch_executor.go`, `tmux.go`, `worktree.go`, `session.go`, `run_control.go` (executor run-state observe/kill), `util.go`.
 - **`reload()`**: canonical way to refresh state - calls `loadTasks()` + `loadProjectCounts()` + `fixCursors()`. Don't call these separately.
 - **Tab counts**: `projectCounts map[string]int` shows non-archived task count per project in tab labels.
 - See `.claude/skills/tui-patterns/` for overlay menus, confirmation pattern, toast, navigation details.

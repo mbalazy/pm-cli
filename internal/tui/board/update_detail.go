@@ -11,24 +11,11 @@ import (
 	"github.com/mbalazy/pm/internal/tui/common"
 )
 
+// updateDetail owns the keyboard in the task-detail / project-info view.
+// Overlays opened from here (subtask picker, launch menu, yank, links, session
+// menu) intercept input before Update ever dispatches here - the precedence
+// lives in overlayLadder (overlay.go), not in this function.
 func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Overlay menus intercept input first
-	if m.subtaskPicker {
-		return m.updateSubtaskPicker(msg)
-	}
-	if m.claudeMenu {
-		return m.updateClaudeMenu(msg)
-	}
-	if m.yankMenu {
-		return m.updateYankMenu(msg)
-	}
-	if m.linksMenu {
-		return m.updateLinksMenu(msg)
-	}
-	if m.sessionMenu {
-		return m.updateSessionMenu(msg)
-	}
-
 	// Detail search input mode
 	if m.detailSearching {
 		return m.updateDetailSearch(msg)

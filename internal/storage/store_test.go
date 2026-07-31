@@ -231,7 +231,7 @@ func TestResolveProject(t *testing.T) {
 }
 
 func TestFindTask(t *testing.T) {
-	store, _ := setupTestStore(t)
+	store, dir := setupTestStore(t)
 
 	t.Run("exact ID match", func(t *testing.T) {
 		task, err := store.FindTask("alpha", "a-1")
@@ -296,6 +296,73 @@ func TestFindTask(t *testing.T) {
 		_, err := store.FindTask("alpha", "a-")
 		if err == nil {
 			t.Error("expected error for ambiguous prefix match")
+		}
+	})
+
+	t.Run("ambiguous count does not double-count a task matching both ID prefix and title", func(t *testing.T) {
+		// "dup-2" matches its own title substring in addition to the ID prefix
+		// phase already selecting it - it must be counted once, not twice.
+		alphaDir := filepath.Join(dir, "alpha")
+		WriteTask(&Task{
+			Meta:     TaskMeta{ID: "dup-1", Title: "Something else", Status: StatusTodo, Created: "2025-01-06", Updated: "2025-01-06"},
+			FilePath: filepath.Join(alphaDir, "dup-1-something-else.md"),
+		})
+		WriteTask(&Task{
+			Meta:     TaskMeta{ID: "dup-2", Title: "Contains dup in title", Status: StatusTodo, Created: "2025-01-06", Updated: "2025-01-06"},
+			FilePath: filepath.Join(alphaDir, "dup-2-contains-dup-in-title.md"),
+		})
+
+		_, err := store.FindTask("alpha", "dup")
+		if err == nil {
+			t.Fatal("expected error for ambiguous match")
+		}
+		if !strings.Contains(err.Error(), "2 matches") {
+			t.Errorf("expected exactly 2 matches (dup-1, dup-2 counted once each), got: %v", err)
+		}
+	})
+}
+
+func TestFindTaskExact(t *testing.T) {
+	store, _ := setupTestStore(t)
+
+	t.Run("exact ID match", func(t *testing.T) {
+		task, err := store.FindTaskExact("alpha", "a-1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if task.Meta.ID != "a-1" {
+			t.Errorf("got ID %q, want %q", task.Meta.ID, "a-1")
+		}
+	})
+
+	t.Run("case insensitive exact ID", func(t *testing.T) {
+		task, err := store.FindTaskExact("alpha", "A-1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if task.Meta.ID != "a-1" {
+			t.Errorf("got ID %q, want %q", task.Meta.ID, "a-1")
+		}
+	})
+
+	t.Run("ID prefix does not match", func(t *testing.T) {
+		_, err := store.FindTaskExact("alpha", "a-")
+		if err == nil {
+			t.Error("expected error for non-exact ID prefix")
+		}
+	})
+
+	t.Run("title substring does not match", func(t *testing.T) {
+		_, err := store.FindTaskExact("alpha", "first")
+		if err == nil {
+			t.Error("expected error for title substring query")
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		_, err := store.FindTaskExact("alpha", "nonexistent-xyz")
+		if err == nil {
+			t.Error("expected error for nonexistent task")
 		}
 	})
 }

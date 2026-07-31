@@ -460,7 +460,7 @@ func TestOpenClaudeMenu(t *testing.T) {
 		os.Setenv("TMUX", "/tmp/tmux-1000/default,12345,0")
 		defer os.Unsetenv("TMUX")
 
-		m := Model{launchAgent: launchAgentCodex}
+		m := Model{launchMenu: launchMenu{launchAgent: launchAgentCodex}}
 		m.rebuildClaudeMenuItems(task)
 
 		kinds := make([]string, len(m.claudeMenuItems))
@@ -486,8 +486,10 @@ func TestOpenClaudeMenu(t *testing.T) {
 		defer os.Unsetenv("TMUX")
 
 		m := Model{
-			launchAgent:        launchAgentCodex,
-			projectScopeLaunch: true,
+			launchMenu: launchMenu{
+				launchAgent:        launchAgentCodex,
+				projectScopeLaunch: true,
+			},
 		}
 		m.rebuildClaudeMenuItems(nil)
 
@@ -508,10 +510,12 @@ func TestOpenClaudeMenu(t *testing.T) {
 
 	t.Run("resets state on open", func(t *testing.T) {
 		m := Model{
-			claudeMenuSkipPerms: true,
-			claudeMenuCursor:    5,
-			claudeMenuItems:     []claudeMenuItem{{"old", "old", "o"}},
-			launchAgent:         launchAgentCodex,
+			launchMenu: launchMenu{
+				claudeMenuSkipPerms: true,
+				claudeMenuCursor:    5,
+				claudeMenuItems:     []claudeMenuItem{{"old", "old", "o"}},
+				launchAgent:         launchAgentCodex,
+			},
 		}
 		os.Unsetenv("TMUX")
 		m.openClaudeMenu(task)
@@ -534,8 +538,10 @@ func TestOpenClaudeMenu(t *testing.T) {
 func TestUpdateClaudeMenuSkipPerms(t *testing.T) {
 	t.Run("toggle with !", func(t *testing.T) {
 		m := Model{
-			claudeMenu:      true,
-			claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
+			launchMenu: launchMenu{
+				claudeMenu:      true,
+				claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
+			},
 		}
 
 		// First toggle: off -> on
@@ -555,9 +561,11 @@ func TestUpdateClaudeMenuSkipPerms(t *testing.T) {
 
 	t.Run("escape closes menu", func(t *testing.T) {
 		m := Model{
-			claudeMenu:          true,
-			claudeMenuSkipPerms: true,
-			claudeMenuItems:     []claudeMenuItem{{"Here", "here", "h"}},
+			launchMenu: launchMenu{
+				claudeMenu:          true,
+				claudeMenuSkipPerms: true,
+				claudeMenuItems:     []claudeMenuItem{{"Here", "here", "h"}},
+			},
 		}
 
 		result, _ := m.updateClaudeMenu(tea.KeyMsg{Type: tea.KeyEsc})
@@ -569,12 +577,14 @@ func TestUpdateClaudeMenuSkipPerms(t *testing.T) {
 
 	t.Run("navigation with j/k", func(t *testing.T) {
 		m := Model{
-			claudeMenu: true,
-			claudeMenuItems: []claudeMenuItem{
-				{"Here", "here", "h"},
-				{"Worktree", "worktree", "w"},
+			launchMenu: launchMenu{
+				claudeMenu: true,
+				claudeMenuItems: []claudeMenuItem{
+					{"Here", "here", "h"},
+					{"Worktree", "worktree", "w"},
+				},
+				claudeMenuCursor: 0,
 			},
-			claudeMenuCursor: 0,
 		}
 
 		// Down
@@ -609,9 +619,11 @@ func TestUpdateClaudeMenuSkipPerms(t *testing.T) {
 	t.Run("toggle agent with @ cycles claude->codex->executor->claude", func(t *testing.T) {
 		os.Unsetenv("TMUX")
 		m := Model{
-			claudeMenu:      true,
-			launchAgent:     launchAgentClaude,
-			claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
+			launchMenu: launchMenu{
+				claudeMenu:      true,
+				launchAgent:     launchAgentClaude,
+				claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
+			},
 		}
 
 		want := []launchAgent{launchAgentCodex, launchAgentExecutor, launchAgentClaude}
@@ -627,10 +639,12 @@ func TestUpdateClaudeMenuSkipPerms(t *testing.T) {
 	t.Run("toggle agent with @ in project scope stays claude<->codex", func(t *testing.T) {
 		os.Unsetenv("TMUX")
 		m := Model{
-			claudeMenu:         true,
-			launchAgent:        launchAgentClaude,
-			projectScopeLaunch: true,
-			claudeMenuItems:    []claudeMenuItem{{"Here", "here", "h"}},
+			launchMenu: launchMenu{
+				claudeMenu:         true,
+				launchAgent:        launchAgentClaude,
+				projectScopeLaunch: true,
+				claudeMenuItems:    []claudeMenuItem{{"Here", "here", "h"}},
+			},
 		}
 
 		result, _ := m.updateClaudeMenu(keyMsg("@"))
@@ -734,11 +748,13 @@ func TestLaunchResultMsgShowsToast(t *testing.T) {
 func TestViewClaudeMenuSkipPerms(t *testing.T) {
 	t.Run("shows unchecked by default", func(t *testing.T) {
 		m := Model{
-			claudeMenu:          true,
-			claudeMenuSkipPerms: false,
-			claudeMenuItems:     []claudeMenuItem{{"Here", "here", "h"}},
-			width:               80,
-			height:              24,
+			width:  80,
+			height: 24,
+			launchMenu: launchMenu{
+				claudeMenu:          true,
+				claudeMenuSkipPerms: false,
+				claudeMenuItems:     []claudeMenuItem{{"Here", "here", "h"}},
+			},
 		}
 		output := m.viewClaudeMenu()
 		if !strings.Contains(output, "[ ]") {
@@ -754,11 +770,13 @@ func TestViewClaudeMenuSkipPerms(t *testing.T) {
 
 	t.Run("shows checked when enabled", func(t *testing.T) {
 		m := Model{
-			claudeMenu:          true,
-			claudeMenuSkipPerms: true,
-			claudeMenuItems:     []claudeMenuItem{{"Here", "here", "h"}},
-			width:               80,
-			height:              24,
+			width:  80,
+			height: 24,
+			launchMenu: launchMenu{
+				claudeMenu:          true,
+				claudeMenuSkipPerms: true,
+				claudeMenuItems:     []claudeMenuItem{{"Here", "here", "h"}},
+			},
 		}
 		output := m.viewClaudeMenu()
 		if !strings.Contains(output, "[x]") {
@@ -768,10 +786,12 @@ func TestViewClaudeMenuSkipPerms(t *testing.T) {
 
 	t.Run("help text mentions toggle", func(t *testing.T) {
 		m := Model{
-			claudeMenu:      true,
-			claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
-			width:           80,
-			height:          24,
+			width:  80,
+			height: 24,
+			launchMenu: launchMenu{
+				claudeMenu:      true,
+				claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
+			},
 		}
 		output := m.viewClaudeMenu()
 		if !strings.Contains(output, "! toggle perms") {
@@ -784,11 +804,13 @@ func TestViewClaudeMenuSkipPerms(t *testing.T) {
 
 	t.Run("shows default claude agent", func(t *testing.T) {
 		m := Model{
-			claudeMenu:      true,
-			launchAgent:     launchAgentClaude,
-			claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
-			width:           80,
-			height:          24,
+			width:  80,
+			height: 24,
+			launchMenu: launchMenu{
+				claudeMenu:      true,
+				launchAgent:     launchAgentClaude,
+				claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
+			},
 		}
 		output := stripANSI(m.viewClaudeMenu())
 		if !strings.Contains(output, "Agent: Claude Code") {
@@ -798,11 +820,13 @@ func TestViewClaudeMenuSkipPerms(t *testing.T) {
 
 	t.Run("shows codex agent and bypass label", func(t *testing.T) {
 		m := Model{
-			claudeMenu:      true,
-			launchAgent:     launchAgentCodex,
-			claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
-			width:           80,
-			height:          24,
+			width:  80,
+			height: 24,
+			launchMenu: launchMenu{
+				claudeMenu:      true,
+				launchAgent:     launchAgentCodex,
+				claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
+			},
 		}
 		output := stripANSI(m.viewClaudeMenu())
 		if !strings.Contains(output, "Agent: Codex") {
@@ -912,7 +936,7 @@ func TestFilteredPickerItems(t *testing.T) {
 	}
 
 	t.Run("no filter returns all", func(t *testing.T) {
-		m := Model{pickerItems: items, pickerFilter: ""}
+		m := Model{pickerState: pickerState{pickerItems: items, pickerFilter: ""}}
 		got := m.filteredPickerItems()
 		if len(got) != 3 {
 			t.Errorf("got %d items, want 3", len(got))
@@ -920,7 +944,7 @@ func TestFilteredPickerItems(t *testing.T) {
 	})
 
 	t.Run("filters by name", func(t *testing.T) {
-		m := Model{pickerItems: items, pickerFilter: "atlas"}
+		m := Model{pickerState: pickerState{pickerItems: items, pickerFilter: "atlas"}}
 		got := m.filteredPickerItems()
 		if len(got) != 1 || got[0].slug != "atlas" {
 			t.Errorf("got %v, want [atlas]", got)
@@ -928,7 +952,7 @@ func TestFilteredPickerItems(t *testing.T) {
 	})
 
 	t.Run("filters by stack", func(t *testing.T) {
-		m := Model{pickerItems: items, pickerFilter: "elixir"}
+		m := Model{pickerState: pickerState{pickerItems: items, pickerFilter: "elixir"}}
 		got := m.filteredPickerItems()
 		if len(got) != 1 || got[0].slug != "atlas" {
 			t.Errorf("got %v, want [atlas]", got)
@@ -936,7 +960,7 @@ func TestFilteredPickerItems(t *testing.T) {
 	})
 
 	t.Run("filters by slug", func(t *testing.T) {
-		m := Model{pickerItems: items, pickerFilter: "pm-cli"}
+		m := Model{pickerState: pickerState{pickerItems: items, pickerFilter: "pm-cli"}}
 		got := m.filteredPickerItems()
 		if len(got) != 1 || got[0].slug != "pm-cli" {
 			t.Errorf("got %v, want [pm-cli]", got)
@@ -944,7 +968,7 @@ func TestFilteredPickerItems(t *testing.T) {
 	})
 
 	t.Run("case insensitive", func(t *testing.T) {
-		m := Model{pickerItems: items, pickerFilter: "ACME-API"}
+		m := Model{pickerState: pickerState{pickerItems: items, pickerFilter: "ACME-API"}}
 		got := m.filteredPickerItems()
 		if len(got) != 1 || got[0].slug != "acme-api" {
 			t.Errorf("got %v, want [acme-api]", got)
@@ -955,9 +979,11 @@ func TestFilteredPickerItems(t *testing.T) {
 func TestSortPickerItems(t *testing.T) {
 	t.Run("hidden projects last", func(t *testing.T) {
 		m := Model{
-			pickerItems: []pickerItem{
-				{slug: "hidden", hidden: true, taskCount: 100},
-				{slug: "visible", hidden: false, taskCount: 1},
+			pickerState: pickerState{
+				pickerItems: []pickerItem{
+					{slug: "hidden", hidden: true, taskCount: 100},
+					{slug: "visible", hidden: false, taskCount: 1},
+				},
 			},
 		}
 		m.sortPickerItems()
@@ -968,10 +994,12 @@ func TestSortPickerItems(t *testing.T) {
 
 	t.Run("preserves insertion order among visible", func(t *testing.T) {
 		m := Model{
-			pickerItems: []pickerItem{
-				{slug: "alpha", doingCount: 0, taskCount: 1},
-				{slug: "beta", doingCount: 5, taskCount: 50},
-				{slug: "gamma", doingCount: 0, taskCount: 10},
+			pickerState: pickerState{
+				pickerItems: []pickerItem{
+					{slug: "alpha", doingCount: 0, taskCount: 1},
+					{slug: "beta", doingCount: 5, taskCount: 50},
+					{slug: "gamma", doingCount: 0, taskCount: 10},
+				},
 			},
 		}
 		m.sortPickerItems()
@@ -1025,10 +1053,12 @@ func TestPickerReorder(t *testing.T) {
 			projects:       []string{"all", "alpha", "beta", "gamma"},
 			activeProject:  1,
 			hiddenProjects: make(map[string]bool),
-			pickerItems: []pickerItem{
-				{slug: "alpha"}, {slug: "beta"}, {slug: "gamma"},
+			pickerState: pickerState{
+				pickerItems: []pickerItem{
+					{slug: "alpha"}, {slug: "beta"}, {slug: "gamma"},
+				},
+				pickerCursor: 0,
 			},
-			pickerCursor: 0,
 		}
 		m.pickerReorder(1)
 		if m.pickerItems[0].slug != "beta" || m.pickerItems[1].slug != "alpha" {
@@ -1048,10 +1078,12 @@ func TestPickerReorder(t *testing.T) {
 			projects:       []string{"all", "alpha", "beta", "gamma"},
 			activeProject:  2,
 			hiddenProjects: make(map[string]bool),
-			pickerItems: []pickerItem{
-				{slug: "alpha"}, {slug: "beta"}, {slug: "gamma"},
+			pickerState: pickerState{
+				pickerItems: []pickerItem{
+					{slug: "alpha"}, {slug: "beta"}, {slug: "gamma"},
+				},
+				pickerCursor: 2,
 			},
-			pickerCursor: 2,
 		}
 		m.pickerReorder(-1)
 		if m.pickerItems[1].slug != "gamma" || m.pickerItems[2].slug != "beta" {
@@ -1066,11 +1098,13 @@ func TestPickerReorder(t *testing.T) {
 		m := Model{
 			projects:       []string{"all", "alpha", "beta"},
 			hiddenProjects: make(map[string]bool),
-			pickerItems: []pickerItem{
-				{slug: "alpha", hidden: false},
-				{slug: "beta", hidden: true},
+			pickerState: pickerState{
+				pickerItems: []pickerItem{
+					{slug: "alpha", hidden: false},
+					{slug: "beta", hidden: true},
+				},
+				pickerCursor: 0,
 			},
-			pickerCursor: 0,
 		}
 		m.pickerReorder(1)
 		// should not swap
@@ -1084,10 +1118,12 @@ func TestPickerReorder(t *testing.T) {
 			projects:       []string{"all", "alpha", "beta", "gamma"},
 			activeProject:  3, // gamma
 			hiddenProjects: make(map[string]bool),
-			pickerItems: []pickerItem{
-				{slug: "alpha"}, {slug: "beta"}, {slug: "gamma"},
+			pickerState: pickerState{
+				pickerItems: []pickerItem{
+					{slug: "alpha"}, {slug: "beta"}, {slug: "gamma"},
+				},
+				pickerCursor: 0,
 			},
-			pickerCursor: 0,
 		}
 		m.pickerReorder(1)
 		// gamma was at index 3, after swap alpha<->beta it should still be at index 3

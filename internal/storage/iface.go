@@ -28,6 +28,7 @@ type TaskStore interface {
 	NextTaskID(slug string) string
 	NextChildID(slug, parentID string) string
 	FindTask(projectSlug, query string) (*Task, error)
+	FindTaskExact(projectSlug, taskID string) (*Task, error)
 
 	// Tasks - write
 	AddTask(projectSlug string, t *Task) error

@@ -106,55 +106,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// An open overlay owns the keyboard, and which one wins is decided in
+		// ONE place (overlayLadder) shared with View - so the layer the user
+		// is looking at is always the layer handling the key.
+		if ov, ok := m.activeOverlay(); ok {
+			return ov.update(m, msg)
+		}
 		if m.currentView == viewExecutor {
 			return m.updateExecutorView(msg)
 		}
 		if m.currentView == viewDetail || m.currentView == viewProjectInfo {
 			return m.updateDetail(msg)
 		}
-		if m.projectPicker {
-			return m.updateProjectPicker(msg)
-		}
-		if m.colVisMenu {
-			return m.updateColVisMenu(msg)
-		}
-		if m.yankMenu {
-			return m.updateYankMenu(msg)
-		}
-		if m.linksMenu {
-			return m.updateLinksMenu(msg)
-		}
-		if m.claudeMenu {
-			return m.updateClaudeMenu(msg)
-		}
 		if m.currentView == viewArchive {
 			return m.updateArchive(msg)
 		}
 		if m.currentView == viewFocus {
 			return m.updateFocus(msg)
-		}
-		if m.showHelp {
-			if m.helpSearch {
-				return m.updateHelpSearch(msg)
-			}
-			switch {
-			case key.Matches(msg, common.Keys.Search):
-				m.helpSearch = true
-				m.helpInput.SetValue(m.helpFilter)
-				m.helpInput.Focus()
-				return m, m.helpInput.Cursor.BlinkCmd()
-			case key.Matches(msg, common.Keys.Escape):
-				if m.helpFilter != "" {
-					m.helpFilter = ""
-					return m, nil
-				}
-				m.showHelp = false
-				return m, nil
-			default:
-				m.showHelp = false
-				m.helpFilter = ""
-				return m, nil
-			}
 		}
 		if m.adding {
 			return m.updateAdd(msg)
