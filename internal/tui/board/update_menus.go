@@ -77,6 +77,18 @@ func (m Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// step 1: create task
+		//
+		// applyColumnVisibility can empty m.statuses (V menu) between opening
+		// add mode and this Enter press - guarded here the same way as the
+		// Add keybinding itself (update.go), which is the normal path but not
+		// the only one this state can be reached from.
+		if len(m.statuses) == 0 {
+			m.adding = false
+			m.addInput.Blur()
+			m.toastMsg = "no visible columns to add to"
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+			return m, nil
+		}
 		id := val
 		if id == "" {
 			id = fmt.Sprintf("%d", time.Now().Unix()%100000)
@@ -92,7 +104,9 @@ func (m Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			},
 		}
 		slug := m.projects[m.activeProject]
-		m.store.AddTask(slug, t)
+		if err := m.store.AddTask(slug, t); err != nil {
+			m.showErrorToast("add failed", err)
+		}
 		m.adding = false
 		m.addInput.Blur()
 		m.reload()
@@ -293,15 +307,18 @@ func (m Model) updateSessionMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			t.Meta.Updated = storage.Today()
-			m.store.WriteTask(t)
+			if err := m.store.WriteTask(t); err != nil {
+				m.showErrorToast("delete session failed", err)
+			} else {
+				m.toastMsg = "Deleted session " + sid[:8] + "..."
+				m.toastExpiry = time.Now().Add(2 * time.Second)
+			}
 			m.openSessionMenu(t)
 			if len(m.sessionMenuItems) == 0 {
 				m.sessionMenu = false
 			} else if m.sessionCursor >= len(m.sessionMenuItems) {
 				m.sessionCursor = len(m.sessionMenuItems) - 1
 			}
-			m.toastMsg = "Deleted session " + sid[:8] + "..."
-			m.toastExpiry = time.Now().Add(2 * time.Second)
 			content := m.renderTaskDetail(t)
 			m.detailViewport.SetContent(content)
 			m.detailPlainContent = stripANSI(content)
