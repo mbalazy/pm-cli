@@ -833,20 +833,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 // --- Context helpers ---
 
 func resolveProjectFromCwd(store storage.TaskStore, cwd string) (string, error) {
-	projects, err := store.ListProjects()
-	if err != nil {
-		return "", err
-	}
-	for _, slug := range projects {
-		proj, err := store.GetProject(slug)
-		if err != nil || proj == nil || proj.Path == "" {
-			continue
-		}
-		if strings.HasPrefix(cwd, proj.Path) {
-			return slug, nil
-		}
-	}
-	return "", fmt.Errorf("no project found for: %s", cwd)
+	return storage.ResolveProjectFromCwd(store, cwd)
 }
 
 func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, any, error) {

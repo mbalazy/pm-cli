@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"os"
-	"path/filepath"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mbalazy/pm/internal/storage"
@@ -38,29 +36,11 @@ func detectProjectFromCwd(store storage.TaskStore) string {
 	if err != nil {
 		return ""
 	}
-	cwd, err = filepath.Abs(cwd)
+	slug, err := storage.ResolveProjectFromCwd(store, cwd)
 	if err != nil {
 		return ""
 	}
-	projects, err := store.ListProjects()
-	if err != nil {
-		return ""
-	}
-	for _, slug := range projects {
-		proj, err := store.GetProject(slug)
-		if err != nil || proj == nil || proj.Path == "" {
-			continue
-		}
-		projectPath, err := filepath.Abs(proj.Path)
-		if err != nil {
-			continue
-		}
-		rel, err := filepath.Rel(projectPath, cwd)
-		if err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, "../"))) {
-			return slug
-		}
-	}
-	return ""
+	return slug
 }
 
 func runBoard(store storage.TaskStore, project string) error {
