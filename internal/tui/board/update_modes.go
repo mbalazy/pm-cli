@@ -273,12 +273,6 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, common.Keys.Undo):
 		m.doUndo()
 		m.fixArchiveCursor()
-
-	case key.Matches(msg, common.Keys.Search):
-		m.searching = true
-		m.searchInput.SetValue(m.searchQuery)
-		m.searchInput.Focus()
-		return m, m.searchInput.Cursor.BlinkCmd()
 	}
 	return m, nil
 }
