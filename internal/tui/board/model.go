@@ -159,6 +159,17 @@ func (m *Model) reload() {
 	} else {
 		slug := m.projects[m.activeProject]
 		m.tasks = filterTasksByProject(allTasks, slug)
+		if len(m.tasks) == 0 && !m.projectIsActive(slug) {
+			// GetAllTasks silently drops archived projects. Old behavior read the
+			// project's tasks directly (archive-agnostic) - preserve that for a
+			// tab left open on a project archived by another process mid-session,
+			// instead of it going empty. Only fires on this rare path: a cheap
+			// ListActiveProjects membership check (project.yaml only), not a
+			// second task-tree read, in the common (active, non-empty) case.
+			if tasks, err := m.store.GetTasks(slug); err == nil {
+				m.tasks = tasks
+			}
+		}
 	}
 	m.loadStatuses()
 	m.applyColumnVisibility()
@@ -197,6 +208,17 @@ func filterTasksByProject(tasks []*storage.Task, slug string) []*storage.Task {
 		}
 	}
 	return result
+}
+
+// projectIsActive reports whether slug is currently a non-archived project.
+func (m *Model) projectIsActive(slug string) bool {
+	active, _ := m.store.ListActiveProjects()
+	for _, p := range active {
+		if p == slug {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) applyColumnVisibility() {

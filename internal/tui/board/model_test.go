@@ -102,6 +102,56 @@ func TestReloadSingleStoreReadPass(t *testing.T) {
 	})
 }
 
+// TestReloadArchivedProjectTabFallsBack proves that a tab left open on a
+// project archived by another process mid-session keeps showing its tasks
+// (the old GetTasks(slug)-direct behavior) instead of going silently empty,
+// while a genuinely empty ACTIVE project stays empty (no spurious fallback).
+func TestReloadArchivedProjectTabFallsBack(t *testing.T) {
+	store := &storage.Store{Root: t.TempDir()}
+	if err := store.CreateProject("p", &storage.Project{Name: "P"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddTask("p", &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusTodo}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateProject("empty", &storage.Project{Name: "Empty"}); err != nil {
+		t.Fatal(err)
+	}
+
+	newModel := func(slug string) *Model {
+		return &Model{
+			store:          store,
+			projects:       []string{"all", slug},
+			activeProject:  1,
+			hiddenStatuses: make(map[storage.TaskStatus]bool),
+			width:          80,
+			height:         24,
+		}
+	}
+
+	t.Run("genuinely empty active project stays empty", func(t *testing.T) {
+		m := newModel("empty")
+		m.reload()
+		if len(m.tasks) != 0 {
+			t.Errorf("empty active project should stay empty, got %d tasks", len(m.tasks))
+		}
+	})
+
+	// Archive "p" out from under the open tab (simulating another process
+	// running `pm project archive` while this board session has it open).
+	if err := store.UpdateProject("p", &storage.Project{Name: "P", Archived: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("archived project's tab keeps its tasks", func(t *testing.T) {
+		m := newModel("p")
+		m.reload()
+		if len(m.tasks) != 1 || m.tasks[0].Meta.ID != "p-1" {
+			t.Errorf("archived project's tab should still show its tasks (old archive-agnostic behavior), got %+v", m.tasks)
+		}
+	})
+}
+
 func TestFilteredTasks(t *testing.T) {
 	m := Model{
 		tasks:    makeTasks(),
