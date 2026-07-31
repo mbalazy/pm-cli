@@ -3,7 +3,7 @@
 
 Local task tracker and control plane for AI coding agents. Data lives in `~/.claude/pm/` as markdown files with YAML frontmatter. CLI binary: `pm`. MCP server: `pm mcp` (stdio, registered as `pm`). TUI: `pm board` (the user runs it).
 
-**MCP tools** (preferred over CLI): `pm_context` (session start / overview, auto-detects project from cwd), `pm_list_tasks`, `pm_get_task`, `pm_add_task`, `pm_update_task`, `pm_move_task`, `pm_update_project`, `pm_create_project`, `pm_list_projects`, `pm_delete_task`. CLI fallback `pm context [project]` prints the same rollup when the running MCP holds a stale binary.
+**MCP tools** (preferred over CLI): `pm_context` (session start / overview, auto-detects project from cwd), `pm_list_tasks`, `pm_get_task`, `pm_add_task`, `pm_update_task`, `pm_move_task`, `pm_update_project`, `pm_create_project`, `pm_list_projects`, `pm_delete_task`. CLI fallback `pm context [project]` prints the same rollup when the running MCP holds a stale binary. `pm_get_task`/`pm_update_task`/`pm_move_task` resolve `task_id` fuzzily (exact ID, ID prefix, or title substring - error if ambiguous); `pm_delete_task` is the one irreversible tool and requires the exact full task ID - a fuzzy/title query errors with nothing deleted.
 
 **Proactively use pm when:**
 - The user starts working on a new task/feature/bug → `pm_add_task` (read the task-authoring rules first: `pm docs authoring`)

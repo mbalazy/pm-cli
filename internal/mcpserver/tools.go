@@ -98,7 +98,7 @@ type createProjectInput struct {
 
 type deleteTaskInput struct {
 	Project string `json:"project" jsonschema:"Project slug or prefix"`
-	TaskID  string `json:"task_id" jsonschema:"Task ID or search query"`
+	TaskID  string `json:"task_id" jsonschema:"Exact full task ID (e.g. my-app-3) - no fuzzy title match, this operation is irreversible"`
 }
 type updateProjectInput struct {
 	Project  string            `json:"project" jsonschema:"Project slug or prefix"`
@@ -700,7 +700,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	// pm_delete_task
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_delete_task",
-		Description: "Permanently delete a task file. Use for removing junk, test tasks, or duplicates. Cannot be undone.",
+		Description: "Permanently delete a task file. Use for removing junk, test tasks, or duplicates. Cannot be undone. Requires the exact full task ID - no fuzzy title match.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in deleteTaskInput) (*mcp.CallToolResult, any, error) {
 		slug, err := store.ResolveProject(in.Project)
 		if err != nil {
@@ -713,7 +713,10 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		if release, lockErr := store.LockProject(slug); lockErr == nil {
 			defer release()
 		}
-		task, err := store.FindTask(slug, in.TaskID)
+		// Exact ID only - this is the one irreversible tool, so FindTask's
+		// fuzzy ID-prefix/title-substring resolution is deliberately NOT used
+		// here (see FindTaskExact).
+		task, err := store.FindTaskExact(slug, in.TaskID)
 		if err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
