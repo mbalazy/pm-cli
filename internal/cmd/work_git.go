@@ -26,13 +26,36 @@ func gitDirty(dir string) (bool, error) {
 	return strings.TrimSpace(string(out)) != "", nil
 }
 
+// requireCleanWorkingTree errors out if dir's git status could not be read
+// (a failing `git status` must abort, never be misread as "clean") or if the
+// tree has uncommitted changes. Shared precondition for the two places the
+// executor switches branches in a checkout it does not own exclusively (the
+// user's main checkout in standalone mode, the epic manager's non-worktree
+// run) - guarding uncommitted work from a branch switch out from under it.
+func requireCleanWorkingTree(dir string) error {
+	dirty, err := gitDirty(dir)
+	if err != nil {
+		return fmt.Errorf("check working tree state at %s: %w", dir, err)
+	}
+	if dirty {
+		return fmt.Errorf("working tree at %s is dirty - commit/stash first or pass --allow-dirty", dir)
+	}
+	return nil
+}
+
 // gitCheckoutBranch checks out branch at dir, creating it from the current HEAD
 // if it does not yet exist.
 func gitCheckoutBranch(dir, branch string) error {
+	var c *exec.Cmd
 	if branchExists(dir, branch) {
-		return exec.Command("git", "-C", dir, "checkout", branch).Run()
+		c = exec.Command("git", "-C", dir, "checkout", branch)
+	} else {
+		c = exec.Command("git", "-C", dir, "checkout", "-b", branch)
 	}
-	return exec.Command("git", "-C", dir, "checkout", "-b", branch).Run()
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("checkout %s: %v: %s", branch, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func branchExists(dir, branch string) bool {
@@ -91,13 +114,19 @@ func gitFreshBranch(dir, branch, base string) error {
 // the current HEAD otherwise. Used by the manager to create the integration
 // branch and per-sub feat branches off it.
 func gitEnsureBranch(dir, branch, base string) error {
-	if branchExists(dir, branch) {
-		return exec.Command("git", "-C", dir, "checkout", branch).Run()
+	var c *exec.Cmd
+	switch {
+	case branchExists(dir, branch):
+		c = exec.Command("git", "-C", dir, "checkout", branch)
+	case base != "" && branchExists(dir, base):
+		c = exec.Command("git", "-C", dir, "checkout", "-b", branch, base)
+	default:
+		c = exec.Command("git", "-C", dir, "checkout", "-b", branch)
 	}
-	if base != "" && branchExists(dir, base) {
-		return exec.Command("git", "-C", dir, "checkout", "-b", branch, base).Run()
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("checkout %s: %v: %s", branch, err, strings.TrimSpace(string(out)))
 	}
-	return exec.Command("git", "-C", dir, "checkout", "-b", branch).Run()
+	return nil
 }
 
 // gitMergeNoFF merges branch into the currently checked-out branch with a merge
@@ -115,7 +144,10 @@ func gitMergeNoFF(dir, branch, message string) error {
 
 // gitDeleteBranch deletes a fully-merged branch.
 func gitDeleteBranch(dir, branch string) error {
-	return exec.Command("git", "-C", dir, "branch", "-d", branch).Run()
+	if out, err := exec.Command("git", "-C", dir, "branch", "-d", branch).CombinedOutput(); err != nil {
+		return fmt.Errorf("branch -d %s: %v: %s", branch, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // gitAheadCount returns how many commits branch carries that base does not.

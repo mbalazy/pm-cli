@@ -341,8 +341,15 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 	if opts.additional {
 		// Base precedence: --base > executor.base_branch > main checkout's current
 		// branch. Resolved here (a read, no side effect) so --dry-run shows it too.
-		cur, _ := gitCurrentBranch(proj.Path)
+		cur, curErr := gitCurrentBranch(proj.Path)
 		base = resolveWorktreeBase(opts.base, exec.BaseBranch, cur)
+		if base == "" {
+			detail := "detached HEAD"
+			if curErr != nil {
+				detail = curErr.Error()
+			}
+			return nil, fmt.Errorf("cannot resolve base branch for %s: git rev-parse --abbrev-ref HEAD at %s failed (%s) - pass --base or set executor.base_branch", slug, proj.Path, detail)
+		}
 		if opts.slotDir != "" {
 			// The caller (epic manager) already claimed a slot - target it.
 			workDir = opts.slotDir
@@ -437,8 +444,8 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			// Non-worktree: the user's own checkout. Enforce the clean-tree
 			// precondition and continue/create the branch in place.
 			if !opts.allowDirty {
-				if dirty, _ := gitDirty(dir); dirty {
-					return nil, fmt.Errorf("working tree at %s is dirty - commit/stash first or pass --allow-dirty", dir)
+				if err := requireCleanWorkingTree(dir); err != nil {
+					return nil, err
 				}
 			}
 			if err := gitCheckoutBranch(dir, plan.branch); err != nil {

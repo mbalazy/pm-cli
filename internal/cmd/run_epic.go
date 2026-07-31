@@ -166,8 +166,8 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			// place). Skipped in additional mode - the worktree is executor-managed
 			// and the user's main checkout is intentionally left alone.
 			if !allowDirty && !additional {
-				if dirty, _ := gitDirty(workDir); dirty {
-					return fmt.Errorf("working tree at %s is dirty - commit/stash first or pass --allow-dirty", workDir)
+				if err := requireCleanWorkingTree(workDir); err != nil {
+					return err
 				}
 			}
 
