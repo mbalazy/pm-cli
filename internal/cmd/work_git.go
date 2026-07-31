@@ -53,7 +53,7 @@ func gitCheckoutBranch(dir, branch string) error {
 		c = exec.Command("git", "-C", dir, "checkout", "-b", branch)
 	}
 	if out, err := c.CombinedOutput(); err != nil {
-		return fmt.Errorf("checkout %s: %v: %s", branch, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("checkout %s: %s", branch, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -124,7 +124,7 @@ func gitEnsureBranch(dir, branch, base string) error {
 		c = exec.Command("git", "-C", dir, "checkout", "-b", branch)
 	}
 	if out, err := c.CombinedOutput(); err != nil {
-		return fmt.Errorf("checkout %s: %v: %s", branch, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("checkout %s: %s", branch, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -145,7 +145,7 @@ func gitMergeNoFF(dir, branch, message string) error {
 // gitDeleteBranch deletes a fully-merged branch.
 func gitDeleteBranch(dir, branch string) error {
 	if out, err := exec.Command("git", "-C", dir, "branch", "-d", branch).CombinedOutput(); err != nil {
-		return fmt.Errorf("branch -d %s: %v: %s", branch, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("branch -d %s: %s", branch, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

@@ -343,12 +343,14 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		// branch. Resolved here (a read, no side effect) so --dry-run shows it too.
 		cur, curErr := gitCurrentBranch(proj.Path)
 		base = resolveWorktreeBase(opts.base, exec.BaseBranch, cur)
-		if base == "" {
-			detail := "detached HEAD"
-			if curErr != nil {
-				detail = curErr.Error()
-			}
-			return nil, fmt.Errorf("cannot resolve base branch for %s: git rev-parse --abbrev-ref HEAD at %s failed (%s) - pass --base or set executor.base_branch", slug, proj.Path, detail)
+		// Only standalone runs actually consume plan.base (executeWork's
+		// gitFreshBranch call, gated on opts.standalone) - an epic sub's base
+		// comes from the manager (epicBranch/baseBranch in run_epic.go) and never
+		// reads this field. Scoping the hard-error to standalone means a failed
+		// gitCurrentBranch read on the main checkout can't fail an epic sub over
+		// a value it was never going to use.
+		if base == "" && opts.standalone {
+			return nil, fmt.Errorf("cannot resolve base branch for %s: git rev-parse --abbrev-ref HEAD at %s failed: %v - pass --base or set executor.base_branch", slug, proj.Path, curErr)
 		}
 		if opts.slotDir != "" {
 			// The caller (epic manager) already claimed a slot - target it.

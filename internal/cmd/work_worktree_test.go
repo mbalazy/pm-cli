@@ -257,6 +257,49 @@ func TestPlanWorkRejectsEmptyResolvedBase(t *testing.T) {
 	}
 }
 
+// TestPlanWorkEpicSubIgnoresUnresolvableMainCheckoutBase is the flip side of
+// TestPlanWorkRejectsEmptyResolvedBase: an epic sub's plan.base is NEVER
+// consumed (executeWork only reads it under opts.standalone; the epic
+// manager resolves its own base - epicBranch/baseBranch in run_epic.go -
+// directly). A failed gitCurrentBranch read on the main checkout (unrelated
+// to the epic's actual worktree/base) must not fail an epic sub over a value
+// it was never going to use - scoping the empty-base guard to opts.standalone
+// only is what keeps this call path unaffected.
+func TestPlanWorkEpicSubIgnoresUnresolvableMainCheckoutBase(t *testing.T) {
+	root := t.TempDir()
+	store := &storage.Store{Root: root}
+	repo := t.TempDir()
+	gitT(t, repo, "init", "-q")
+	gitT(t, repo, "checkout", "-q", "-b", "development")
+	os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
+	gitT(t, repo, "add", ".")
+	gitT(t, repo, "commit", "-q", "-m", "init")
+
+	proj := &storage.Project{Name: "NoBase", Path: repo, Executor: &storage.Executor{
+		Enabled:            true,
+		AdditionalWorktree: true,
+		WorktreePath:       "../nobase-additional",
+	}}
+	if err := store.CreateProject("nobase", proj); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	task := &storage.Task{Meta: storage.TaskMeta{ID: "nobase-1", Title: "Task", Status: storage.StatusTodo}}
+	if err := store.AddTask("nobase", task); err != nil {
+		t.Fatalf("add task: %v", err)
+	}
+
+	fakeGitFailing(t, " rev-parse --abbrev-ref HEAD", "fatal: fake HEAD read failure")
+
+	// Epic sub call: standalone false, a slot already claimed by the manager
+	// (slotDir set), same as driveSub/driveSubIndependent in run_epic.go.
+	_, err := planWork(store, task, "nobase", workOptions{
+		standalone: false, additional: true, slotDir: "/mgr/claimed", slotEnv: nil,
+	})
+	if err != nil {
+		t.Fatalf("epic sub planWork must not fail on an unresolvable main-checkout base it never uses, got: %v", err)
+	}
+}
+
 func TestResolveWorktreeBase(t *testing.T) {
 	cases := []struct {
 		name     string
