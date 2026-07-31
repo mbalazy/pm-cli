@@ -142,6 +142,52 @@ func TestSelectedFocusTask(t *testing.T) {
 	})
 }
 
+// TestFocusNavigationSingleStoreReadPerKeypress covers pm-cli-67-2: focusTasks()
+// used to call m.store.GetAllTasks() on every invocation, and it is invoked both
+// from the key handler (updateFocus) AND the subsequent render (viewFocus) - so
+// a single "j" press cost 2 full task-tree reads, defeating reload()'s design of
+// one read pass per refresh (see model.go's reload() doc comment). The fix caches
+// the ID->task lookup on the Model, rebuilt once in reload(); a keypress + the
+// render that follows it should need 0 fresh reads once that cache is warm.
+func TestFocusNavigationSingleStoreReadPerKeypress(t *testing.T) {
+	base := &storage.Store{Root: t.TempDir()}
+	if err := base.CreateProject("p", &storage.Project{Name: "P"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"p-1", "p-2", "p-3"} {
+		task := &storage.Task{Meta: storage.TaskMeta{ID: id, Title: id, Status: storage.StatusTodo}}
+		if err := base.AddTask("p", task); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cs := &countingStore{TaskStore: base}
+	m := New(cs, "")
+	m.focusPlan = storage.FocusPlan{Date: storage.Today(), Tasks: []string{"p-1", "p-2", "p-3"}}
+	m.rebuildFocusSet()
+	m.currentView = viewFocus
+
+	press := func(key rune) Model {
+		cs.getAllTasksCalls = 0
+		cs.getTasksCalls = 0
+		result, _ := m.updateFocus(keyRunes(key))
+		next, ok := result.(Model)
+		if !ok {
+			t.Fatalf("updateFocus returned %T, want Model", result)
+		}
+		_ = next.viewFocus() // the render bubbletea performs right after every Update
+		if total := cs.getAllTasksCalls + cs.getTasksCalls; total > 1 {
+			t.Errorf("key %q triggered %d task-tree reads (GetAllTasks=%d, GetTasks=%d), want at most 1",
+				string(key), total, cs.getAllTasksCalls, cs.getTasksCalls)
+		}
+		return next
+	}
+
+	m = press('j')
+	m = press('j')
+	press('k')
+}
+
 func TestFixFocusCursor(t *testing.T) {
 	m := focusFixture(t)
 

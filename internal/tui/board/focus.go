@@ -40,14 +40,17 @@ func (m *Model) handleStalePlan() {
 }
 
 func (m *Model) focusTasks() []*storage.Task {
-	allTasks, _ := m.store.GetAllTasks()
-	lookup := make(map[string]*storage.Task, len(allTasks))
-	for _, t := range allTasks {
-		lookup[t.Meta.ID] = t
+	if m.focusTaskLookup == nil {
+		// Only hit before the first reload() (e.g. a Model built without New()).
+		allTasks, _ := m.store.GetAllTasks()
+		m.focusTaskLookup = make(map[string]*storage.Task, len(allTasks))
+		for _, t := range allTasks {
+			m.focusTaskLookup[t.Meta.ID] = t
+		}
 	}
 	var result []*storage.Task
 	for _, id := range m.focusPlan.Tasks {
-		if t, ok := lookup[id]; ok {
+		if t, ok := m.focusTaskLookup[id]; ok {
 			result = append(result, t)
 		}
 	}
