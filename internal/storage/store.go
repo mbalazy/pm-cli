@@ -115,10 +115,16 @@ func (s *Store) GetAllStatuses() []TaskStatus {
 	return result
 }
 
+// CreateProject writes a new project.yaml, creating the project dir first.
+// The lock is taken AFTER the dir exists (it lives inside that dir) and only
+// covers the write - callers must not hold the project lock themselves.
 func (s *Store) CreateProject(slug string, p *Project) error {
 	dir := s.ProjectDir(slug)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
+	}
+	if release, err := s.LockProject(slug); err == nil {
+		defer release()
 	}
 	return writeProject(s.ProjectYAML(slug), p)
 }
@@ -176,9 +182,27 @@ func (s *Store) MoveTask(t *Task, newStatus TaskStatus) error {
 	if release, err := s.LockProject(t.Project); err == nil {
 		defer release()
 	}
-	if fresh, err := s.FindTask(t.Project, t.Meta.ID); err == nil {
-		*t = *fresh
+	// The re-read is a PRECONDITION, not a best-effort refresh: swallowing its
+	// error and writing the caller's copy anyway RESURRECTS a task another
+	// session deleted in the meantime (the board holds card pointers from its
+	// last reload and moves them from 8 call sites). Both failure classes -
+	// the file is gone, or the dir could not be read - mean the copy in hand
+	// is unfit to write, so refuse and let the caller surface it.
+	tasks, err := s.GetTasks(t.Project)
+	if err != nil {
+		return fmt.Errorf("cannot move %s: read project %s: %w", t.Meta.ID, t.Project, err)
 	}
+	var fresh *Task
+	for _, cand := range tasks {
+		if strings.EqualFold(cand.Meta.ID, t.Meta.ID) {
+			fresh = cand
+			break
+		}
+	}
+	if fresh == nil {
+		return fmt.Errorf("cannot move %s: task no longer exists (deleted by another session?)", t.Meta.ID)
+	}
+	*t = *fresh
 	t.Meta.Status = newStatus
 	t.Meta.Updated = Today()
 	return writeTask(t)
@@ -190,9 +214,52 @@ func (s *Store) WriteTask(t *Task) error {
 	return writeTask(t)
 }
 
-// UpdateProject persists project metadata to disk.
+// UpdateProject persists project metadata to disk under the project lock.
+//
+// writeProject is itself a read-modify-write (it merges the fresh marshal into
+// the existing file's node tree to keep comments and unknown keys), so its
+// read->write window is WIDER than a task write's - and nothing serialized it
+// before: two pm processes (parallel CC sessions' MCP servers, `pm executor
+// init` racing the board) could interleave and drop each other's edits, the
+// exact hazard LockProject documents for task files.
+//
+// This only covers the write itself. A caller that READS the project, edits a
+// field and writes it back still has a lost-update window as wide as its own
+// think time - use MutateProject for that. Callers must NOT hold the project
+// lock themselves (a second flock in the same process deadlocks).
 func (s *Store) UpdateProject(slug string, p *Project) error {
+	if release, err := s.LockProject(slug); err == nil {
+		defer release()
+	}
 	return writeProject(s.ProjectYAML(slug), p)
+}
+
+// MutateProject serializes a whole read-modify-write on project.yaml: it takes
+// the project lock, re-reads the project FRESH inside the critical section,
+// applies fn to it and writes the result, returning the written project.
+//
+// This is the project-level counterpart of the FindTask -> mutate -> WriteTask
+// pattern LockProject documents for tasks. Partial-field editors
+// (pm_update_project, `pm executor init`) must go through it: reading the
+// project, mutating that copy and calling UpdateProject leaves the caller's
+// think time as a lost-update window, so a concurrent session's edit to an
+// untouched field is silently reverted. fn must not call back into the store
+// (no nested LockProject), and callers must not already hold the lock.
+func (s *Store) MutateProject(slug string, fn func(*Project) error) (*Project, error) {
+	if release, err := s.LockProject(slug); err == nil {
+		defer release()
+	}
+	p, err := s.GetProject(slug)
+	if err != nil {
+		return nil, err
+	}
+	if err := fn(p); err != nil {
+		return nil, err
+	}
+	if err := writeProject(s.ProjectYAML(slug), p); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 func (s *Store) DeleteTask(t *Task) error {

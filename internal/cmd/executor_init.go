@@ -80,8 +80,14 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 				return nil
 			}
 
-			proj.Executor = result
-			if err := store.UpdateProject(slug, proj); err != nil {
+			// Write the executor block onto a FRESH read under the project
+			// lock: detection + drafting above is slow, and this command
+			// routinely runs next to a live MCP server - only `executor` is
+			// ours to overwrite, everything else must stay as it is on disk.
+			if _, err := store.MutateProject(slug, func(fresh *storage.Project) error {
+				fresh.Executor = result
+				return nil
+			}); err != nil {
 				return fmt.Errorf("write project.yaml: %w", err)
 			}
 			fmt.Printf("# saved to %s\n", store.ProjectYAML(slug))
