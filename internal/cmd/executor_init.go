@@ -85,10 +85,10 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 			// runs next to a live MCP server, so `proj` may be minutes stale.
 			// The merge is REDONE against the fresh executor block - merging
 			// the draft into the stale one and assigning that wholesale would
-			// still clobber the very field this command owns. The block
-			// printed above is therefore the merge as it looked at scan time;
-			// what lands is the same merge over the current file.
+			// still clobber the very field this command owns.
+			var raced bool
 			if _, err := store.MutateProject(slug, func(fresh *storage.Project) error {
+				raced = !reflect.DeepEqual(fresh.Executor, proj.Executor)
 				merged, _ := mergeExecutor(fresh.Executor, draft)
 				fresh.Executor = merged
 				return nil
@@ -96,6 +96,19 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 				return fmt.Errorf("write project.yaml: %w", err)
 			}
 			fmt.Printf("# saved to %s\n", store.ProjectYAML(slug))
+
+			// Everything printed above (the block, the preserved-field notes,
+			// the playbook decision) describes the merge as it looked at scan
+			// time. If the executor block changed underneath us, what landed is
+			// a different merge - say so instead of letting the output pass for
+			// the file, and skip the scaffold, whose path was decided from the
+			// stale block and could end up referenced by nothing.
+			if raced {
+				fmt.Fprintf(os.Stderr, "warning: %s changed during the scan - the block above is the scan-time merge; "+
+					"what landed was re-merged over the current file. Re-run `pm executor init %s` to see it.\n",
+					store.ProjectYAML(slug), slug)
+				return nil
+			}
 
 			// After project.yaml, and never fatal: the profile is the command's
 			// job, the scaffold is a convenience. A project.yaml that points at

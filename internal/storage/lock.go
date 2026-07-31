@@ -24,7 +24,16 @@ import (
 // (handler/apply) level.
 func (s *Store) LockProject(slug string) (func(), error) {
 	dir := s.ProjectDir(slug)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	// The lock file lives INSIDE the project dir, so creating the dir here
+	// (as this used to) made every lock site able to conjure a project: a
+	// write to a typo'd slug silently created one, and locking a project
+	// someone just deleted resurrected its dir - `applyWorkerResult` then
+	// wrote a 30-minute-old task into it, invisible forever since no
+	// project.yaml comes back with it. Locking something that does not exist
+	// is a caller error; CreateProject (the only site that legitimately makes
+	// the dir) MkdirAll's before it locks. Callers that degrade to an
+	// unlocked write on error keep exactly the behaviour they had.
+	if _, err := os.Stat(dir); err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(filepath.Join(dir, ".pm.lock"), os.O_CREATE|os.O_RDWR, 0644)
@@ -44,26 +53,4 @@ func (s *Store) LockProject(slug string) (func(), error) {
 			_ = f.Close()
 		})
 	}, nil
-}
-
-// lockProjectIfExists takes the project lock only when the project dir is
-// already there, and never fails: a lock that cannot be taken degrades to an
-// unlocked write (today's behaviour) rather than dropping the caller's edit.
-//
-// The existence check is load-bearing, not defensive. LockProject MkdirAll's
-// the dir (the lock file lives inside it), so locking a slug with no dir would
-// CREATE it - turning a write to a typo'd slug from an error into a silently
-// created project, and re-creating the dir of a project just deleted. With no
-// dir there is nothing to serialize against anyway: the write that follows
-// fails on its own, exactly as it did before the lock existed.
-func (s *Store) lockProjectIfExists(slug string) func() {
-	noop := func() {}
-	if _, err := os.Stat(s.ProjectDir(slug)); err != nil {
-		return noop
-	}
-	release, err := s.LockProject(slug)
-	if err != nil {
-		return noop
-	}
-	return release
 }

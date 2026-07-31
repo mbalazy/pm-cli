@@ -396,6 +396,69 @@ func TestExecutorInitCmdPreservesExistingConfig(t *testing.T) {
 	}
 }
 
+// racingStore lets a test land a project.yaml edit in the window between
+// `pm executor init`'s scan and its write - the window the MutateProject
+// re-merge exists for.
+type racingStore struct {
+	storage.TaskStore
+	during func()
+	fired  bool
+}
+
+func (r *racingStore) MutateProject(slug string, fn func(*storage.Project) error) (*storage.Project, error) {
+	if !r.fired {
+		r.fired = true
+		r.during()
+	}
+	return r.TaskStore.MutateProject(slug, fn)
+}
+
+// TestExecutorInitMergesOverTheCurrentFile: init reads the project, then scans
+// the repo (slow), then writes. The merge MUST be redone against the executor
+// block as it is at write time - merging the draft into the block read before
+// the scan and assigning that wholesale silently reverts an edit made during
+// it, on the one field this command owns. Every other executor_init test is
+// single-goroutine, so nothing else can catch a stale merge base.
+func TestExecutorInitMergesOverTheCurrentFile(t *testing.T) {
+	base, slug := tempStore(t)
+	proj, _ := base.GetProject(slug)
+	writeFile(t, filepath.Join(proj.Path, "go.mod"), "module x\n")
+
+	proj.Executor = &storage.Executor{Enabled: true, BaseBranch: "development", Prepare: "old-prepare"}
+	if err := base.UpdateProject(slug, proj); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+
+	store := &racingStore{TaskStore: base, during: func() {
+		if _, err := base.MutateProject(slug, func(p *storage.Project) error {
+			p.Executor.BaseBranch = "release"
+			p.Executor.Prepare = "new-prepare"
+			return nil
+		}); err != nil {
+			t.Errorf("racing edit: %v", err)
+		}
+	}}
+
+	cmd := newExecutorInitCmd(store)
+	cmd.SetArgs([]string{slug})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("executor init: %v", err)
+	}
+
+	reloaded, err := base.GetProject(slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := reloaded.GetExecutor()
+	if e.BaseBranch != "release" || e.Prepare != "new-prepare" {
+		t.Fatalf("merge used the stale executor block: base_branch=%q prepare=%q", e.BaseBranch, e.Prepare)
+	}
+	// The detected half must still be refreshed from the scan.
+	if e.Baseline != "go test ./... && go vet ./..." {
+		t.Fatalf("baseline not refreshed: %q", e.Baseline)
+	}
+}
+
 func TestRuntimeSkillTier(t *testing.T) {
 	tests := []struct {
 		name string

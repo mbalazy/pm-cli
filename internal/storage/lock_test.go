@@ -174,8 +174,15 @@ func TestMoveTaskVanishedTask(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := s.MoveTask(stale, StatusDone); err == nil {
+		err = s.MoveTask(stale, StatusDone)
+		if err == nil {
 			t.Fatal("MoveTask into a vanished project returned nil")
+		}
+		// Pin the BRANCH, not just the failure: without this the subtest would
+		// silently slide into the not-found branch (already covered above) if
+		// GetTasks ever stopped erroring on a missing dir.
+		if !strings.HasPrefix(err.Error(), "read project ") {
+			t.Fatalf("expected the read-failed branch, got: %v", err)
 		}
 		if _, err := os.Stat(stale.FilePath); !os.IsNotExist(err) {
 			t.Fatalf("task file resurrected at %s (stat err = %v)", stale.FilePath, err)
@@ -216,14 +223,20 @@ func TestUpdateProjectTakesTheLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer release() // idempotent; keeps the flock from leaking if we fail early
 
 	done := make(chan error, 1)
 	go func() { done <- s.UpdateProject("app", &Project{Name: "Updated"}) }()
 
 	select {
 	case err := <-done:
-		t.Fatalf("UpdateProject wrote while the project lock was held (err = %v)", err)
+		t.Fatalf("UpdateProject returned while the project lock was held (err = %v)", err)
 	case <-time.After(100 * time.Millisecond):
+	}
+	// Assert the WRITE, not just the call: an implementation that wrote first
+	// and locked afterwards would also still be blocked here.
+	if held, err := s.GetProject("app"); err != nil || held.Name != "App" {
+		t.Fatalf("project.yaml was written while the lock was held: %+v (err = %v)", held, err)
 	}
 	release()
 

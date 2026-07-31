@@ -123,7 +123,9 @@ func (s *Store) CreateProject(slug string, p *Project) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	defer s.lockProjectIfExists(slug)()
+	if release, err := s.LockProject(slug); err == nil {
+		defer release()
+	}
 	return writeProject(s.ProjectYAML(slug), p)
 }
 
@@ -177,7 +179,9 @@ func (s *Store) MoveTask(t *Task, newStatus TaskStatus) error {
 			return err
 		}
 	}
-	defer s.lockProjectIfExists(t.Project)()
+	if release, err := s.LockProject(t.Project); err == nil {
+		defer release()
+	}
 	// The re-read is a PRECONDITION, not a best-effort refresh: swallowing its
 	// error and writing the caller's copy anyway RESURRECTS a task another
 	// session deleted in the meantime (the board holds card pointers from its
@@ -220,7 +224,9 @@ func (s *Store) WriteTask(t *Task) error {
 // think time - use MutateProject for that. Callers must NOT hold the project
 // lock themselves (a second flock in the same process deadlocks).
 func (s *Store) UpdateProject(slug string, p *Project) error {
-	defer s.lockProjectIfExists(slug)()
+	if release, err := s.LockProject(slug); err == nil {
+		defer release()
+	}
 	return writeProject(s.ProjectYAML(slug), p)
 }
 
@@ -236,7 +242,9 @@ func (s *Store) UpdateProject(slug string, p *Project) error {
 // untouched field is silently reverted. fn must not call back into the store
 // (no nested LockProject), and callers must not already hold the lock.
 func (s *Store) MutateProject(slug string, fn func(*Project) error) (*Project, error) {
-	defer s.lockProjectIfExists(slug)()
+	if release, err := s.LockProject(slug); err == nil {
+		defer release()
+	}
 	p, err := s.GetProject(slug)
 	if err != nil {
 		return nil, err
