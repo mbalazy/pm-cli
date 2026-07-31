@@ -84,8 +84,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case reloadMsg:
+		// No doTick() here: the tickMsg loop started by Init already runs for
+		// the life of the process. Re-issuing it here used to add a PERMANENT
+		// extra 2s loop for every editor return / launch return, compounding
+		// unboundedly over a session.
 		m.reload()
-		return m, doTick()
+		return m, nil
 
 	case launchResultMsg:
 		m.reload()
@@ -95,7 +99,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toastMsg = fmt.Sprintf("%s %s exited", msg.agent.label(), msg.kind)
 		}
 		m.toastExpiry = time.Now().Add(15 * time.Second)
-		return m, doTick()
+		// See reloadMsg above: the tick loop is already running, don't fan it out.
+		return m, nil
 
 	case tea.MouseMsg:
 		if m.currentView == viewDetail || m.currentView == viewProjectInfo {
@@ -296,7 +301,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.confirmAction == "delete" && m.confirmTaskID == t.Meta.ID {
 			// confirmed
 			m.lastUndo = &undoAction{kind: "delete", task: snapshotTask(t)}
-			m.store.DeleteTask(t)
+			if err := m.store.DeleteTask(t); err != nil {
+				m.showErrorToast("delete failed", err)
+			}
 			m.confirmAction = ""
 			m.confirmTaskID = ""
 			m.reload()
@@ -503,6 +510,13 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				return m, nil
 			}
+		}
+		// All columns can be hidden via the V menu (applyColumnVisibility) -
+		// there is then no status to create the task into.
+		if len(m.statuses) == 0 {
+			m.toastMsg = "no visible columns to add to"
+			m.toastExpiry = time.Now().Add(3 * time.Second)
+			return m, nil
 		}
 		m.adding = true
 		m.addStep = 0
