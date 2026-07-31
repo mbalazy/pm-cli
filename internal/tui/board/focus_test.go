@@ -188,6 +188,51 @@ func TestFocusNavigationSingleStoreReadPerKeypress(t *testing.T) {
 	press('k')
 }
 
+// TestReloadRefreshesFocusTaskCache is the other half of the focus cache: the
+// lookup is only ever rebuilt in reload(), so if that rebuild is dropped the
+// cache is filled once and never again - and the focus view keeps rendering a
+// task's old title/status after another process (an MCP session, `pm mv`) has
+// changed it on disk. The counting test above passes either way, since a stale
+// cache reads the store even less.
+func TestReloadRefreshesFocusTaskCache(t *testing.T) {
+	root := t.TempDir()
+	store := &storage.Store{Root: root}
+	if err := store.CreateProject("p", &storage.Project{Name: "P"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddTask("p", &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "before", Status: storage.StatusTodo}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.WriteFocusPlan(root, storage.FocusPlan{Date: storage.Today(), Tasks: []string{"p-1"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(store, "")
+	// The focus view rendering once is what warms the cache in practice.
+	if got := m.focusTasks(); len(got) != 1 || got[0].Meta.Title != "before" {
+		t.Fatalf("focusTasks() = %v, want one task titled %q", got, "before")
+	}
+
+	task, err := store.FindTaskExact("p", "p-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Meta.Title = "after"
+	if err := store.WriteTask(task); err != nil {
+		t.Fatal(err)
+	}
+
+	m.reload()
+
+	got := m.focusTasks()
+	if len(got) != 1 {
+		t.Fatalf("focusTasks() returned %d tasks after reload, want 1", len(got))
+	}
+	if got[0].Meta.Title != "after" {
+		t.Errorf("focusTasks() returned stale title %q after reload, want %q", got[0].Meta.Title, "after")
+	}
+}
+
 func TestFixFocusCursor(t *testing.T) {
 	m := focusFixture(t)
 
