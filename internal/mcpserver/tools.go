@@ -326,6 +326,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in contextInput) (*mcp.CallToolResult, any, error) {
 		// Resolve project
 		projectSlug := ""
+		cwdMissNote := ""
 		if in.Project != "" {
 			slug, err := store.ResolveProject(in.Project)
 			if err != nil {
@@ -334,14 +335,17 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			}
 			projectSlug = slug
 		} else if in.Cwd != "" {
-			slug, _ := resolveProjectFromCwd(store, in.Cwd)
+			slug, err := resolveProjectFromCwd(store, in.Cwd)
+			if err != nil {
+				cwdMissNote = fmt.Sprintf("cwd %q matches no configured project - showing all projects; pass project explicitly or register the path in project.yaml", in.Cwd)
+			}
 			projectSlug = slug
 		}
 
 		if projectSlug != "" {
 			return projectContext(store, projectSlug)
 		}
-		return crossProjectContext(store)
+		return crossProjectContext(store, cwdMissNote)
 	})
 
 	// pm_list_projects
@@ -910,7 +914,7 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 	return r, nil, err
 }
 
-func crossProjectContext(store storage.TaskStore) (*mcp.CallToolResult, any, error) {
+func crossProjectContext(store storage.TaskStore, note string) (*mcp.CallToolResult, any, error) {
 	projects, _ := store.ListActiveProjects()
 
 	type projectSummary struct {
@@ -958,6 +962,9 @@ func crossProjectContext(store storage.TaskStore) (*mcp.CallToolResult, any, err
 	}
 	if focus := focusTaskSummaries(store); len(focus) > 0 {
 		output["focus_tasks"] = focus
+	}
+	if note != "" {
+		output["note"] = note
 	}
 
 	r, err := jsonText(output)
