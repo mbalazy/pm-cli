@@ -153,7 +153,11 @@ func (m *Model) loadStatuses() {
 // those hit the store separately (3 full task-tree reads per tick/tab-switch).
 func (m *Model) reload() {
 	allTasks, err := m.store.GetAllTasks()
-	m.err = err
+	if err != nil {
+		// A broken store read used to render as a silently empty board with
+		// no trace of why - surface it like every other failed mutation.
+		m.showErrorToast("failed to load tasks", err)
+	}
 	if m.activeProject == 0 {
 		m.tasks = allTasks
 	} else {
