@@ -190,7 +190,9 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 
 	case "here":
 		sessionID := generateSessionID()
-		m.saveSession(t, sessionID)
+		if err := m.saveSession(t, sessionID); err != nil {
+			m.showErrorToast("save session failed", err)
+		}
 		args := []string{"--session-id", sessionID}
 		if skipFlag != "" {
 			args = append(args, skipFlag)
@@ -207,7 +209,9 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 
 	case "tmux":
 		sessionID := generateSessionID()
-		m.saveSession(t, sessionID)
+		if err := m.saveSession(t, sessionID); err != nil {
+			m.showErrorToast("save session failed", err)
+		}
 		shellCmd := withCd(fmt.Sprintf("claude --session-id %s %s %s", sessionID, skipFlag, shellQuote(prompt)))
 		winName := tmuxWindowName("cc", t.Meta.ID, sessionID)
 		sess, err := tmuxNewWindow(winName, shellCmd)
@@ -221,7 +225,9 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 
 	case "worktree":
 		sessionID := generateSessionID()
-		m.saveSession(t, sessionID)
+		if err := m.saveSession(t, sessionID); err != nil {
+			m.showErrorToast("save session failed", err)
+		}
 		wtName := worktreeName(t)
 		if projDir != "" {
 			copyWorktreeFiles(projDir, wtName)
@@ -251,7 +257,9 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 
 	case "worktree-tmux":
 		sessionID := generateSessionID()
-		m.saveSession(t, sessionID)
+		if err := m.saveSession(t, sessionID); err != nil {
+			m.showErrorToast("save session failed", err)
+		}
 		wtName := worktreeName(t)
 		if projDir != "" {
 			copyWorktreeFiles(projDir, wtName)
@@ -320,7 +328,9 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		m.resumeSessionID = ""
 		m.forkMode = false
 		newID := generateSessionID()
-		m.saveSession(t, newID)
+		if err := m.saveSession(t, newID); err != nil {
+			m.showErrorToast("save session failed", err)
+		}
 		args := []string{"--resume", parentID, "--fork-session", "--session-id", newID}
 		if skipFlag != "" {
 			args = append(args, skipFlag)
@@ -342,7 +352,9 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		m.resumeSessionID = ""
 		m.forkMode = false
 		newID := generateSessionID()
-		m.saveSession(t, newID)
+		if err := m.saveSession(t, newID); err != nil {
+			m.showErrorToast("save session failed", err)
+		}
 		shellCmd := withResumeCd(fmt.Sprintf("claude --resume %s --fork-session --session-id %s %s", parentID, newID, skipFlag))
 		winName := tmuxWindowName("cc", t.Meta.ID, newID)
 		sess, err := tmuxNewWindow(winName, shellCmd)
