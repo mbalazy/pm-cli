@@ -148,17 +148,18 @@ func (m *Model) loadStatuses() {
 	}
 }
 
-func (m *Model) loadTasks() {
+// reload is the canonical refresh: ONE store read pass (GetAllTasks) feeds
+// m.tasks, the project counts, and the focus-plan cleanup - previously each of
+// those hit the store separately (3 full task-tree reads per tick/tab-switch).
+func (m *Model) reload() {
+	allTasks, err := m.store.GetAllTasks()
+	m.err = err
 	if m.activeProject == 0 {
-		m.tasks, m.err = m.store.GetAllTasks()
+		m.tasks = allTasks
 	} else {
 		slug := m.projects[m.activeProject]
-		m.tasks, m.err = m.store.GetTasks(slug)
+		m.tasks = filterTasksByProject(allTasks, slug)
 	}
-}
-
-func (m *Model) reload() {
-	m.loadTasks()
 	m.loadStatuses()
 	m.applyColumnVisibility()
 	n := len(m.statuses)
@@ -175,15 +176,27 @@ func (m *Model) reload() {
 	} else if n == 0 {
 		m.activeCol = 0
 	}
-	m.loadProjectCounts()
+	m.loadProjectCounts(allTasks)
 	m.fixCursors()
 
 	// refresh focus plan: remove done/archived/deleted tasks
 	m.loadFocusPlan()
-	allTasks, _ := m.store.GetAllTasks()
 	if m.focusPlan.Cleanup(allTasks) {
 		m.saveFocusPlan()
 	}
+}
+
+// filterTasksByProject returns the subset of tasks belonging to slug. slug is
+// always one of m.projects (sourced from ListActiveProjects), so it is always
+// present among the projects GetAllTasks already read - no separate query needed.
+func filterTasksByProject(tasks []*storage.Task, slug string) []*storage.Task {
+	var result []*storage.Task
+	for _, t := range tasks {
+		if t.Project == slug {
+			result = append(result, t)
+		}
+	}
+	return result
 }
 
 func (m *Model) applyColumnVisibility() {
@@ -196,11 +209,10 @@ func (m *Model) applyColumnVisibility() {
 	m.statuses = filtered
 }
 
-func (m *Model) loadProjectCounts() {
+func (m *Model) loadProjectCounts(allTasks []*storage.Task) {
 	m.projectCounts = make(map[string]int)
-	all, _ := m.store.GetAllTasks()
 	total := 0
-	for _, t := range all {
+	for _, t := range allTasks {
 		if t.Meta.Status == storage.StatusArchived {
 			continue
 		}

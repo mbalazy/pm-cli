@@ -24,6 +24,84 @@ func makeTasks() []*storage.Task {
 	}
 }
 
+// countingStore wraps a real TaskStore and counts calls to the task-reading
+// methods, so a test can assert reload() performs exactly one read pass.
+type countingStore struct {
+	storage.TaskStore
+	getAllTasksCalls int
+	getTasksCalls    int
+}
+
+func (c *countingStore) GetAllTasks() ([]*storage.Task, error) {
+	c.getAllTasksCalls++
+	return c.TaskStore.GetAllTasks()
+}
+
+func (c *countingStore) GetTasks(slug string) ([]*storage.Task, error) {
+	c.getTasksCalls++
+	return c.TaskStore.GetTasks(slug)
+}
+
+// TestReloadSingleStoreReadPass proves reload() reads the task tree exactly
+// once (previously loadTasks + loadProjectCounts + the focus-plan cleanup each
+// called the store separately - 3 full reads per tick/tab-switch).
+func TestReloadSingleStoreReadPass(t *testing.T) {
+	base := &storage.Store{Root: t.TempDir()}
+	if err := base.CreateProject("p", &storage.Project{Name: "P"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := base.AddTask("p", &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusTodo}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := base.AddTask("p", &storage.Task{Meta: storage.TaskMeta{ID: "p-2", Title: "B", Status: storage.StatusDone}}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("project-scoped view", func(t *testing.T) {
+		cs := &countingStore{TaskStore: base}
+		m := &Model{
+			store:          cs,
+			projects:       []string{"all", "p"},
+			activeProject:  1,
+			hiddenStatuses: make(map[storage.TaskStatus]bool),
+			width:          80,
+			height:         24,
+		}
+		m.reload()
+
+		if total := cs.getAllTasksCalls + cs.getTasksCalls; total != 1 {
+			t.Errorf("reload() made %d task-read calls (GetAllTasks=%d, GetTasks=%d), want exactly 1", total, cs.getAllTasksCalls, cs.getTasksCalls)
+		}
+		if len(m.tasks) != 2 {
+			t.Errorf("reload() loaded %d tasks, want 2", len(m.tasks))
+		}
+		if m.projectCounts["p"] != 2 || m.projectCounts["all"] != 2 {
+			// p-2 is done (not archived), so it still counts alongside p-1.
+			t.Errorf("unexpected project counts: %+v", m.projectCounts)
+		}
+	})
+
+	t.Run("all-projects view", func(t *testing.T) {
+		cs := &countingStore{TaskStore: base}
+		m := &Model{
+			store:          cs,
+			projects:       []string{"all", "p"},
+			activeProject:  0,
+			hiddenStatuses: make(map[storage.TaskStatus]bool),
+			width:          80,
+			height:         24,
+		}
+		m.reload()
+
+		if total := cs.getAllTasksCalls + cs.getTasksCalls; total != 1 {
+			t.Errorf("reload() made %d task-read calls (GetAllTasks=%d, GetTasks=%d), want exactly 1", total, cs.getAllTasksCalls, cs.getTasksCalls)
+		}
+		if len(m.tasks) != 2 {
+			t.Errorf("reload() loaded %d tasks, want 2", len(m.tasks))
+		}
+	})
+}
+
 func TestFilteredTasks(t *testing.T) {
 	m := Model{
 		tasks:    makeTasks(),
