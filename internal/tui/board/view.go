@@ -12,35 +12,19 @@ import (
 )
 
 func (m Model) View() string {
-	// Overlay menus take priority over all views
-	if m.claudeMenu {
-		return m.viewClaudeMenu()
+	// Overlay menus take priority over all views - which overlay wins is
+	// decided in ONE place (overlayLadder), shared with Update's dispatch.
+	if ov := m.activeOverlay(); ov != nil {
+		return ov.view(m)
 	}
-	if m.currentView == viewDetail || m.currentView == viewProjectInfo {
+	switch m.currentView {
+	case viewDetail, viewProjectInfo:
 		return m.viewDetail()
-	}
-	if m.yankMenu {
-		return m.viewYankMenu()
-	}
-	if m.projectPicker {
-		return m.viewProjectPicker()
-	}
-	if m.colVisMenu {
-		return m.viewColVisMenu()
-	}
-	if m.linksMenu {
-		return m.viewLinksMenu()
-	}
-	if m.showHelp {
-		return m.viewHelp()
-	}
-	if m.currentView == viewArchive {
+	case viewArchive:
 		return m.viewArchive()
-	}
-	if m.currentView == viewFocus {
+	case viewFocus:
 		return m.viewFocus()
-	}
-	if m.currentView == viewExecutor {
+	case viewExecutor:
 		return m.viewExecutor()
 	}
 	return m.viewBoard()

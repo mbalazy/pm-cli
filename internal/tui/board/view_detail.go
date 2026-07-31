@@ -211,19 +211,10 @@ func truncLines(s string, width, maxLines int) string {
 	return strings.Join(lines, "\n")
 }
 
+// viewDetail renders the task-detail / project-info body. Overlays opened on
+// top of it (subtask picker, yank, links, session menu) are resolved by
+// overlayLadder before View ever gets here - see overlay.go.
 func (m Model) viewDetail() string {
-	if m.subtaskPicker {
-		return m.viewSubtaskPicker()
-	}
-	if m.yankMenu {
-		return m.viewYankMenu()
-	}
-	if m.linksMenu {
-		return m.viewLinksMenu()
-	}
-	if m.sessionMenu {
-		return m.viewSessionMenu()
-	}
 	var sb strings.Builder
 	sb.WriteString(m.detailViewport.View())
 	sb.WriteString("\n")

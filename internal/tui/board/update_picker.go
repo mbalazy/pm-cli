@@ -127,10 +127,10 @@ func (m *Model) saveTUIState() {
 	})
 }
 
+// updateProjectPicker owns the keyboard while the project picker is up. The
+// yank menu can be opened ON TOP of it (Y) and outranks it in overlayLadder,
+// so this function is never reached with that menu open.
 func (m Model) updateProjectPicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.yankMenu {
-		return m.updateYankMenu(msg)
-	}
 	// handle filter input mode
 	if m.pickerInput.Focused() {
 		switch {
