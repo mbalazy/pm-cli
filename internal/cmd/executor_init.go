@@ -80,12 +80,17 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 				return nil
 			}
 
-			// Write the executor block onto a FRESH read under the project
-			// lock: detection + drafting above is slow, and this command
-			// routinely runs next to a live MCP server - only `executor` is
-			// ours to overwrite, everything else must stay as it is on disk.
+			// Write onto a FRESH read under the project lock: detection above
+			// is slow (it scans the whole repo) and this command routinely
+			// runs next to a live MCP server, so `proj` may be minutes stale.
+			// The merge is REDONE against the fresh executor block - merging
+			// the draft into the stale one and assigning that wholesale would
+			// still clobber the very field this command owns. The block
+			// printed above is therefore the merge as it looked at scan time;
+			// what lands is the same merge over the current file.
 			if _, err := store.MutateProject(slug, func(fresh *storage.Project) error {
-				fresh.Executor = result
+				merged, _ := mergeExecutor(fresh.Executor, draft)
+				fresh.Executor = merged
 				return nil
 			}); err != nil {
 				return fmt.Errorf("write project.yaml: %w", err)

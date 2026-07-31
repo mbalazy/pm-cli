@@ -140,10 +140,11 @@ func TestE2EAddGetUpdateMoveDelete(t *testing.T) {
 	}
 }
 
-// TestE2EUpdateProject: the handler patches only the fields it was given, on a
-// project re-read FRESH under the project lock - so an edit another process
-// made in the meantime (here: written straight to disk after the session was
-// started) survives, and links merge instead of replacing.
+// TestE2EUpdateProject: the handler patches only the fields it was given and
+// leaves the rest of project.yaml as it found it, links merging instead of
+// replacing. (It cannot exercise the mid-handler race the lock exists for -
+// the parallel write below is sequenced BEFORE the call; the serialization
+// itself is covered by storage's TestMutateProjectSerializesLostUpdate.)
 func TestE2EUpdateProject(t *testing.T) {
 	store, _ := setupMCPTestStore(t)
 	sess := startMCP(t, store)

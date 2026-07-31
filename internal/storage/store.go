@@ -123,9 +123,7 @@ func (s *Store) CreateProject(slug string, p *Project) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	if release, err := s.LockProject(slug); err == nil {
-		defer release()
-	}
+	defer s.lockProjectIfExists(slug)()
 	return writeProject(s.ProjectYAML(slug), p)
 }
 
@@ -179,28 +177,22 @@ func (s *Store) MoveTask(t *Task, newStatus TaskStatus) error {
 			return err
 		}
 	}
-	if release, err := s.LockProject(t.Project); err == nil {
-		defer release()
-	}
+	defer s.lockProjectIfExists(t.Project)()
 	// The re-read is a PRECONDITION, not a best-effort refresh: swallowing its
 	// error and writing the caller's copy anyway RESURRECTS a task another
 	// session deleted in the meantime (the board holds card pointers from its
 	// last reload and moves them from 8 call sites). Both failure classes -
-	// the file is gone, or the dir could not be read - mean the copy in hand
-	// is unfit to write, so refuse and let the caller surface it.
-	tasks, err := s.GetTasks(t.Project)
+	// the dir could not be read, or the task is not in it - mean the copy in
+	// hand is unfit to write, so refuse and let the caller surface it.
+	fresh, err := s.findByExactID(t.Project, t.Meta.ID)
 	if err != nil {
-		return fmt.Errorf("cannot move %s: read project %s: %w", t.Meta.ID, t.Project, err)
-	}
-	var fresh *Task
-	for _, cand := range tasks {
-		if strings.EqualFold(cand.Meta.ID, t.Meta.ID) {
-			fresh = cand
-			break
-		}
+		return fmt.Errorf("read project %s: %w", t.Project, err)
 	}
 	if fresh == nil {
-		return fmt.Errorf("cannot move %s: task no longer exists (deleted by another session?)", t.Meta.ID)
+		// Not necessarily a delete: ReadTasksFromDir also SKIPS a file whose
+		// frontmatter stopped parsing, so name both causes rather than assert
+		// the wrong one.
+		return fmt.Errorf("task %s no longer exists or its file no longer parses", t.Meta.ID)
 	}
 	*t = *fresh
 	t.Meta.Status = newStatus
@@ -228,9 +220,7 @@ func (s *Store) WriteTask(t *Task) error {
 // think time - use MutateProject for that. Callers must NOT hold the project
 // lock themselves (a second flock in the same process deadlocks).
 func (s *Store) UpdateProject(slug string, p *Project) error {
-	if release, err := s.LockProject(slug); err == nil {
-		defer release()
-	}
+	defer s.lockProjectIfExists(slug)()
 	return writeProject(s.ProjectYAML(slug), p)
 }
 
@@ -246,9 +236,7 @@ func (s *Store) UpdateProject(slug string, p *Project) error {
 // untouched field is silently reverted. fn must not call back into the store
 // (no nested LockProject), and callers must not already hold the lock.
 func (s *Store) MutateProject(slug string, fn func(*Project) error) (*Project, error) {
-	if release, err := s.LockProject(slug); err == nil {
-		defer release()
-	}
+	defer s.lockProjectIfExists(slug)()
 	p, err := s.GetProject(slug)
 	if err != nil {
 		return nil, err
@@ -438,17 +426,30 @@ func (s *Store) FindTask(projectSlug, query string) (*Task, error) {
 // no ID-prefix or title fallback. Use for irreversible operations (delete)
 // where a fuzzy match could silently target the wrong task.
 func (s *Store) FindTaskExact(projectSlug, taskID string) (*Task, error) {
+	t, err := s.findByExactID(projectSlug, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if t == nil {
+		return nil, fmt.Errorf("task not found: %q (exact task ID required, e.g. %q)", taskID, s.ProjectPrefix(projectSlug)+"-1")
+	}
+	return t, nil
+}
+
+// findByExactID is the ONE place the exact-ID matching rule lives: the task
+// whose ID equals taskID case-insensitively, or (nil, nil) when the project
+// holds no such task. FindTaskExact and MoveTask's precondition re-read share
+// it so the rule cannot drift; they differ only in how they word the miss.
+func (s *Store) findByExactID(projectSlug, taskID string) (*Task, error) {
 	tasks, err := s.GetTasks(projectSlug)
 	if err != nil {
 		return nil, err
 	}
-
 	query := strings.ToLower(taskID)
 	for _, t := range tasks {
 		if strings.ToLower(t.Meta.ID) == query {
 			return t, nil
 		}
 	}
-
-	return nil, fmt.Errorf("task not found: %q (exact task ID required, e.g. %q)", taskID, s.ProjectPrefix(projectSlug)+"-1")
+	return nil, nil
 }

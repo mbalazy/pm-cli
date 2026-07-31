@@ -45,3 +45,25 @@ func (s *Store) LockProject(slug string) (func(), error) {
 		})
 	}, nil
 }
+
+// lockProjectIfExists takes the project lock only when the project dir is
+// already there, and never fails: a lock that cannot be taken degrades to an
+// unlocked write (today's behaviour) rather than dropping the caller's edit.
+//
+// The existence check is load-bearing, not defensive. LockProject MkdirAll's
+// the dir (the lock file lives inside it), so locking a slug with no dir would
+// CREATE it - turning a write to a typo'd slug from an error into a silently
+// created project, and re-creating the dir of a project just deleted. With no
+// dir there is nothing to serialize against anyway: the write that follows
+// fails on its own, exactly as it did before the lock existed.
+func (s *Store) lockProjectIfExists(slug string) func() {
+	noop := func() {}
+	if _, err := os.Stat(s.ProjectDir(slug)); err != nil {
+		return noop
+	}
+	release, err := s.LockProject(slug)
+	if err != nil {
+		return noop
+	}
+	return release
+}

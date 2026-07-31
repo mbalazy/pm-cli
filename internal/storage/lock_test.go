@@ -161,6 +161,9 @@ func TestMoveTaskVanishedTask(t *testing.T) {
 		}
 	})
 
+	// The read-failed branch: the whole project dir is gone, so GetTasks
+	// itself errors. Nothing may be re-created - not the task file, and not
+	// the project dir either (taking the lock would MkdirAll it back).
 	t.Run("project gone", func(t *testing.T) {
 		s := setupLockTestStore(t)
 		stale, err := s.FindTask("app", "app-1")
@@ -177,7 +180,68 @@ func TestMoveTaskVanishedTask(t *testing.T) {
 		if _, err := os.Stat(stale.FilePath); !os.IsNotExist(err) {
 			t.Fatalf("task file resurrected at %s (stat err = %v)", stale.FilePath, err)
 		}
+		if _, err := os.Stat(s.ProjectDir("app")); !os.IsNotExist(err) {
+			t.Fatalf("project dir resurrected at %s (stat err = %v)", s.ProjectDir("app"), err)
+		}
 	})
+}
+
+// TestProjectWritesDoNotCreateProjects: the project lock file lives INSIDE the
+// project dir, so a lock taken on an unknown slug would MkdirAll it into
+// existence - a typo'd slug must stay an error, not become a new project.
+func TestProjectWritesDoNotCreateProjects(t *testing.T) {
+	s := setupLockTestStore(t)
+
+	if err := s.UpdateProject("typo", &Project{Name: "Typo"}); err == nil {
+		t.Fatal("UpdateProject on an unknown slug returned nil")
+	}
+	if _, err := s.MutateProject("typo", func(*Project) error { return nil }); err == nil {
+		t.Fatal("MutateProject on an unknown slug returned nil")
+	}
+	if _, err := os.Stat(s.ProjectDir("typo")); !os.IsNotExist(err) {
+		t.Fatalf("project dir created for an unknown slug (stat err = %v)", err)
+	}
+}
+
+// TestUpdateProjectTakesTheLock: UpdateProject's own lock is what makes a
+// full-struct write mutually exclusive with a MutateProject critical section -
+// without it a write lands inside another process's read->patch->write window
+// and is clobbered. Asserted directly (the write must not land while the lock
+// is held elsewhere), since a lost-update test cannot distinguish it from
+// last-write-wins.
+func TestUpdateProjectTakesTheLock(t *testing.T) {
+	s := setupLockTestStore(t)
+
+	release, err := s.LockProject("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- s.UpdateProject("app", &Project{Name: "Updated"}) }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("UpdateProject wrote while the project lock was held (err = %v)", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("UpdateProject never completed after the lock was released")
+	}
+	final, err := s.GetProject("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Name != "Updated" {
+		t.Fatalf("name = %q", final.Name)
+	}
 }
 
 // TestMutateProjectSerializesLostUpdate: project.yaml gets the same lost-update
@@ -223,10 +287,12 @@ func TestMutateProjectSerializesLostUpdate(t *testing.T) {
 	}
 }
 
-// TestUpdateProjectConcurrentWrites: concurrent full-project writes are
-// last-write-wins by design, but each one merges into the file it reads - so
-// they must never interleave into a torn or unparseable project.yaml, and an
-// unknown hand-written key must survive every one of them.
+// TestUpdateProjectConcurrentWrites CHARACTERIZES concurrent full-project
+// writes (it does not guard the lock - tmp+rename already rules out a torn
+// file, so it passes unlocked too): they are last-write-wins by design, and
+// because every writer merges into the file it read, an unknown hand-written
+// key survives all of them. The lock's own teeth are in
+// TestUpdateProjectTakesTheLock and TestMutateProjectSerializesLostUpdate.
 func TestUpdateProjectConcurrentWrites(t *testing.T) {
 	s := setupLockTestStore(t)
 	path := s.ProjectYAML("app")
