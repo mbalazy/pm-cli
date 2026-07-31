@@ -15,18 +15,9 @@ func newContextCmd(store storage.TaskStore) *cobra.Command {
 		Short: "Show session context: trackers (parent+subtask rollup), active tasks, counts",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slug := ""
-			if len(args) == 1 {
-				s, err := store.ResolveProject(args[0])
-				if err != nil {
-					return err
-				}
-				slug = s
-			} else {
-				slug = detectProjectFromCwd(store)
-			}
-			if slug == "" {
-				return fmt.Errorf("no project (pass a project or run inside a project dir)")
+			slug, _, err := resolveProjectArg(store, args)
+			if err != nil {
+				return err
 			}
 
 			tasks, err := store.GetTasks(slug)

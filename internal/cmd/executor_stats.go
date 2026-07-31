@@ -462,18 +462,9 @@ func newExecutorStatsCmd(store storage.TaskStore) *cobra.Command {
 			"averages. Read-only; an empty or missing journal prints a note, not an error.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var slug string
-			if len(args) == 1 {
-				s, err := store.ResolveProject(args[0])
-				if err != nil {
-					return err
-				}
-				slug = s
-			} else {
-				slug = detectProjectFromCwd(store)
-			}
-			if slug == "" {
-				return fmt.Errorf("no project (pass a project or run inside a project dir)")
+			slug, _, err := resolveProjectArg(store, args)
+			if err != nil {
+				return err
 			}
 
 			dir := store.ProjectDir(slug)
