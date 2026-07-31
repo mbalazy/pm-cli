@@ -330,20 +330,31 @@ func (s *Store) FindTask(projectSlug, query string) (*Task, error) {
 	}
 
 	// prefix match on ID
-	var matches []*Task
+	var idMatches []*Task
 	for _, t := range tasks {
 		if strings.HasPrefix(strings.ToLower(t.Meta.ID), query) {
-			matches = append(matches, t)
+			idMatches = append(idMatches, t)
 		}
 	}
-	if len(matches) == 1 {
-		return matches[0], nil
+	if len(idMatches) == 1 {
+		return idMatches[0], nil
 	}
 
-	// title substring
+	// title substring - deduplicated against ID matches so a task hitting
+	// both phases is never counted twice in the ambiguity total.
+	seen := make(map[string]bool, len(idMatches))
+	matches := make([]*Task, len(idMatches))
+	copy(matches, idMatches)
+	for _, t := range idMatches {
+		seen[t.Meta.ID] = true
+	}
 	for _, t := range tasks {
+		if seen[t.Meta.ID] {
+			continue
+		}
 		if strings.Contains(strings.ToLower(t.Meta.Title), query) {
 			matches = append(matches, t)
+			seen[t.Meta.ID] = true
 		}
 	}
 	if len(matches) == 1 {
@@ -354,4 +365,23 @@ func (s *Store) FindTask(projectSlug, query string) (*Task, error) {
 	}
 
 	return nil, fmt.Errorf("task not found: %q", query)
+}
+
+// FindTaskExact finds a task by exact ID match only (case-insensitive) -
+// no ID-prefix or title fallback. Use for irreversible operations (delete)
+// where a fuzzy match could silently target the wrong task.
+func (s *Store) FindTaskExact(projectSlug, taskID string) (*Task, error) {
+	tasks, err := s.GetTasks(projectSlug)
+	if err != nil {
+		return nil, err
+	}
+
+	query := strings.ToLower(taskID)
+	for _, t := range tasks {
+		if strings.ToLower(t.Meta.ID) == query {
+			return t, nil
+		}
+	}
+
+	return nil, fmt.Errorf("task not found: %q (exact task ID required, e.g. %q)", taskID, s.ProjectPrefix(projectSlug)+"-1")
 }
