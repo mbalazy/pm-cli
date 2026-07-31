@@ -520,3 +520,60 @@ func TestIsGitRepoOnPlainDir(t *testing.T) {
 		t.Error("missing dir reported as git repo")
 	}
 }
+
+// TestOpenEpicPRUsesResolvedBase guards the PR-base contract: the epic PR must
+// target the same resolved base the integration branch was forked from
+// (--base flag > executor.base_branch > main), never a hardcoded main - with
+// base_branch: development a main-targeted PR would carry every
+// development-only commit in its diff.
+func TestOpenEpicPRUsesResolvedBase(t *testing.T) {
+	repo := t.TempDir()
+	gitT(t, repo, "init", "-q")
+	gitT(t, repo, "checkout", "-q", "-b", "development")
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("base\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, repo, "add", ".")
+	gitT(t, repo, "commit", "-q", "-m", "base")
+	gitT(t, repo, "checkout", "-q", "-b", "epic/x", "development")
+
+	bare := t.TempDir()
+	gitT(t, bare, "init", "-q", "--bare")
+	gitT(t, repo, "remote", "add", "origin", bare)
+
+	// Fake `gh` at the front of PATH records its argv instead of hitting GitHub.
+	binDir := t.TempDir()
+	argsFile := filepath.Join(binDir, "gh-args")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\n"
+	if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	tracker := &storage.Task{Meta: storage.TaskMeta{ID: "proj-1", Title: "Epic"}}
+	stderr := captureStderr(t, func() {
+		openEpicPR(repo, "epic/x", "development", tracker)
+	})
+
+	raw, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("fake gh never ran: %v\nstderr: %s", err, stderr)
+	}
+	args := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	base := ""
+	head := ""
+	for i, a := range args {
+		if a == "--base" && i+1 < len(args) {
+			base = args[i+1]
+		}
+		if a == "--head" && i+1 < len(args) {
+			head = args[i+1]
+		}
+	}
+	if base != "development" {
+		t.Errorf("gh pr create --base = %q, want %q (argv: %v)", base, "development", args)
+	}
+	if head != "epic/x" {
+		t.Errorf("gh pr create --head = %q, want %q", head, "epic/x")
+	}
+}

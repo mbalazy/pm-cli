@@ -362,9 +362,9 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			printEpicSummary(tracker, epicBranch, outcomes)
 
 			if !noPR && anyMerged(outcomes) {
-				openEpicPR(workDir, epicBranch, tracker)
+				openEpicPR(workDir, epicBranch, baseBranch, tracker)
 			}
-			fmt.Fprintf(os.Stderr, "\nThe epic->main PR and closing %s stay human-gated - review the integration branch when convenient.\n", tracker.Meta.ID)
+			fmt.Fprintf(os.Stderr, "\nThe epic->%s PR and closing %s stay human-gated - review the integration branch when convenient.\n", baseBranch, tracker.Meta.ID)
 			return nil
 		},
 	}
@@ -795,14 +795,17 @@ func anyMerged(outcomes []subOutcome) bool {
 }
 
 // openEpicPR best-effort pushes the integration branch and opens a DRAFT
-// epic->main PR. Failures are reported with a manual fallback, never fatal.
-func openEpicPR(dir, epicBranch string, tracker *storage.Task) {
+// epic->base PR targeting the same resolved base the integration branch was
+// forked from (--base flag > executor.base_branch > main) - a hardcoded main
+// here would carry every base-only commit into the PR diff. Failures are
+// reported with a manual fallback, never fatal.
+func openEpicPR(dir, epicBranch, baseBranch string, tracker *storage.Task) {
 	if !gitHasRemote(dir) {
-		fmt.Fprintf(os.Stderr, "\nno git remote configured - push %s and open the epic->main PR manually.\n", epicBranch)
+		fmt.Fprintf(os.Stderr, "\nno git remote configured - push %s and open the epic->%s PR manually.\n", epicBranch, baseBranch)
 		return
 	}
 	if err := gitPush(dir, epicBranch); err != nil {
-		fmt.Fprintf(os.Stderr, "\n%v\nopen the epic->main PR manually once pushed.\n", err)
+		fmt.Fprintf(os.Stderr, "\n%v\nopen the epic->%s PR manually once pushed.\n", err, baseBranch)
 		return
 	}
 	title := fmt.Sprintf("Epic %s: %s", tracker.Meta.ID, tracker.Meta.Title)
@@ -812,15 +815,15 @@ func openEpicPR(dir, epicBranch string, tracker *storage.Task) {
 	// otherwise finished run.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	c := exec.CommandContext(ctx, "gh", "pr", "create", "--draft", "--base", "main", "--head", epicBranch, "--title", title, "--body", body)
+	c := exec.CommandContext(ctx, "gh", "pr", "create", "--draft", "--base", baseBranch, "--head", epicBranch, "--title", title, "--body", body)
 	c.Dir = dir
 	out, err := c.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
-		fmt.Fprintf(os.Stderr, "\ngh pr create timed out after 2m\nopen the epic->main PR manually.\n")
+		fmt.Fprintf(os.Stderr, "\ngh pr create timed out after 2m\nopen the epic->%s PR manually.\n", baseBranch)
 		return
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\ngh pr create failed: %s\nopen the epic->main PR manually.\n", strings.TrimSpace(string(out)))
+		fmt.Fprintf(os.Stderr, "\ngh pr create failed: %s\nopen the epic->%s PR manually.\n", strings.TrimSpace(string(out)), baseBranch)
 		return
 	}
 	fmt.Fprintf(os.Stderr, "\nopened draft PR: %s\n", strings.TrimSpace(string(out)))
