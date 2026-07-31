@@ -41,13 +41,14 @@ func (m Model) updateSelectMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Navigation - same as board
 	case key.Matches(msg, common.Keys.Up):
-		if m.cursors[m.activeCol] > 0 {
+		tasks := m.columnTasks(m.activeCol)
+		if len(tasks) > 0 && m.cursors[m.activeCol] > 0 {
 			m.cursors[m.activeCol]--
 			m.fixScrollOffsets()
 		}
 	case key.Matches(msg, common.Keys.Down):
 		tasks := m.columnTasks(m.activeCol)
-		if m.cursors[m.activeCol] < len(tasks)-1 {
+		if len(tasks) > 0 && m.cursors[m.activeCol] < len(tasks)-1 {
 			m.cursors[m.activeCol]++
 			m.fixScrollOffsets()
 		}
@@ -60,8 +61,13 @@ func (m Model) updateSelectMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.activeCol++
 		}
 	case key.Matches(msg, common.Keys.JumpTop):
-		m.cursors[m.activeCol] = 0
-		m.fixScrollOffsets()
+		// With every column hidden m.cursors is empty and m.activeCol is 0 -
+		// unguarded indexing here panicked select mode the same way it did
+		// updateBoard (see update.go).
+		if len(m.statuses) > 0 {
+			m.cursors[m.activeCol] = 0
+			m.fixScrollOffsets()
+		}
 	case key.Matches(msg, common.Keys.JumpBottom):
 		tasks := m.columnTasks(m.activeCol)
 		if len(tasks) > 0 {
@@ -80,18 +86,29 @@ func (m Model) updateSelectMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	// Bulk actions
+	//
+	// Move/MoveBack index m.statuses inside the next() closure - guarded
+	// here rather than inside the closure so a zero-column board (no marked
+	// task can exist there today, but bulkStatusMove has no visibility into
+	// column state) never calls next() at all. Done resolves each task's
+	// project statuses from the store instead (they are never empty), so it
+	// needs no column guard.
 	case key.Matches(msg, common.Keys.Move):
-		m.bulkStatusMove(m.markedTasks(), "Moved", "forward", func(t *storage.Task) storage.TaskStatus {
-			return m.statuses[(m.statusIndex(t.Meta.Status)+1)%len(m.statuses)]
-		})
+		if len(m.statuses) > 0 {
+			m.bulkStatusMove(m.markedTasks(), "Moved", "forward", func(t *storage.Task) storage.TaskStatus {
+				return m.statuses[(m.statusIndex(t.Meta.Status)+1)%len(m.statuses)]
+			})
+		}
 
 	case key.Matches(msg, common.Keys.MoveBack):
-		m.bulkStatusMove(m.markedTasks(), "Moved", "back", func(t *storage.Task) storage.TaskStatus {
-			if idx := m.statusIndex(t.Meta.Status); idx > 0 {
-				return m.statuses[idx-1]
-			}
-			return m.statuses[len(m.statuses)-1]
-		})
+		if len(m.statuses) > 0 {
+			m.bulkStatusMove(m.markedTasks(), "Moved", "back", func(t *storage.Task) storage.TaskStatus {
+				if idx := m.statusIndex(t.Meta.Status); idx > 0 {
+					return m.statuses[idx-1]
+				}
+				return m.statuses[len(m.statuses)-1]
+			})
+		}
 
 	case key.Matches(msg, common.Keys.Done):
 		m.bulkStatusMove(m.markedTasks(), "Marked", "done", func(t *storage.Task) storage.TaskStatus {
