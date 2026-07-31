@@ -30,7 +30,17 @@ func overlayModel(t *testing.T, apply func(*Model)) Model {
 		focusSet:       make(map[string]bool),
 		width:          80,
 		height:         24,
+		searchInput:    textinput.New(),
+		addInput:       textinput.New(),
+		helpInput:      textinput.New(),
 	}
+	// The clustered inputs are set after construction: they are promoted
+	// fields, which Go forbids in a composite literal. The real constructor
+	// builds all five, and a zero textinput panics on Focus - so a fixture
+	// without them cannot be driven with a key that starts a filter
+	// (e.g. "/" in the project picker).
+	m.detailSearchInput = textinput.New()
+	m.pickerInput = textinput.New()
 	apply(&m)
 	return m
 }
@@ -264,6 +274,119 @@ func TestUpdateWithoutOverlayReachesBaseView(t *testing.T) {
 	if got := next.(Model).currentView; got != viewBoard {
 		t.Errorf("esc in the archive view should return to the board, got view %d", got)
 	}
+}
+
+// clearOverlayItems empties every overlay's item slice. Each handler guards its
+// activating branch on `cursor < len(items)`, so with the slices empty no key
+// can launch a process (launch menu), write the clipboard (yank, links) or open
+// a URL (links) - which is what makes it safe to drive EVERY key below.
+func clearOverlayItems(m *Model) {
+	m.claudeMenuItems = nil
+	m.yankItems = nil
+	m.linkItems = nil
+	m.sessionMenuItems = nil
+	m.subtaskItems = nil
+	m.colVisItems = nil
+	m.pickerItems = nil
+}
+
+// anyOverlayOpen reports whether any ladder entry still claims the screen.
+func anyOverlayOpen(m Model) (string, bool) {
+	for _, spec := range overlayLadder {
+		if spec.open(&m) {
+			return spec.name, true
+		}
+	}
+	return "", false
+}
+
+// invariantKeys is a broad sweep of what a user can press: every letter and
+// digit plus the navigation and control keys. Breadth is the point - the
+// regression this guards against is a view switch added to some overlay
+// handler on a key nobody thought to test.
+func invariantKeys() []tea.KeyMsg {
+	keys := []tea.KeyMsg{
+		{Type: tea.KeyEsc}, {Type: tea.KeyEnter}, {Type: tea.KeyTab},
+		{Type: tea.KeyShiftTab}, {Type: tea.KeyUp}, {Type: tea.KeyDown},
+		{Type: tea.KeyLeft}, {Type: tea.KeyRight}, {Type: tea.KeySpace},
+		{Type: tea.KeyBackspace}, {Type: tea.KeyCtrlV}, {Type: tea.KeyCtrlA},
+	}
+	for _, r := range "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789?/:" {
+		keys = append(keys, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	return keys
+}
+
+// TestNoOverlayFlagSurvivesAViewChange enforces the invariant overlayLadder
+// DEPENDS on and that overlay.go documents but nothing checked: no overlay flag
+// survives a change of currentView.
+//
+// It is load-bearing. Because overlays now outrank every base view, a handler
+// that switches views while leaving its own flag set would hand the ladder the
+// whole screen and keyboard in a view that never opened that overlay. The old
+// per-view ladders could not express that bug; this table can, so the invariant
+// needs a test rather than a comment.
+//
+// Item slices are emptied (see clearOverlayItems) so every key is inert - this
+// sweeps the full keyboard without launching anything. The one reachable
+// overlay-driven view switch, which DOES need populated items, is pinned
+// separately by TestProjectPickerClearsItselfWhenOpeningProjectInfo.
+func TestNoOverlayFlagSurvivesAViewChange(t *testing.T) {
+	keys := invariantKeys()
+	for _, spec := range overlayLadder {
+		for _, v := range baseViews {
+			t.Run(fmt.Sprintf("%s/%s", spec.name, viewName(v)), func(t *testing.T) {
+				for _, k := range keys {
+					m := overlayModel(t, func(m *Model) {
+						setOverlay(m, spec.name)
+						clearOverlayItems(m)
+						m.currentView = v
+						m.helpInput = textinput.New()
+						m.detailTask = &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "T"}}
+					})
+					next, _ := m.Update(k)
+					got := mustModel(t, next)
+					if got.currentView == v {
+						continue
+					}
+					if name, open := anyOverlayOpen(got); open {
+						t.Errorf("key %q switched %s -> %s with the %s overlay still open: "+
+							"it would own the screen in a view that never opened it",
+							k.String(), viewName(v), viewName(got.currentView), name)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestProjectPickerClearsItselfWhenOpeningProjectInfo pins the ONE reachable
+// case where an overlay handler changes the view: "i" in the project picker
+// opens the project-info view. It must close the picker on the way out, or the
+// picker would be drawn over the project info it just opened.
+func TestProjectPickerClearsItselfWhenOpeningProjectInfo(t *testing.T) {
+	m := overlayModel(t, func(m *Model) {
+		setOverlay(m, "project-picker")
+		m.currentView = viewBoard
+	})
+	next, _ := m.Update(keyMsg("i"))
+	got := mustModel(t, next)
+	if got.currentView != viewProjectInfo {
+		t.Fatalf("i in the picker should open project info, got %s", viewName(got.currentView))
+	}
+	if name, open := anyOverlayOpen(got); open {
+		t.Errorf("the %s overlay is still open over the project-info view", name)
+	}
+}
+
+// mustModel unwraps the tea.Model an Update returns.
+func mustModel(t *testing.T, m tea.Model) Model {
+	t.Helper()
+	got, ok := m.(Model)
+	if !ok {
+		t.Fatalf("Update returned %T, want board.Model", m)
+	}
+	return got
 }
 
 // TestHelpSearchStaysInsideHelpOverlay: helpSearch is a mode within the help
