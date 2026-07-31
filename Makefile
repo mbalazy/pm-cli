@@ -1,7 +1,7 @@
 VERSION ?= 0.30.1
 LDFLAGS = -ldflags "-X github.com/mbalazy/pm/internal/version.Version=$(VERSION)"
 
-.PHONY: install vet staticcheck test check build-pm-linux
+.PHONY: install vet staticcheck fmt-check test test-race check build-pm-linux
 
 # staticcheck lives in GOBIN (go install honnef.co/go/tools/cmd/staticcheck@latest),
 # which may not be on PATH in every invocation context (hooks, CI) - resolve it.
@@ -14,6 +14,14 @@ install:
 build-pm-linux:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false $(LDFLAGS) -o bin/pm-linux ./cmd/pm/
 
+fmt-check:
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt needed on:" >&2; \
+		echo "$$unformatted" >&2; \
+		exit 1; \
+	fi
+
 vet:
 	go vet ./...
 
@@ -22,6 +30,9 @@ staticcheck:
 	"$(STATICCHECK)" ./...
 
 test:
-	go test ./internal/... -count=1
+	go test ./... -count=1
 
-check: vet staticcheck test
+test-race:
+	go test ./... -race -count=1
+
+check: fmt-check vet staticcheck test
