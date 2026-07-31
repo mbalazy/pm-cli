@@ -72,7 +72,11 @@ func TestHandleStalePlan(t *testing.T) {
 			t.Errorf("focusSet = %v, want only p-1", m.focusSet)
 		}
 		// Persisted: a fresh read sees the carried-over plan.
-		if got := storage.ReadFocusPlan(m.store.RootDir()); got.Date != storage.Today() || len(got.Tasks) != 1 {
+		got, err := storage.ReadFocusPlan(m.store.RootDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Date != storage.Today() || len(got.Tasks) != 1 {
 			t.Errorf("plan not persisted, got %+v", got)
 		}
 	})

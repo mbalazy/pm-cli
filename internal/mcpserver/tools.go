@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -171,7 +172,13 @@ func toSummary(t *storage.Task) taskSummary {
 }
 
 func focusTaskSummaries(store storage.TaskStore) []taskSummary {
-	fp := storage.ReadFocusPlan(store.RootDir())
+	fp, err := storage.ReadFocusPlan(store.RootDir())
+	if err != nil {
+		// Best-effort supplementary section: never fail the whole pm_context
+		// call over a corrupt focus.yaml, but don't swallow it either.
+		fmt.Fprintf(os.Stderr, "pm: skipping unreadable focus plan: %v\n", err)
+		return nil
+	}
 	if fp.Date != storage.Today() || len(fp.Tasks) == 0 {
 		return nil
 	}

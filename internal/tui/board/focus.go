@@ -15,7 +15,12 @@ func (m *Model) rebuildFocusSet() {
 }
 
 func (m *Model) loadFocusPlan() {
-	m.focusPlan = storage.ReadFocusPlan(m.store.RootDir())
+	fp, err := storage.ReadFocusPlan(m.store.RootDir())
+	if err != nil {
+		m.showErrorToast("focus plan", err)
+		return
+	}
+	m.focusPlan = fp
 	m.rebuildFocusSet()
 }
 
