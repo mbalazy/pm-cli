@@ -12,7 +12,7 @@ make install VERSION=X.Y.Z  # override version
 
 Git hooks live in `githooks/` (versioned; `git config core.hooksPath githooks` - already set locally). `pre-commit` runs gofmt-check + vet + staticcheck + tests and unsets the `GIT_*` env git exports into hooks (test-spawned git repos would inherit the hook's index and explode). Both the hook and `make check` resolve the `staticcheck` binary via PATH → `go env GOBIN` → `GOPATH/bin` and fail with an install hint when missing (`go install honnef.co/go/tools/cmd/staticcheck@latest`). Fix failures - never bypass with `-n`.
 
-IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.30.0**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN).
+IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.30.1**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN).
 
 ## Tests
 
