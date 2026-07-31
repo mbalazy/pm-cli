@@ -122,10 +122,7 @@ func (m Model) viewYankMenu() string {
 			prefix = "> "
 			style = lipgloss.NewStyle().Bold(true).Foreground(special)
 		}
-		display := item.value
-		if len(display) > 50 {
-			display = display[:47] + "..."
-		}
+		display := truncateWidth(item.value, 50)
 		lines = append(lines, style.Render(fmt.Sprintf("%s%s: %s", prefix, item.label, display)))
 	}
 	lines = append(lines, "")
@@ -199,10 +196,7 @@ func (m Model) viewLinksMenu() string {
 			prefix = "> "
 			style = lipgloss.NewStyle().Bold(true).Foreground(special)
 		}
-		display := item.url
-		if len(display) > 50 {
-			display = display[:47] + "..."
-		}
+		display := truncateWidth(item.url, 50)
 		lines = append(lines, style.Render(fmt.Sprintf("%s%s: %s", prefix, item.name, display)))
 	}
 	lines = append(lines, "")
@@ -239,11 +233,7 @@ func (m Model) viewSessionMenu() string {
 		// Line 1: summary or meta (msgs | date) + (latest) tag
 		var primaryParts []string
 		if item.summary != "" {
-			s := item.summary
-			if len(s) > 45 {
-				s = s[:42] + "..."
-			}
-			primaryParts = append(primaryParts, s)
+			primaryParts = append(primaryParts, truncateWidth(item.summary, 45))
 		}
 		if item.msgCount > 0 {
 			label := fmt.Sprintf("%d msgs", item.msgCount)

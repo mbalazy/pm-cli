@@ -119,7 +119,7 @@ func (m Model) viewArchive() string {
 	help := helpStyle.Render("archived: " + fmt.Sprint(len(tasks)) + "  ↑/↓ navigate  r restore  u undo  x delete  o detail  esc back")
 	sb.WriteString(help)
 
-	return sb.String()
+	return m.applyToast(sb.String())
 }
 
 func (m Model) viewFocus() string {
@@ -330,20 +330,20 @@ func (m Model) viewProjectPicker() string {
 	const rightWidth = 40
 	for i, l := range leftLines {
 		plain := stripANSI(l)
-		pad := leftWidth - len(plain)
+		pad := leftWidth - lipgloss.Width(plain)
 		if pad > 0 {
 			leftLines[i] = l + strings.Repeat(" ", pad)
 		}
 	}
 	for i, l := range rightLines {
 		plain := stripANSI(l)
-		if len(plain) > rightWidth {
+		if lipgloss.Width(plain) > rightWidth {
 			// Truncate the PLAIN text (styling is dropped for this line): slicing
 			// the styled string by a plain-text index cuts mid-ANSI-sequence and
 			// bleeds garbage into the rest of the panel.
 			rightLines[i] = truncateWidth(plain, rightWidth)
 		} else {
-			pad := rightWidth - len(plain)
+			pad := rightWidth - lipgloss.Width(plain)
 			if pad > 0 {
 				rightLines[i] = l + strings.Repeat(" ", pad)
 			}
