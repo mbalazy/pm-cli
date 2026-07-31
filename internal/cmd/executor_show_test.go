@@ -137,3 +137,72 @@ func TestDescribeBinding(t *testing.T) {
 		})
 	}
 }
+
+// A slug-only command must not inherit resolveProjectArg's fatal project load.
+// `pm context` and `pm executor stats` are read-only diagnostics that never
+// touch the project struct - before the resolver was shared they printed their
+// rollup regardless of what project.yaml held, and an unparseable one is
+// exactly the situation you run them in.
+func TestSlugOnlyCommandsSurviveUnreadableProjectYAML(t *testing.T) {
+	newStore := func(t *testing.T) (*storage.Store, string) {
+		t.Helper()
+		store := &storage.Store{Root: t.TempDir()}
+		if err := store.CreateProject("app", &storage.Project{Name: "App"}); err != nil {
+			t.Fatalf("create project: %v", err)
+		}
+		// Valid enough for ListProjects/ResolveProject to see the project,
+		// unparseable for ReadProject.
+		writeFile(t, store.ProjectYAML("app"), "name: App\nstatuses: [todo, doing\n\tbad: \"unclosed\n")
+		if _, err := store.GetProject("app"); err == nil {
+			t.Fatal("fixture is not corrupt: GetProject must fail for this test to mean anything")
+		}
+		return store, "app"
+	}
+
+	t.Run("resolveProjectSlugArg resolves it", func(t *testing.T) {
+		store, slug := newStore(t)
+		got, err := resolveProjectSlugArg(store, []string{slug})
+		if err != nil {
+			t.Fatalf("slug resolution must not load project.yaml, got: %v", err)
+		}
+		if got != slug {
+			t.Errorf("slug = %q, want %q", got, slug)
+		}
+	})
+
+	t.Run("resolveProjectArg still fails (the struct really is unusable)", func(t *testing.T) {
+		store, slug := newStore(t)
+		if _, _, err := resolveProjectArg(store, []string{slug}); err == nil {
+			t.Error("a command needing the project struct must still get the load error")
+		}
+	})
+
+	t.Run("pm context prints its rollup", func(t *testing.T) {
+		store, slug := newStore(t)
+		addTask(t, store, slug, storage.TaskMeta{ID: "app-1", Title: "A doing task", Status: storage.StatusDoing}, "")
+		out, err := execContextCmd(t, store, slug)
+		if err != nil {
+			t.Fatalf("context must not fail on an unreadable project.yaml, got: %v", err)
+		}
+		if !strings.Contains(out, "A doing task") {
+			t.Errorf("expected the doing task in the rollup, got %q", out)
+		}
+	})
+
+	t.Run("pm executor stats prints its note", func(t *testing.T) {
+		store, slug := newStore(t)
+		cmd := newExecutorStatsCmd(store)
+		var buf strings.Builder
+		cmd.SetOut(&buf)
+		cmd.SetErr(&buf)
+		cmd.SetArgs([]string{slug})
+		cmd.SilenceUsage = true
+		cmd.SilenceErrors = true
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("stats must not fail on an unreadable project.yaml, got: %v", err)
+		}
+		if !strings.Contains(buf.String(), "no executor runs recorded yet") {
+			t.Errorf("expected the empty-journal note, got %q", buf.String())
+		}
+	})
+}

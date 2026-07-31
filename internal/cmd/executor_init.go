@@ -48,23 +48,9 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 			"the output lists which fields were preserved. An existing playbook file is never rewritten.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var slug string
-			if len(args) == 1 {
-				s, err := store.ResolveProject(args[0])
-				if err != nil {
-					return err
-				}
-				slug = s
-			} else {
-				slug = detectProjectFromCwd(store)
-			}
-			if slug == "" {
-				return fmt.Errorf("no project (pass a project or run inside a project dir)")
-			}
-
-			proj, err := store.GetProject(slug)
+			slug, proj, err := resolveProjectArg(store, args)
 			if err != nil {
-				return fmt.Errorf("load project %s: %w", slug, err)
+				return err
 			}
 			if proj.Path == "" {
 				return fmt.Errorf("project %s has no path - set `path` in project.yaml so init can scan it", slug)
