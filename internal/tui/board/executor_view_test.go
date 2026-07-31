@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -152,6 +154,67 @@ func TestTranscriptCacheAppendIsIncremental(t *testing.T) {
 	}
 	if strings.Contains(out2, "TAMPR") {
 		t.Errorf("append render re-parsed the already-consumed prefix instead of just the new bytes: got %q", out2)
+	}
+}
+
+// TestTranscriptCacheHandlesGrowthDuringRead guards against a Stat-vs-Read
+// race: render() stats the file, then opens+reads it - if a live writer (the
+// worker process) appends more bytes in between, io.ReadAll reads past what
+// Stat reported. Bookkeeping the new offset from the stale Stat().Size()
+// instead of the bytes actually read would understate it, so the next call
+// re-seeks into already-rendered content and duplicates it. One goroutine
+// hammers the file with uniquely-marked appends while the (single, as in
+// production) reader goroutine renders in a tight loop; no marker may ever
+// appear more than once in the final output.
+func TestTranscriptCacheHandlesGrowthDuringRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s1.jsonl")
+	if err := os.WriteFile(path, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	const writes = 1500
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+		for i := 0; i < writes; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := f.WriteString(assistantLine(fmt.Sprintf("MARK-%d", i)) + "\n"); err != nil {
+				panic(err)
+			}
+		}
+	}()
+
+	c := &transcriptCache{}
+	for i := 0; i < writes*2; i++ {
+		c.render(path, 100, false)
+	}
+	close(stop)
+	wg.Wait()
+	out := c.render(path, 100, false) // final flush once writing has stopped
+
+	seen := map[string]int{}
+	for _, m := range regexp.MustCompile(`MARK-\d+`).FindAllString(out, -1) {
+		seen[m]++
+	}
+	for m, n := range seen {
+		if n > 1 {
+			t.Fatalf("marker %s appeared %d times in the decoded output - transcriptCache duplicated content under a Stat/Read race", m, n)
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("no markers decoded at all - test didn't exercise the render path")
 	}
 }
 

@@ -565,7 +565,8 @@ func (c *transcriptCache) render(path string, width int, verbose bool) string {
 		return strings.TrimRight(c.rendered.String(), "\n")
 	}
 	defer f.Close()
-	if _, err := f.Seek(c.size, io.SeekStart); err != nil {
+	readFrom := c.size
+	if _, err := f.Seek(readFrom, io.SeekStart); err != nil {
 		return strings.TrimRight(c.rendered.String(), "\n")
 	}
 	newData, err := io.ReadAll(f)
@@ -580,8 +581,19 @@ func (c *transcriptCache) render(path string, width int, verbose bool) string {
 		appendTranscriptLine(&c.rendered, line, width, verbose)
 	}
 	c.pending = []byte(leftover)
-	c.size = info.Size()
-	c.modTime = info.ModTime()
+	// The file may have grown further between the Stat above and this read
+	// finishing (a live worker still writing) - ReadAll reads to the ACTUAL
+	// EOF at read time, which can exceed info.Size(). Deriving the new offset
+	// from bytes actually consumed (not the stale pre-read Stat) is what makes
+	// this safe to re-seek from on the next tick; stamping info.Size() here
+	// would understate it and cause the next call to re-decode (duplicate)
+	// the tail this call already rendered.
+	c.size = readFrom + int64(len(newData))
+	if post, err := f.Stat(); err == nil {
+		c.modTime = post.ModTime()
+	} else {
+		c.modTime = info.ModTime()
+	}
 	return strings.TrimRight(c.rendered.String(), "\n")
 }
 
