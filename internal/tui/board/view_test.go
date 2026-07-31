@@ -1,7 +1,9 @@
 package board
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mbalazy/pm/internal/storage"
@@ -26,6 +28,23 @@ func TestStatusGlyphAligned(t *testing.T) {
 	// view's "Parent:" line), where padding would read as a stray space.
 	if got := statusGlyph(storage.StatusTodo); got != "○" {
 		t.Errorf("statusGlyph(todo) = %q, want the bare glyph", got)
+	}
+}
+
+// TestViewArchiveRendersActiveToast covers pm-cli-67-2: viewArchive returned
+// sb.String() directly instead of wrapping it in applyToast like every other
+// view (viewBoard, viewDetail, viewFocus, viewExecutor, the picker) - so a
+// failed restore/undo, or a clipboard confirmation, set toastMsg/toastExpiry
+// but the archive view never drew it.
+func TestViewArchiveRendersActiveToast(t *testing.T) {
+	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusDone}})
+	m.doArchive(m.taskByID("p-1"))
+	m.toastMsg = "restore failed: boom"
+	m.toastExpiry = time.Now().Add(4 * time.Second)
+
+	got := stripANSI(m.viewArchive())
+	if !strings.Contains(got, m.toastMsg) {
+		t.Errorf("viewArchive() output missing active toast %q:\n%s", m.toastMsg, got)
 	}
 }
 
