@@ -41,6 +41,7 @@ func setOverlay(m *Model, name string) {
 	case "launch-menu":
 		m.claudeMenu = true
 		m.claudeMenuItems = []claudeMenuItem{{"Here", "here", "h"}}
+		m.launchAgent = launchAgentClaude // openClaudeMenu always sets one; the zero value is not a valid agent
 	case "yank-menu":
 		m.yankMenu = true
 		m.yankItems = []yankItem{{"id", "p-1"}}
@@ -100,18 +101,22 @@ func TestActiveOverlayResolvesEachFlag(t *testing.T) {
 	})
 }
 
-// TestOverlayPrecedence pins the documented order for the combinations that can
-// actually occur: the yank menu opens ON TOP of a live session menu and of the
-// project picker (both stay set underneath), and the launch menu wins over the
-// subtask picker - the case where View and updateDetail used to disagree.
+// TestOverlayPrecedence pins the documented order. The first two cases are the
+// only stacks REACHABLE in the running program (the yank menu opens on top of a
+// live session menu and of the project picker, both of which stay set
+// underneath) - those are the ones that must never regress. The rest pin the
+// deliberate tie-break between overlays that cannot currently coexist,
+// including the pair View and updateDetail used to order differently.
 func TestOverlayPrecedence(t *testing.T) {
 	cases := []struct {
 		name string
 		open []string
 		want string
 	}{
+		// reachable
 		{"yank over session menu", []string{"session-menu", "yank-menu"}, "yank-menu"},
 		{"yank over project picker", []string{"project-picker", "yank-menu"}, "yank-menu"},
+		// defensive tie-breaks (not reachable today)
 		{"launch menu over subtask picker", []string{"subtask-picker", "launch-menu"}, "launch-menu"},
 		{"launch menu over help", []string{"help", "launch-menu"}, "launch-menu"},
 		{"links over session menu", []string{"session-menu", "links-menu"}, "links-menu"},
@@ -131,20 +136,50 @@ func TestOverlayPrecedence(t *testing.T) {
 	}
 }
 
+// baseViews are the views an overlay can be opened on top of.
+var baseViews = []view{viewBoard, viewDetail, viewArchive, viewFocus, viewExecutor}
+
+// expectedRenderer names the renderer each overlay MUST be drawn by. It is
+// written out by hand on purpose: comparing View() against overlayLadder's own
+// view field would pass even if an entry pointed at the wrong renderer, which
+// is the one new mistake a single dispatch table makes possible.
+func expectedRenderer(t *testing.T, name string, m Model) string {
+	t.Helper()
+	switch name {
+	case "launch-menu":
+		return m.viewClaudeMenu()
+	case "yank-menu":
+		return m.viewYankMenu()
+	case "links-menu":
+		return m.viewLinksMenu()
+	case "session-menu":
+		return m.viewSessionMenu()
+	case "subtask-picker":
+		return m.viewSubtaskPicker()
+	case "column-visibility":
+		return m.viewColVisMenu()
+	case "project-picker":
+		return m.viewProjectPicker()
+	case "help":
+		return m.viewHelp()
+	}
+	t.Fatalf("no expected renderer for overlay %q - add one when adding a ladder entry", name)
+	return ""
+}
+
 // TestViewRendersActiveOverlay: View must draw the overlay the ladder resolves,
 // from every base view - including the detail view, whose renderer used to
-// re-encode its own overlay order.
+// re-encode its own overlay order - and it must be that overlay's OWN renderer.
 func TestViewRendersActiveOverlay(t *testing.T) {
-	views := []view{viewBoard, viewDetail, viewArchive, viewFocus, viewExecutor}
 	for _, spec := range overlayLadder {
-		for _, v := range views {
+		for _, v := range baseViews {
 			m := overlayModel(t, func(m *Model) {
 				setOverlay(m, spec.name)
 				m.currentView = v
 				m.detailTask = &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "T"}}
 			})
-			if got, want := m.View(), spec.view(m); got != want {
-				t.Errorf("view %d with %s open: View() did not render the overlay", v, spec.name)
+			if got, want := m.View(), expectedRenderer(t, spec.name, m); got != want {
+				t.Errorf("view %d with %s open: View() did not render that overlay's renderer", v, spec.name)
 			}
 		}
 	}
@@ -152,38 +187,52 @@ func TestViewRendersActiveOverlay(t *testing.T) {
 
 // TestUpdateDispatchesToActiveOverlay: the layer being drawn is the layer
 // eating the keys. Escape closes every overlay, so it is the one key that
-// proves which handler received the message.
+// proves which handler received the message. Run from every base view - the
+// executor agent-view especially, since it used to be checked BEFORE all
+// overlays and is the base view this refactor re-ranks hardest.
 func TestUpdateDispatchesToActiveOverlay(t *testing.T) {
 	for _, spec := range overlayLadder {
-		t.Run(spec.name, func(t *testing.T) {
-			m := overlayModel(t, func(m *Model) {
-				setOverlay(m, spec.name)
-				m.currentView = viewDetail
-				m.detailTask = &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "T"}}
+		for _, v := range baseViews {
+			t.Run(spec.name, func(t *testing.T) {
+				m := overlayModel(t, func(m *Model) {
+					setOverlay(m, spec.name)
+					m.currentView = v
+					m.detailTask = &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "T"}}
+				})
+				next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+				if isOpen(next.(Model), spec.name) {
+					t.Errorf("view %d: esc did not reach the %s handler (overlay still open)", v, spec.name)
+				}
 			})
-			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-			if isOpen(next.(Model), spec.name) {
-				t.Errorf("esc did not reach the %s handler (overlay still open)", spec.name)
-			}
-		})
+		}
 	}
 }
 
-// TestUpdateStackedOverlayKeepsLowerLayer: with the yank menu open on top of
-// the project picker, esc must close only the yank menu - the picker stays up.
-// updateProjectPicker used to hand-check this itself; now the ladder does.
-func TestUpdateStackedOverlayKeepsLowerLayer(t *testing.T) {
-	m := overlayModel(t, func(m *Model) {
-		setOverlay(m, "project-picker")
-		setOverlay(m, "yank-menu")
-	})
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	got := next.(Model)
-	if got.yankMenu {
-		t.Error("esc should close the yank menu")
-	}
-	if !got.projectPicker {
-		t.Error("the project picker underneath must stay open")
+// TestStackedOverlayRendersAndHandlesTheTopLayer covers the two stacks that are
+// actually reachable (yank opened from a live session menu / project picker):
+// View draws the TOP layer and Update routes to it, which is the agreement the
+// old per-view ladders could not guarantee. Esc must then close only the top
+// layer - the one underneath stays up. updateProjectPicker used to hand-check
+// that itself; now the ladder does.
+func TestStackedOverlayRendersAndHandlesTheTopLayer(t *testing.T) {
+	for _, under := range []string{"project-picker", "session-menu"} {
+		t.Run("yank over "+under, func(t *testing.T) {
+			m := overlayModel(t, func(m *Model) {
+				setOverlay(m, under)
+				setOverlay(m, "yank-menu")
+			})
+			if m.View() != m.viewYankMenu() {
+				t.Errorf("View() should draw the yank menu stacked on the %s", under)
+			}
+			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+			got := next.(Model)
+			if got.yankMenu {
+				t.Error("esc should close the yank menu")
+			}
+			if !isOpen(got, under) {
+				t.Errorf("the %s underneath must stay open", under)
+			}
+		})
 	}
 }
 

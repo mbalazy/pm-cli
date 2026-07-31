@@ -18,23 +18,30 @@ type overlaySpec struct {
 // path (View) and the key-dispatch path (Update) resolve the active overlay
 // through it, so an overlay is drawn by exactly the layer that is also eating
 // the keys. Before this, View and updateDetail each hand-coded their own
-// if-ladder and the two DISAGREED (View checked the launch menu first,
-// updateDetail the subtask picker), and adding an overlay meant editing every
-// ladder in the right order.
+// if-ladder and the two disagreed in source order (View checked the launch menu
+// first, updateDetail the subtask picker) - a latent inconsistency, since that
+// particular pair cannot both be open, but adding an overlay meant editing
+// every ladder in the right order for the pairs that CAN.
 //
 // ORDER (first match wins). An overlay that can be opened ON TOP of another
-// must outrank it, or the one underneath would keep eating the keys:
+// must outrank it, or the one underneath would keep eating the keys. Only two
+// stacks are actually reachable today (both yank-on-top, see 2); the rest of
+// the order is a deliberate tie-break among overlays that never coexist, so it
+// stays stable as new ones arrive:
 //
-//  1. launch menu (claude/codex/executor) - opens over every base view. The
-//     session menu clears itself before opening it, so it never has to lose
-//     to one; this also resolves the old View-vs-updateDetail disagreement in
-//     View's favour (what the user sees is what handles the keys).
-//  2. yank menu - openable from a LIVE session menu and from the project
-//     picker (both stay set underneath), so it MUST outrank them.
-//  3. links menu - same class as yank: a transient leaf, nothing stacks on it.
+//  1. launch menu (claude/codex/executor) - opens over every base view, and
+//     every opener either starts from a bare view or clears the overlay
+//     underneath first (the session menu and the project picker both do). This
+//     also resolves the old View-vs-updateDetail order in View's favour: what
+//     the user sees is what handles the keys.
+//  2. yank menu - openable from a LIVE session menu (update_menus.go) and from
+//     the project picker (update_picker.go); both stay set underneath, so yank
+//     MUST outrank them. These are the only reachable stacks.
+//  3. links menu - same class as yank: transient, nothing stacks on it.
 //  4. session menu - sits under yank (2) and opens the launch menu (1).
-//  5. subtask picker - detail-scoped leaf, opens no other overlay.
-//  6. column-visibility menu, 7. project picker, 8. help - board-scoped leaves.
+//  5. subtask picker - detail-scoped, opens no other overlay.
+//  6. column-visibility menu, 7. project picker, 8. help. The picker is not a
+//     leaf (it opens 1 and 2, both of which outrank it); colVis and help are.
 //
 // Overlays always win over the base views. That is not a new rule: every
 // overlay is reachable only from a view that already dispatched to it, and the
