@@ -68,6 +68,42 @@ func TestReloadDoesNotClobberCorruptFocusPlan(t *testing.T) {
 	}
 }
 
+// TestNewDoesNotClobberCorruptFocusPlan covers the one caller
+// TestReloadDoesNotClobberCorruptFocusPlan does not: New() starts from a
+// zero-value m.focusPlan (there is no "last known good" yet) and used to
+// follow reload() with a second, unguarded loadFocusPlan() call right before
+// handleStalePlan()'s own mutate+save. Construct the model the same way the
+// real TUI does - via New(), not the newBoardModel test helper, which builds
+// the Model by struct literal and skips this path entirely.
+func TestNewDoesNotClobberCorruptFocusPlan(t *testing.T) {
+	store := &storage.Store{Root: t.TempDir()}
+	if err := store.CreateProject("p", &storage.Project{Name: "P"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddTask("p", &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusTodo}}); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(store.RootDir(), "focus.yaml")
+	corrupt := []byte("not: [valid: yaml")
+	if err := os.WriteFile(path, corrupt, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(store, "")
+
+	if m.toastMsg == "" {
+		t.Error("expected an error toast surfacing the corrupt focus plan")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(corrupt) {
+		t.Errorf("New() must not overwrite a corrupt focus.yaml, got %q", got)
+	}
+}
+
 func TestHandleStalePlan(t *testing.T) {
 	t.Run("fresh plan is untouched", func(t *testing.T) {
 		m := focusFixture(t)
