@@ -153,6 +153,13 @@ func (m *Model) doReorder(direction int) {
 	a := tasks[cursor]
 	b := tasks[target]
 
+	var firstErr error
+	trackErr := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
 	// If all tasks have Order==0, assign sequential orders to all tasks in column
 	allZero := true
 	for _, t := range tasks {
@@ -165,7 +172,7 @@ func (m *Model) doReorder(direction int) {
 		for i, t := range tasks {
 			t.Meta.Order = (i + 1) * 10
 			t.Meta.Updated = storage.Today()
-			m.store.WriteTask(t)
+			trackErr(m.store.WriteTask(t))
 		}
 	}
 
@@ -173,11 +180,14 @@ func (m *Model) doReorder(direction int) {
 	a.Meta.Order, b.Meta.Order = b.Meta.Order, a.Meta.Order
 	a.Meta.Updated = storage.Today()
 	b.Meta.Updated = storage.Today()
-	m.store.WriteTask(a)
-	m.store.WriteTask(b)
+	trackErr(m.store.WriteTask(a))
+	trackErr(m.store.WriteTask(b))
 
 	m.cursors[m.activeCol] = target
 	m.reload()
+	if firstErr != nil {
+		m.showErrorToast("reorder failed", firstErr)
+	}
 }
 
 func snapshotTask(t *storage.Task) *storage.Task {
