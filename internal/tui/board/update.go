@@ -71,6 +71,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Errors are dropped: the process may have exited in the gap (the next
 		// refreshRunStates reflects reality), and this is a TUI so stderr is unusable.
 		if storage.ProcessAlive(msg.pid) {
+			// The worker's own group first: SIGKILLing the manager is what makes
+			// the worker unreachable (it can no longer forward), so it must not
+			// happen before the worker itself is down.
+			if msg.workerPGID > 0 && msg.workerPGID != msg.pid {
+				_ = syscall.Kill(-msg.workerPGID, syscall.SIGKILL)
+			}
 			_ = syscall.Kill(-msg.pid, syscall.SIGKILL)
 			_ = syscall.Kill(msg.pid, syscall.SIGKILL)
 		}
