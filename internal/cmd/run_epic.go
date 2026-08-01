@@ -61,7 +61,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 			}
 			// --base is NOT inert here (it is the integration branch's fork point
 			// in default mode too), so it is deliberately not passed in.
-			warnInertFlags(opts.errOut, "pm run-epic", additional, slotPin, "")
+			warnInertFlags(opts.stderr(), "pm run-epic", additional, slotPin, "")
 
 			plan, err := planEpic(store, args, opts)
 			if err != nil {

@@ -12,16 +12,20 @@ import (
 	"github.com/mbalazy/pm/internal/storage"
 )
 
-// testExecutor is the minimal executor block a manager run needs. Built in Go
-// (not YAML), so the start/done statuses defaultExecutor() would have supplied
-// are spelled out here.
+// testExecutor is the minimal executor block a manager run needs. The block
+// round-trips through project.yaml (CreateProject -> ReadProject ->
+// Executor.UnmarshalYAML overlays defaultExecutor()), so these statuses would
+// resolve to the same values if omitted - they are spelled out so a test
+// asserting on them reads without that indirection.
 func testExecutor() *storage.Executor {
 	return &storage.Executor{Enabled: true, StartStatus: "todo", DoneStatus: "merged"}
 }
 
 // epicFixture creates a store with one git-backed project ("app") holding a
-// tracker plus subs, and returns the store. Subs are added out of Order on
-// purpose so the plan's sequencing is actually exercised.
+// tracker plus subs, and returns the store. The subs' Orders deliberately
+// CONTRADICT their alphabetical IDs (app-1-1 is last), so a comparator that
+// dropped the Order key and fell back to the ID tiebreaker fails the
+// sequencing assertion instead of passing by coincidence.
 func epicFixture(t *testing.T, exc *storage.Executor) (*storage.Store, string) {
 	t.Helper()
 	store := &storage.Store{Root: t.TempDir()}
@@ -37,9 +41,9 @@ func epicFixture(t *testing.T, exc *storage.Executor) (*storage.Store, string) {
 		t.Fatal(err)
 	}
 	addTask(t, store, "app", storage.TaskMeta{ID: "app-1", Title: "Epic", Status: storage.StatusDoing}, "")
-	addTask(t, store, "app", storage.TaskMeta{ID: "app-1-3", Title: "Third", Status: storage.StatusTodo, Parent: "app-1", Order: 30}, "")
-	addTask(t, store, "app", storage.TaskMeta{ID: "app-1-1", Title: "First", Status: storage.StatusTodo, Parent: "app-1", Order: 10}, "")
-	addTask(t, store, "app", storage.TaskMeta{ID: "app-1-2", Title: "Second", Status: storage.StatusWaiting, Parent: "app-1", Order: 20}, "")
+	addTask(t, store, "app", storage.TaskMeta{ID: "app-1-1", Title: "Last", Status: storage.StatusTodo, Parent: "app-1", Order: 30}, "")
+	addTask(t, store, "app", storage.TaskMeta{ID: "app-1-3", Title: "Middle", Status: storage.StatusTodo, Parent: "app-1", Order: 20}, "")
+	addTask(t, store, "app", storage.TaskMeta{ID: "app-1-2", Title: "First", Status: storage.StatusWaiting, Parent: "app-1", Order: 10}, "")
 	return store, repo
 }
 
@@ -137,7 +141,8 @@ func TestPlanEpicResolvesSubsAndBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planEpic: %v", err)
 	}
-	if got := strings.Join(subIDs(plan.subs), ","); got != "app-1-1,app-1-2,app-1-3" {
+	// By Order (10, 20, 30), NOT by ID - the two disagree in this fixture.
+	if got := strings.Join(subIDs(plan.subs), ","); got != "app-1-2,app-1-3,app-1-1" {
 		t.Errorf("subs = %s, want them sorted by Order", got)
 	}
 	if plan.epicBranch != "epic/app-1" {
