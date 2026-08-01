@@ -33,6 +33,11 @@ const (
 	StatusWaiting  TaskStatus = "waiting"
 	StatusDone     TaskStatus = "done"
 	StatusArchived TaskStatus = "archived"
+	// StatusMerged is the per-project epic-lifecycle status (todo -> doing ->
+	// merged -> done) used by pm run-epic's default done_status. It is NOT in
+	// DefaultStatuses - it only exists on projects that opt into it via
+	// project.yaml's `statuses` list.
+	StatusMerged TaskStatus = "merged"
 )
 
 func ParseStatus(s string) TaskStatus {

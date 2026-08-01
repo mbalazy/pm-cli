@@ -142,7 +142,7 @@ func glamourRender(md string, contentWidth int) string {
 func renderSubtaskTable(kids []*storage.Task, width int) string {
 	done := 0
 	for _, k := range kids {
-		if k.Meta.Status == storage.StatusDone || k.Meta.Status == "merged" {
+		if k.Meta.Status == storage.StatusDone || k.Meta.Status == storage.StatusMerged {
 			done++
 		}
 	}
