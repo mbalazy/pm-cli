@@ -439,6 +439,34 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 	}
 }
 
+// TestPrintEpicSummaryLabel: the header used to hardcode "integration: %s", so
+// an independent run - which has no integration branch at all - reported
+// "(integration: independent, off main)".
+func TestPrintEpicSummaryLabel(t *testing.T) {
+	tracker := &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "Epic"}}
+	outcomes := []subOutcome{{"p-1-1", "merged", "ok", "feat/one"}}
+
+	var integration, independent strings.Builder
+	printEpicSummary(&integration, tracker, "integration: epic/p-1", outcomes)
+	printEpicSummary(&independent, tracker, "independent, off main", outcomes)
+
+	if !strings.Contains(integration.String(), "(integration: epic/p-1)") {
+		t.Errorf("integration summary should name the integration branch:\n%s", integration.String())
+	}
+	if !strings.Contains(independent.String(), "(independent, off main)") {
+		t.Errorf("independent summary should name the fork base:\n%s", independent.String())
+	}
+	if strings.Contains(independent.String(), "integration") {
+		t.Errorf("independent summary must not claim an integration branch:\n%s", independent.String())
+	}
+	// Both keep rendering the per-sub lines.
+	for _, out := range []string{integration.String(), independent.String()} {
+		if !strings.Contains(out, "merged    p-1-1  - ok") {
+			t.Errorf("summary missing the sub line:\n%s", out)
+		}
+	}
+}
+
 func TestJournalSubs(t *testing.T) {
 	outcomes := []subOutcome{
 		{"p-1-1", "merged", "ok", "feat/one"},
