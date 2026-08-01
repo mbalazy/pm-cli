@@ -14,6 +14,12 @@ func (m *Model) openClaudeMenu(t *storage.Task) {
 	m.claudeMenuCursor = 0
 	m.claudeMenuSkipPerms = false
 	m.launchAgent = launchAgentClaude
+	// Reset symmetrically with openExecutorMenu: without this, toggling # on
+	// while in executor mode, then Esc, then opening this menu for a DIFFERENT
+	// task and @-cycling back to executor carries the stale additional-worktree
+	// choice into a launch the user never opted into from this menu.
+	m.claudeMenuAdditional = false
+	m.executorAdditionalAvail = false
 	m.rebuildClaudeMenuItems(t)
 	m.claudeMenu = true
 }
