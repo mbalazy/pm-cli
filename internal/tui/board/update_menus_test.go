@@ -21,11 +21,11 @@ func TestAddTaskShowsErrorToast(t *testing.T) {
 	}
 
 	m := Model{
-		store:          store,
-		projects:       []string{"all", "p"},
-		activeProject:  1,
-		hiddenStatuses: make(map[storage.TaskStatus]bool),
-		width:          80, height: 24,
+		store:         store,
+		projects:      []string{"all", "p"},
+		activeProject: 1,
+		menuState:     menuState{hiddenStatuses: make(map[storage.TaskStatus]bool)},
+		width:         80, height: 24,
 	}
 	m.reload()
 

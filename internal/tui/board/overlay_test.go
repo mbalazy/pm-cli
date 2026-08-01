@@ -24,7 +24,7 @@ func overlayModel(t *testing.T, apply func(*Model)) Model {
 		statuses:       []storage.TaskStatus{storage.StatusTodo},
 		cursors:        []int{0},
 		scrollOffsets:  []int{0},
-		hiddenStatuses: make(map[storage.TaskStatus]bool),
+		menuState:      menuState{hiddenStatuses: make(map[storage.TaskStatus]bool)},
 		hiddenProjects: make(map[string]bool),
 		selected:       make(map[string]bool),
 		focusSet:       make(map[string]bool),

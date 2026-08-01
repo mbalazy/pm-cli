@@ -17,7 +17,7 @@ func New(store storage.TaskStore, filterProject string) Model {
 		width:          80,
 		height:         24,
 		projectCounts:  make(map[string]int),
-		hiddenStatuses: make(map[storage.TaskStatus]bool),
+		menuState:      menuState{hiddenStatuses: make(map[storage.TaskStatus]bool)},
 		hiddenProjects: make(map[string]bool),
 		selected:       make(map[string]bool),
 		focusSet:       make(map[string]bool),
