@@ -703,6 +703,71 @@ func TestE2EContextRollupIsCompressed(t *testing.T) {
 	}
 }
 
+// TestE2EContextCwdMissNote: a cwd that matches no configured project must be
+// distinguishable from "no project was requested" - both fall back to the
+// same cross-project dump, but only the cwd-miss case carries a note so the
+// agent knows auto-detection failed rather than assuming full coverage.
+func TestE2EContextCwdMissNote(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	t.Run("no project, no cwd: cross-project fallback with no note", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_context", nil)
+		if isErr {
+			t.Fatalf("pm_context error: %s", text)
+		}
+		var out struct {
+			Projects []map[string]any `json:"projects"`
+			Note     string           `json:"note"`
+		}
+		mustUnmarshal(t, text, &out)
+		if len(out.Projects) != 1 {
+			t.Fatalf("want cross-project fallback with 1 project, got %d", len(out.Projects))
+		}
+		if out.Note != "" {
+			t.Fatalf("no cwd was given - note must be empty, got %q", out.Note)
+		}
+	})
+
+	t.Run("cwd matches no project: cross-project fallback with a note", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_context", map[string]any{"cwd": "/home/user/unregistered-repo"})
+		if isErr {
+			t.Fatalf("pm_context error: %s", text)
+		}
+		var out struct {
+			Projects []map[string]any `json:"projects"`
+			Note     string           `json:"note"`
+		}
+		mustUnmarshal(t, text, &out)
+		if len(out.Projects) != 1 {
+			t.Fatalf("cwd miss must still preserve the cross-project fallback, got %d projects", len(out.Projects))
+		}
+		if !strings.Contains(out.Note, "/home/user/unregistered-repo") || !strings.Contains(out.Note, "no configured project") {
+			t.Fatalf("note must name the mismatched cwd, got %q", out.Note)
+		}
+	})
+
+	t.Run("cwd matches a project: no note, project-scoped context", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_context", map[string]any{"cwd": "/home/user/test"})
+		if isErr {
+			t.Fatalf("pm_context error: %s", text)
+		}
+		var out struct {
+			Project struct {
+				Slug string `json:"slug"`
+			} `json:"project"`
+			Note string `json:"note"`
+		}
+		mustUnmarshal(t, text, &out)
+		if out.Project.Slug != "test" {
+			t.Fatalf("cwd match must resolve to project scope, got %+v", out)
+		}
+		if out.Note != "" {
+			t.Fatalf("a resolved cwd must not carry a miss note, got %q", out.Note)
+		}
+	})
+}
+
 // TestE2ECrossProjectContextCompressesBriefs: the no-project branch of
 // pm_context spans every active project, so its doing-task briefs compress like
 // any other listing (the project-scoped branch keeps them whole on purpose).

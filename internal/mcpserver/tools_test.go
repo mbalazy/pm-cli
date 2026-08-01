@@ -817,7 +817,7 @@ func TestCrossProjectContextWrapsProjectsAndFocusTasks(t *testing.T) {
 		Tasks: []string{task.Meta.ID},
 	})
 
-	result, _, err := crossProjectContext(store)
+	result, _, err := crossProjectContext(store, "")
 	if err != nil {
 		t.Fatalf("crossProjectContext failed: %v", err)
 	}
