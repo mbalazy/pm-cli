@@ -789,7 +789,10 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		// orphans them - the task vanishes from every board column, the same
 		// bug class 0.29.2 closed for MoveTask/pm_update_task. Enforced here
 		// (handler-level), not in storage - CLI/manual project.yaml edits stay
-		// lenient.
+		// lenient. Best-effort, not race-proof: the task read happens before
+		// MutateProject takes the project lock, so a task concurrently moved
+		// onto the about-to-be-dropped status in that narrow window is
+		// invisible to this check.
 		if in.Statuses != nil {
 			if err := validateStatusesKeepTasks(store, slug, in.Statuses); err != nil {
 				r, _ := toolError(err.Error())
@@ -889,12 +892,24 @@ func resolveProjectFromCwd(store storage.TaskStore, cwd string) (string, error) 
 }
 
 // validateStatusesKeepTasks rejects a pm_update_project statuses replacement
-// that would drop a status current tasks sit on. Archived is system-level
-// (never a project status) and excluded. Best-effort: a task-read failure
-// does not block the update.
+// that would drop a status current tasks sit on. Compares against the
+// EFFECTIVE post-update status set, not the raw param: an empty slice is the
+// only way this schema exposes to reset a project back to defaults, and
+// Project.GetStatuses() falls back to DefaultStatuses in that case - without
+// mirroring that fallback here, resetting to [] would falsely flag every task
+// sitting on a plain default status (e.g. "doing") as orphaned. Archived is
+// system-level (never a project status) and excluded. Best-effort: a
+// task-read failure does not block the update.
 func validateStatusesKeepTasks(store storage.TaskStore, slug string, newStatuses []string) error {
-	allowed := make(map[string]bool, len(newStatuses))
-	for _, s := range newStatuses {
+	effective := newStatuses
+	if len(effective) == 0 {
+		effective = make([]string, len(storage.DefaultStatuses))
+		for i, s := range storage.DefaultStatuses {
+			effective[i] = string(s)
+		}
+	}
+	allowed := make(map[string]bool, len(effective))
+	for _, s := range effective {
 		allowed[strings.ToLower(s)] = true
 	}
 	tasks, err := store.GetTasks(slug)

@@ -184,6 +184,50 @@ func TestE2EUpdateProject(t *testing.T) {
 	}
 }
 
+// TestE2EUpdateProjectArchived drives the real pm_update_project handler for
+// the archived flag (previously only exercised via storage.WriteProject
+// directly, bypassing the handler) and confirms it flows into
+// ListActiveProjects like everywhere else that reads it.
+func TestE2EUpdateProjectArchived(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	if _, isErr := call(t, sess, "pm_update_project", map[string]any{
+		"project": "test", "archived": true,
+	}); isErr {
+		t.Fatal("update_project error")
+	}
+	proj, err := store.GetProject("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proj.Archived {
+		t.Fatal("archived not set")
+	}
+	active, err := store.ListActiveProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, slug := range active {
+		if slug == "test" {
+			t.Fatal("archived project must not appear in ListActiveProjects")
+		}
+	}
+
+	if _, isErr := call(t, sess, "pm_update_project", map[string]any{
+		"project": "test", "archived": false,
+	}); isErr {
+		t.Fatal("update_project error")
+	}
+	proj, err = store.GetProject("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proj.Archived {
+		t.Fatal("archived not cleared")
+	}
+}
+
 func TestE2EErrorsAreToolErrors(t *testing.T) {
 	store, _ := setupMCPTestStore(t)
 	sess := startMCP(t, store)
@@ -923,6 +967,25 @@ func TestE2EUpdateProjectStatuses(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("statuses not applied: %v", proj.Statuses)
+	}
+
+	// An empty list resets the project back to DefaultStatuses - the only way
+	// this schema exposes to do that. t-1 sits on "doing", which IS a default
+	// status, so this must be accepted: the check has to compare against the
+	// EFFECTIVE post-reset set (DefaultStatuses), not the empty literal.
+	text, isErr = call(t, sess, "pm_update_project", map[string]any{
+		"project":  "test",
+		"statuses": []string{},
+	})
+	if isErr {
+		t.Fatalf("resetting statuses to defaults must not falsely orphan a task on a default status: %s", text)
+	}
+	proj, err = store.GetProject("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proj.Statuses) != 0 {
+		t.Fatalf("empty statuses must reset to defaults (stored as empty), got %v", proj.Statuses)
 	}
 }
 
