@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -101,6 +102,23 @@ func ValidateMode(m string) error {
 		return nil
 	}
 	return fmt.Errorf("invalid mode %q (valid: auto, manual)", m)
+}
+
+// slugPattern is deliberately NOT "slug == Slugify(slug)": Slugify drops
+// literal hyphens (it only turns ' '/'_'/'/' into '-', see the "slashes" case
+// in TestSlugify: "feat/add-auth" -> "feat-addauth"), so that check would
+// reject real hyphenated slugs like "app-orbit". Requiring the first
+// char to be alphanumeric (never '.' or '/') is what blocks every path
+// separator and ".."/"../foo" style traversal in one rule.
+var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// ValidateSlug checks that a project slug is safe to use as a filesystem
+// path component (ProjectDir/ProjectYAML join it under the pm root).
+func ValidateSlug(slug string) error {
+	if !slugPattern.MatchString(slug) {
+		return fmt.Errorf("invalid slug %q - must start with a lowercase letter or digit and contain only lowercase letters, digits, '.', '_' or '-' (no path separators)", slug)
+	}
+	return nil
 }
 
 type Task struct {

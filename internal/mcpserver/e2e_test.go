@@ -771,6 +771,272 @@ func TestE2EContextCwdMissNote(t *testing.T) {
 // TestE2ECrossProjectContextCompressesBriefs: the no-project branch of
 // pm_context spans every active project, so its doing-task briefs compress like
 // any other listing (the project-scoped branch keeps them whole on purpose).
+// TestE2EListProjects drives the real pm_list_projects handler: task counts
+// per status and the archived flag come from the store, not a re-simulation.
+func TestE2EListProjects(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_list_projects", nil)
+	if isErr {
+		t.Fatalf("list_projects error: %s", text)
+	}
+	var out []struct {
+		Slug       string         `json:"slug"`
+		Name       string         `json:"name"`
+		Archived   bool           `json:"archived"`
+		TaskCounts map[string]int `json:"task_counts"`
+	}
+	mustUnmarshal(t, text, &out)
+	if len(out) != 1 || out[0].Slug != "test" {
+		t.Fatalf("want 1 project 'test', got %+v", out)
+	}
+	if out[0].TaskCounts["doing"] != 1 {
+		t.Fatalf("task_counts[doing] = %d, want 1", out[0].TaskCounts["doing"])
+	}
+	if out[0].Archived {
+		t.Fatal("fresh project must not be archived")
+	}
+}
+
+// TestE2EListProjectsEmpty: no projects must serialize as [] not null - a nil
+// slice through json.Marshal renders "null", which breaks a caller that
+// assumes it always gets an array.
+func TestE2EListProjectsEmpty(t *testing.T) {
+	store := &storage.Store{Root: t.TempDir()}
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_list_projects", nil)
+	if isErr {
+		t.Fatalf("list_projects error: %s", text)
+	}
+	if strings.TrimSpace(text) != "[]" {
+		t.Fatalf("empty project list must serialize as [], got %q", text)
+	}
+}
+
+// TestE2ECreateProject drives the real pm_create_project handler end to end:
+// project.yaml is written with every field and immediately resolvable
+// through the store. Also covers the duplicate-slug and slug-validation
+// rejections (path separators / "..", non-canonical casing).
+func TestE2ECreateProject(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_create_project", map[string]any{
+		"slug":  "newproj",
+		"name":  "New Project",
+		"path":  "/home/user/newproj",
+		"stack": "Go",
+		"tags":  []string{"client-a"},
+		"links": map[string]string{"repo": "https://x/newproj"},
+	})
+	if isErr {
+		t.Fatalf("create_project error: %s", text)
+	}
+	proj, err := store.GetProject("newproj")
+	if err != nil {
+		t.Fatalf("project not created: %v", err)
+	}
+	if proj.Name != "New Project" || proj.Stack != "Go" || proj.Path != "/home/user/newproj" {
+		t.Fatalf("project fields wrong: %+v", proj)
+	}
+	if proj.Links["repo"] != "https://x/newproj" {
+		t.Fatalf("links: %v", proj.Links)
+	}
+	if len(proj.Tags) != 1 || proj.Tags[0] != "client-a" {
+		t.Fatalf("tags: %v", proj.Tags)
+	}
+
+	t.Run("duplicate slug rejected", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_create_project", map[string]any{"slug": "newproj"})
+		if !isErr {
+			t.Fatalf("duplicate slug must be a tool error, got: %s", text)
+		}
+	})
+
+	t.Run("path-escaping slug rejected", func(t *testing.T) {
+		before, _ := store.ListProjects()
+		text, isErr := call(t, sess, "pm_create_project", map[string]any{"slug": "../evil"})
+		if !isErr {
+			t.Fatalf("path-escaping slug must be a tool error, got: %s", text)
+		}
+		after, _ := store.ListProjects()
+		if len(after) != len(before) {
+			t.Fatalf("rejected slug must not create a project, before=%d after=%d", len(before), len(after))
+		}
+	})
+
+	t.Run("non-canonical slug rejected", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_create_project", map[string]any{"slug": "NewProj2"})
+		if !isErr {
+			t.Fatalf("non-canonical slug must be a tool error, got: %s", text)
+		}
+	})
+}
+
+// TestE2EUpdateProjectStatuses: replacing statuses with a set that would
+// orphan tasks currently sitting on a dropped status is rejected (0.29.2
+// closed this bug class for MoveTask/pm_update_task; this closes it for the
+// statuses list itself). A safe replacement still goes through, and archived
+// is exempt (system-level, never a project status).
+func TestE2EUpdateProjectStatuses(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	// t-1 sits on "doing" - dropping it must be rejected.
+	text, isErr := call(t, sess, "pm_update_project", map[string]any{
+		"project":  "test",
+		"statuses": []string{"todo", "done"},
+	})
+	if !isErr {
+		t.Fatalf("statuses dropping an occupied status must be a tool error, got: %s", text)
+	}
+	if !strings.Contains(text, "doing") {
+		t.Fatalf("error must name the orphaned status, got: %s", text)
+	}
+	proj, err := store.GetProject("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proj.Statuses) != 0 {
+		t.Fatalf("rejected update must not touch statuses, got %v", proj.Statuses)
+	}
+
+	// A superset (keeps doing) is fine.
+	text, isErr = call(t, sess, "pm_update_project", map[string]any{
+		"project":  "test",
+		"statuses": []string{"todo", "doing", "waiting", "done", "review"},
+	})
+	if isErr {
+		t.Fatalf("safe statuses replacement rejected: %s", text)
+	}
+	proj, err = store.GetProject("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, s := range proj.Statuses {
+		if s == "review" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("statuses not applied: %v", proj.Statuses)
+	}
+}
+
+// TestE2EUpdateTaskTriState: branch/parent/brief/ac follow the same
+// tri-state pattern as mode/model/epic_mode (omit = keep current, empty
+// string = clear) - before this they used the old `if in.X != ""` pattern
+// and could never be cleared through MCP. Title stays required-non-empty:
+// an explicit empty string is ignored, not treated as a clear.
+func TestE2EUpdateTaskTriState(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	// set all four
+	if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+		"project": "test", "task_id": "t-1",
+		"branch": "feat/x", "parent": "t-parent", "brief": "b1", "ac": "a1",
+	}); isErr {
+		t.Fatal("update_task error")
+	}
+	task, err := store.FindTask("test", "t-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Meta.Branch != "feat/x" || task.Meta.Parent != "t-parent" || task.Meta.Brief != "b1" || task.Meta.AC != "a1" {
+		t.Fatalf("fields not set: %+v", task.Meta)
+	}
+
+	// omit = keep current (an unrelated update must not clear any of them)
+	if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+		"project": "test", "task_id": "t-1", "title": "still here",
+	}); isErr {
+		t.Fatal("update_task error")
+	}
+	task, err = store.FindTask("test", "t-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Meta.Branch != "feat/x" || task.Meta.Parent != "t-parent" || task.Meta.Brief != "b1" || task.Meta.AC != "a1" {
+		t.Fatalf("omitted fields must be kept: %+v", task.Meta)
+	}
+	if task.Meta.Title != "still here" {
+		t.Fatalf("title = %q, want updated", task.Meta.Title)
+	}
+
+	// explicit empty title is ignored, not a clear
+	if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+		"project": "test", "task_id": "t-1", "title": "",
+	}); isErr {
+		t.Fatal("update_task error")
+	}
+	task, err = store.FindTask("test", "t-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Meta.Title != "still here" {
+		t.Fatalf("empty title must not clear it, got %q", task.Meta.Title)
+	}
+
+	// empty string = clear
+	if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+		"project": "test", "task_id": "t-1",
+		"branch": "", "parent": "", "brief": "", "ac": "",
+	}); isErr {
+		t.Fatal("update_task error")
+	}
+	task, err = store.FindTask("test", "t-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Meta.Branch != "" || task.Meta.Parent != "" || task.Meta.Brief != "" || task.Meta.AC != "" {
+		t.Fatalf("empty string must clear the fields, got %+v", task.Meta)
+	}
+}
+
+// TestE2EListTasksInvalidStatusRejected: a typo'd status used to silently
+// render an empty list; it must now be rejected with the allowed set, both
+// project-scoped (against that project's statuses) and cross-project
+// (against the union of every project's statuses, matching how the board's
+// ALL view counts them). Archived is exempt (system-level) in both cases.
+func TestE2EListTasksInvalidStatusRejected(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_list_tasks", map[string]any{"project": "test", "status": "dnoe"})
+	if !isErr {
+		t.Fatalf("typo'd status (project-scoped) must be a tool error, got: %s", text)
+	}
+
+	text, isErr = call(t, sess, "pm_list_tasks", map[string]any{"status": "dnoe"})
+	if !isErr {
+		t.Fatalf("typo'd status (cross-project) must be a tool error, got: %s", text)
+	}
+
+	if _, isErr = call(t, sess, "pm_list_tasks", map[string]any{"project": "test", "status": "archived"}); isErr {
+		t.Fatal("archived must always be a valid list_tasks status filter")
+	}
+}
+
+// TestE2EListTasksEmptyResultIsEmptyArray: a zero-result listing must
+// serialize `tasks` as [] not null, so a caller can range over it without a
+// nil check.
+func TestE2EListTasksEmptyResultIsEmptyArray(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_list_tasks", map[string]any{"project": "test", "status": "done"})
+	if isErr {
+		t.Fatalf("list_tasks error: %s", text)
+	}
+	if !strings.Contains(text, `"tasks":[]`) {
+		t.Fatalf("empty result must serialize tasks as [], got: %s", text)
+	}
+}
+
 func TestE2ECrossProjectContextCompressesBriefs(t *testing.T) {
 	store, task := setupMCPTestStore(t)
 	task.Meta.Brief = "headline\nrest of the brief"

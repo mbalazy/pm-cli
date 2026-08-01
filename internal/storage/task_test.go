@@ -123,6 +123,22 @@ func TestWriteTaskRejectsInvalidEpicMode(t *testing.T) {
 	}
 }
 
+func TestValidateSlug(t *testing.T) {
+	for _, ok := range []string{"test", "app-orbit", "mobile-claude-toolkit", "app.orbit", "a", "a1", "full_project", "pm-cli"} {
+		if err := ValidateSlug(ok); err != nil {
+			t.Errorf("ValidateSlug(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"", "../foo", "..", ".", "foo/bar", "/etc/passwd", "-foo", ".foo",
+		"Foo", "FOO", "foo bar", "foo/../bar", "~foo",
+	} {
+		if err := ValidateSlug(bad); err == nil {
+			t.Errorf("ValidateSlug(%q) = nil, want error", bad)
+		}
+	}
+}
+
 func TestValidateStatus(t *testing.T) {
 	allowed := []TaskStatus{StatusTodo, StatusDoing, StatusDone}
 

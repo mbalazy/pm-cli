@@ -61,9 +61,9 @@ type updateTaskInput struct {
 	Project    string            `json:"project" jsonschema:"Project slug or prefix"`
 	TaskID     string            `json:"task_id" jsonschema:"Task ID or search query"`
 	Status     string            `json:"status,omitempty" jsonschema:"New status"`
-	Title      string            `json:"title,omitempty" jsonschema:"New title"`
-	Branch     string            `json:"branch,omitempty" jsonschema:"Git branch name"`
-	Parent     string            `json:"parent,omitempty" jsonschema:"Parent task ID for subtasks (e.g. atlas-39). Set to make this a child of a tracker task."`
+	Title      string            `json:"title,omitempty" jsonschema:"New title. Required-non-empty: an empty/omitted value leaves the current title untouched (clearing a title is not a supported operation)."`
+	Branch     *string           `json:"branch,omitempty" jsonschema:"Set the git branch name. Omit to keep current; pass an empty string to clear."`
+	Parent     *string           `json:"parent,omitempty" jsonschema:"Set the parent task ID for subtasks (e.g. atlas-39), making this a child of a tracker task. Omit to keep current; pass an empty string to clear (de-parent)."`
 	Order      *int              `json:"order,omitempty" jsonschema:"Set sort order within a column / parent rollup (lower runs first; convention: 10, 20, 30...). Omit to keep current; pass 0 to clear. Changes only the order - the rest of the task is untouched."`
 	DependsOn  []string          `json:"depends_on,omitempty" jsonschema:"Replace the sub's depends_on list (sub IDs that must be merged/done before pm run-epic runs this sub). Omit to keep current; pass an empty array to clear."`
 	Mode       *string           `json:"mode,omitempty" jsonschema:"Set the execution mode for pm run-epic. 'auto' runs the sub autonomously via a headless worker; 'manual' makes pm run-epic skip this sub (no worker spawned, status untouched) as a permanent gate until you do the work and move it to the done status yourself. Omit to keep current."`
@@ -73,8 +73,8 @@ type updateTaskInput struct {
 	Links      map[string]string `json:"links,omitempty" jsonschema:"Links to merge (existing links are preserved)"`
 	BodyAppend string            `json:"body_append,omitempty" jsonschema:"Append to the Log zone of the body (append-only session history; never replaces existing content)"`
 	Spec       string            `json:"spec,omitempty" jsonschema:"Replace the current-truth Spec block (between <!-- spec:start --> / <!-- spec:end --> markers): what we're building, current decisions, still-open questions. Editable in place; created at the top of the body if absent. When a decision changes, rewrite the Spec to read as current truth AND append a one-line pointer to the Log via body_append (e.g. 'Q3 resolved -> see Spec'). Nothing is lost; the Spec never rots."`
-	Brief      string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
-	AC         string            `json:"ac,omitempty" jsonschema:"Acceptance criteria (overwrites previous)"`
+	Brief      *string           `json:"brief,omitempty" jsonschema:"Set the short session context summary (overwrites previous). Omit to keep current; pass an empty string to clear."`
+	AC         *string           `json:"ac,omitempty" jsonschema:"Set the acceptance criteria (overwrites previous). Omit to keep current; pass an empty string to clear."`
 	Sessions   []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to append (never removes existing)"`
 }
 
@@ -255,6 +255,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in listTasksInput) (*mcp.CallToolResult, any, error) {
 		var tasks []*storage.Task
 		var err error
+		var allowedStatuses []storage.TaskStatus
 
 		if in.Project != "" {
 			slug, e := store.ResolveProject(in.Project)
@@ -262,8 +263,12 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 				r, _ := toolError(e.Error())
 				return r, nil, nil
 			}
+			allowedStatuses = store.GetProjectStatuses(slug)
 			tasks, err = store.GetTasks(slug)
 		} else {
+			// Cross-project: validate against the UNION of every project's
+			// statuses + archived, matching how the board's ALL view counts them.
+			allowedStatuses = store.GetAllStatuses()
 			tasks, err = store.GetAllTasks()
 		}
 		if err != nil {
@@ -271,10 +276,23 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			return r, nil, nil
 		}
 
-		var filtered []taskSummary
+		var status storage.TaskStatus
+		if in.Status != "" {
+			// A typo'd status used to silently render an empty list; reject it
+			// with the allowed set instead, like pm_update_task/pm_move_task.
+			status = storage.ParseStatus(in.Status)
+			if status != storage.StatusArchived {
+				if err := storage.ValidateStatus(status, allowedStatuses); err != nil {
+					r, _ := toolError(err.Error())
+					return r, nil, nil
+				}
+			}
+		}
+
+		filtered := []taskSummary{}
 		for _, t := range tasks {
 			if in.Status != "" {
-				if string(t.Meta.Status) != strings.ToLower(in.Status) {
+				if t.Meta.Status != status {
 					continue
 				}
 			} else if t.Meta.Status == storage.StatusArchived {
@@ -374,7 +392,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			TaskCounts map[string]int `json:"task_counts"`
 		}
 
-		var result []projectInfo
+		result := []projectInfo{}
 		for _, slug := range projects {
 			proj, _ := store.GetProject(slug)
 			pi := projectInfo{
@@ -487,7 +505,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	// pm_update_task
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_update_task",
-		Description: "Update an existing task. Links merge (never removed). body_append appends to the Log zone (never replaces); spec rewrites the current-truth Spec block in place. Brief and ac overwrite. Tags replace if provided.",
+		Description: "Update an existing task. Links merge (never removed). body_append appends to the Log zone (never replaces); spec rewrites the current-truth Spec block in place. Tags replace if provided. Branch/parent/brief/ac are tri-state: omit to keep current, pass an empty string to clear. Title is required-non-empty - an empty/omitted value leaves it untouched.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateTaskInput) (*mcp.CallToolResult, any, error) {
 		slug, err := store.ResolveProject(in.Project)
 		if err != nil {
@@ -522,11 +540,11 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		if in.Title != "" {
 			task.Meta.Title = in.Title
 		}
-		if in.Branch != "" {
-			task.Meta.Branch = in.Branch
+		if in.Branch != nil {
+			task.Meta.Branch = *in.Branch
 		}
-		if in.Parent != "" {
-			task.Meta.Parent = in.Parent
+		if in.Parent != nil {
+			task.Meta.Parent = *in.Parent
 		}
 		if in.Order != nil {
 			task.Meta.Order = *in.Order
@@ -580,14 +598,16 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			}
 		}
 
-		// Brief: overwrite (current state, not history)
-		if in.Brief != "" {
-			task.Meta.Brief = in.Brief
+		// Brief: overwrite (current state, not history). Tri-state: omit keeps
+		// current, empty string clears (matches Mode/Model/EpicMode).
+		if in.Brief != nil {
+			task.Meta.Brief = *in.Brief
 		}
 
-		// AC: overwrite (acceptance criteria, not history)
-		if in.AC != "" {
-			task.Meta.AC = in.AC
+		// AC: overwrite (acceptance criteria, not history). Tri-state: omit keeps
+		// current, empty string clears.
+		if in.AC != nil {
+			task.Meta.AC = *in.AC
 		}
 
 		// Sessions: append, never remove
@@ -646,6 +666,13 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in createProjectInput) (*mcp.CallToolResult, any, error) {
 		if in.Slug == "" {
 			r, _ := toolError("slug is required")
+			return r, nil, nil
+		}
+		// The slug becomes a directory name via filepath.Join(ProjectDir/
+		// ProjectYAML) - reject anything that could escape the pm root
+		// ("../foo") or isn't canonical (uppercase, spaces).
+		if err := storage.ValidateSlug(in.Slug); err != nil {
+			r, _ := toolError(err.Error())
 			return r, nil, nil
 		}
 
@@ -751,12 +778,23 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	// pm_update_project
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_update_project",
-		Description: "Update project metadata. Links merge (never removed). Tags and statuses replace if provided. Scalar fields overwrite if non-empty.",
+		Description: "Update project metadata. Links merge (never removed). Tags and statuses replace if provided. Scalar fields overwrite if non-empty. Rejects a statuses replacement that would drop a status current tasks sit on (they'd vanish from every board column) - move or close those tasks first.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateProjectInput) (*mcp.CallToolResult, any, error) {
 		slug, err := store.ResolveProject(in.Project)
 		if err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
+		}
+		// A statuses replacement that drops a status current tasks sit on
+		// orphans them - the task vanishes from every board column, the same
+		// bug class 0.29.2 closed for MoveTask/pm_update_task. Enforced here
+		// (handler-level), not in storage - CLI/manual project.yaml edits stay
+		// lenient.
+		if in.Statuses != nil {
+			if err := validateStatusesKeepTasks(store, slug, in.Statuses); err != nil {
+				r, _ := toolError(err.Error())
+				return r, nil, nil
+			}
 		}
 		// The whole read -> patch -> write runs under the project lock, with
 		// the project re-read FRESH inside it: this handler only sets the
@@ -850,6 +888,40 @@ func resolveProjectFromCwd(store storage.TaskStore, cwd string) (string, error) 
 	return storage.ResolveProjectFromCwd(store, cwd)
 }
 
+// validateStatusesKeepTasks rejects a pm_update_project statuses replacement
+// that would drop a status current tasks sit on. Archived is system-level
+// (never a project status) and excluded. Best-effort: a task-read failure
+// does not block the update.
+func validateStatusesKeepTasks(store storage.TaskStore, slug string, newStatuses []string) error {
+	allowed := make(map[string]bool, len(newStatuses))
+	for _, s := range newStatuses {
+		allowed[strings.ToLower(s)] = true
+	}
+	tasks, err := store.GetTasks(slug)
+	if err != nil {
+		return nil
+	}
+	counts := make(map[string]int)
+	for _, t := range tasks {
+		st := string(t.Meta.Status)
+		if st == string(storage.StatusArchived) {
+			continue
+		}
+		if !allowed[st] {
+			counts[st]++
+		}
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(counts))
+	for st, n := range counts {
+		parts = append(parts, fmt.Sprintf("%s (%d task(s))", st, n))
+	}
+	sort.Strings(parts)
+	return fmt.Errorf("new statuses would orphan tasks on: %s", strings.Join(parts, ", "))
+}
+
 func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, any, error) {
 	proj, _ := store.GetProject(slug)
 
@@ -880,7 +952,7 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 	tasks, _ := store.GetTasks(slug)
 	trackers, suppressed := storage.BuildTrackers(tasks)
 	counts := make(map[string]int)
-	var doing []taskDetail
+	doing := []taskDetail{}
 	for _, t := range tasks {
 		counts[string(t.Meta.Status)]++
 		if t.Meta.Status == storage.StatusDoing && !suppressed[t.Meta.ID] {
@@ -933,7 +1005,7 @@ func crossProjectContext(store storage.TaskStore, note string) (*mcp.CallToolRes
 		Trackers   []storage.Tracker `json:"trackers,omitempty"`
 	}
 
-	var result []projectSummary
+	result := []projectSummary{}
 	for _, slug := range projects {
 		proj, _ := store.GetProject(slug)
 		ps := projectSummary{
