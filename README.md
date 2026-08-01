@@ -36,14 +36,22 @@ Requirements: Go 1.24+, git. For the executor: the [Claude Code](https://docs.an
 **1. Build and install:**
 
 ```sh
-git clone <this repo> && cd pm-cli
+git clone https://github.com/mbalazy/pm-cli.git && cd pm-cli
 make install          # builds with version ldflags, installs to GOBIN
 ```
 
-**2. Register the MCP server** with Claude Code (user scope, available in every project; adjust the path to your GOBIN):
+`make install` runs `go install`, which puts the binary at `$(go env GOBIN)`, or `$(go env GOPATH)/bin` when `GOBIN` is unset (that's `~/go/bin` on a stock Go setup). Find yours with:
 
 ```sh
-claude mcp add --transport stdio --scope user pm -- ~/.local/share/go/bin/pm mcp
+go env GOBIN GOPATH   # empty GOBIN -> binary is at $GOPATH/bin/pm
+```
+
+Make sure that directory is on your `PATH` - the rest of this guide assumes `pm` is runnable by name.
+
+**2. Register the MCP server** with Claude Code (user scope, available in every project; substitute the path from the step above, e.g. `~/go/bin/pm`):
+
+```sh
+claude mcp add --transport stdio --scope user pm -- <path-from-step-1>/pm mcp
 ```
 
 **3. Teach your agent** - install the usage contract into Claude Code's global memory:
@@ -53,6 +61,14 @@ pm docs claude >> ~/.claude/CLAUDE.md
 ```
 
 This step is not optional. The MCP server gives the agent the *tools*; the guide gives it the *workflow* - when to proactively record things, the brief format, the Spec/Log write rules, task-authoring discipline (`pm docs authoring`), and the rule that only the human closes tasks. Without it the agent drives the tools blind. The guide is embedded in the binary and wrapped in `<!-- pm:agent-guide:start/end -->` markers - to refresh after an upgrade, delete the block and append again. Source of truth, versioned with the code: [docs/agent-guide.md](docs/agent-guide.md) and [docs/task-authoring.md](docs/task-authoring.md).
+
+**4. Create a project** for each repo you want to track (`pm init` only creates the top-level `~/.claude/pm/` data directory - it does not create a project):
+
+```sh
+pm projects add <slug> --path /path/to/repo
+```
+
+`--path` is effectively required: cwd auto-detection (`pm_context`, `pm executor init`, ...) matches against it, so a project without one won't be found from inside its own repo. You can also just ask Claude Code ("create a pm project for this repo") once the MCP server is registered - it calls `pm_create_project` for you.
 
 Using the executor? One more step, once per project: `pm executor init <project>` (see [The executor](#the-executor)).
 
@@ -220,7 +236,8 @@ pm executor stats [project]   # journal rollup
 | Command | What it does |
 |---|---|
 | `pm` / `pm board` | open the TUI board (project auto-detected from cwd) |
-| `pm init <slug>` | create a project |
+| `pm init` | initialize the `~/.claude/pm/` data directory (does not create a project) |
+| `pm projects add <slug> --path <repo>` | create a project |
 | `pm projects` | list projects |
 | `pm add <project> <title>` | add a task (`--order`, `--id`) |
 | `pm list [project]` | list tasks |
@@ -254,6 +271,8 @@ Common executor flags: `--dry-run`, `--model`, `--max-turns`, `--timeout`, `--yo
         └── journal.jsonl     # append-only run history
 ```
 
+Set `PM_DATA_DIR` to point the whole data directory elsewhere (default `~/.claude/pm/`). Useful for sandboxed verification, and for headless executor workers - they run under a guard that refuses writes anywhere under `~/.claude`, so a worker task that needs to write into the data dir will fail without a relocated `PM_DATA_DIR`.
+
 Concurrency model in one paragraph: task writes are atomic (tmp+rename), so the only hazard is two pm processes interleaving read-modify-write and dropping each other's edits. `Store.LockProject` (an flock on `.pm.lock`) guards every mutating path - MCP handlers, the executor's long-window writers (which re-read the task fresh, since their copy predates a 30+ minute worker run), and `MoveTask` itself. Locks never nest in-process; release closures are idempotent for handoff to self-locking callees.
 
 ## Development
@@ -266,7 +285,7 @@ go test ./internal/... -v  # tests directly
 
 - Git hooks are versioned in `githooks/` (`git config core.hooksPath githooks`); pre-commit runs gofmt-check + vet + staticcheck + tests.
 - **Executor paths are tested through a fake `claude` binary** - a PATH-prepended script emitting a canned result envelope - so the real subprocess/parse/journal/run-state plumbing runs at zero token cost.
-- **MCP handlers are tested end-to-end** over the SDK's in-memory transport, so the actual registered closures execute - no re-simulated handler logic in test bodies.
+- **MCP handlers have true end-to-end coverage in `internal/mcpserver/e2e_test.go`**, driven over the SDK's in-memory transport so the actual registered closures execute. The older `tools_test.go` invariant tests (links merge, Spec rewrite, Log append, brief lifecycle) are storage-level: they exercise `storage.WriteTask`/`FindTask` directly rather than going through a handler.
 - Concurrency invariants (lock races, atomic slot claims) have dedicated hammer tests; run suspects under `-race`.
 - Bump `VERSION` in the Makefile on each release.
 

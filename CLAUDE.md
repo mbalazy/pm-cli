@@ -100,7 +100,7 @@ The `maxCardHeight` is computed dynamically: `m.height - overhead` where overhea
 
 ## Workflow
 
-- Branch: `main` only (no feature branches for solo project)
+- Branch: substantive work (features, fixes, refactors, review-fix batches) goes on a feature branch and merges via PR, per repo history (`git log --merges`). Small standalone tweaks may still land as a direct commit on `main`.
 - Commit messages: imperative, concise, prefix with feat/fix/refactor
 - Always bump version in build command when releasing
 
