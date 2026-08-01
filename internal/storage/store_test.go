@@ -641,6 +641,51 @@ func TestAddTaskValidatesStatus(t *testing.T) {
 	})
 }
 
+// TestAddTaskRejectsUnsafeID: AddTask is the choke point every entry path
+// (--id, MCP's id param, the board's add prompt) goes through, and the ID
+// becomes the leading component of the file name - so a traversing ID must be
+// refused BEFORE anything is written, anywhere.
+func TestAddTaskRejectsUnsafeID(t *testing.T) {
+	store, root := setupTestStore(t)
+	// A sibling of the pm root: "../escaped" from a project dir lands in the
+	// root itself, "../../escaped" one level above it - both invisible to
+	// ReadTasksFromDir forever.
+	outside := filepath.Dir(root)
+
+	for _, id := range []string{"../escaped", "../../escaped", "sub/dir-1", "", ".."} {
+		task := NewTask(id, "Escaped", "alpha")
+		err := store.AddTask("alpha", task)
+		if err == nil {
+			t.Fatalf("AddTask with id %q returned nil", id)
+		}
+		if !strings.Contains(err.Error(), "invalid task id") {
+			t.Errorf("id %q: error should come from ValidateTaskID, got: %v", id, err)
+		}
+	}
+
+	// Nothing may have been written inside the project, the pm root, or above it.
+	tasks, err := store.GetTasks("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range tasks {
+		if tk.Meta.Title == "Escaped" {
+			t.Fatalf("rejected add created task %q", tk.Meta.ID)
+		}
+	}
+	for _, dir := range []string{root, outside} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.Contains(e.Name(), "escaped") {
+				t.Fatalf("task file escaped to %s/%s", dir, e.Name())
+			}
+		}
+	}
+}
+
 func TestAddTaskAtomicDuplicate(t *testing.T) {
 	store, _ := setupTestStore(t)
 

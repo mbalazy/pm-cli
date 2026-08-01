@@ -271,6 +271,67 @@ func TestE2EInvalidStatusRejected(t *testing.T) {
 	}
 }
 
+// TestE2EAddTaskRejectsTraversingID: pm_add_task's `id` param is raw input
+// that becomes the leading component of the task's file name, exactly like the
+// CLI's --id - so the traversal hole was never CLI-only. The guard lives in
+// Store.AddTask (storage.ValidateTaskID), which is why driving the real
+// handler end to end is the test that proves BOTH entry paths are covered.
+func TestE2EAddTaskRejectsTraversingID(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+	root := store.RootDir()
+
+	before, err := store.GetTasks("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []string{"../escaped", "../../escaped", "sub/dir-1"} {
+		text, isErr := call(t, sess, "pm_add_task", map[string]any{
+			"project": "test", "title": "Escaping task", "id": id,
+		})
+		if !isErr {
+			t.Fatalf("id %q must be a tool error, got: %s", id, text)
+		}
+		// Pin the message to ValidateTaskID's own wording: a looser assertion
+		// would still pass if the validator were dropped and the call failed
+		// for some other reason (e.g. an SDK-level decode error).
+		if !strings.Contains(text, "invalid task id") {
+			t.Errorf("id %q: error must come from ValidateTaskID, got: %s", id, text)
+		}
+	}
+
+	after, err := store.GetTasks("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("rejected adds created tasks (%d -> %d)", len(before), len(after))
+	}
+	// And nothing landed outside the project dir - in the pm root or above it.
+	for _, dir := range []string{root, filepath.Dir(root)} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.Contains(e.Name(), "escap") {
+				t.Fatalf("task file escaped to %s", filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+
+	// A legit ID still round-trips - this is hardening, not a schema change.
+	if text, isErr := call(t, sess, "pm_add_task", map[string]any{
+		"project": "test", "title": "Explicit id", "id": "t-99",
+	}); isErr {
+		t.Fatalf("valid explicit id rejected: %s", text)
+	}
+	if _, err := store.FindTaskExact("test", "t-99"); err != nil {
+		t.Fatalf("valid explicit id not created: %v", err)
+	}
+}
+
 func TestE2EContextAndListTasks(t *testing.T) {
 	store, _ := setupMCPTestStore(t)
 	sess := startMCP(t, store)

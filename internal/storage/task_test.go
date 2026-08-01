@@ -139,6 +139,29 @@ func TestValidateSlug(t *testing.T) {
 	}
 }
 
+// TestValidateTaskID: the ID is a path component (Filename renders
+// "<id>-<title>.md"), so traversal must be impossible - while every ID shape
+// that exists in real data keeps working (legacy numeric "30422", imported
+// ticket keys "ACME-253", hierarchical sub ids "pm-cli-72-3").
+func TestValidateTaskID(t *testing.T) {
+	for _, ok := range []string{
+		"pm-cli-72-3", "30422", "ACME-253", "a", "1", "app.orbit-1",
+		"full_project-2", "orbit2-16",
+	} {
+		if err := ValidateTaskID(ok); err != nil {
+			t.Errorf("ValidateTaskID(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"", "..", ".", "../foo", "../../escaped", "foo/bar", "/etc/passwd",
+		"foo/../bar", ".hidden", "-foo", "foo bar", "~foo", "a\\b",
+	} {
+		if err := ValidateTaskID(bad); err == nil {
+			t.Errorf("ValidateTaskID(%q) = nil, want error", bad)
+		}
+	}
+}
+
 func TestValidateStatus(t *testing.T) {
 	allowed := []TaskStatus{StatusTodo, StatusDoing, StatusDone}
 
