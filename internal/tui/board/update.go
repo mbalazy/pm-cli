@@ -102,6 +102,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// See reloadMsg above: the tick loop is already running, don't fan it out.
 		return m, nil
 
+	case editorResultMsg:
+		m.reload()
+		if msg.err != nil {
+			m.showErrorToast("editor failed", msg.err)
+		}
+		// See reloadMsg above: the tick loop is already running, don't fan it out.
+		return m, nil
+
 	case tea.MouseMsg:
 		if m.currentView == viewDetail || m.currentView == viewProjectInfo {
 			var cmd tea.Cmd

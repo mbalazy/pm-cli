@@ -299,3 +299,11 @@ type launchResultMsg struct {
 	kind  string
 	err   error
 }
+
+// editorResultMsg is openEditor's tea.ExecProcess callback result. A separate
+// type from launchResultMsg (rather than reusing it with a synthetic agent)
+// because openEditor never carries a launchAgent - the editor isn't one of
+// claude/codex/executor.
+type editorResultMsg struct {
+	err error
+}

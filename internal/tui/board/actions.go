@@ -55,7 +55,17 @@ func (m *Model) bulkStatusMove(tasks []*storage.Task, verb, suffix string, next 
 }
 
 // doMoveForward cycles task to next status column.
+//
+// Guarded against an empty m.statuses HERE, not at each call site: the V menu
+// (applyColumnVisibility) can hide every column, and every entry point that
+// reaches this function (board, detail, focus) indexes m.statuses via the
+// closure below - a zero-length slice divides by zero in the modulo.
 func (m *Model) doMoveForward(t *storage.Task) {
+	if len(m.statuses) == 0 {
+		m.toastMsg = "no visible columns"
+		m.toastExpiry = time.Now().Add(2 * time.Second)
+		return
+	}
 	m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
 	idx := m.statusIndex(t.Meta.Status)
 	if err := m.store.MoveTask(t, m.statuses[(idx+1)%len(m.statuses)]); err != nil {
@@ -64,8 +74,14 @@ func (m *Model) doMoveForward(t *storage.Task) {
 	m.reload()
 }
 
-// doMoveBack cycles task to previous status column.
+// doMoveBack cycles task to previous status column. See doMoveForward for why
+// the empty-statuses guard lives here rather than at each call site.
 func (m *Model) doMoveBack(t *storage.Task) {
+	if len(m.statuses) == 0 {
+		m.toastMsg = "no visible columns"
+		m.toastExpiry = time.Now().Add(2 * time.Second)
+		return
+	}
 	m.lastUndo = &undoAction{kind: "move", task: snapshotTask(t)}
 	idx := m.statusIndex(t.Meta.Status)
 	var newStatus storage.TaskStatus
