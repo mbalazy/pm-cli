@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -207,6 +208,8 @@ func TestPlanEpicBasePrecedence(t *testing.T) {
 	exc := func() *storage.Executor {
 		e := testExecutor()
 		e.BaseBranch = "development"
+		// A slot, so the --additional case gets past planEpic's no-slots refusal.
+		e.Worktrees = []storage.WorktreeSlot{{Path: "../app-additional"}}
 		return e
 	}
 	cases := []struct {
@@ -216,6 +219,7 @@ func TestPlanEpicBasePrecedence(t *testing.T) {
 	}{
 		{"default mode ignores executor.base_branch", epicOptions{}, "main"},
 		{"--base wins in default mode", epicOptions{base: "release/1"}, "release/1"},
+		{"--additional honours executor.base_branch", epicOptions{additional: true}, "development"},
 		{"independent mode honours executor.base_branch", epicOptions{independent: true}, "development"},
 		{"--base wins over executor.base_branch", epicOptions{independent: true, base: "release/1"}, "release/1"},
 	}
@@ -291,16 +295,8 @@ func subStatuses(t *testing.T, store *storage.Store) string {
 	for _, task := range tasks {
 		lines = append(lines, task.Meta.ID+"="+string(task.Meta.Status))
 	}
-	sortStrings(lines)
+	sort.Strings(lines)
 	return strings.Join(lines, ",")
-}
-
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
 }
 
 // TestApplyWorkerResultRefusesToResurrectADeletedTask: the executor holds its

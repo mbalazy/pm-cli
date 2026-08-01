@@ -108,6 +108,23 @@ type epicOptions struct {
 	errOut      io.Writer
 }
 
+// stdout/stderr resolve the run's writers, defaulting to the process streams -
+// the same contract as workOptions.stderr(), so an epicOptions built by hand
+// (every planEpic test does) stays safe to hand to executeEpic.
+func (o epicOptions) stdout() io.Writer {
+	if o.out != nil {
+		return o.out
+	}
+	return os.Stdout
+}
+
+func (o epicOptions) stderr() io.Writer {
+	if o.errOut != nil {
+		return o.errOut
+	}
+	return os.Stderr
+}
+
 // epicPlan is everything a run resolves BEFORE it touches git, pm or a worker:
 // the project + executor preflight, the tracker's ready subs, the mode, and the
 // branches. It is exactly the planWork/executeWork split `pm work` already uses
@@ -201,15 +218,15 @@ func planEpic(store storage.TaskStore, args []string, opts epicOptions) (*epicPl
 // printEpicDryRun renders the resolved plan (subs, branches, readiness) plus
 // the once-per-run commands the real run would execute.
 func printEpicDryRun(plan *epicPlan, opts epicOptions) {
-	printEpicPlan(opts.out, plan.tracker, plan.epicBranch, plan.baseBranch, plan.startStatus, plan.doneStatus,
+	printEpicPlan(opts.stdout(), plan.tracker, plan.epicBranch, plan.baseBranch, plan.startStatus, plan.doneStatus,
 		plan.subs, opts.additional, plan.workDir, plan.independent)
 	if opts.additional {
 		if prep := strings.TrimSpace(plan.exc.Prepare); prep != "" {
-			fmt.Fprintf(opts.out, "\nprepare (once per run, in claimed slot): %s\n", prep)
+			fmt.Fprintf(opts.stdout(), "\nprepare (once per run, in claimed slot): %s\n", prep)
 		}
 	}
 	if bl := strings.TrimSpace(plan.exc.Baseline); bl != "" {
-		fmt.Fprintf(opts.out, "\nbaseline (once per run, injected into every worker prompt): %s\n", bl)
+		fmt.Fprintf(opts.stdout(), "\nbaseline (once per run, injected into every worker prompt): %s\n", bl)
 	}
 }
 
@@ -220,7 +237,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	tracker, slug, subs := plan.tracker, plan.slug, plan.subs
 	epicBranch, baseBranch, doneStatus := plan.epicBranch, plan.baseBranch, plan.doneStatus
 	independentMode := plan.independent
-	errOut := opts.errOut
+	errOut := opts.stderr()
 
 	// Hard gate, not a warning: MoveTask validates statuses, so with an
 	// unlisted done status every "mark merged" move would fail AFTER the
@@ -449,7 +466,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	})
 
 	if independentMode {
-		printEpicSummary(opts.out, tracker, "independent, off "+baseBranch, outcomes)
+		printEpicSummary(opts.stdout(), tracker, "independent, off "+baseBranch, outcomes)
 		fmt.Fprintf(errOut, "\nEach sub lives on its own branch (pushed to origin when it carried commits). Finish + verify every task by hand, then open per-task PRs - nothing was merged anywhere.\n")
 		return nil
 	}
@@ -460,7 +477,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	// only affects which branch is checked out at exit.
 	_ = gitEnsureBranch(workDir, epicBranch, "")
 
-	printEpicSummary(opts.out, tracker, "integration: "+epicBranch, outcomes)
+	printEpicSummary(opts.stdout(), tracker, "integration: "+epicBranch, outcomes)
 
 	if !opts.noPR && anyMerged(outcomes) {
 		openEpicPR(errOut, workDir, epicBranch, baseBranch, tracker)
