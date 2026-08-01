@@ -115,8 +115,7 @@ func skillScripts(skillDir string) (string, []string) {
 func resolveRepoPath(projPath, p string) string {
 	p = strings.TrimSpace(p)
 	if p == "~" || strings.HasPrefix(p, "~/") {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, strings.TrimPrefix(p, "~"))
+		return expandTilde(p)
 	}
 	if filepath.IsAbs(p) {
 		return filepath.Clean(p)

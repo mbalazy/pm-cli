@@ -204,8 +204,7 @@ func ResolveWorktreeDir(projPath, p string) string {
 		return filepath.Clean(projPath) + "-additional"
 	}
 	if p == "~" || strings.HasPrefix(p, "~/") {
-		home, _ := os.UserHomeDir()
-		return filepath.Join(home, strings.TrimPrefix(p, "~"))
+		return expandTilde(p)
 	}
 	if filepath.IsAbs(p) {
 		return filepath.Clean(p)
