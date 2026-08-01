@@ -491,15 +491,20 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, common.Keys.Focus):
 		if t := m.selectedTask(); t != nil {
 			m.focusPlan.Toggle(t.Meta.ID)
-			if m.focusPlan.Contains(t.Meta.ID) {
-				m.toastMsg = "Added to focus"
-			} else {
-				m.toastMsg = "Removed from focus"
-			}
+			added := m.focusPlan.Contains(t.Meta.ID)
 			m.focusPlan.Date = storage.Today()
-			m.saveFocusPlan()
+			// Toast set only on a successful save - otherwise the unconditional
+			// "Added/Removed" text + 2s expiry clobbers the error toast
+			// saveFocusPlan just set (message and its 15s expiry both).
+			if m.saveFocusPlan() {
+				if added {
+					m.toastMsg = "Added to focus"
+				} else {
+					m.toastMsg = "Removed from focus"
+				}
+				m.toastExpiry = time.Now().Add(2 * time.Second)
+			}
 			m.rebuildFocusSet()
-			m.toastExpiry = time.Now().Add(2 * time.Second)
 		}
 
 	case key.Matches(msg, common.Keys.FocusView):
