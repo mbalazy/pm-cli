@@ -194,6 +194,13 @@ func (m *Model) reload() {
 	m.loadProjectCounts(allTasks)
 	m.fixCursors()
 
+	// focusTasks() lookup cache: rebuilt from the read we already did above, so
+	// focus navigation (view render + keypress handlers) never re-hits the store.
+	m.focusTaskLookup = make(map[string]*storage.Task, len(allTasks))
+	for _, t := range allTasks {
+		m.focusTaskLookup[t.Meta.ID] = t
+	}
+
 	// refresh focus plan: remove done/archived/deleted tasks
 	m.loadFocusPlan()
 	if m.focusPlan.Cleanup(allTasks) {

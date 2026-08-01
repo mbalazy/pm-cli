@@ -142,6 +142,97 @@ func TestSelectedFocusTask(t *testing.T) {
 	})
 }
 
+// TestFocusNavigationSingleStoreReadPerKeypress covers pm-cli-67-2: focusTasks()
+// used to call m.store.GetAllTasks() on every invocation, and it is invoked both
+// from the key handler (updateFocus) AND the subsequent render (viewFocus) - so
+// a single "j" press cost 2 full task-tree reads, defeating reload()'s design of
+// one read pass per refresh (see model.go's reload() doc comment). The fix caches
+// the ID->task lookup on the Model, rebuilt once in reload(); a keypress + the
+// render that follows it should need 0 fresh reads once that cache is warm.
+func TestFocusNavigationSingleStoreReadPerKeypress(t *testing.T) {
+	base := &storage.Store{Root: t.TempDir()}
+	if err := base.CreateProject("p", &storage.Project{Name: "P"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"p-1", "p-2", "p-3"} {
+		task := &storage.Task{Meta: storage.TaskMeta{ID: id, Title: id, Status: storage.StatusTodo}}
+		if err := base.AddTask("p", task); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cs := &countingStore{TaskStore: base}
+	m := New(cs, "")
+	m.focusPlan = storage.FocusPlan{Date: storage.Today(), Tasks: []string{"p-1", "p-2", "p-3"}}
+	m.rebuildFocusSet()
+	m.currentView = viewFocus
+
+	press := func(key rune) Model {
+		cs.getAllTasksCalls = 0
+		cs.getTasksCalls = 0
+		result, _ := m.updateFocus(keyRunes(key))
+		next, ok := result.(Model)
+		if !ok {
+			t.Fatalf("updateFocus returned %T, want Model", result)
+		}
+		_ = next.viewFocus() // the render bubbletea performs right after every Update
+		if total := cs.getAllTasksCalls + cs.getTasksCalls; total > 1 {
+			t.Errorf("key %q triggered %d task-tree reads (GetAllTasks=%d, GetTasks=%d), want at most 1",
+				string(key), total, cs.getAllTasksCalls, cs.getTasksCalls)
+		}
+		return next
+	}
+
+	m = press('j')
+	m = press('j')
+	press('k')
+}
+
+// TestReloadRefreshesFocusTaskCache is the other half of the focus cache: the
+// lookup is only ever rebuilt in reload(), so if that rebuild is dropped the
+// cache is filled once and never again - and the focus view keeps rendering a
+// task's old title/status after another process (an MCP session, `pm mv`) has
+// changed it on disk. The counting test above passes either way, since a stale
+// cache reads the store even less.
+func TestReloadRefreshesFocusTaskCache(t *testing.T) {
+	root := t.TempDir()
+	store := &storage.Store{Root: root}
+	if err := store.CreateProject("p", &storage.Project{Name: "P"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddTask("p", &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "before", Status: storage.StatusTodo}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.WriteFocusPlan(root, storage.FocusPlan{Date: storage.Today(), Tasks: []string{"p-1"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(store, "")
+	// The focus view rendering once is what warms the cache in practice.
+	if got := m.focusTasks(); len(got) != 1 || got[0].Meta.Title != "before" {
+		t.Fatalf("focusTasks() = %v, want one task titled %q", got, "before")
+	}
+
+	task, err := store.FindTaskExact("p", "p-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Meta.Title = "after"
+	if err := store.WriteTask(task); err != nil {
+		t.Fatal(err)
+	}
+
+	m.reload()
+
+	got := m.focusTasks()
+	if len(got) != 1 {
+		t.Fatalf("focusTasks() returned %d tasks after reload, want 1", len(got))
+	}
+	if got[0].Meta.Title != "after" {
+		t.Errorf("focusTasks() returned stale title %q after reload, want %q", got[0].Meta.Title, "after")
+	}
+}
+
 func TestFixFocusCursor(t *testing.T) {
 	m := focusFixture(t)
 

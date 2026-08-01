@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mattn/go-runewidth"
 )
 
 func keyRunes(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
@@ -208,6 +209,12 @@ func TestTruncateWidth(t *testing.T) {
 			}
 			if !strings.HasSuffix(got, "…") {
 				t.Fatalf("truncated result should end with ellipsis: %q", got)
+			}
+			// The point of the function: the result fits the column it was cut
+			// for. A byte-oriented cut overshoots on diacritics and doubly so
+			// on emoji, which is what pushed the menus out of their overlay.
+			if w, limit := runewidth.StringWidth(got), max(c.max, 2); w > limit {
+				t.Errorf("result is %d cells wide, want at most %d: %q", w, limit, got)
 			}
 		})
 	}

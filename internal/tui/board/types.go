@@ -269,9 +269,10 @@ type Model struct {
 	startupDuration time.Duration
 
 	// focus plan
-	focusCursor int
-	focusPlan   storage.FocusPlan
-	focusSet    map[string]bool // O(1) lookup for card rendering
+	focusCursor     int
+	focusPlan       storage.FocusPlan
+	focusSet        map[string]bool          // O(1) lookup for card rendering
+	focusTaskLookup map[string]*storage.Task // ID->task cache, rebuilt in reload() so focusTasks() never re-reads the store
 
 	// hidden projects (not shown in tab bar)
 	hiddenProjects map[string]bool
