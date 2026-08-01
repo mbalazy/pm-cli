@@ -117,3 +117,46 @@ func TestSelectModeBulkActionsWithMarkedTaskAndNoColumns(t *testing.T) {
 		}()
 	}
 }
+
+// TestArchiveSearchKeyDoesNotLeakIntoBoard is the pm-cli-65 regression:
+// pressing "/" in the archive view set m.searching without the archive
+// dispatch ever consuming search-mode keys, so the flag survived the esc
+// back to the board and the very next keypress there was silently swallowed
+// by updateSearch instead of updateBoard. Drives the real Model.Update
+// dispatch (not updateArchive directly) so the routing bug is exercised.
+func TestArchiveSearchKeyDoesNotLeakIntoBoard(t *testing.T) {
+	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusTodo}})
+
+	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlA})
+	got, ok := result.(Model)
+	if !ok {
+		t.Fatalf("Update(ctrl+a) returned %T, want Model", result)
+	}
+	if got.currentView != viewArchive {
+		t.Fatalf("currentView = %v, want viewArchive after ctrl+a", got.currentView)
+	}
+
+	result, _ = got.Update(keyMsg("/"))
+	got, ok = result.(Model)
+	if !ok {
+		t.Fatalf("Update(/) returned %T, want Model", result)
+	}
+	if got.searching {
+		t.Errorf("searching = true after / in archive view, want a no-op (archive has no filter)")
+	}
+	if got.currentView != viewArchive {
+		t.Errorf("currentView = %v after / in archive view, want to stay in archive", got.currentView)
+	}
+
+	result, _ = got.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	got, ok = result.(Model)
+	if !ok {
+		t.Fatalf("Update(esc) returned %T, want Model", result)
+	}
+	if got.currentView != viewBoard {
+		t.Fatalf("currentView = %v, want viewBoard after esc from archive", got.currentView)
+	}
+	if got.searching {
+		t.Fatalf("searching = true after archive -> board, want no unrequested search prompt")
+	}
+}
