@@ -39,33 +39,49 @@ func cardHeight(t *storage.Task) int {
 	return lines + 3 // +2 border, +1 margin bottom
 }
 
-// fixScrollOffsets ensures the cursor is visible within the column viewport.
-// It renders cards to measure actual heights (accounting for text wrapping).
-func (m *Model) fixScrollOffsets() {
+// columnGeometry computes the two board-layout numbers viewBoard (view.go) and
+// fixScrollOffsets both need and used to compute independently (a drift risk:
+// render and scroll disagreeing on where the cursor sits). maxCardHeight is
+// the vertical budget for a column's cards; colWidth is a single column's
+// rendered width (zoom mode collapses to one column at full width).
+//
+// Non-column overhead: title(2\n) + tabs(2\n) + after-cols(1\n) + confirm(1\n)
+// + status bar(1 line) + column border/padding(4\n) = 11 lines. Search/add
+// input adds 1 more when active.
+func (m Model) columnGeometry() (maxCardHeight, colWidth int) {
 	overhead := 11
 	if m.adding || m.searching || m.searchQuery != "" {
 		overhead++
 	}
-	maxCardHeight := m.height - overhead
+	maxCardHeight = m.height - overhead
 	if maxCardHeight < 5 {
 		maxCardHeight = 5
 	}
-	// Conservative budget: subtract 2 for column header + possible scroll indicator
+
+	numCols := len(m.statuses)
+	if numCols == 0 || m.zoomed {
+		numCols = 1
+	}
+	colWidth = (m.width - 8) / numCols
+	if colWidth < 20 {
+		colWidth = 20
+	}
+	return maxCardHeight, colWidth
+}
+
+// fixScrollOffsets ensures the cursor is visible within the column viewport.
+// It renders cards to measure actual heights (accounting for text wrapping).
+func (m *Model) fixScrollOffsets() {
+	maxCardHeight, colWidth := m.columnGeometry()
+	// Conservative budget: subtract a CONSTANT 2 lines for column header +
+	// possible scroll indicator. viewBoard (view.go) instead subtracts the
+	// ACTUAL header line count (1, or 2 once a "N more" indicator is shown) -
+	// deliberately different: this is a pre-render estimate that must stay
+	// stable across scroll direction changes, while the renderer knows the
+	// real number once it decides whether to draw the indicator.
 	cardBudget := maxCardHeight - 2
 	if cardBudget < 3 {
 		cardBudget = 3
-	}
-
-	numCols := len(m.statuses)
-	if numCols == 0 {
-		numCols = 1
-	}
-	colWidth := (m.width - 8) / numCols
-	if m.zoomed {
-		colWidth = m.width - 8
-	}
-	if colWidth < 20 {
-		colWidth = 20
 	}
 	cardW := colWidth - 6
 

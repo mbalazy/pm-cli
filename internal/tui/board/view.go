@@ -78,18 +78,12 @@ func (m Model) viewBoard() string {
 	sb.WriteString("\n\n")
 
 	// columns
-	numCols := len(m.statuses)
-	if numCols == 0 {
-		numCols = 1
-	}
-
 	// In zoom mode, show only the active column at full width
 	var visibleStatuses []storage.TaskStatus
 	var visibleIndices []int
 	if m.zoomed && len(m.statuses) > 0 {
 		visibleStatuses = []storage.TaskStatus{m.statuses[m.activeCol]}
 		visibleIndices = []int{m.activeCol}
-		numCols = 1
 	} else {
 		visibleStatuses = m.statuses
 		visibleIndices = make([]int, len(m.statuses))
@@ -98,21 +92,7 @@ func (m Model) viewBoard() string {
 		}
 	}
 
-	colWidth := (m.width - 8) / numCols
-	if colWidth < 20 {
-		colWidth = 20
-	}
-	// Non-column overhead: title(2\n) + tabs(2\n) + after-cols(1\n) + confirm(1\n)
-	// + status bar(1 line) + column border/padding(4\n) = 11 lines.
-	// Search/add input adds 1 more when active.
-	overhead := 11
-	if m.adding || m.searching || m.searchQuery != "" {
-		overhead++
-	}
-	maxCardHeight := m.height - overhead
-	if maxCardHeight < 5 {
-		maxCardHeight = 5
-	}
+	maxCardHeight, colWidth := m.columnGeometry()
 
 	var cols []string
 	for vi, status := range visibleStatuses {
