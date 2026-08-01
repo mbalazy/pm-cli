@@ -18,9 +18,12 @@ type TaskStore interface {
 	ProjectPrefix(slug string) string
 	ResolveProject(input string) (string, error)
 
-	// Projects - write
+	// Projects - write. All three self-lock; never call them while holding
+	// LockProject. MutateProject is the one to use for a partial-field edit
+	// (it re-reads the project fresh inside the critical section).
 	CreateProject(slug string, p *Project) error
 	UpdateProject(slug string, p *Project) error
+	MutateProject(slug string, fn func(*Project) error) (*Project, error)
 
 	// Tasks - read
 	GetTasks(projectSlug string) ([]*Task, error)

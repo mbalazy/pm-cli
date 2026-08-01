@@ -24,7 +24,16 @@ import (
 // (handler/apply) level.
 func (s *Store) LockProject(slug string) (func(), error) {
 	dir := s.ProjectDir(slug)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	// The lock file lives INSIDE the project dir, so creating the dir here
+	// (as this used to) made every lock site able to conjure a project: a
+	// write to a typo'd slug silently created one, and locking a project
+	// someone just deleted resurrected its dir - `applyWorkerResult` then
+	// wrote a 30-minute-old task into it, invisible forever since no
+	// project.yaml comes back with it. Locking something that does not exist
+	// is a caller error; CreateProject (the only site that legitimately makes
+	// the dir) MkdirAll's before it locks. Callers that degrade to an
+	// unlocked write on error keep exactly the behaviour they had.
+	if _, err := os.Stat(dir); err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(filepath.Join(dir, ".pm.lock"), os.O_CREATE|os.O_RDWR, 0644)

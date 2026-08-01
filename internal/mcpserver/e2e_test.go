@@ -140,6 +140,50 @@ func TestE2EAddGetUpdateMoveDelete(t *testing.T) {
 	}
 }
 
+// TestE2EUpdateProject: the handler patches only the fields it was given and
+// leaves the rest of project.yaml as it found it, links merging instead of
+// replacing. (It cannot exercise the mid-handler race the lock exists for -
+// the parallel write below is sequenced BEFORE the call; the serialization
+// itself is covered by storage's TestMutateProjectSerializesLostUpdate.)
+func TestE2EUpdateProject(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	// A parallel writer sets fields this call will not touch.
+	proj, err := store.GetProject("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj.Repo = "git@x:test.git"
+	proj.Links = map[string]string{"board": "https://x/board"}
+	if err := store.UpdateProject("test", proj); err != nil {
+		t.Fatal(err)
+	}
+
+	text, isErr := call(t, sess, "pm_update_project", map[string]any{
+		"project": "test",
+		"stack":   "Go, Bubble Tea",
+		"links":   map[string]string{"ci": "https://x/ci"},
+	})
+	if isErr {
+		t.Fatalf("update_project error: %s", text)
+	}
+
+	final, err := store.GetProject("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Stack != "Go, Bubble Tea" {
+		t.Fatalf("stack not applied: %q", final.Stack)
+	}
+	if final.Name != "Test Project" || final.Path != "/home/user/test" || final.Repo != "git@x:test.git" {
+		t.Fatalf("untouched fields clobbered: %+v", final)
+	}
+	if final.Links["board"] != "https://x/board" || final.Links["ci"] != "https://x/ci" {
+		t.Fatalf("links must merge, got %v", final.Links)
+	}
+}
+
 func TestE2EErrorsAreToolErrors(t *testing.T) {
 	store, _ := setupMCPTestStore(t)
 	sess := startMCP(t, store)

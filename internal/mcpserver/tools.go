@@ -747,57 +747,57 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
 		}
-		proj, err := store.GetProject(slug)
+		// The whole read -> patch -> write runs under the project lock, with
+		// the project re-read FRESH inside it: this handler only sets the
+		// fields the caller passed, so a copy read before the lock would
+		// silently revert whatever a parallel session changed meanwhile.
+		proj, err := store.MutateProject(slug, func(proj *storage.Project) error {
+			if in.Name != "" {
+				proj.Name = in.Name
+			}
+			if in.Path != "" {
+				proj.Path = in.Path
+			}
+			if in.Repo != "" {
+				proj.Repo = in.Repo
+			}
+			if in.Stack != "" {
+				proj.Stack = in.Stack
+			}
+			if in.Notes != "" {
+				proj.Notes = in.Notes
+			}
+			if in.Prefix != "" {
+				proj.Prefix = in.Prefix
+			}
+
+			// Links: merge, never remove
+			if len(in.Links) > 0 {
+				if proj.Links == nil {
+					proj.Links = make(map[string]string)
+				}
+				for k, v := range in.Links {
+					proj.Links[k] = v
+				}
+			}
+
+			// Tags: replace if provided
+			if in.Tags != nil {
+				proj.Tags = in.Tags
+			}
+
+			// Statuses: replace if provided
+			if in.Statuses != nil {
+				proj.Statuses = in.Statuses
+			}
+
+			// Archived: set if provided
+			if in.Archived != nil {
+				proj.Archived = *in.Archived
+			}
+			return nil
+		})
 		if err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
-		}
-
-		if in.Name != "" {
-			proj.Name = in.Name
-		}
-		if in.Path != "" {
-			proj.Path = in.Path
-		}
-		if in.Repo != "" {
-			proj.Repo = in.Repo
-		}
-		if in.Stack != "" {
-			proj.Stack = in.Stack
-		}
-		if in.Notes != "" {
-			proj.Notes = in.Notes
-		}
-		if in.Prefix != "" {
-			proj.Prefix = in.Prefix
-		}
-
-		// Links: merge, never remove
-		if len(in.Links) > 0 {
-			if proj.Links == nil {
-				proj.Links = make(map[string]string)
-			}
-			for k, v := range in.Links {
-				proj.Links[k] = v
-			}
-		}
-
-		// Tags: replace if provided
-		if in.Tags != nil {
-			proj.Tags = in.Tags
-		}
-
-		// Statuses: replace if provided
-		if in.Statuses != nil {
-			proj.Statuses = in.Statuses
-		}
-
-		// Archived: set if provided
-		if in.Archived != nil {
-			proj.Archived = *in.Archived
-		}
-
-		if err := store.UpdateProject(slug, proj); err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
 		}
