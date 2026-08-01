@@ -61,10 +61,10 @@ func TestCapturePipeSurvivesMoreThanThePipeBuffer(t *testing.T) {
 }
 
 func TestLogIfErr(t *testing.T) {
-	if got := captureStderr(t, func() { logIfErr("move x-1 to doing", nil) }); got != "" {
+	if got := captureStderr(t, func() { logIfErr(os.Stderr, "move x-1 to doing", nil) }); got != "" {
 		t.Errorf("nil err should print nothing, got %q", got)
 	}
-	got := captureStderr(t, func() { logIfErr("move x-1 to doing", errors.New("disk full")) })
+	got := captureStderr(t, func() { logIfErr(os.Stderr, "move x-1 to doing", errors.New("disk full")) })
 	if !strings.Contains(got, "move x-1 to doing") || !strings.Contains(got, "disk full") {
 		t.Errorf("expected context + error in output, got %q", got)
 	}
@@ -408,7 +408,7 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 		{Meta: storage.TaskMeta{ID: "p-1-5", Title: "manual done", Status: storage.StatusDone, Order: 50, Mode: "manual"}},
 	}
 	out := captureStdout(t, func() {
-		printEpicPlan(tracker, "epic/p-1", "main", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", false)
+		printEpicPlan(os.Stdout, tracker, "epic/p-1", "main", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", false)
 	})
 	for _, want := range []string{
 		"[READY ] p-1-1",
@@ -426,7 +426,7 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 	}
 
 	independent := captureStdout(t, func() {
-		printEpicPlan(tracker, "epic/p-1", "development", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", true)
+		printEpicPlan(os.Stdout, tracker, "epic/p-1", "development", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", true)
 	})
 	if !strings.Contains(independent, "mode: INDEPENDENT") {
 		t.Errorf("independent plan should announce the mode:\n%s", independent)
@@ -436,6 +436,34 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 	}
 	if strings.Contains(independent, "integration branch:") {
 		t.Errorf("independent plan must not mention an integration branch:\n%s", independent)
+	}
+}
+
+// TestPrintEpicSummaryLabel: the header used to hardcode "integration: %s", so
+// an independent run - which has no integration branch at all - reported
+// "(integration: independent, off main)".
+func TestPrintEpicSummaryLabel(t *testing.T) {
+	tracker := &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "Epic"}}
+	outcomes := []subOutcome{{"p-1-1", "merged", "ok", "feat/one"}}
+
+	var integration, independent strings.Builder
+	printEpicSummary(&integration, tracker, "integration: epic/p-1", outcomes)
+	printEpicSummary(&independent, tracker, "independent, off main", outcomes)
+
+	if !strings.Contains(integration.String(), "(integration: epic/p-1)") {
+		t.Errorf("integration summary should name the integration branch:\n%s", integration.String())
+	}
+	if !strings.Contains(independent.String(), "(independent, off main)") {
+		t.Errorf("independent summary should name the fork base:\n%s", independent.String())
+	}
+	if strings.Contains(independent.String(), "integration") {
+		t.Errorf("independent summary must not claim an integration branch:\n%s", independent.String())
+	}
+	// Both keep rendering the per-sub lines.
+	for _, out := range []string{integration.String(), independent.String()} {
+		if !strings.Contains(out, "merged    p-1-1  - ok") {
+			t.Errorf("summary missing the sub line:\n%s", out)
+		}
 	}
 }
 
@@ -552,7 +580,7 @@ func TestOpenEpicPRUsesResolvedBase(t *testing.T) {
 
 	tracker := &storage.Task{Meta: storage.TaskMeta{ID: "proj-1", Title: "Epic"}}
 	stderr := captureStderr(t, func() {
-		openEpicPR(repo, "epic/x", "development", tracker)
+		openEpicPR(os.Stderr, repo, "epic/x", "development", tracker)
 	})
 
 	raw, err := os.ReadFile(argsFile)

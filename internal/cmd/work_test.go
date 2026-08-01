@@ -350,6 +350,35 @@ func TestAppendLog(t *testing.T) {
 	})
 }
 
+// TestWarnInertFlags: --slot and (for `pm work`) --base do nothing without
+// --additional. They stay warnings rather than errors so no existing script's
+// exit code changes.
+func TestWarnInertFlags(t *testing.T) {
+	warn := func(additional bool, slotPin int, base string) string {
+		var buf strings.Builder
+		warnInertFlags(&buf, "pm work", additional, slotPin, base)
+		return buf.String()
+	}
+
+	if got := warn(false, 2, ""); !strings.Contains(got, "--slot 2 ignored without --additional") {
+		t.Errorf("--slot without --additional should warn, got %q", got)
+	}
+	if got := warn(false, 0, "development"); !strings.Contains(got, "--base development ignored without --additional") {
+		t.Errorf("--base without --additional should warn, got %q", got)
+	}
+	if got := warn(true, 2, "development"); got != "" {
+		t.Errorf("with --additional both flags apply - no warning expected, got %q", got)
+	}
+	if got := warn(false, 0, ""); got != "" {
+		t.Errorf("nothing inert, nothing to say - got %q", got)
+	}
+	// `pm run-epic --base` DOES apply in default mode, so the manager passes an
+	// empty base and must stay silent about it.
+	if got := warn(false, 0, "  "); got != "" {
+		t.Errorf("a blank base is unset, not inert - got %q", got)
+	}
+}
+
 func mustContain(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if !strings.Contains(haystack, needle) {
@@ -384,7 +413,7 @@ func TestApplyWorkerResultFreshRead(t *testing.T) {
 	}
 
 	res := &workerResult{Status: "merged", Summary: "done", Branch: "feat/x", Commits: []string{"abc"}}
-	if err := applyWorkerResult(store, stale, "feat/x", "sess-1", res, true, false); err != nil {
+	if err := applyWorkerResult(os.Stderr, store, stale, "feat/x", "sess-1", res, true, false); err != nil {
 		t.Fatal(err)
 	}
 

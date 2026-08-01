@@ -32,17 +32,17 @@ func TestCaptureBaseline(t *testing.T) {
 	dir := t.TempDir()
 
 	t.Run("green command", func(t *testing.T) {
-		got := captureBaseline(dir, "true")
+		got := captureBaseline(os.Stderr, dir, "true")
 		mustContain(t, got, "GREEN")
 	})
 	t.Run("red command captures combined output", func(t *testing.T) {
-		got := captureBaseline(dir, "echo out-line; echo err-line >&2; exit 3")
+		got := captureBaseline(os.Stderr, dir, "echo out-line; echo err-line >&2; exit 3")
 		mustContain(t, got, "exited 3")
 		mustContain(t, got, "out-line")
 		mustContain(t, got, "err-line")
 	})
 	t.Run("long output keeps the tail", func(t *testing.T) {
-		got := captureBaseline(dir, `i=0; while [ $i -lt 600 ]; do echo "line-$i 0123456789"; i=$((i+1)); done; exit 1`)
+		got := captureBaseline(os.Stderr, dir, `i=0; while [ $i -lt 600 ]; do echo "line-$i 0123456789"; i=$((i+1)); done; exit 1`)
 		mustContain(t, got, "truncated")
 		mustContain(t, got, "line-599")
 		if strings.Contains(got, "\"line-0 ") {
@@ -50,7 +50,7 @@ func TestCaptureBaseline(t *testing.T) {
 		}
 	})
 	t.Run("command that cannot run degrades to no baseline", func(t *testing.T) {
-		if got := captureBaseline(filepath.Join(dir, "no-such-dir"), "true"); got != "" {
+		if got := captureBaseline(os.Stderr, filepath.Join(dir, "no-such-dir"), "true"); got != "" {
 			t.Errorf("expected empty section when the command cannot run, got %q", got)
 		}
 	})
