@@ -341,7 +341,13 @@ func TestMoveTaskPreservesAC(t *testing.T) {
 	})
 }
 
-func TestCreateProjectDuplicateBlocked(t *testing.T) {
+// TestStorageCreateProjectAllowsFreshSlug pins a storage-layer invariant:
+// Store.CreateProject itself has no duplicate-slug guard (that check lives
+// only in the pm_create_project MCP handler - see
+// TestE2ECreateProject/duplicate_slug_rejected for real handler coverage), so
+// this just confirms a project with a brand-new slug is created and readable
+// back, alongside a pre-existing one.
+func TestStorageCreateProjectAllowsFreshSlug(t *testing.T) {
 	store, _ := setupMCPTestStore(t)
 
 	// "test" project already exists from setup

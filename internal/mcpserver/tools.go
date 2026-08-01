@@ -676,11 +676,19 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			return r, nil, nil
 		}
 
-		// Check if project already exists
+		// Check if project already exists. Case-insensitive: on the default
+		// case-insensitive-but-preserving macOS filesystem, ProjectDir("foo")
+		// and ProjectDir("Foo") are the SAME directory - an exact-case-only
+		// check would miss the collision, MkdirAll would silently succeed
+		// against the existing dir, and writeProject's merge-into-existing-file
+		// logic would splice this project's fields into the other one's
+		// project.yaml. ValidateSlug already forces new slugs to be lowercase,
+		// but an existing slug (e.g. CLI-created, which has no slug validation)
+		// may not be.
 		existing, _ := store.ListProjects()
 		for _, s := range existing {
-			if s == in.Slug {
-				r, _ := toolError(fmt.Sprintf("project %q already exists", in.Slug))
+			if strings.EqualFold(s, in.Slug) {
+				r, _ := toolError(fmt.Sprintf("project %q already exists (case-insensitive match with %q - this filesystem does not distinguish case)", in.Slug, s))
 				return r, nil, nil
 			}
 		}
@@ -785,20 +793,6 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
 		}
-		// A statuses replacement that drops a status current tasks sit on
-		// orphans them - the task vanishes from every board column, the same
-		// bug class 0.29.2 closed for MoveTask/pm_update_task. Enforced here
-		// (handler-level), not in storage - CLI/manual project.yaml edits stay
-		// lenient. Best-effort, not race-proof: the task read happens before
-		// MutateProject takes the project lock, so a task concurrently moved
-		// onto the about-to-be-dropped status in that narrow window is
-		// invisible to this check.
-		if in.Statuses != nil {
-			if err := validateStatusesKeepTasks(store, slug, in.Statuses); err != nil {
-				r, _ := toolError(err.Error())
-				return r, nil, nil
-			}
-		}
 		// The whole read -> patch -> write runs under the project lock, with
 		// the project re-read FRESH inside it: this handler only sets the
 		// fields the caller passed, so a copy read before the lock would
@@ -838,8 +832,20 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 				proj.Tags = in.Tags
 			}
 
-			// Statuses: replace if provided
+			// Statuses: replace if provided. Validated HERE, inside the locked
+			// critical section (GetTasks itself takes no lock, so this doesn't
+			// nest LockProject): a statuses replacement that drops a status
+			// current tasks sit on orphans them - the task vanishes from every
+			// board column, the same bug class 0.29.2 closed for
+			// MoveTask/pm_update_task. Reading tasks here, under the same lock
+			// task-mutation handlers hold around their own writes, closes the
+			// TOCTOU window a pre-lock check would leave open. Enforced here
+			// (handler-level), not in storage - CLI/manual project.yaml edits
+			// stay lenient.
 			if in.Statuses != nil {
+				if err := validateStatusesKeepTasks(store, slug, in.Statuses); err != nil {
+					return err
+				}
 				proj.Statuses = in.Statuses
 			}
 

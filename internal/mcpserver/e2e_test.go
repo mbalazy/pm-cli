@@ -917,6 +917,31 @@ func TestE2ECreateProject(t *testing.T) {
 			t.Fatalf("non-canonical slug must be a tool error, got: %s", text)
 		}
 	})
+
+	// A case-only collision must be rejected too: on the default
+	// case-insensitive-but-preserving macOS filesystem, ProjectDir("mixedcase")
+	// and ProjectDir("MixedCase") are the SAME directory - an exact-case-only
+	// duplicate check would miss this and MkdirAll/writeProject would silently
+	// splice the new project's fields into the existing one's project.yaml.
+	// The pre-existing slug here is created directly through the store (like a
+	// CLI-created project, which has no slug validation) since ValidateSlug
+	// itself would reject a mixed-case slug on create.
+	if err := store.CreateProject("MixedCase", &storage.Project{Name: "Mixed"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("case-insensitive collision rejected", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_create_project", map[string]any{"slug": "mixedcase"})
+		if !isErr {
+			t.Fatalf("case-insensitive slug collision must be a tool error, got: %s", text)
+		}
+		proj, err := store.GetProject("MixedCase")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if proj.Name != "Mixed" {
+			t.Fatalf("rejected create must not clobber the existing project, got name %q", proj.Name)
+		}
+	})
 }
 
 // TestE2EUpdateProjectStatuses: replacing statuses with a set that would
