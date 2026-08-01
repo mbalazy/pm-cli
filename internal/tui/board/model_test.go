@@ -60,12 +60,12 @@ func TestReloadSingleStoreReadPass(t *testing.T) {
 	t.Run("project-scoped view", func(t *testing.T) {
 		cs := &countingStore{TaskStore: base}
 		m := &Model{
-			store:          cs,
-			projects:       []string{"all", "p"},
-			activeProject:  1,
-			hiddenStatuses: make(map[storage.TaskStatus]bool),
-			width:          80,
-			height:         24,
+			store:         cs,
+			projects:      []string{"all", "p"},
+			activeProject: 1,
+			menuState:     menuState{hiddenStatuses: make(map[storage.TaskStatus]bool)},
+			width:         80,
+			height:        24,
 		}
 		m.reload()
 
@@ -84,12 +84,12 @@ func TestReloadSingleStoreReadPass(t *testing.T) {
 	t.Run("all-projects view", func(t *testing.T) {
 		cs := &countingStore{TaskStore: base}
 		m := &Model{
-			store:          cs,
-			projects:       []string{"all", "p"},
-			activeProject:  0,
-			hiddenStatuses: make(map[storage.TaskStatus]bool),
-			width:          80,
-			height:         24,
+			store:         cs,
+			projects:      []string{"all", "p"},
+			activeProject: 0,
+			menuState:     menuState{hiddenStatuses: make(map[storage.TaskStatus]bool)},
+			width:         80,
+			height:        24,
 		}
 		m.reload()
 
@@ -120,12 +120,12 @@ func TestReloadArchivedProjectTabFallsBack(t *testing.T) {
 
 	newModel := func(slug string) *Model {
 		return &Model{
-			store:          store,
-			projects:       []string{"all", slug},
-			activeProject:  1,
-			hiddenStatuses: make(map[storage.TaskStatus]bool),
-			width:          80,
-			height:         24,
+			store:         store,
+			projects:      []string{"all", slug},
+			activeProject: 1,
+			menuState:     menuState{hiddenStatuses: make(map[storage.TaskStatus]bool)},
+			width:         80,
+			height:        24,
 		}
 	}
 

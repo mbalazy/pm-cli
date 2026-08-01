@@ -153,7 +153,9 @@ func (m Model) updateLinksMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, common.Keys.Enter):
 		if m.linksCursor < len(m.linkItems) {
-			exec.Command("open", m.linkItems[m.linksCursor].url).Start()
+			// Run() (not Start()) so the process is reaped instead of leaking
+			// a zombie per open link - "open" returns almost immediately.
+			_ = exec.Command("open", m.linkItems[m.linksCursor].url).Run()
 		}
 		if len(m.linkItems) <= 1 {
 			m.linksMenu = false
@@ -357,7 +359,10 @@ func (m Model) updateColVisMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) copyToClipboard(value string) {
 	c := exec.Command("pbcopy")
 	c.Stdin = strings.NewReader(value)
-	c.Start()
+	if err := c.Run(); err != nil {
+		m.showErrorToast("copy failed", err)
+		return
+	}
 	display := truncateWidth(value, 40)
 	m.toastMsg = "Copied: " + display
 	m.toastExpiry = time.Now().Add(2 * time.Second)

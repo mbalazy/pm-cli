@@ -160,3 +160,31 @@ func TestArchiveSearchKeyDoesNotLeakIntoBoard(t *testing.T) {
 		t.Fatalf("searching = true after archive -> board, want no unrequested search prompt")
 	}
 }
+
+// TestArchivedTasksIgnoresSearchQuery covers the still-live half of pm-cli-65:
+// batch A (abab6e3) fixed only the "/" MODE leak into the archive view -
+// archivedTasks() itself still filtered by m.searchQuery, so a filter left
+// active on the board from before Ctrl+a silently pre-filtered the archive
+// list even though the archive has no filter feature of its own. A matching
+// task must stay visible in the archive regardless of a non-matching board
+// query, and the board's own query must survive the round trip unchanged.
+func TestArchivedTasksIgnoresSearchQuery(t *testing.T) {
+	// StatusArchived is system-level, not one of the project's own statuses
+	// (see storage.ValidateStatus), so AddTask cannot create a task with it
+	// directly - archive via MoveTask like the rest of the board does.
+	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "Archived one", Status: storage.StatusTodo}})
+	task := m.taskByID("p-1")
+	if err := m.store.MoveTask(task, storage.StatusArchived); err != nil {
+		t.Fatal(err)
+	}
+	m.reload()
+	m.searchQuery = "does-not-match-anything"
+
+	tasks := m.archivedTasks()
+	if len(tasks) != 1 || tasks[0].Meta.ID != "p-1" {
+		t.Fatalf("archivedTasks() = %v, want [p-1] despite a non-matching board searchQuery", tasks)
+	}
+	if m.searchQuery != "does-not-match-anything" {
+		t.Errorf("searchQuery = %q, want the board's filter left untouched", m.searchQuery)
+	}
+}

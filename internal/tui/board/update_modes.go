@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/mbalazy/pm/internal/tui/common"
@@ -263,15 +262,7 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			m.previousView = viewArchive
 			m.currentView = viewDetail
-			m.detailTask = t
-			m.detailViewport = viewport.New(m.width, m.height-2)
-			content := m.renderTaskDetail(t)
-			m.detailViewport.SetContent(content)
-			m.detailPlainContent = stripANSI(content)
-			m.detailSearchQuery = ""
-			m.detailSearchMatches = nil
-			m.detailSearchIdx = 0
-			m.detailSearching = false
+			m.openDetailTask(t)
 		}
 
 	case key.Matches(msg, common.Keys.Tab):
@@ -326,15 +317,7 @@ func (m Model) updateFocus(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			m.previousView = viewFocus
 			m.currentView = viewDetail
-			m.detailTask = t
-			m.detailViewport = viewport.New(m.width, m.height-2)
-			content := m.renderTaskDetail(t)
-			m.detailViewport.SetContent(content)
-			m.detailPlainContent = stripANSI(content)
-			m.detailSearchQuery = ""
-			m.detailSearchMatches = nil
-			m.detailSearchIdx = 0
-			m.detailSearching = false
+			m.openDetailTask(t)
 		}
 
 	case key.Matches(msg, common.Keys.Focus), key.Matches(msg, common.Keys.Delete):

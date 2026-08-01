@@ -17,7 +17,7 @@ func New(store storage.TaskStore, filterProject string) Model {
 		width:          80,
 		height:         24,
 		projectCounts:  make(map[string]int),
-		hiddenStatuses: make(map[storage.TaskStatus]bool),
+		menuState:      menuState{hiddenStatuses: make(map[storage.TaskStatus]bool)},
 		hiddenProjects: make(map[string]bool),
 		selected:       make(map[string]bool),
 		focusSet:       make(map[string]bool),
@@ -317,14 +317,15 @@ func matchesQuery(t *storage.Task, q string) bool {
 	return false
 }
 
+// archivedTasks lists every archived task, deliberately IGNORING
+// m.searchQuery: the archive has no filter feature of its own, so a board
+// filter left active from before Ctrl+a must not silently pre-filter the
+// archive list. The board keeps its own filter untouched (searchQuery is not
+// cleared here) so it is still applied when the user returns.
 func (m Model) archivedTasks() []*storage.Task {
 	var result []*storage.Task
-	q := strings.ToLower(m.searchQuery)
 	for _, t := range m.tasks {
 		if t.Meta.Status != storage.StatusArchived {
-			continue
-		}
-		if q != "" && !matchesQuery(t, q) {
 			continue
 		}
 		result = append(result, t)

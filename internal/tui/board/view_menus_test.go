@@ -18,7 +18,7 @@ func TestMenuTruncationHandlesMultiByteStrings(t *testing.T) {
 		// "ą" is a 2-byte rune -> character boundaries fall on even byte offsets
 		// only; byte 47 (odd) always lands mid-character.
 		long := strings.Repeat("ą", 30) // 60 bytes, well over the 50-cell cutoff
-		m := Model{width: 80, height: 24, yankItems: []yankItem{{label: "Body", value: long}}}
+		m := Model{width: 80, height: 24, menuState: menuState{yankItems: []yankItem{{label: "Body", value: long}}}}
 
 		got := m.viewYankMenu()
 		if !utf8.ValidString(got) {
@@ -32,7 +32,7 @@ func TestMenuTruncationHandlesMultiByteStrings(t *testing.T) {
 
 	t.Run("links menu (item.url), old cutoff 47 mid rune", func(t *testing.T) {
 		long := strings.Repeat("ą", 30)
-		m := Model{width: 80, height: 24, linkItems: []linkItem{{name: "doc", url: long}}}
+		m := Model{width: 80, height: 24, menuState: menuState{linkItems: []linkItem{{name: "doc", url: long}}}}
 
 		got := m.viewLinksMenu()
 		if !utf8.ValidString(got) {
@@ -48,7 +48,7 @@ func TestMenuTruncationHandlesMultiByteStrings(t *testing.T) {
 		// "😀" is a 4-byte rune -> character boundaries fall on multiples of 4;
 		// byte 42 (between 40 and 44) always lands mid-character.
 		long := strings.Repeat("😀", 20) // 80 bytes, well over the 45-cell cutoff
-		m := Model{width: 80, height: 24, sessionMenuItems: []sessionMenuItem{{sessionID: "abc123", summary: long}}}
+		m := Model{width: 80, height: 24, menuState: menuState{sessionMenuItems: []sessionMenuItem{{sessionID: "abc123", summary: long}}}}
 
 		got := m.viewSessionMenu()
 		if !utf8.ValidString(got) {

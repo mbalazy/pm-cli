@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -94,10 +95,23 @@ func claudeLaunchEnv(configDir string, extra ...string) []string {
 	return env
 }
 
+// envKeyPattern matches valid POSIX shell variable names - the only names
+// that can appear on the left of KEY=VALUE without splitting into extra shell
+// words or breaking out of the assignment. There is no quoting that makes an
+// invalid name safe (the shell requires the identifier itself to be clean),
+// so an invalid key is dropped rather than emitted.
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // claudeEnvPrefix returns a shell prefix ("KEY=val ... ") for tmux /
 // shell-string launches: CLAUDE_CONFIG_DIR for a non-default config dir plus
 // any extra KEY=VALUE pairs (values shell-quoted). "" when there is nothing to
 // inject. The prefix relies on tmuxNewWindow running commands via `sh -c`.
+//
+// extra's keys come from project.yaml (executor.env / worktree slot env) -
+// user-authored, unlike the values, which were already shellQuote'd. A key
+// containing shell metacharacters (space, `;`, `$()`, ...) would otherwise
+// splice arbitrary text into the launched command line, so keys are
+// validated against envKeyPattern and silently dropped when they don't match.
 func claudeEnvPrefix(configDir string, extra ...string) string {
 	var sb strings.Builder
 	if configDir != "" && configDir != storage.DefaultClaudeConfigDir() {
@@ -105,7 +119,7 @@ func claudeEnvPrefix(configDir string, extra ...string) string {
 	}
 	for _, kv := range extra {
 		k, v, ok := strings.Cut(kv, "=")
-		if !ok {
+		if !ok || !envKeyPattern.MatchString(k) {
 			continue
 		}
 		sb.WriteString(k + "=" + shellQuote(v) + " ")

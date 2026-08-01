@@ -181,6 +181,36 @@ type pickerState struct {
 	subtaskCursor int
 }
 
+// menuState groups the four small list-pick-and-act overlays left loose after
+// 60-5 (yank/links/colVis/session): each is an open flag + item list + cursor,
+// opened from several base views (board/detail/archive/focus/project-info) and
+// closed on its own with no shared workflow beyond that shape - unlike
+// launchMenu/pickerState, which group by concern, this one groups by identical
+// structure. hiddenStatuses rides along with colVis: it is the persisted
+// result of toggling colVisItems, not independent state.
+type menuState struct {
+	// yank menu
+	yankMenu   bool
+	yankItems  []yankItem
+	yankCursor int
+
+	// links menu
+	linksMenu   bool
+	linkItems   []linkItem
+	linksCursor int
+
+	// column visibility menu
+	colVisMenu     bool
+	colVisItems    []colVisItem
+	colVisCursor   int
+	hiddenStatuses map[storage.TaskStatus]bool
+
+	// session menu
+	sessionMenu      bool
+	sessionMenuItems []sessionMenuItem
+	sessionCursor    int
+}
+
 type Model struct {
 	// Sub-struct clusters, embedded so every field stays reachable as
 	// m.<field> (no call-site churn, no accessor layer).
@@ -188,6 +218,7 @@ type Model struct {
 	execView
 	launchMenu
 	pickerState
+	menuState
 
 	store         storage.TaskStore
 	tasks         []*storage.Task
@@ -219,16 +250,6 @@ type Model struct {
 	// project counts for tabs
 	projectCounts map[string]int
 
-	// yank menu
-	yankMenu   bool
-	yankItems  []yankItem
-	yankCursor int
-
-	// links menu
-	linksMenu   bool
-	linkItems   []linkItem
-	linksCursor int
-
 	// toast notification
 	toastMsg    string
 	toastExpiry time.Time
@@ -244,12 +265,6 @@ type Model struct {
 	helpFilter string
 	helpInput  textinput.Model
 
-	// column visibility
-	colVisMenu     bool
-	colVisItems    []colVisItem
-	colVisCursor   int
-	hiddenStatuses map[storage.TaskStatus]bool
-
 	// zoom
 	zoomed bool
 
@@ -260,11 +275,6 @@ type Model struct {
 	// executor run-states (live background runs), keyed by task/tracker id;
 	// refreshed on tick from <project>/.executor/*.json
 	runStates map[string]*storage.RunState
-
-	// session menu
-	sessionMenu      bool
-	sessionMenuItems []sessionMenuItem
-	sessionCursor    int
 
 	startupDuration time.Duration
 
