@@ -37,7 +37,7 @@ func openEditor(path string) tea.Cmd {
 	}
 	c := exec.Command(editor, path)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
-		return reloadMsg{}
+		return editorResultMsg{err: err}
 	})
 }
 
