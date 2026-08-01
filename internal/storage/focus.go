@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -17,21 +18,33 @@ func focusPlanPath(rootDir string) string {
 	return filepath.Join(rootDir, "focus.yaml")
 }
 
-func ReadFocusPlan(rootDir string) FocusPlan {
+// ReadFocusPlan returns the focus plan. A missing focus.yaml (and missing
+// legacy daily.yaml) is not an error - it just means no plan exists yet, and
+// returns a zero FocusPlan. A focus.yaml that EXISTS but fails to read or
+// parse is a real error and is returned as such, rather than presenting as
+// "no focus list" and inviting a follow-up write to clobber it - the same
+// distinction ReadTasksFromDir draws for task files in this data dir.
+func ReadFocusPlan(rootDir string) (FocusPlan, error) {
 	path := focusPlanPath(rootDir)
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			return FocusPlan{}, fmt.Errorf("reading focus plan: %w", err)
+		}
 		// Migration: try legacy daily.yaml
 		data, err = os.ReadFile(filepath.Join(rootDir, "daily.yaml"))
 		if err != nil {
-			return FocusPlan{}
+			if os.IsNotExist(err) {
+				return FocusPlan{}, nil
+			}
+			return FocusPlan{}, fmt.Errorf("reading legacy focus plan: %w", err)
 		}
 	}
 	var fp FocusPlan
 	if err := yaml.Unmarshal(data, &fp); err != nil {
-		return FocusPlan{}
+		return FocusPlan{}, fmt.Errorf("parsing focus plan: %w", err)
 	}
-	return fp
+	return fp, nil
 }
 
 func WriteFocusPlan(rootDir string, plan FocusPlan) error {
@@ -40,7 +53,7 @@ func WriteFocusPlan(rootDir string, plan FocusPlan) error {
 		return err
 	}
 	path := focusPlanPath(rootDir)
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := atomicWriteFile(path, data, 0644); err != nil {
 		return err
 	}
 	// Migration: remove legacy daily.yaml after successful write

@@ -1,13 +1,17 @@
 package storage
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
 func TestFocusPlan_ReadMissing(t *testing.T) {
-	fp := ReadFocusPlan(t.TempDir())
+	fp, err := ReadFocusPlan(t.TempDir())
+	if err != nil {
+		t.Fatalf("missing focus.yaml must not be an error: %v", err)
+	}
 	if fp.Date != "" || len(fp.Tasks) != 0 {
 		t.Fatalf("expected empty plan, got %+v", fp)
 	}
@@ -22,7 +26,10 @@ func TestFocusPlan_ReadWriteRoundtrip(t *testing.T) {
 	if err := WriteFocusPlan(dir, plan); err != nil {
 		t.Fatal(err)
 	}
-	got := ReadFocusPlan(dir)
+	got, err := ReadFocusPlan(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.Date != plan.Date {
 		t.Errorf("date: got %q, want %q", got.Date, plan.Date)
 	}
@@ -39,9 +46,26 @@ func TestFocusPlan_ReadWriteRoundtrip(t *testing.T) {
 func TestFocusPlan_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "focus.yaml"), []byte("not: [valid: yaml"), 0644)
-	fp := ReadFocusPlan(dir)
-	if fp.Date != "" || len(fp.Tasks) != 0 {
-		t.Fatalf("expected empty plan on invalid yaml, got %+v", fp)
+	fp, err := ReadFocusPlan(dir)
+	if err == nil {
+		t.Fatalf("expected an error for unparseable focus.yaml, got plan %+v", fp)
+	}
+}
+
+// TestFocusPlan_UnreadableFile covers the failure mode a bare os.WriteFile
+// used to hide: a focus.yaml that exists but cannot be read must surface an
+// error, not present as "no focus list" (which would invite a follow-up
+// WriteFocusPlan to clobber it for good).
+func TestFocusPlan_UnreadableFile(t *testing.T) {
+	dir := t.TempDir()
+	// A directory where the file is expected always fails to read as a file,
+	// portably (unlike chmod-based permission tests, which root ignores).
+	if err := os.Mkdir(filepath.Join(dir, "focus.yaml"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	fp, err := ReadFocusPlan(dir)
+	if err == nil {
+		t.Fatalf("expected an error for unreadable focus.yaml, got plan %+v", fp)
 	}
 }
 
@@ -154,7 +178,10 @@ func TestFocusPlan_MigrationFromDaily(t *testing.T) {
 	os.WriteFile(legacy, []byte("date: \"2026-04-15\"\ntasks:\n    - proj-1\n"), 0644)
 
 	// ReadFocusPlan should find it via fallback
-	fp := ReadFocusPlan(dir)
+	fp, err := ReadFocusPlan(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if fp.Date != "2026-04-15" || len(fp.Tasks) != 1 || fp.Tasks[0] != "proj-1" {
 		t.Fatalf("migration read failed: %+v", fp)
 	}
@@ -168,5 +195,52 @@ func TestFocusPlan_MigrationFromDaily(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "focus.yaml")); err != nil {
 		t.Error("focus.yaml should exist after migration write")
+	}
+}
+
+// TestWriteFocusPlanIsAtomic mirrors TestWorktreeLockRefreshIsAtomic
+// (worktree_test.go): a hammer of concurrent writes must never let a
+// concurrent ReadFocusPlan observe a torn/partial focus.yaml, and must leave
+// no tmp scratch files behind once the writes settle.
+func TestWriteFocusPlanIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	seed := FocusPlan{Date: Today(), Tasks: []string{"proj-0"}}
+	if err := WriteFocusPlan(dir, seed); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 1; i <= 200; i++ {
+			plan := FocusPlan{Date: Today(), Tasks: []string{fmt.Sprintf("proj-%d", i)}}
+			if err := WriteFocusPlan(dir, plan); err != nil {
+				t.Errorf("write %d: %v", i, err)
+				return
+			}
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range entries {
+				if e.Name() != "focus.yaml" {
+					t.Fatalf("scratch file left behind: %s", e.Name())
+				}
+			}
+			return
+		default:
+			fp, err := ReadFocusPlan(dir)
+			if err != nil {
+				t.Fatalf("reader saw a torn focus plan: %v", err)
+			}
+			if len(fp.Tasks) != 1 {
+				t.Fatalf("reader saw a malformed focus plan: %+v", fp)
+			}
+		}
 	}
 }

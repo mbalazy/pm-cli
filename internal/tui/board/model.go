@@ -41,8 +41,10 @@ func New(store storage.TaskStore, filterProject string) Model {
 		}
 	}
 
+	// reload() already loads the focus plan (guarded against a failed read);
+	// a second unguarded m.loadFocusPlan() here would defeat that guard right
+	// before handleStalePlan()'s own mutate+save.
 	m.reload()
-	m.loadFocusPlan()
 	m.handleStalePlan()
 
 	ti := textinput.New()
@@ -201,9 +203,11 @@ func (m *Model) reload() {
 		m.focusTaskLookup[t.Meta.ID] = t
 	}
 
-	// refresh focus plan: remove done/archived/deleted tasks
-	m.loadFocusPlan()
-	if m.focusPlan.Cleanup(allTasks) {
+	// refresh focus plan: remove done/archived/deleted tasks. Skip the
+	// cleanup+save on a failed load - m.focusPlan is left at its last-known-
+	// good value, and saving it would silently overwrite a corrupt
+	// focus.yaml instead of surfacing the read error (see loadFocusPlan).
+	if m.loadFocusPlan() && m.focusPlan.Cleanup(allTasks) {
 		m.saveFocusPlan()
 	}
 }

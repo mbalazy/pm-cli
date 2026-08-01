@@ -414,12 +414,23 @@ func (m *Model) pickWorktreeSlot(proj *storage.Project, slug, sessionID string) 
 // session ends the pid dies and the lock reads as stale (= free) - no cleanup
 // needed. Lock-write failure must never block the launch, hence ";" not "&&"
 // before the command that follows.
+//
+// The write itself goes through a per-pid tmp file + "mv" (atomic rename
+// within the same directory), mirroring storage.atomicWriteFile - a bare
+// "printf > file" truncates in place, and a rival reading mid-write would see
+// a torn/empty lock and steal a live holder's slot (the exact failure
+// worktree.go's rename-aside guards against for the executor's lock).
 func sessionLockScript(projDir string, slot int, sessionID string) string {
 	lock := storage.SessionLockPath(projDir, slot)
 	payload := fmt.Sprintf(`{"pid":%%d,"session_id":%q,"slot":%d,"started":%q}`,
 		sessionID, slot, time.Now().UTC().Format(time.RFC3339))
-	return fmt.Sprintf("mkdir -p %s && printf %s \"$$\" > %s 2>/dev/null; ",
-		shellQuote(filepath.Dir(lock)), shellQuote(payload), shellQuote(lock))
+	quotedLock := shellQuote(lock)
+	tmp := quotedLock + `.tmp.$$`
+	// "|| rm -f tmp" cleans up a leftover tmp file if either the printf or the
+	// mv step failed (both silenced above) - mirrors atomicWriteFile removing
+	// its scratch file on every failure path. A no-op when the write succeeds.
+	return fmt.Sprintf("mkdir -p %s && printf %s \"$$\" > %s 2>/dev/null && mv %s %s 2>/dev/null || rm -f %s 2>/dev/null; ",
+		shellQuote(filepath.Dir(lock)), shellQuote(payload), tmp, tmp, quotedLock, tmp)
 }
 
 func buildClaudePrompt(t *storage.Task, store storage.TaskStore) string {

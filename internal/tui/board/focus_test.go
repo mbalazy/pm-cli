@@ -2,6 +2,8 @@ package board
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -31,6 +33,74 @@ func TestSaveAndLoadFocusPlan(t *testing.T) {
 	}
 	if !m.focusSet["p-2"] || !m.focusSet["p-1"] || m.focusSet["p-3"] {
 		t.Errorf("focusSet not rebuilt from plan: %v", m.focusSet)
+	}
+}
+
+// TestReloadDoesNotClobberCorruptFocusPlan guards the exact failure mode the
+// atomic-write fix exists for: reload() always follows loadFocusPlan() with
+// a Cleanup + conditional save, so a naive fix that only made ReadFocusPlan
+// return an error (without reload() checking it) would still let a stale
+// in-memory plan get saved straight over a corrupt focus.yaml on the very
+// next board tick.
+func TestReloadDoesNotClobberCorruptFocusPlan(t *testing.T) {
+	m := focusFixture(t)
+	// p-3 is done, so Cleanup() has work to do once reload() reloads a good plan.
+	m.focusPlan = storage.FocusPlan{Date: storage.Today(), Tasks: []string{"p-1", "p-3"}}
+	m.saveFocusPlan()
+
+	path := filepath.Join(m.store.RootDir(), "focus.yaml")
+	corrupt := []byte("not: [valid: yaml")
+	if err := os.WriteFile(path, corrupt, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m.reload()
+
+	if m.toastMsg == "" {
+		t.Error("expected an error toast surfacing the corrupt focus plan")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(corrupt) {
+		t.Errorf("reload() must not overwrite a corrupt focus.yaml, got %q", got)
+	}
+}
+
+// TestNewDoesNotClobberCorruptFocusPlan covers the one caller
+// TestReloadDoesNotClobberCorruptFocusPlan does not: New() starts from a
+// zero-value m.focusPlan (there is no "last known good" yet) and used to
+// follow reload() with a second, unguarded loadFocusPlan() call right before
+// handleStalePlan()'s own mutate+save. Construct the model the same way the
+// real TUI does - via New(), not the newBoardModel test helper, which builds
+// the Model by struct literal and skips this path entirely.
+func TestNewDoesNotClobberCorruptFocusPlan(t *testing.T) {
+	store := &storage.Store{Root: t.TempDir()}
+	if err := store.CreateProject("p", &storage.Project{Name: "P"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddTask("p", &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "A", Status: storage.StatusTodo}}); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(store.RootDir(), "focus.yaml")
+	corrupt := []byte("not: [valid: yaml")
+	if err := os.WriteFile(path, corrupt, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := New(store, "")
+
+	if m.toastMsg == "" {
+		t.Error("expected an error toast surfacing the corrupt focus plan")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(corrupt) {
+		t.Errorf("New() must not overwrite a corrupt focus.yaml, got %q", got)
 	}
 }
 
@@ -72,7 +142,11 @@ func TestHandleStalePlan(t *testing.T) {
 			t.Errorf("focusSet = %v, want only p-1", m.focusSet)
 		}
 		// Persisted: a fresh read sees the carried-over plan.
-		if got := storage.ReadFocusPlan(m.store.RootDir()); got.Date != storage.Today() || len(got.Tasks) != 1 {
+		got, err := storage.ReadFocusPlan(m.store.RootDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Date != storage.Today() || len(got.Tasks) != 1 {
 			t.Errorf("plan not persisted, got %+v", got)
 		}
 	})
