@@ -126,6 +126,11 @@ func epicRunFixture(t *testing.T) (*storage.Store, string) {
 	store := &storage.Store{Root: t.TempDir()}
 	repo := t.TempDir()
 	gitT(t, repo, "init", "-q")
+	// Local identity: the fake worker's `git commit` and the manager's
+	// `merge --no-ff` run with the REAL process env (gitT's env injection
+	// covers only fixture commits), and a CI runner has no global identity.
+	gitT(t, repo, "config", "user.email", "t@t")
+	gitT(t, repo, "config", "user.name", "t")
 	gitT(t, repo, "checkout", "-q", "-B", "main")
 	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644); err != nil {
 		t.Fatal(err)
