@@ -44,7 +44,7 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 			"detected fields (`phases`, `baseline`) are refreshed, `handoff` is filled in ONLY when that block " +
 			"is empty (its playbook is hand-written prose, never regenerated), and every other hand-set field " +
 			"(enabled, additional_worktree, worktree_path, worktrees, base_branch, env, seed_exclude, prepare, " +
-			"context_repos, start_status, wip_status, done_status, fix_rounds, gate, notes) is left untouched; " +
+			"context_repos, start_status, wip_status, done_status, fix_rounds, notes) is left untouched; " +
 			"the output lists which fields were preserved. An existing playbook file is never rewritten.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -130,7 +130,7 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 // drafted executor profile plus human-readable detection notes.
 func draftExecutor(projectPath string) (*storage.Executor, []string) {
 	// Start from the engine defaults (enabled, additional_worktree off, todo/doing/merged,
-	// fix_rounds 3, human gates) so the drafted block is explicit and editable.
+	// fix_rounds 3) so the drafted block is explicit and editable.
 	e := (&storage.Project{}).GetExecutor()
 	var notes []string
 
