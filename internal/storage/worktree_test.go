@@ -217,6 +217,36 @@ func TestWorktreeLockStaleTakeover(t *testing.T) {
 	}
 }
 
+// TestResolveWorktreeDir covers the path-resolution rules directly. The table
+// used to live in internal/cmd (against a resolveWorktreePath wrapper that no
+// production code called any more); ResolveWorktrees only exercises the empty
+// and relative-sibling cases, so the subdir/absolute/home rules would otherwise
+// have gone uncovered when the wrapper was deleted.
+func TestResolveWorktreeDir(t *testing.T) {
+	proj := "/repos/app"
+	home, _ := os.UserHomeDir()
+
+	cases := []struct {
+		name string
+		wt   string
+		want string
+	}{
+		{"empty defaults to sibling", "", "/repos/app-additional"},
+		{"relative sibling", "../app-additional", "/repos/app-additional"},
+		{"relative subdir", "worktrees/extra", "/repos/app/worktrees/extra"},
+		{"absolute as-is", "/tmp/wt", "/tmp/wt"},
+		{"home expansion", "~/wt", filepath.Join(home, "wt")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ResolveWorktreeDir(proj, tc.wt)
+			if got != tc.want {
+				t.Fatalf("ResolveWorktreeDir(%q) = %q, want %q", tc.wt, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestResolveWorktrees(t *testing.T) {
 	proj := "/repos/app"
 

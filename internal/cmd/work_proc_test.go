@@ -158,7 +158,9 @@ func TestRunWorkerTimeoutKillsWholeWorkerTree(t *testing.T) {
 
 	var res *workerResult
 	var err error
-	f.run(func() { res, _, err = runWorker(t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil, nil) })
+	f.run(func() {
+		res, _, err = runWorker(os.Stderr, t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil, nil)
+	})
 
 	gcPid, cPid := f.awaitPid(grandchild), f.awaitPid(child)
 	f.wait("runWorker")
@@ -182,7 +184,9 @@ func TestRunWorkerTimeoutKillsWorkerIgnoringSIGTERM(t *testing.T) {
 	fakeClaude(t, "trap '' TERM\n"+spawnGrandchild(grandchild)+"trap '' TERM; sleep 300\n")
 
 	var err error
-	f.run(func() { _, _, err = runWorker(t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil, nil) })
+	f.run(func() {
+		_, _, err = runWorker(os.Stderr, t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil, nil)
+	})
 
 	pid := f.awaitPid(grandchild)
 	f.wait("runWorker")
@@ -203,7 +207,9 @@ func TestRunWorkerOrphanHoldingStdoutDoesNotHang(t *testing.T) {
 
 	var res *workerResult
 	var err error
-	f.run(func() { res, _, err = runWorker(t.TempDir(), []string{"-p", "x"}, time.Minute, "", nil, nil) })
+	f.run(func() {
+		res, _, err = runWorker(os.Stderr, t.TempDir(), []string{"-p", "x"}, time.Minute, "", nil, nil)
+	})
 
 	pid := f.awaitPid(grandchild)
 	f.wait("runWorker")
@@ -223,7 +229,7 @@ func TestCaptureBaselineCapKillsWholeTree(t *testing.T) {
 	grandchild, child := f.pidFile("grandchild"), f.pidFile("child")
 
 	var got string
-	f.run(func() { got = captureBaseline(f.dir, spawnGrandchild(grandchild)+holdOpen(child)) })
+	f.run(func() { got = captureBaseline(os.Stderr, f.dir, spawnGrandchild(grandchild)+holdOpen(child)) })
 
 	gcPid, cPid := f.awaitPid(grandchild), f.awaitPid(child)
 	f.wait("captureBaseline")
@@ -244,7 +250,7 @@ func TestCaptureBaselineGreenSurvivesOrphanHoldingOutput(t *testing.T) {
 	// "no baseline" would cost every worker in the run its pre-existing-failure
 	// reference.
 	var got string
-	f.run(func() { got = captureBaseline(f.dir, spawnGrandchild(grandchild)+"echo all-good\nexit 0\n") })
+	f.run(func() { got = captureBaseline(os.Stderr, f.dir, spawnGrandchild(grandchild)+"echo all-good\nexit 0\n") })
 
 	pid := f.awaitPid(grandchild)
 	f.wait("captureBaseline")
@@ -267,7 +273,7 @@ const forwardChildEnv = "PM_TEST_FORWARD_CHILD"
 func TestForwardedSignalTakesTheWorkerTreeDown(t *testing.T) {
 	if dir := os.Getenv(forwardChildEnv); dir != "" {
 		// Manager role: block on a worker that would otherwise run for 10m.
-		_, _, _ = runWorker(dir, []string{"-p", "x"}, 10*time.Minute, "", nil, nil)
+		_, _, _ = runWorker(os.Stderr, dir, []string{"-p", "x"}, 10*time.Minute, "", nil, nil)
 		return
 	}
 

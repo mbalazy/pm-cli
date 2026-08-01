@@ -61,10 +61,10 @@ func TestCapturePipeSurvivesMoreThanThePipeBuffer(t *testing.T) {
 }
 
 func TestLogIfErr(t *testing.T) {
-	if got := captureStderr(t, func() { logIfErr("move x-1 to doing", nil) }); got != "" {
+	if got := captureStderr(t, func() { logIfErr(os.Stderr, "move x-1 to doing", nil) }); got != "" {
 		t.Errorf("nil err should print nothing, got %q", got)
 	}
-	got := captureStderr(t, func() { logIfErr("move x-1 to doing", errors.New("disk full")) })
+	got := captureStderr(t, func() { logIfErr(os.Stderr, "move x-1 to doing", errors.New("disk full")) })
 	if !strings.Contains(got, "move x-1 to doing") || !strings.Contains(got, "disk full") {
 		t.Errorf("expected context + error in output, got %q", got)
 	}
@@ -408,7 +408,7 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 		{Meta: storage.TaskMeta{ID: "p-1-5", Title: "manual done", Status: storage.StatusDone, Order: 50, Mode: "manual"}},
 	}
 	out := captureStdout(t, func() {
-		printEpicPlan(tracker, "epic/p-1", "main", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", false)
+		printEpicPlan(os.Stdout, tracker, "epic/p-1", "main", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", false)
 	})
 	for _, want := range []string{
 		"[READY ] p-1-1",
@@ -426,7 +426,7 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 	}
 
 	independent := captureStdout(t, func() {
-		printEpicPlan(tracker, "epic/p-1", "development", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", true)
+		printEpicPlan(os.Stdout, tracker, "epic/p-1", "development", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", true)
 	})
 	if !strings.Contains(independent, "mode: INDEPENDENT") {
 		t.Errorf("independent plan should announce the mode:\n%s", independent)
@@ -552,7 +552,7 @@ func TestOpenEpicPRUsesResolvedBase(t *testing.T) {
 
 	tracker := &storage.Task{Meta: storage.TaskMeta{ID: "proj-1", Title: "Epic"}}
 	stderr := captureStderr(t, func() {
-		openEpicPR(repo, "epic/x", "development", tracker)
+		openEpicPR(os.Stderr, repo, "epic/x", "development", tracker)
 	})
 
 	raw, err := os.ReadFile(argsFile)

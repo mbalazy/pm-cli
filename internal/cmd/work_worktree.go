@@ -9,17 +9,6 @@ import (
 	"github.com/mbalazy/pm/internal/storage"
 )
 
-// resolveWorktreePath computes the absolute path of the LEGACY single
-// "additional" worktree for a project (kept for the legacy
-// additional_worktree/worktree_path pair; the multi-slot pool resolves via
-// Executor.ResolveWorktrees). Rules: an absolute worktree_path is used as-is; a
-// "~"-prefixed one is home-expanded; a relative one resolves against the repo
-// dir (so `../foo-additional` is a sibling); empty defaults to
-// "<repo>-additional".
-func resolveWorktreePath(proj *storage.Project, exec storage.Executor) string {
-	return storage.ResolveWorktreeDir(proj.Path, exec.WorktreePath)
-}
-
 // resolveWorktreeBase applies the base-branch precedence for a reused
 // "additional" worktree: an explicit --base flag wins; else executor.base_branch
 // from project.yaml; else the caller's fallback (pm work: the main checkout's
@@ -69,9 +58,12 @@ func prepareWorktree(proj *storage.Project, workDir, taskID, kind string) (func(
 // The claimed slot is ensured + seeded + locked (prepareWorktree); the returned
 // release closure MUST be deferred. When every slot is busy the error lists
 // each slot's holder so the user can pick what to wait for or kill.
-func acquireWorktreeSlot(proj *storage.Project, slots []storage.ResolvedWorktree, pin int, taskID, kind string) (storage.ResolvedWorktree, func(), error) {
+func acquireWorktreeSlot(proj *storage.Project, slug string, slots []storage.ResolvedWorktree, pin int, taskID, kind string) (storage.ResolvedWorktree, func(), error) {
 	if len(slots) == 0 {
-		return storage.ResolvedWorktree{}, nil, fmt.Errorf("no worktree slots configured - set `executor.worktrees` (or legacy `additional_worktree: true`) in project.yaml")
+		// Unreachable from either command (both refuse --additional on an
+		// unconfigured project first) - kept as a guard, and worded by the one
+		// shared helper so it cannot drift from the checks that do fire.
+		return storage.ResolvedWorktree{}, nil, errNoWorktreeSlots(slug)
 	}
 	if pin > 0 {
 		if pin > len(slots) {

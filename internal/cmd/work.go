@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -81,6 +82,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 			"branch, no per-sub PR.",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
 			task, slug, err := resolveWorkTask(store, args)
 			if err != nil {
 				return err
@@ -90,6 +92,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 			if task.Meta.Model != "" && !cmd.Flags().Changed("model") {
 				model = task.Meta.Model
 			}
+			warnInertFlags(stderr, "pm work", additional, slotPin, base)
 			opts := workOptions{
 				standalone: !epic,
 				model:      model,
@@ -99,6 +102,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 				timeout:    timeout,
 				base:       base,
 				additional: additional,
+				errOut:     stderr,
 			}
 
 			plan, err := planWork(store, task, slug, opts)
@@ -107,30 +111,30 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 			}
 
 			if dryRun {
-				fmt.Printf("# pm work (dry-run)\nproject: %s\ntask: %s\nbranch: %s\nmode: %s\ncwd: %s\n",
+				fmt.Fprintf(stdout, "# pm work (dry-run)\nproject: %s\ntask: %s\nbranch: %s\nmode: %s\ncwd: %s\n",
 					slug, task.Meta.ID, plan.branch, modeLabel(opts.standalone), plan.workDir)
 				if plan.worktree {
-					fmt.Printf("run: ADDITIONAL worktree - first free of %d slot(s), claimed at run time (lock: %s)\n",
+					fmt.Fprintf(stdout, "run: ADDITIONAL worktree - first free of %d slot(s), claimed at run time (lock: %s)\n",
 						len(plan.slots), ".pm-executor.lock")
 					for i, s := range plan.slots {
-						fmt.Printf("  slot %d: %s", i+1, s.Path)
+						fmt.Fprintf(stdout, "  slot %d: %s", i+1, s.Path)
 						if len(s.Env) > 0 {
-							fmt.Printf("  (env: %s)", strings.Join(s.Env, " "))
+							fmt.Fprintf(stdout, "  (env: %s)", strings.Join(s.Env, " "))
 						}
-						fmt.Println()
+						fmt.Fprintln(stdout)
 					}
-					fmt.Printf("fresh branch base: %s\n", plan.base)
+					fmt.Fprintf(stdout, "fresh branch base: %s\n", plan.base)
 					if plan.prepare != "" {
-						fmt.Printf("prepare (before worker, in claimed slot): %s\n", plan.prepare)
+						fmt.Fprintf(stdout, "prepare (before worker, in claimed slot): %s\n", plan.prepare)
 					}
 				} else {
-					fmt.Printf("run: DEFAULT (main checkout, clean-tree required)\n")
+					fmt.Fprintf(stdout, "run: DEFAULT (main checkout, clean-tree required)\n")
 				}
 				if plan.baselineCmd != "" {
-					fmt.Printf("baseline (captured before worker, injected into prompt): %s\n", plan.baselineCmd)
+					fmt.Fprintf(stdout, "baseline (captured before worker, injected into prompt): %s\n", plan.baselineCmd)
 				}
-				fmt.Printf("\n$ claude %s\n\n", strings.Join(quoteArgs(plan.cmdArgs), " "))
-				fmt.Printf("=== SYSTEM PROMPT ===\n%s\n\n=== PROMPT ===\n%s\n", plan.sysPrompt, plan.prompt)
+				fmt.Fprintf(stdout, "\n$ claude %s\n\n", strings.Join(quoteArgs(plan.cmdArgs), " "))
+				fmt.Fprintf(stdout, "=== SYSTEM PROMPT ===\n%s\n\n=== PROMPT ===\n%s\n", plan.sysPrompt, plan.prompt)
 				return nil
 			}
 
@@ -139,7 +143,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 			// lock is released by the deferred closure on every exit path (success,
 			// fail, panic).
 			if plan.worktree {
-				slot, release, err := acquireWorktreeSlot(plan.proj, plan.slots, slotPin, task.Meta.ID, "work")
+				slot, release, err := acquireWorktreeSlot(plan.proj, slug, plan.slots, slotPin, task.Meta.ID, "work")
 				if err != nil {
 					return err
 				}
@@ -148,7 +152,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 				// against the provisional slot 1 and the prompt states the repo path.
 				plan.retarget(slot.Path, slot.Env)
 				if len(plan.slots) > 1 {
-					fmt.Fprintf(os.Stderr, "pm work: claimed worktree slot %s\n", slot.Path)
+					fmt.Fprintf(stderr, "pm work: claimed worktree slot %s\n", slot.Path)
 				}
 			}
 
@@ -158,7 +162,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 			}
 
 			out, _ := json.MarshalIndent(res, "", "  ")
-			fmt.Println(string(out))
+			fmt.Fprintln(stdout, string(out))
 			return nil
 		},
 	}
@@ -257,6 +261,23 @@ type workOptions struct {
 	// standalone `pm work` (it owns its own run-state, created in executeWork)
 	// and for a bare `pm work --epic` with no manager (no run-state at all).
 	runWriter *storage.RunWriter
+	// errOut: where this run's progress and warnings go. The cobra commands
+	// point it at cmd.ErrOrStderr() so the executor is testable; the zero value
+	// falls back to the process's own stderr, so a caller that does not care (a
+	// test building workOptions by hand) needs no wiring. There is no stdout
+	// counterpart on purpose: everything a run prints to stdout is printed by
+	// RunE itself, which has cmd.OutOrStdout() at hand.
+	errOut io.Writer
+}
+
+// stderr resolves the run's progress writer, defaulting to the process stream.
+// Resolved per call, never cached: a test that swaps os.Stderr for a pipe
+// around a call still sees its output.
+func (o workOptions) stderr() io.Writer {
+	if o.errOut != nil {
+		return o.errOut
+	}
+	return os.Stderr
 }
 
 // workPlan is the resolved, ready-to-run worker invocation: the project, the
@@ -299,24 +320,63 @@ type workPlan struct {
 	baselineCmd string
 }
 
+// warnInertFlags surfaces flag combinations that silently do nothing. A
+// warning on stderr, never an error: the exit code has to stay what it is so
+// existing scripts keep working. `--slot` only selects from the worktree pool,
+// and `pm work --base` is only consumed when a fresh task branch is created in
+// a worktree - both are inert without --additional. `pm run-epic --base` is NOT
+// (it is the integration branch's fork point in every mode), so the manager
+// passes an empty base here.
+func warnInertFlags(w io.Writer, cmdName string, additional bool, slotPin int, base string) {
+	if additional {
+		return
+	}
+	if slotPin != 0 {
+		fmt.Fprintf(w, "%s: --slot %d ignored without --additional (slots exist only in the worktree pool)\n", cmdName, slotPin)
+	}
+	if strings.TrimSpace(base) != "" {
+		fmt.Fprintf(w, "%s: --base %s ignored without --additional (the branch continues from the current checkout)\n", cmdName, base)
+	}
+}
+
+// preflightProject resolves the project for an executor run and enforces the
+// three preconditions every entry point shares: a configured repo path, that
+// path being a git repo, and the executor being enabled. planWork and the
+// run-epic manager carried byte-identical copies of this block (only the
+// not-a-git-repo wording differed) - one copy now, so a rule can no longer be
+// tightened in one command and forgotten in the other.
+func preflightProject(store storage.TaskStore, slug string) (*storage.Project, storage.Executor, error) {
+	proj, err := store.GetProject(slug)
+	if err != nil {
+		return nil, storage.Executor{}, fmt.Errorf("load project %s: %w", slug, err)
+	}
+	if proj.Path == "" {
+		return nil, storage.Executor{}, fmt.Errorf("project %s has no path - the executor needs a git repo (set `path` in project.yaml)", slug)
+	}
+	if !isGitRepo(proj.Path) {
+		return nil, storage.Executor{}, fmt.Errorf("project path %s is not a git repository - the executor only runs on git projects", proj.Path)
+	}
+	exc := proj.GetExecutor()
+	if !exc.Enabled {
+		return nil, storage.Executor{}, fmt.Errorf("executor disabled for project %s (executor.enabled: false)", slug)
+	}
+	return proj, exc, nil
+}
+
+// errNoWorktreeSlots is the ONE wording for "--additional was asked for but the
+// project configures no slots" - `pm work`, `pm run-epic` and the slot claim
+// itself all raise it, so the fix instructions cannot drift apart.
+func errNoWorktreeSlots(slug string) error {
+	return fmt.Errorf("--additional requested but project %s has no worktree slots configured - set `executor.worktrees` (or legacy `additional_worktree: true` + worktree_path/env) in project.yaml", slug)
+}
+
 // planWork validates preconditions and assembles everything needed to invoke a
 // worker for task, without touching git or spending tokens. Used by both the
 // dry-run path and the real run.
 func planWork(store storage.TaskStore, task *storage.Task, slug string, opts workOptions) (*workPlan, error) {
-	proj, err := store.GetProject(slug)
+	proj, exec, err := preflightProject(store, slug)
 	if err != nil {
-		return nil, fmt.Errorf("load project %s: %w", slug, err)
-	}
-	if proj.Path == "" {
-		return nil, fmt.Errorf("project %s has no path - the executor needs a git repo (set `path` in project.yaml)", slug)
-	}
-	if !isGitRepo(proj.Path) {
-		return nil, fmt.Errorf("project path %s is not a git repository - the executor only runs on git projects", proj.Path)
-	}
-
-	exec := proj.GetExecutor()
-	if !exec.Enabled {
-		return nil, fmt.Errorf("executor disabled for project %s (executor.enabled: false)", slug)
+		return nil, err
 	}
 
 	var parent *storage.Task
@@ -359,7 +419,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		} else {
 			slots = exec.ResolveWorktrees(proj.Path)
 			if len(slots) == 0 {
-				return nil, fmt.Errorf("--additional requested but project %s has no worktree slots configured - set `executor.worktrees` (or legacy `additional_worktree: true` + worktree_path/env) in project.yaml", slug)
+				return nil, errNoWorktreeSlots(slug)
 			}
 			// Provisional until a slot is claimed at run start.
 			workDir = slots[0].Path
@@ -461,7 +521,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// claimed slot). A failed prepare aborts the run - the worker would fail on
 	// the same broken deps anyway, just slower and less legibly.
 	if plan.worktree && plan.prepare != "" {
-		fmt.Fprintf(os.Stderr, "pm work: prepare in %s: %s\n", dir, plan.prepare)
+		fmt.Fprintf(opts.stderr(), "pm work: prepare in %s: %s\n", dir, plan.prepare)
 		if err := runPrepare(dir, plan.prepare); err != nil {
 			return nil, fmt.Errorf("prepare cmd (%s) failed in %s: %w", plan.prepare, dir, err)
 		}
@@ -475,8 +535,8 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// carry the manager's once-per-run capture, already baked in by planWork.
 	baselineUsed := ""
 	if plan.baselineCmd != "" {
-		fmt.Fprintf(os.Stderr, "pm work: baseline in %s: %s\n", dir, plan.baselineCmd)
-		if section := captureBaseline(dir, plan.baselineCmd); section != "" {
+		fmt.Fprintf(opts.stderr(), "pm work: baseline in %s: %s\n", dir, plan.baselineCmd)
+		if section := captureBaseline(opts.stderr(), dir, plan.baselineCmd); section != "" {
 			plan.prompt += "\n" + section
 			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo)
 			baselineUsed = plan.baselineCmd
@@ -527,7 +587,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		})
 	}
 
-	fmt.Fprintf(os.Stderr, "pm work: launching headless worker for %s on %s (%s)...\n", task.Meta.ID, plan.branch, modeLabel(opts.standalone))
+	fmt.Fprintf(opts.stderr(), "pm work: launching headless worker for %s on %s (%s)...\n", task.Meta.ID, plan.branch, modeLabel(opts.standalone))
 
 	workStart := time.Now()
 	// journalEnd pairs the start line above with exactly one terminal line; the
@@ -563,7 +623,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// anything outside this process has on it. Publishing it lets the board kill
 	// the worker tree directly when it has to SIGKILL the manager - a signal the
 	// manager cannot forward (see storage.RunState.Kill).
-	res, sessionID, err := runWorker(dir, plan.cmdArgs, opts.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env,
+	res, sessionID, err := runWorker(opts.stderr(), dir, plan.cmdArgs, opts.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env,
 		func(pgid int) { _ = hbw.Update(func(run *storage.RunState) { run.WorkerPGID = pgid }) })
 	stopHeartbeat()
 	// The worker is gone and the heartbeat died with it, so drop the in-flight
@@ -594,7 +654,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		}
 		return nil, err
 	}
-	if err := applyWorkerResult(store, task, plan.branch, sessionID, res, opts.standalone, opts.independent); err != nil {
+	if err := applyWorkerResult(opts.stderr(), store, task, plan.branch, sessionID, res, opts.standalone, opts.independent); err != nil {
 		if runw != nil {
 			_ = runw.Update(func(run *storage.RunState) {
 				run.Status = storage.RunStatusFailed
@@ -713,9 +773,9 @@ const baselineOutputCap = 8000
 // captureBaseline runs the executor.baseline command in dir and renders the
 // "## Verification baseline" prompt section from its outcome. A non-zero exit
 // is the expected signal of a red baseline, not an error. Returns "" (with a
-// stderr warning) only when the command could not run at all - the run then
+// warning on errOut) only when the command could not run at all - the run then
 // proceeds without a baseline rather than aborting.
-func captureBaseline(dir, command string) string {
+func captureBaseline(errOut io.Writer, dir, command string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), baselineTimeout)
 	defer cancel()
 	// Same process-group enforcement as the worker: a baseline command that
@@ -731,7 +791,7 @@ func captureBaseline(dir, command string) string {
 	err := runGroupCmd(ctx, c, nil)
 	out := combined.Bytes()
 	if ctx.Err() == context.DeadlineExceeded {
-		fmt.Fprintf(os.Stderr, "pm work: baseline cmd timed out after %s - continuing without a baseline\n", baselineTimeout)
+		fmt.Fprintf(errOut, "pm work: baseline cmd timed out after %s - continuing without a baseline\n", baselineTimeout)
 		return ""
 	}
 	if err == nil {
@@ -744,13 +804,13 @@ func captureBaseline(dir, command string) string {
 		// wins as *ExitError - so this baseline is GREEN. Degrading to "no
 		// baseline" here would cost every worker in the run the one section that
 		// tells it which failures are pre-existing.
-		fmt.Fprintf(os.Stderr, "pm work: baseline cmd left background processes holding its output - killed them after %s\n", procWaitDelay)
+		fmt.Fprintf(errOut, "pm work: baseline cmd left background processes holding its output - killed them after %s\n", procWaitDelay)
 		return baselineSection(command, 0, "")
 	}
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
 		// The command never ran (sh missing, dir gone, ...) - no data to report.
-		fmt.Fprintf(os.Stderr, "pm work: baseline cmd could not run (%v) - continuing without a baseline\n", err)
+		fmt.Fprintf(errOut, "pm work: baseline cmd could not run (%v) - continuing without a baseline\n", err)
 		return ""
 	}
 	text := strings.TrimSpace(string(out))
@@ -765,7 +825,7 @@ func captureBaseline(dir, command string) string {
 // claude is killed when the timeout elapses rather than blocking pm forever.
 // onSpawn (optional) receives the worker group's pgid once it is up; see
 // runGroupCmd.
-func runWorker(dir string, args []string, timeout time.Duration, configDir string, extraEnv []string, onSpawn func(pgid int)) (*workerResult, string, error) {
+func runWorker(errOut io.Writer, dir string, args []string, timeout time.Duration, configDir string, extraEnv []string, onSpawn func(pgid int)) (*workerResult, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -788,7 +848,7 @@ func runWorker(dir string, args []string, timeout time.Duration, configDir strin
 		// honour the result instead of discarding a completed worker's work.
 		if errors.Is(err, exec.ErrWaitDelay) {
 			if res, sessionID, perr := parseClaudeResult(stdout.Bytes()); perr == nil {
-				fmt.Fprintf(os.Stderr, "pm work: worker left background processes holding stdout - killed them after %s\n", procWaitDelay)
+				fmt.Fprintf(errOut, "pm work: worker left background processes holding stdout - killed them after %s\n", procWaitDelay)
 				return res, sessionID, nil
 			}
 		}
@@ -866,19 +926,27 @@ func parseClaudeResult(data []byte) (*workerResult, string, error) {
 // (a brief update, a link, a log note), so the outcome is applied to a FRESH
 // read of the task, under the project's cross-process lock; t is then updated
 // in place so callers (driveSub's status checks) see the written state.
-func applyWorkerResult(store storage.TaskStore, t *storage.Task, branch, sessionID string, res *workerResult, standalone, independent bool) error {
+func applyWorkerResult(errOut io.Writer, store storage.TaskStore, t *storage.Task, branch, sessionID string, res *workerResult, standalone, independent bool) error {
 	release, lockErr := store.LockProject(t.Project)
 	if lockErr != nil {
 		// Degrade to an unlocked write rather than dropping the worker's result,
 		// but say so - a silent degrade hides that a concurrent session's edit
 		// may get clobbered.
-		fmt.Fprintf(os.Stderr, "pm work: project lock unavailable (%v) - recording result without it\n", lockErr)
+		fmt.Fprintf(errOut, "pm work: project lock unavailable (%v) - recording result without it\n", lockErr)
 		release = func() {}
 	}
 	defer release()
-	if fresh, err := store.FindTask(t.Project, t.Meta.ID); err == nil {
-		*t = *fresh
+	// The fresh re-read is a PRECONDITION, not a best-effort refresh (same rule
+	// as Store.MoveTask): a miss means the task file was deleted - or stopped
+	// parsing - while the worker ran, so the 30-minute-old copy in hand is unfit
+	// to write. Writing it anyway RESURRECTED the deleted task, carrying a
+	// worker brief nobody would ever look for. Refuse instead; the caller
+	// surfaces it (`pm work` as its error, the manager as a parked sub's note).
+	fresh, err := store.FindTaskExact(t.Project, t.Meta.ID)
+	if err != nil {
+		return fmt.Errorf("record worker result for %s: %w", t.Meta.ID, err)
 	}
+	*t = *fresh
 	if sessionID != "" {
 		t.Meta.Sessions = append(t.Meta.Sessions, sessionID)
 	}

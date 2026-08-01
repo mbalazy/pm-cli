@@ -10,31 +10,6 @@ import (
 	"github.com/mbalazy/pm/internal/storage"
 )
 
-func TestResolveWorktreePath(t *testing.T) {
-	proj := &storage.Project{Path: "/repos/app"}
-	home, _ := os.UserHomeDir()
-
-	cases := []struct {
-		name string
-		wt   string
-		want string
-	}{
-		{"empty defaults to sibling", "", "/repos/app-additional"},
-		{"relative sibling", "../app-additional", "/repos/app-additional"},
-		{"relative subdir", "worktrees/extra", "/repos/app/worktrees/extra"},
-		{"absolute as-is", "/tmp/wt", "/tmp/wt"},
-		{"home expansion", "~/wt", filepath.Join(home, "wt")},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := resolveWorktreePath(proj, storage.Executor{WorktreePath: tc.wt})
-			if got != tc.want {
-				t.Fatalf("resolveWorktreePath(%q) = %q, want %q", tc.wt, got, tc.want)
-			}
-		})
-	}
-}
-
 // TestPrepareWorktree exercises the cmd-level integration: ensure + seed configs
 // + lock, then release. Uses a real git repo, no claude.
 func TestPrepareWorktree(t *testing.T) {
@@ -145,7 +120,7 @@ func TestPlanWorkAdditionalGating(t *testing.T) {
 		if !plan.worktree {
 			t.Fatal("--additional must use the worktree")
 		}
-		if want := resolveWorktreePath(proj, *proj.Executor); plan.workDir != want {
+		if want := storage.ResolveWorktreeDir(proj.Path, proj.Executor.WorktreePath); plan.workDir != want {
 			t.Fatalf("workDir = %q, want %q", plan.workDir, want)
 		}
 		if plan.base != "development" {
@@ -164,7 +139,7 @@ func TestPlanWorkAdditionalGating(t *testing.T) {
 		if err != nil {
 			t.Fatalf("planWork: %v", err)
 		}
-		wt := resolveWorktreePath(proj, *proj.Executor)
+		wt := storage.ResolveWorktreeDir(proj.Path, proj.Executor.WorktreePath)
 		if !strings.Contains(plan.prompt, "Repo path: "+wt) {
 			t.Fatalf("prompt must state the slot path %q, got:\n%s", wt, firstLines(plan.prompt, 6))
 		}
@@ -362,7 +337,7 @@ executor:
 	if exec.Env["ADDITIONAL_METRO_PORT"] != "8090" {
 		t.Fatalf("env not parsed: %v", exec.Env)
 	}
-	if got := resolveWorktreePath(proj, exec); got != "/repos/app-additional" {
+	if got := storage.ResolveWorktreeDir(proj.Path, exec.WorktreePath); got != "/repos/app-additional" {
 		t.Fatalf("resolved = %q", got)
 	}
 	if slice := exec.EnvSlice(); len(slice) != 1 || !strings.HasPrefix(slice[0], "ADDITIONAL_METRO_PORT=") {
@@ -400,7 +375,7 @@ func TestAcquireWorktreeSlot(t *testing.T) {
 
 	t.Run("first free slot wins", func(t *testing.T) {
 		proj, slots := newRepo(t), newSlots(t)
-		slot, release, err := acquireWorktreeSlot(proj, slots, 0, "app-1", "work")
+		slot, release, err := acquireWorktreeSlot(proj, "app", slots, 0, "app-1", "work")
 		if err != nil {
 			t.Fatalf("acquire: %v", err)
 		}
@@ -419,7 +394,7 @@ func TestAcquireWorktreeSlot(t *testing.T) {
 		if err := storage.AcquireWorktreeLock(slots[0].Path, "app-other", "work", otherLivePID); err != nil {
 			t.Fatalf("seed busy lock: %v", err)
 		}
-		slot, release, err := acquireWorktreeSlot(proj, slots, 0, "app-1", "work")
+		slot, release, err := acquireWorktreeSlot(proj, "app", slots, 0, "app-1", "work")
 		if err != nil {
 			t.Fatalf("acquire: %v", err)
 		}
@@ -440,7 +415,7 @@ func TestAcquireWorktreeSlot(t *testing.T) {
 				t.Fatalf("seed busy lock: %v", err)
 			}
 		}
-		_, _, err := acquireWorktreeSlot(proj, slots, 0, "app-1", "work")
+		_, _, err := acquireWorktreeSlot(proj, "app", slots, 0, "app-1", "work")
 		if err == nil {
 			t.Fatal("expected all-busy error")
 		}
@@ -453,7 +428,7 @@ func TestAcquireWorktreeSlot(t *testing.T) {
 
 	t.Run("pin claims that slot even when slot 1 is free", func(t *testing.T) {
 		proj, slots := newRepo(t), newSlots(t)
-		slot, release, err := acquireWorktreeSlot(proj, slots, 2, "app-1", "work")
+		slot, release, err := acquireWorktreeSlot(proj, "app", slots, 2, "app-1", "work")
 		if err != nil {
 			t.Fatalf("acquire pinned: %v", err)
 		}
@@ -469,7 +444,7 @@ func TestAcquireWorktreeSlot(t *testing.T) {
 		if err := storage.AcquireWorktreeLock(slots[1].Path, "app-other", "work", otherLivePID); err != nil {
 			t.Fatalf("seed busy lock: %v", err)
 		}
-		_, _, err := acquireWorktreeSlot(proj, slots, 2, "app-1", "work")
+		_, _, err := acquireWorktreeSlot(proj, "app", slots, 2, "app-1", "work")
 		if err == nil || !strings.Contains(err.Error(), "slot 2") {
 			t.Fatalf("expected pinned-busy error mentioning slot 2, got %v", err)
 		}
@@ -477,7 +452,7 @@ func TestAcquireWorktreeSlot(t *testing.T) {
 
 	t.Run("pin out of range errors", func(t *testing.T) {
 		proj, slots := newRepo(t), newSlots(t)
-		_, _, err := acquireWorktreeSlot(proj, slots, 3, "app-1", "work")
+		_, _, err := acquireWorktreeSlot(proj, "app", slots, 3, "app-1", "work")
 		if err == nil || !strings.Contains(err.Error(), "out of range") {
 			t.Fatalf("expected out-of-range error, got %v", err)
 		}

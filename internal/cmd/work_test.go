@@ -384,7 +384,7 @@ func TestApplyWorkerResultFreshRead(t *testing.T) {
 	}
 
 	res := &workerResult{Status: "merged", Summary: "done", Branch: "feat/x", Commits: []string{"abc"}}
-	if err := applyWorkerResult(store, stale, "feat/x", "sess-1", res, true, false); err != nil {
+	if err := applyWorkerResult(os.Stderr, store, stale, "feat/x", "sess-1", res, true, false); err != nil {
 		t.Fatal(err)
 	}
 
