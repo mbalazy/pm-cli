@@ -31,8 +31,13 @@ func (m *Model) loadFocusPlan() bool {
 	return true
 }
 
+// saveFocusPlan persists the plan and toasts on a write failure - mirrors
+// loadFocusPlan's toast on a READ failure. Without this, a failed write
+// silently reverts the user's reorder/hide on the next reload().
 func (m *Model) saveFocusPlan() {
-	storage.WriteFocusPlan(m.store.RootDir(), m.focusPlan)
+	if err := storage.WriteFocusPlan(m.store.RootDir(), m.focusPlan); err != nil {
+		m.showErrorToast("focus plan", err)
+	}
 }
 
 func (m *Model) handleStalePlan() {
