@@ -59,6 +59,15 @@ func newMigrateIDsCmd(store storage.TaskStore) *cobra.Command {
 
 				for i, t := range tasks {
 					newID := fmt.Sprintf("%s-%d", prefix, i+1)
+					// This is the one renumbering path that does NOT go through
+					// AddTask (it rewrites existing files via the deliberately
+					// lenient WriteTask), so it has to check the minted ID
+					// itself: with a hand-edited `prefix: ../x`, Filename+Join
+					// would land the file outside the project dir, where
+					// ReadTasksFromDir never finds it again.
+					if err := storage.ValidateTaskID(newID); err != nil {
+						return fmt.Errorf("%w - fix the `prefix` in %s before migrating", err, store.ProjectYAML(slug))
+					}
 					oldPath := t.FilePath
 
 					fmt.Printf("  %s → %s  (%s)\n", t.Meta.ID, newID, t.Meta.Title)

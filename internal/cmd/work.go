@@ -211,12 +211,18 @@ func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*s
 	// first-hit-wins in sorted ListProjects order silently picked one, which
 	// here means spawning a 60-minute worker that commits in the WRONG repo.
 	//
-	// The scan keeps FindTask's OWN ranking rather than flattening it: an
-	// exact ID wins outright, and the fuzzy tier decides only when no project
-	// holds one. Treating the tiers as equals would make `pm work pm-cli-18`
+	// The scan keeps FindTask's OWN three-tier ranking rather than flattening
+	// it: exact ID, then unique ID prefix, then title substring - each tier
+	// decides alone, and a later tier is consulted only when the earlier one
+	// is empty. Treating the tiers as equals would make `pm work pm-cli-18`
 	// ambiguous merely because some other project has a task TITLED "... test
 	// for pm-cli-18" - which is not ambiguity, it is a weaker match.
-	projects, err := store.ListProjects()
+	//
+	// ARCHIVED projects are excluded (GetAllTasks/pm context do the same): a
+	// shelved client repo holding an imported ticket key must not make every
+	// query for that key ambiguous forever. The explicit two-arg form still
+	// reaches them - ResolveProject sees every project.
+	projects, err := store.ListActiveProjects()
 	if err != nil {
 		return nil, "", err
 	}
@@ -229,6 +235,33 @@ func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*s
 	}
 	if len(exact) > 0 {
 		return resolveHits(exact, query, cmdName)
+	}
+
+	// Tier 2: ID prefix. Mirrors FindTask's middle tier (internal/storage/
+	// store.go) - several hits INSIDE one project make that project ambiguous
+	// rather than silently dropping out of the scan.
+	var byIDPrefix []projectHit
+	for _, slug := range projects {
+		tasks, err := store.GetTasks(slug)
+		if err != nil {
+			continue
+		}
+		var hits []*storage.Task
+		for _, t := range tasks {
+			if strings.HasPrefix(strings.ToLower(t.Meta.ID), strings.ToLower(query)) {
+				hits = append(hits, t)
+			}
+		}
+		switch len(hits) {
+		case 0:
+		case 1:
+			byIDPrefix = append(byIDPrefix, projectHit{task: hits[0], slug: slug, label: slug + "/" + hits[0].Meta.ID})
+		default:
+			byIDPrefix = append(byIDPrefix, projectHit{slug: slug, label: slug + "/<several>"})
+		}
+	}
+	if len(byIDPrefix) > 0 {
+		return resolveHits(byIDPrefix, query, cmdName)
 	}
 
 	var fuzzy []projectHit

@@ -103,6 +103,13 @@ func newProjectsAddCmd(store storage.TaskStore) *cobra.Command {
 			}
 
 			if err := store.CreateProject(slug, p); err != nil {
+				// A rejected slug is nearly always a display name typed where
+				// a directory name belongs ("My Project"); name the safe form
+				// instead of leaving the user to derive it from the rule.
+				if suggestion := storage.Slugify(slug); suggestion != "" && suggestion != slug &&
+					storage.ValidateSlug(slug) != nil && storage.ValidateSlug(suggestion) == nil {
+					return fmt.Errorf("%w (did you mean %q?)", err, suggestion)
+				}
 				return err
 			}
 			fmt.Printf("Created project: %s (%s)\n", slug, store.ProjectDir(slug))

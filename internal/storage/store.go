@@ -137,6 +137,14 @@ func (s *Store) CreateProject(slug string, p *Project) error {
 	if err := ValidateSlug(slug); err != nil {
 		return err
 	}
+	// The prefix is the ID source for every auto-minted task, so an unsafe one
+	// creates a project that cannot hold a task - the failure would only
+	// surface later, on the first add, blaming an ID nobody typed.
+	if p != nil {
+		if err := ValidateProjectPrefix(p.Prefix); err != nil {
+			return err
+		}
+	}
 	dir := s.ProjectDir(slug)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -296,15 +304,20 @@ func (s *Store) AddTask(projectSlug string, t *Task) error {
 	// prompt). Validate BEFORE the O_EXCL claim below, so a rejected ID leaves
 	// no phantom file behind (same reason the mode/epic_mode pre-checks exist).
 	if err := ValidateTaskID(t.Meta.ID); err != nil {
-		// An auto-minted ID is "<prefix>-<n>", and `prefix` is free-form in
-		// project.yaml (hand-editable, settable over MCP, never validated) -
-		// so an unsafe prefix surfaces here as an error about an ID the user
-		// never typed. Name the actual culprit instead of leaving them to
-		// guess. The check is on the ID we were handed, so a caller passing an
-		// explicit bad --id still gets the plain error.
+		// An auto-minted ID is "<prefix>-<n>", and a project.yaml predating the
+		// prefix check (or hand-edited since) can still carry an unsafe one -
+		// which surfaces here as an error about an ID the user never typed.
+		// Name the actual culprit. ProjectPrefix falls back to the SLUG when
+		// no prefix is set, so the two cases are worded apart: pointing at a
+		// `prefix:` key that isn't in the file would send the reader hunting
+		// for something that does not exist.
 		if prefix := s.ProjectPrefix(projectSlug); prefix != "" &&
 			strings.HasPrefix(t.Meta.ID, prefix) && ValidateTaskID(prefix) != nil {
-			return fmt.Errorf("%w - it was derived from the project's `prefix` %q, which is not a safe path component; fix it in %s",
+			if proj, perr := s.GetProject(projectSlug); perr == nil && proj.Prefix != "" {
+				return fmt.Errorf("%w - it was derived from the project's `prefix` %q, which is not a safe path component; fix it in %s",
+					err, prefix, s.ProjectYAML(projectSlug))
+			}
+			return fmt.Errorf("%w - it was derived from the project directory name %q (no `prefix` is set); set a safe `prefix` in %s",
 				err, prefix, s.ProjectYAML(projectSlug))
 		}
 		return err

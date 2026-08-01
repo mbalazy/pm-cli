@@ -68,6 +68,62 @@ func TestResolveWorkTaskExactIDBeatsTitleMention(t *testing.T) {
 	}
 }
 
+// TestResolveWorkTaskIDPrefixBeatsTitleMention: FindTask's MIDDLE tier - a
+// unique ID-prefix hit outranks a title substring - has to survive the
+// cross-project scan too, or `pm work alpha-72` starts failing as ambiguous
+// merely because another project has a task titled "port alpha-72 helper".
+func TestResolveWorkTaskIDPrefixBeatsTitleMention(t *testing.T) {
+	store := twoProjectStore(t)
+	addTask(t, store, "alpha", storage.TaskMeta{ID: "alpha-720", Title: "Real work", Status: storage.StatusTodo}, "")
+	addTask(t, store, "beta", storage.TaskMeta{ID: "beta-3", Title: "Port alpha-72 helper", Status: storage.StatusTodo}, "")
+
+	task, slug, err := resolveWorkTask(store, []string{"alpha-72"}, "work")
+	if err != nil {
+		t.Fatalf("unique id-prefix lost to a title mention: %v", err)
+	}
+	if slug != "alpha" || task.Meta.ID != "alpha-720" {
+		t.Fatalf("resolved %s/%s, want alpha/alpha-720", slug, task.Meta.ID)
+	}
+
+	// Two projects each holding an id-prefix hit IS ambiguity.
+	addTask(t, store, "beta", storage.TaskMeta{ID: "alpha-729", Title: "Stranger", Status: storage.StatusTodo}, "")
+	if _, _, err := resolveWorkTask(store, []string{"alpha-72"}, "work"); err == nil {
+		t.Fatal("an id-prefix hit in two projects must be ambiguous")
+	}
+}
+
+// TestResolveWorkTaskSkipsArchivedProjects: a shelved project holding an
+// imported ticket key must not make every query for that key ambiguous
+// forever. GetAllTasks and pm context already scan active projects only.
+func TestResolveWorkTaskSkipsArchivedProjects(t *testing.T) {
+	store := twoProjectStore(t)
+	addTask(t, store, "alpha", storage.TaskMeta{ID: "ACME-253", Title: "Live work", Status: storage.StatusTodo}, "")
+	addTask(t, store, "beta", storage.TaskMeta{ID: "ACME-253", Title: "Old client work", Status: storage.StatusTodo}, "")
+	if _, err := store.MutateProject("beta", func(p *storage.Project) error {
+		p.Archived = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	task, slug, err := resolveWorkTask(store, []string{"ACME-253"}, "work")
+	if err != nil {
+		t.Fatalf("an archived twin made a live task unreachable: %v", err)
+	}
+	if slug != "alpha" || task.Meta.ID != "ACME-253" {
+		t.Fatalf("resolved %s/%s, want alpha/ACME-253", slug, task.Meta.ID)
+	}
+
+	// The explicit two-arg form still reaches the archived project.
+	task, slug, err = resolveWorkTask(store, []string{"beta", "ACME-253"}, "work")
+	if err != nil {
+		t.Fatalf("explicit form must still reach an archived project: %v", err)
+	}
+	if slug != "beta" || task.Meta.Title != "Old client work" {
+		t.Fatalf("resolved %s/%q, want beta/\"Old client work\"", slug, task.Meta.Title)
+	}
+}
+
 // TestResolveWorkTaskIntraProjectAmbiguityCounts: FindTask returns an error
 // for BOTH "no match here" and "several matches here". Collapsing them makes
 // an ambiguous project contribute nothing, so the scan resolves to whichever

@@ -156,6 +156,22 @@ func ValidateTaskID(id string) error {
 	return nil
 }
 
+// ValidateProjectPrefix checks a project's `prefix` field, which is the ID
+// SOURCE for every auto-minted task ("<prefix>-<n>" from NextTaskID). It has
+// to pass the same bar as an ID: an unsafe prefix used to produce merely ugly
+// task files, but now that AddTask validates, it would lock the project out of
+// task creation entirely - and every add would fail naming an ID nobody typed.
+// Empty is fine (the slug is used, and slugs are validated on create).
+func ValidateProjectPrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	if err := ValidateTaskID(prefix); err != nil {
+		return fmt.Errorf("invalid prefix %q - task ids are minted as \"<prefix>-<n>\", so the prefix must start with a letter or digit and contain only letters, digits, '.', '_' or '-' (no path separators or spaces)", prefix)
+	}
+	return nil
+}
+
 type Task struct {
 	Meta     TaskMeta
 	Body     string

@@ -162,6 +162,46 @@ func TestValidateTaskID(t *testing.T) {
 	}
 }
 
+// TestValidateProjectPrefix: the prefix is the ID source for every auto-minted
+// task, so it has to pass the ID bar - otherwise a project accepts creation
+// and then rejects every single `pm add` on it.
+func TestValidateProjectPrefix(t *testing.T) {
+	for _, ok := range []string{"", "pm-cli", "best", "rc", "a1", "app.le"} {
+		if err := ValidateProjectPrefix(ok); err != nil {
+			t.Errorf("ValidateProjectPrefix(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"My Proj", "../x", "sub/dir", ".hidden", "-lead"} {
+		if err := ValidateProjectPrefix(bad); err == nil {
+			t.Errorf("ValidateProjectPrefix(%q) = nil, want error", bad)
+		}
+	}
+}
+
+// TestCreateProjectRejectsUnsafePrefix: rejected at creation, so the lockout
+// (project exists, no task can ever be added to it) cannot be created at all.
+func TestCreateProjectRejectsUnsafePrefix(t *testing.T) {
+	s := &Store{Root: t.TempDir()}
+	err := s.CreateProject("acme", &Project{Name: "Acme", Prefix: "Acme Corp"})
+	if err == nil {
+		t.Fatal("an unsafe prefix was accepted at create")
+	}
+	if !strings.Contains(err.Error(), "invalid prefix") {
+		t.Errorf("want an invalid-prefix error, got: %v", err)
+	}
+	if _, statErr := os.Stat(s.ProjectYAML("acme")); !os.IsNotExist(statErr) {
+		t.Errorf("rejected create still wrote project.yaml (stat err = %v)", statErr)
+	}
+
+	// The valid case is untouched, including an empty prefix (slug is used).
+	if err := s.CreateProject("acme", &Project{Name: "Acme", Prefix: "ac"}); err != nil {
+		t.Fatalf("valid prefix rejected: %v", err)
+	}
+	if err := s.CreateProject("plain", &Project{Name: "Plain"}); err != nil {
+		t.Fatalf("empty prefix rejected: %v", err)
+	}
+}
+
 func TestValidateStatus(t *testing.T) {
 	allowed := []TaskStatus{StatusTodo, StatusDoing, StatusDone}
 

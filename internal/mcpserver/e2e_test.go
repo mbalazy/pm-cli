@@ -332,6 +332,44 @@ func TestE2EAddTaskRejectsTraversingID(t *testing.T) {
 	}
 }
 
+// TestE2EUnsafePrefixRejected: `prefix` is the ID source for every auto-minted
+// task ("<prefix>-<n>"), and AddTask validates the result - so accepting an
+// unsafe prefix here would hand back a project that looks fine and then
+// refuses every pm_add_task on it, blaming an ID nobody typed. Both write
+// points must refuse it, and a rejected update must leave the project alone.
+func TestE2EUnsafePrefixRejected(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_create_project", map[string]any{"slug": "acme", "prefix": "Acme Corp"})
+	if !isErr {
+		t.Fatalf("unsafe prefix on create must be a tool error, got: %s", text)
+	}
+	if !strings.Contains(text, "invalid prefix") {
+		t.Errorf("error must come from ValidateProjectPrefix, got: %s", text)
+	}
+	if _, err := store.GetProject("acme"); err == nil {
+		t.Fatal("rejected create still made the project")
+	}
+
+	text, isErr = call(t, sess, "pm_update_project", map[string]any{"project": "test", "prefix": "My Proj"})
+	if !isErr {
+		t.Fatalf("unsafe prefix on update must be a tool error, got: %s", text)
+	}
+	proj, err := store.GetProject("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proj.Prefix != "t" {
+		t.Fatalf("rejected update changed the prefix to %q", proj.Prefix)
+	}
+
+	// The project still mints and accepts task ids, i.e. no lockout.
+	if text, isErr := call(t, sess, "pm_add_task", map[string]any{"project": "test", "title": "Still works"}); isErr {
+		t.Fatalf("add after the rejected prefix update failed: %s", text)
+	}
+}
+
 func TestE2EContextAndListTasks(t *testing.T) {
 	store, _ := setupMCPTestStore(t)
 	sess := startMCP(t, store)
