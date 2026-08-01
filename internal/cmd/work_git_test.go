@@ -21,6 +21,33 @@ func gitT(t *testing.T, dir string, args ...string) {
 	}
 }
 
+// fakeGitFailing installs a fake `git` at the front of PATH that fails with
+// stderr text when the invocation's argv (space-joined) ends with failSuffix
+// (which must include its own leading space, e.g. " status --porcelain"),
+// and otherwise execs the real git binary unchanged. Used to force an error
+// out of a specific git subcommand without corrupting a real repo.
+func fakeGitFailing(t *testing.T, failSuffix, stderr string) {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("no real git on PATH: %v", err)
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"case \"$*\" in\n" +
+		"  *\"" + failSuffix + "\")\n" +
+		"    echo '" + stderr + "' >&2\n" +
+		"    exit 1\n" +
+		"    ;;\n" +
+		"esac\n" +
+		"exec " + realGit + " \"$@\"\n"
+	path := filepath.Join(dir, "git")
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 // TestGitFreshBranchOnReusedWorktree is the crux of the reused-worktree fix: a
 // new task's branch must fork from the base branch's CURRENT tip and start from
 // a clean tree - never inheriting a previous (killed) task's branch, its
@@ -176,5 +203,114 @@ func TestGitAheadCountAndPushIfAhead(t *testing.T) {
 	note := pushIfAhead(repo, "feat/work", "missing-base")
 	if !strings.Contains(note, "pushed feat/work") || !strings.Contains(note, "ahead-check failed") {
 		t.Errorf("pushIfAhead with a broken ahead-check = %q, want push-to-be-safe with the reason", note)
+	}
+}
+
+// TestGitThinWrappersSurfaceStderr covers the three wrappers that used to
+// return a bare `*ExitError` ("exit status N") on failure - gitCheckoutBranch,
+// gitEnsureBranch, gitDeleteBranch - with real git failures, verifying the
+// returned error carries git's own stderr text, not just the exit code.
+func TestGitThinWrappersSurfaceStderr(t *testing.T) {
+	t.Run("gitCheckoutBranch: invalid branch name", func(t *testing.T) {
+		repo := t.TempDir()
+		gitT(t, repo, "init", "-q")
+		gitT(t, repo, "checkout", "-q", "-b", "main")
+		os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
+		gitT(t, repo, "add", ".")
+		gitT(t, repo, "commit", "-q", "-m", "init")
+
+		err := gitCheckoutBranch(repo, "bad..name")
+		if err == nil {
+			t.Fatal("expected an error for an invalid branch name")
+		}
+		if err.Error() == "exit status 128" || !strings.Contains(err.Error(), "not a valid branch name") {
+			t.Fatalf("error must carry git's stderr text, got: %v", err)
+		}
+	})
+
+	t.Run("gitEnsureBranch: checkout blocked by conflicting local changes", func(t *testing.T) {
+		repo := t.TempDir()
+		gitT(t, repo, "init", "-q")
+		gitT(t, repo, "checkout", "-q", "-b", "main")
+		os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
+		gitT(t, repo, "add", ".")
+		gitT(t, repo, "commit", "-q", "-m", "init")
+		gitT(t, repo, "checkout", "-q", "-b", "other")
+		os.WriteFile(filepath.Join(repo, "f.txt"), []byte("other\n"), 0644)
+		gitT(t, repo, "commit", "-q", "-am", "other-commit")
+		gitT(t, repo, "checkout", "-q", "main")
+		os.WriteFile(filepath.Join(repo, "f.txt"), []byte("conflict\n"), 0644)
+
+		err := gitEnsureBranch(repo, "other", "")
+		if err == nil {
+			t.Fatal("expected an error - local changes would be overwritten")
+		}
+		if !strings.Contains(err.Error(), "overwritten by checkout") {
+			t.Fatalf("error must carry git's stderr text, got: %v", err)
+		}
+	})
+
+	t.Run("gitDeleteBranch: branch not fully merged", func(t *testing.T) {
+		repo := t.TempDir()
+		gitT(t, repo, "init", "-q")
+		gitT(t, repo, "checkout", "-q", "-b", "main")
+		os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
+		gitT(t, repo, "add", ".")
+		gitT(t, repo, "commit", "-q", "-m", "init")
+		gitT(t, repo, "checkout", "-q", "-b", "unmerged")
+		os.WriteFile(filepath.Join(repo, "g.txt"), []byte("y\n"), 0644)
+		gitT(t, repo, "add", ".")
+		gitT(t, repo, "commit", "-q", "-m", "wip")
+		gitT(t, repo, "checkout", "-q", "main")
+
+		err := gitDeleteBranch(repo, "unmerged")
+		if err == nil {
+			t.Fatal("expected an error - branch is not fully merged")
+		}
+		if !strings.Contains(err.Error(), "not fully merged") {
+			t.Fatalf("error must carry git's stderr text, got: %v", err)
+		}
+	})
+}
+
+// TestRequireCleanWorkingTreePropagatesStatusError verifies the shared
+// clean-tree precondition (used by both pm work standalone and pm run-epic's
+// non-worktree path) surfaces a failing `git status` as an error instead of
+// silently treating it as a clean tree - the bug was `if dirty, _ :=
+// gitDirty(dir); dirty` discarding the error, so a broken git status let a
+// dirty (or unreadable) tree slip past the guard that exists specifically to
+// protect uncommitted work from a branch switch.
+func TestRequireCleanWorkingTreePropagatesStatusError(t *testing.T) {
+	repo := t.TempDir()
+	gitT(t, repo, "init", "-q")
+	gitT(t, repo, "checkout", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
+	gitT(t, repo, "add", ".")
+	gitT(t, repo, "commit", "-q", "-m", "init")
+
+	fakeGitFailing(t, " status --porcelain", "fatal: fake status failure")
+	if err := requireCleanWorkingTree(repo); err == nil {
+		t.Fatal("expected requireCleanWorkingTree to surface the git status failure, got nil")
+	}
+}
+
+// TestRequireCleanWorkingTreeCleanAndDirty are the (pre-existing) happy-path
+// cases, kept alongside the error-propagation test above for contrast.
+func TestRequireCleanWorkingTreeCleanAndDirty(t *testing.T) {
+	repo := t.TempDir()
+	gitT(t, repo, "init", "-q")
+	gitT(t, repo, "checkout", "-q", "-b", "main")
+	os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
+	gitT(t, repo, "add", ".")
+	gitT(t, repo, "commit", "-q", "-m", "init")
+
+	if err := requireCleanWorkingTree(repo); err != nil {
+		t.Fatalf("clean tree must pass: %v", err)
+	}
+
+	os.WriteFile(filepath.Join(repo, "f.txt"), []byte("dirty\n"), 0644)
+	err := requireCleanWorkingTree(repo)
+	if err == nil || !strings.Contains(err.Error(), "is dirty") {
+		t.Fatalf("dirty tree must be rejected with a clear message, got: %v", err)
 	}
 }
