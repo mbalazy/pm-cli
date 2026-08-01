@@ -139,15 +139,22 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 	}
 
 	// Park the in-flight task on `waiting` so the board reflects the stop.
+	var parkErr error
 	if inFlight != "" {
 		if t, err := m.store.FindTask(proj, inFlight); err == nil && t.Meta.Status != storage.StatusWaiting {
-			m.store.MoveTask(t, storage.StatusWaiting)
+			parkErr = m.store.MoveTask(t, storage.StatusWaiting)
 		}
 	}
 	m.reload()
 	m.refreshRunStates()
-	m.toastMsg = "Stopped executor run " + taskID + " (parked " + inFlight + " on waiting)"
-	m.toastExpiry = time.Now().Add(5 * time.Second)
+	if parkErr != nil {
+		// MoveTask can legally fail (e.g. the task file was deleted while the
+		// run was live) - the old unconditional toast lied about the park.
+		m.showErrorToast("Stopped executor run "+taskID+", but failed to park "+inFlight, parkErr)
+	} else {
+		m.toastMsg = "Stopped executor run " + taskID + " (parked " + inFlight + " on waiting)"
+		m.toastExpiry = time.Now().Add(5 * time.Second)
+	}
 	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
 		return execKillCheckMsg{pid: pid, workerPGID: workerPGID, project: proj, taskID: taskID}
 	})
