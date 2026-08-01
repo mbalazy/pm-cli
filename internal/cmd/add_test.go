@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mbalazy/pm/internal/storage"
 )
@@ -33,10 +34,11 @@ func TestAddMintsUniqueIDsUnderConcurrency(t *testing.T) {
 	store, slug := tempStore(t)
 
 	const adders = 8
-	// Start barrier: without it the goroutines merely tend to overlap inside
-	// NextTaskID, so a reverted fix could pass green on a constrained runner
-	// (GOMAXPROCS=1 plus an unlucky schedule). Releasing them all at once
-	// makes the collision deterministic in practice.
+	// Start barrier: releasing the goroutines together maximizes the overlap
+	// inside NextTaskID. It does NOT make detection certain - at -cpu=1 they
+	// still run largely serially, and a reverted fix passes. The deterministic
+	// detector is TestAddBlocksOnProjectLockAndRereads; this one is the
+	// property test (N adds -> N distinct ids).
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := 0; i < adders; i++ {
@@ -68,6 +70,65 @@ func TestAddMintsUniqueIDsUnderConcurrency(t *testing.T) {
 	}
 	if len(seen) != adders {
 		t.Fatalf("%d distinct id(s) for %d adds: %v", len(seen), adders, seen)
+	}
+}
+
+// TestAddBlocksOnProjectLockAndRereads is the DETERMINISTIC half of AC-1.
+// TestAddMintsUniqueIDsUnderConcurrency is a property test and its detection
+// is probabilistic - measured with the lock removed it catches the duplicate
+// 10/10 at the default GOMAXPROCS but 0/30 at -cpu=1, where the goroutines
+// simply run serially through NextTaskID. This one blocks on the real flock
+// instead of on the scheduler (same shape as TestReorderSerializesWithProjectLock):
+// the test holds the lock, so a locking `pm add` CANNOT finish, and once
+// released it must mint its ID from the state as of AFTER the wait.
+func TestAddBlocksOnProjectLockAndRereads(t *testing.T) {
+	store, slug := tempStore(t)
+
+	release, err := store.LockProject(slug)
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	defer release() // see TestReorderSerializesWithProjectLock - Once-idempotent
+
+	done := make(chan error, 1)
+	go func() { done <- runAddCmd(store, slug, "Waited for the lock") }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("`pm add` completed while the project lock was held (err = %v) - it minted its id from unserialized state", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Consume the id it would have taken, inside the critical section.
+	if err := store.AddTask(slug, &storage.Task{
+		Meta: storage.TaskMeta{ID: slug + "-1", Title: "Taken meanwhile", Status: storage.StatusTodo},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	release()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("add: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("`pm add` never finished after the lock was released")
+	}
+
+	tasks, err := store.GetTasks(slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]string{}
+	for _, tk := range tasks {
+		if prev, dup := ids[tk.Meta.ID]; dup {
+			t.Fatalf("duplicate id %q: %q and %q - the add did not re-read inside the lock", tk.Meta.ID, prev, tk.Meta.Title)
+		}
+		ids[tk.Meta.ID] = tk.Meta.Title
+	}
+	if ids[slug+"-2"] != "Waited for the lock" {
+		t.Fatalf("the waiting add minted from stale state: ids = %v", ids)
 	}
 }
 

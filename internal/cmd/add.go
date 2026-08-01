@@ -70,7 +70,7 @@ func newAddCmd(store storage.TaskStore) *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("Created task: %s → %s\n", t.Meta.ID, t.FilePath)
+			fmt.Fprintf(cmd.OutOrStdout(), "Created task: %s → %s\n", t.Meta.ID, t.FilePath)
 			return nil
 		},
 	}

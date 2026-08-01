@@ -178,6 +178,40 @@ func TestValidateProjectPrefix(t *testing.T) {
 	}
 }
 
+// TestCreateProjectRejectsUnsafeSlug pins the check at the STORAGE layer, not
+// only in `pm projects add`: pm_create_project's handler pre-check would
+// otherwise mask a missing guard here, leaving every future caller (a new
+// command, an importer) able to MkdirAll its way out of the pm root.
+func TestCreateProjectRejectsUnsafeSlug(t *testing.T) {
+	root := t.TempDir()
+	s := &Store{Root: filepath.Join(root, "pm")}
+	if err := os.MkdirAll(s.Root, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, slug := range []string{"../outside", "MyProj", "sub/dir", "..", ""} {
+		err := s.CreateProject(slug, &Project{Name: "X"})
+		if err == nil {
+			t.Fatalf("CreateProject(%q) returned nil", slug)
+		}
+		if !strings.Contains(err.Error(), "invalid slug") {
+			t.Errorf("slug %q: want a ValidateSlug error, got: %v", slug, err)
+		}
+	}
+	// Nothing was created inside the pm root or next to it.
+	for _, dir := range []string{s.Root, root} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if e.Name() != "pm" {
+				t.Fatalf("rejected create left %s in %s", e.Name(), dir)
+			}
+		}
+	}
+}
+
 // TestCreateProjectRejectsUnsafePrefix: rejected at creation, so the lockout
 // (project exists, no task can ever be added to it) cannot be created at all.
 func TestCreateProjectRejectsUnsafePrefix(t *testing.T) {

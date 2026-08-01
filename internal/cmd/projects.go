@@ -112,7 +112,7 @@ func newProjectsAddCmd(store storage.TaskStore) *cobra.Command {
 				}
 				return err
 			}
-			fmt.Printf("Created project: %s (%s)\n", slug, store.ProjectDir(slug))
+			fmt.Fprintf(cmd.OutOrStdout(), "Created project: %s (%s)\n", slug, store.ProjectDir(slug))
 			return nil
 		},
 	}

@@ -81,9 +81,9 @@ func newReorderCmd(store storage.TaskStore) *cobra.Command {
 				if err := store.WriteTask(t); err != nil {
 					return fmt.Errorf("write %s: %w", id, err)
 				}
-				fmt.Printf("%-13s order=%d\n", id, t.Meta.Order)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-13s order=%d\n", id, t.Meta.Order)
 			}
-			fmt.Printf("Reordered %d subtask(s) of %s\n", len(wantIDs), parentID)
+			fmt.Fprintf(cmd.OutOrStdout(), "Reordered %d subtask(s) of %s\n", len(wantIDs), parentID)
 			return nil
 		},
 	}

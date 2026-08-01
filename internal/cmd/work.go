@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -200,13 +201,16 @@ func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*s
 	}
 
 	query := args[0]
-	// Prefer the project of the current directory.
-	if slug := detectProjectFromCwd(store); slug != "" {
-		if t, err := store.FindTask(slug, query); err == nil {
-			return t, slug, nil
-		}
-	}
-	// Fall back to scanning every project. FindTask also matches on TITLE
+	// The project of the current directory is a PREFERENCE, applied inside a
+	// tier (below), not a short-circuit. It used to run FindTask on the cwd
+	// project first and return whatever came back - so a TITLE mention in the
+	// repo you happen to stand in beat another project's EXACT id: run
+	// `pm work pm-cli-18` from a repo holding "Port pm-cli-18 learnings" and
+	// the 60-minute worker committed there. Standing somewhere breaks a tie;
+	// it does not outrank a stronger match.
+	cwdSlug := detectProjectFromCwd(store)
+
+	// Scan every project. FindTask also matches on TITLE
 	// SUBSTRING, so a short query ("auth") can hit several projects - and
 	// first-hit-wins in sorted ListProjects order silently picked one, which
 	// here means spawning a 60-minute worker that commits in the WRONG repo.
@@ -226,6 +230,11 @@ func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*s
 	if err != nil {
 		return nil, "", err
 	}
+	// ...except the one you are standing in: if that project is archived, the
+	// cwd says plainly which one is meant, so excluding it would be perverse.
+	if cwdSlug != "" && !slices.Contains(projects, cwdSlug) {
+		projects = append(projects, cwdSlug)
+	}
 
 	var exact []projectHit
 	for _, slug := range projects {
@@ -234,7 +243,7 @@ func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*s
 		}
 	}
 	if len(exact) > 0 {
-		return resolveHits(exact, query, cmdName)
+		return resolveHits(exact, cwdSlug, query, cmdName)
 	}
 
 	// Tier 2: ID prefix. Mirrors FindTask's middle tier (internal/storage/
@@ -261,7 +270,7 @@ func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*s
 		}
 	}
 	if len(byIDPrefix) > 0 {
-		return resolveHits(byIDPrefix, query, cmdName)
+		return resolveHits(byIDPrefix, cwdSlug, query, cmdName)
 	}
 
 	var fuzzy []projectHit
@@ -281,7 +290,7 @@ func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*s
 	if len(fuzzy) == 0 {
 		return nil, "", fmt.Errorf("task %q not found in any project (try `pm %s <project> <task-id>`)", query, cmdName)
 	}
-	return resolveHits(fuzzy, query, cmdName)
+	return resolveHits(fuzzy, cwdSlug, query, cmdName)
 }
 
 // projectHit is one project's answer to a cross-project task scan. task is nil
@@ -293,16 +302,35 @@ type projectHit struct {
 	label string
 }
 
-func resolveHits(hits []projectHit, query, cmdName string) (*storage.Task, string, error) {
+// resolveHits picks the winner of ONE tier. Several projects matching equally
+// is real ambiguity - except when one of them is the project the user is
+// standing in, which is as explicit a statement of intent as the two-arg form.
+func resolveHits(hits []projectHit, cwdSlug, query, cmdName string) (*storage.Task, string, error) {
 	if len(hits) == 1 && hits[0].task != nil {
 		return hits[0].task, hits[0].slug, nil
 	}
+	for _, h := range hits {
+		if h.slug == cwdSlug && h.task != nil {
+			return h.task, h.slug, nil
+		}
+	}
 	labels := make([]string, len(hits))
+	several := false
 	for i, h := range hits {
 		labels[i] = h.label
+		if h.task == nil {
+			several = true
+		}
 	}
-	return nil, "", fmt.Errorf("ambiguous task %q: matches %s (disambiguate with `pm %s <project> <task-id>`)",
-		query, strings.Join(labels, ", "), cmdName)
+	// The remedy has to fit the failure: for a query that is ambiguous INSIDE
+	// a project, `pm work <project> <query>` just fails the same way again -
+	// what is needed there is a narrower query, not a project name.
+	remedy := fmt.Sprintf("disambiguate with `pm %s <project> <task-id>`", cmdName)
+	if several {
+		remedy = fmt.Sprintf("use the exact task id, or `pm %s <project> <task-id>` for a project that matched once", cmdName)
+	}
+	return nil, "", fmt.Errorf("ambiguous task %q: matches %s (%s)",
+		query, strings.Join(labels, ", "), remedy)
 }
 
 // resolveWorkBranch returns the branch a worker commits on: the task's explicit

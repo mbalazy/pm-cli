@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -65,6 +66,49 @@ func TestResolveWorkTaskExactIDBeatsTitleMention(t *testing.T) {
 	addTask(t, store, "beta", storage.TaskMeta{ID: "shared-1", Title: "B", Status: storage.StatusTodo}, "")
 	if _, _, err := resolveWorkTask(store, []string{"shared-1"}, "work"); err == nil {
 		t.Fatal("the same exact id in two projects must be ambiguous")
+	}
+}
+
+// TestResolveWorkTaskCwdIsATiebreakNotAnOverride: the cwd project used to
+// short-circuit the whole scan - `FindTask` on it, first hit wins - so a TITLE
+// mention in the repo you happen to be standing in beat another project's
+// EXACT id, and the worker committed in the wrong repo. cwd must break ties
+// WITHIN a tier, never outrank a stronger match.
+func TestResolveWorkTaskCwdIsATiebreakNotAnOverride(t *testing.T) {
+	store := &storage.Store{Root: t.TempDir()}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "local" is the project whose path encloses the test's cwd, so
+	// detectProjectFromCwd resolves to it for real.
+	if err := store.CreateProject("local", &storage.Project{Name: "local", Path: cwd}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateProject("remote", &storage.Project{Name: "remote"}); err != nil {
+		t.Fatal(err)
+	}
+	addTask(t, store, "local", storage.TaskMeta{ID: "local-1", Title: "Port remote-9 learnings", Status: storage.StatusTodo}, "")
+	addTask(t, store, "remote", storage.TaskMeta{ID: "remote-9", Title: "The real one", Status: storage.StatusTodo}, "")
+
+	task, slug, err := resolveWorkTask(store, []string{"remote-9"}, "work")
+	if err != nil {
+		t.Fatalf("exact id lost to a title mention in the cwd project: %v", err)
+	}
+	if slug != "remote" || task.Meta.ID != "remote-9" {
+		t.Fatalf("resolved %s/%s, want remote/remote-9", slug, task.Meta.ID)
+	}
+
+	// Within ONE tier the cwd project does win - two equal title matches, and
+	// standing in one of the repos settles it instead of erroring.
+	addTask(t, store, "local", storage.TaskMeta{ID: "local-2", Title: "Sync widget", Status: storage.StatusTodo}, "")
+	addTask(t, store, "remote", storage.TaskMeta{ID: "remote-2", Title: "Sync widget", Status: storage.StatusTodo}, "")
+	task, slug, err = resolveWorkTask(store, []string{"sync widget"}, "work")
+	if err != nil {
+		t.Fatalf("cwd must settle a tie inside a tier: %v", err)
+	}
+	if slug != "local" || task.Meta.ID != "local-2" {
+		t.Fatalf("resolved %s/%s, want local/local-2", slug, task.Meta.ID)
 	}
 }
 
