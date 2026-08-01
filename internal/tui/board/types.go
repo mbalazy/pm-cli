@@ -208,7 +208,6 @@ type Model struct {
 	addStep       int // 0=title, 1=ID
 	addInput      textinput.Model
 	addTitle      string
-	err           error
 
 	// confirmation
 	confirmAction string // "" | "done" | "delete"

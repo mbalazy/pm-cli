@@ -18,16 +18,28 @@ func (m Model) updateSelectMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if key.Matches(msg, common.Keys.Delete) {
 			tasks := m.markedTasks()
 			count := 0
+			failed := 0
+			var firstErr error
 			for _, t := range tasks {
-				m.store.DeleteTask(t)
+				if err := m.store.DeleteTask(t); err != nil {
+					failed++
+					if firstErr == nil {
+						firstErr = err
+					}
+					continue
+				}
 				count++
 			}
 			m.confirmAction = ""
 			m.selecting = false
 			m.selected = make(map[string]bool)
 			m.reload()
-			m.toastMsg = fmt.Sprintf("Deleted %d tasks", count)
-			m.toastExpiry = time.Now().Add(2 * time.Second)
+			if failed > 0 {
+				m.showErrorToast(fmt.Sprintf("Deleted %d of %d tasks (%d failed)", count, len(tasks), failed), firstErr)
+			} else {
+				m.toastMsg = fmt.Sprintf("Deleted %d tasks", count)
+				m.toastExpiry = time.Now().Add(2 * time.Second)
+			}
 			return m, nil
 		}
 		m.confirmAction = ""
@@ -234,7 +246,9 @@ func (m Model) updateArchive(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.confirmAction == "delete" && m.confirmTaskID == t.Meta.ID {
 			m.lastUndo = &undoAction{kind: "delete", task: snapshotTask(t)}
-			m.store.DeleteTask(t)
+			if err := m.store.DeleteTask(t); err != nil {
+				m.showErrorToast("delete failed", err)
+			}
 			m.confirmAction = ""
 			m.confirmTaskID = ""
 			m.reload()

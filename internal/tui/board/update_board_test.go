@@ -45,6 +45,89 @@ func TestBoardKeysWithAllColumnsHidden(t *testing.T) {
 	}
 }
 
+// TestAddWithAllColumnsHidden covers pm-cli-67-1: applyColumnVisibility (the V
+// menu) can legally empty m.statuses, and the Add flow indexed m.statuses[0]
+// unguarded - both at the "a" keybinding (update.go) and again at task
+// creation time (updateAdd, update_menus.go). Confirmed panic before the fix:
+// "runtime error: index out of range [0] with length 0".
+func TestAddWithAllColumnsHidden(t *testing.T) {
+	t.Run("the a keybinding does not enter add mode", func(t *testing.T) {
+		m := Model{
+			projects:      []string{"all", "p"},
+			activeProject: 1,
+			statuses:      nil,
+			cursors:       []int{},
+			scrollOffsets: []int{},
+			width:         80, height: 24,
+		}
+		result, _ := m.updateBoard(keyRunes('a'))
+		m2 := result.(Model)
+		if m2.adding {
+			t.Error("add mode should not open with zero visible columns")
+		}
+		if !strings.Contains(m2.toastMsg, "no visible columns") {
+			t.Errorf("toastMsg = %q, want a hint about hidden columns", m2.toastMsg)
+		}
+	})
+
+	t.Run("Enter during add does not index an emptied m.statuses", func(t *testing.T) {
+		// Simulates hiddenStatuses changing out from under an already-open add
+		// dialog (defense in depth - the "a" guard above is the normal path).
+		m := Model{
+			projects:      []string{"all", "p"},
+			activeProject: 1,
+			statuses:      nil,
+			adding:        true,
+			addStep:       1,
+			addTitle:      "New task",
+			width:         80, height: 24,
+		}
+
+		var m2 Model
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("Enter with empty m.statuses panicked: %v", r)
+				}
+			}()
+			result, _ := m.updateAdd(tea.KeyMsg{Type: tea.KeyEnter})
+			m2 = result.(Model)
+		}()
+		if m2.adding {
+			t.Error("add mode should close instead of creating a task with no status")
+		}
+	})
+}
+
+// TestDeleteTaskShowsErrorToast covers pm-cli-67-1: DeleteTask's error was
+// dropped on the floor (MoveTask's hardening never reached its sibling
+// mutations), so a failed delete looked identical to a successful one. A task
+// with no FilePath is store.DeleteTask's own documented failure mode
+// ("task has no file path").
+func TestDeleteTaskShowsErrorToast(t *testing.T) {
+	store := &storage.Store{Root: t.TempDir()}
+	task := &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "No file", Status: storage.StatusTodo}}
+
+	m := Model{
+		store:         store,
+		tasks:         []*storage.Task{task},
+		statuses:      []storage.TaskStatus{storage.StatusTodo},
+		cursors:       []int{0},
+		scrollOffsets: []int{0},
+		width:         80, height: 24,
+	}
+
+	// First x arms the confirmation, second x (matching confirmTaskID) executes it.
+	result, _ := m.updateBoard(keyRunes('x'))
+	m2 := result.(Model)
+	result, _ = m2.updateBoard(keyRunes('x'))
+	m3 := result.(Model)
+
+	if !strings.Contains(m3.toastMsg, "delete failed") || !strings.Contains(m3.toastMsg, "no file path") {
+		t.Errorf("toastMsg = %q, want it to mention the delete failure and the reason", m3.toastMsg)
+	}
+}
+
 // TestSessionMenuActsOnDetailTask: the session menu opens from the DETAIL view
 // on m.detailTask; after a relation jump the board cursor points at a DIFFERENT
 // task. x (delete session) used selectedTask() and deleted the session from

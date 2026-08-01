@@ -26,7 +26,7 @@ func lastSession(t *storage.Task) string {
 	return t.Meta.Links["cc-session"] // legacy fallback
 }
 
-func (m *Model) saveSession(t *storage.Task, sessionID string) {
+func (m *Model) saveSession(t *storage.Task, sessionID string) error {
 	// Migrate legacy cc-session link
 	if old := t.Meta.Links["cc-session"]; old != "" {
 		if len(t.Meta.Sessions) == 0 || t.Meta.Sessions[len(t.Meta.Sessions)-1] != old {
@@ -39,7 +39,7 @@ func (m *Model) saveSession(t *storage.Task, sessionID string) {
 	}
 	t.Meta.Sessions = append(t.Meta.Sessions, sessionID)
 	t.Meta.Updated = storage.Today()
-	m.store.WriteTask(t)
+	return m.store.WriteTask(t)
 }
 
 type sessionIndexEntry struct {

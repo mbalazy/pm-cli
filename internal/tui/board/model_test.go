@@ -745,6 +745,44 @@ func TestLaunchResultMsgShowsToast(t *testing.T) {
 	}
 }
 
+// TestReloadAndLaunchResultDoNotFanOutTick covers the unbounded tick fan-out
+// bug: reloadMsg (every editor return) and launchResultMsg (every "here" /
+// "worktree" / "resume" / "fork" launch return) each used to return doTick(),
+// stacking a PERMANENT extra 2s render loop on top of the one Init already
+// started - 10 launches meant refreshRunStates ran 11x per tick. Only the
+// tickMsg branch itself may keep re-arming the loop.
+func TestReloadAndLaunchResultDoNotFanOutTick(t *testing.T) {
+	store := &storage.Store{Root: t.TempDir()}
+	m := Model{
+		store:         store,
+		projects:      []string{"all"},
+		statuses:      []storage.TaskStatus{storage.StatusTodo},
+		cursors:       []int{0},
+		scrollOffsets: []int{0},
+	}
+
+	t.Run("reloadMsg returns no cmd", func(t *testing.T) {
+		_, cmd := m.Update(reloadMsg{})
+		if cmd != nil {
+			t.Error("reloadMsg must not return a tick cmd - the loop from Init already runs forever")
+		}
+	})
+
+	t.Run("launchResultMsg returns no cmd", func(t *testing.T) {
+		_, cmd := m.Update(launchResultMsg{agent: launchAgentClaude, kind: "here"})
+		if cmd != nil {
+			t.Error("launchResultMsg must not return a tick cmd - the loop from Init already runs forever")
+		}
+	})
+
+	t.Run("tickMsg keeps re-arming itself", func(t *testing.T) {
+		_, cmd := m.Update(tickMsg(time.Now()))
+		if cmd == nil {
+			t.Error("tickMsg must keep returning a tick cmd to sustain the one render loop")
+		}
+	})
+}
+
 func TestViewClaudeMenuSkipPerms(t *testing.T) {
 	t.Run("shows unchecked by default", func(t *testing.T) {
 		m := Model{
