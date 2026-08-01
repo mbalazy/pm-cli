@@ -301,12 +301,17 @@ func ProcessAlive(pid int) bool {
 	return p.Signal(syscall.Signal(0)) == nil
 }
 
-// NewSessionID returns a random UUID used to pin a worker's session id up front
-// (passed via `claude --session-id`) so its transcript path is known before the
-// worker emits anything.
+// NewSessionID returns a random UUIDv4 used to pin a worker's session id up
+// front (passed via `claude --session-id`) so its transcript path is known
+// before the worker emits anything.
 func NewSessionID() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand does not fail in practice on any supported platform.
+		panic("storage: crypto/rand.Read failed: " + err.Error())
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
