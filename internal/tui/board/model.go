@@ -317,14 +317,15 @@ func matchesQuery(t *storage.Task, q string) bool {
 	return false
 }
 
+// archivedTasks lists every archived task, deliberately IGNORING
+// m.searchQuery: the archive has no filter feature of its own, so a board
+// filter left active from before Ctrl+a must not silently pre-filter the
+// archive list. The board keeps its own filter untouched (searchQuery is not
+// cleared here) so it is still applied when the user returns.
 func (m Model) archivedTasks() []*storage.Task {
 	var result []*storage.Task
-	q := strings.ToLower(m.searchQuery)
 	for _, t := range m.tasks {
 		if t.Meta.Status != storage.StatusArchived {
-			continue
-		}
-		if q != "" && !matchesQuery(t, q) {
 			continue
 		}
 		result = append(result, t)
