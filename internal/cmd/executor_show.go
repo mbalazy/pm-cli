@@ -95,7 +95,6 @@ func renderExecutorProfile(slug string, proj *storage.Project) string {
 	fmt.Fprintf(&b, "  baseline:     %s\n", orUnset(e.Baseline))
 	fmt.Fprintf(&b, "  statuses:     start=%s wip=%s done=%s\n", e.StartStatus, e.WipStatus, e.DoneStatus)
 	fmt.Fprintf(&b, "  fix_rounds:   %d\n", e.FixRounds)
-	fmt.Fprintf(&b, "  gate:         pr=%s merge=%s\n", orUnset(string(e.Gate.PR)), orUnset(string(e.Gate.Merge)))
 	if len(e.SeedExclude) > 0 {
 		fmt.Fprintf(&b, "  seed_exclude: %s\n", strings.Join(e.SeedExclude, ", "))
 	}

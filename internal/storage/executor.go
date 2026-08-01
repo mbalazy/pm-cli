@@ -13,8 +13,8 @@ import (
 //
 // A project with NO executor block resolves to all-generic defaults (see
 // defaultExecutor): every phase falls back to the engine's built-in generic,
-// additional_worktree is off, statuses are todo/doing/merged, fix_rounds is 3, gates are
-// human. The block is the ONLY project-specific piece of the engine.
+// additional_worktree is off, statuses are todo/doing/merged, fix_rounds is 3.
+// The block is the ONLY project-specific piece of the engine.
 type Executor struct {
 	Enabled bool `yaml:"enabled"`
 	// AdditionalWorktree = the LEGACY single "additional" worktree is CONFIGURED
@@ -91,7 +91,6 @@ type Executor struct {
 	WipStatus   string                  `yaml:"wip_status,omitempty"`
 	DoneStatus  string                  `yaml:"done_status,omitempty"` // where a verified sub lands
 	FixRounds   int                     `yaml:"fix_rounds,omitempty"`  // review->fix loop cap before escalating
-	Gate        Gate                    `yaml:"gate,omitempty"`
 	Phases      map[string]PhaseBinding `yaml:"phases,omitempty"`
 	Notes       string                  `yaml:"notes,omitempty"`
 }
@@ -102,21 +101,6 @@ type Executor struct {
 type WorktreeSlot struct {
 	Path string            `yaml:"path,omitempty"`
 	Env  map[string]string `yaml:"env,omitempty"`
-}
-
-// GateMode controls whether a side-effecting step (pr, merge) is human-gated or
-// allowed to run automatically.
-type GateMode string
-
-const (
-	GateHuman GateMode = "human"
-	GateAuto  GateMode = "auto"
-)
-
-// Gate holds the per-action autonomy gates. Client repos keep these human.
-type Gate struct {
-	PR    GateMode `yaml:"pr,omitempty"`
-	Merge GateMode `yaml:"merge,omitempty"`
 }
 
 // The fixed, universal set of phases. The engine knows phase SEMANTICS; the
@@ -239,13 +223,12 @@ func defaultExecutor() Executor {
 		WipStatus:          "doing",
 		DoneStatus:         "merged",
 		FixRounds:          3,
-		Gate:               Gate{PR: GateHuman, Merge: GateHuman},
 	}
 }
 
 // UnmarshalYAML overlays the YAML block onto defaultExecutor so that omitted
-// fields keep their defaults (e.g. fix_rounds stays 3, gates stay human,
-// additional_worktree stays false) while present fields override. Phases stay as parsed;
+// fields keep their defaults (e.g. fix_rounds stays 3, additional_worktree
+// stays false) while present fields override. Phases stay as parsed;
 // missing phases resolve to generic via Phase().
 func (e *Executor) UnmarshalYAML(node *yaml.Node) error {
 	type rawExecutor Executor

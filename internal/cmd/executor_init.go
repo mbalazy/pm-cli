@@ -250,9 +250,6 @@ func preservedFieldNotes(existing *storage.Executor) []string {
 	if existing.FixRounds != base.FixRounds {
 		note("fix_rounds")
 	}
-	if !reflect.DeepEqual(existing.Gate, base.Gate) {
-		note("gate")
-	}
 	if existing.Notes != "" {
 		note("notes")
 	}

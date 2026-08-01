@@ -253,7 +253,6 @@ func TestMergeExecutor(t *testing.T) {
 			WipStatus:    "in-progress",
 			DoneStatus:   "shipped",
 			FixRounds:    5,
-			Gate:         storage.Gate{PR: storage.GateAuto, Merge: storage.GateHuman},
 			Phases: map[string]storage.PhaseBinding{
 				storage.PhaseReview: {Skill: "/hand-picked-review"},
 			},
@@ -299,9 +298,6 @@ func TestMergeExecutor(t *testing.T) {
 		if result.FixRounds != 5 {
 			t.Errorf("fix_rounds clobbered: %d", result.FixRounds)
 		}
-		if result.Gate.PR != storage.GateAuto {
-			t.Errorf("gate clobbered: %+v", result.Gate)
-		}
 		if result.Notes != "hand-written notes, do not clobber" {
 			t.Errorf("notes clobbered: %q", result.Notes)
 		}
@@ -330,7 +326,6 @@ func TestMergeExecutor(t *testing.T) {
 			"preserved existing wip_status",
 			"preserved existing done_status",
 			"preserved existing fix_rounds",
-			"preserved existing gate",
 			"preserved existing notes",
 		} {
 			if !containsNote(notes, want) {
