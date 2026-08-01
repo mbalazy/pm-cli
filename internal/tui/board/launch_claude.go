@@ -13,6 +13,59 @@ import (
 	"github.com/mbalazy/pm/internal/storage"
 )
 
+// claudeSessionArgs builds the argv for a plain `claude --session-id ... prompt`
+// launch (kinds "here"/"tmux", and the project-scope launch which has no
+// worktree/resume/fork variants). Pure so it is unit-testable without
+// spawning a process, like executorPMArgs/codexArgs.
+func claudeSessionArgs(sessionID, skipFlag, prompt string) []string {
+	args := []string{"--session-id", sessionID}
+	if skipFlag != "" {
+		args = append(args, skipFlag)
+	}
+	return append(args, prompt)
+}
+
+// claudeWorktreeArgs is claudeSessionArgs prefixed with `-w <name>` (kinds
+// "worktree"/"worktree-tmux").
+func claudeWorktreeArgs(wtName, sessionID, skipFlag, prompt string) []string {
+	args := []string{"-w", wtName, "--session-id", sessionID}
+	if skipFlag != "" {
+		args = append(args, skipFlag)
+	}
+	return append(args, prompt)
+}
+
+// claudeResumeArgs builds the argv for `claude --resume <id>` (kinds
+// "resume"/"resume-tmux").
+func claudeResumeArgs(sessionID, skipFlag string) []string {
+	args := []string{"--resume", sessionID}
+	if skipFlag != "" {
+		args = append(args, skipFlag)
+	}
+	return args
+}
+
+// claudeForkArgs builds the argv for `claude --resume <parent> --fork-session
+// --session-id <new>` (kinds "fork"/"fork-tmux").
+func claudeForkArgs(parentID, newID, skipFlag string) []string {
+	args := []string{"--resume", parentID, "--fork-session", "--session-id", newID}
+	if skipFlag != "" {
+		args = append(args, skipFlag)
+	}
+	return args
+}
+
+// claudeShellCommand renders `claude <args...>` with each token shell-quoted,
+// mirroring pmShellCommand/codexShellCommand - the tmux/shell-string launch
+// paths embed this in a larger command line (cd, env prefix, lock script).
+func claudeShellCommand(args []string) string {
+	parts := []string{"claude"}
+	for _, a := range args {
+		parts = append(parts, shellQuote(a))
+	}
+	return strings.Join(parts, " ")
+}
+
 func (m Model) launchProjectClaude(kind string) (tea.Model, tea.Cmd) {
 	m.projectScopeLaunch = false
 	slug := m.projectScopeSlug
@@ -41,12 +94,7 @@ func (m Model) launchProjectClaude(kind string) (tea.Model, tea.Cmd) {
 
 	switch kind {
 	case "here":
-		args := []string{"--session-id", sessionID}
-		if skipFlag != "" {
-			args = append(args, skipFlag)
-		}
-		args = append(args, prompt)
-		c := exec.Command("claude", args...)
+		c := exec.Command("claude", claudeSessionArgs(sessionID, skipFlag, prompt)...)
 		if projDir != "" {
 			c.Dir = projDir
 		}
@@ -68,7 +116,7 @@ func (m Model) launchProjectClaude(kind string) (tea.Model, tea.Cmd) {
 			}
 			return cmd
 		}
-		shellCmd := withCd(fmt.Sprintf("claude --session-id %s %s %s", sessionID, skipFlag, shellQuote(prompt)))
+		shellCmd := withCd(claudeShellCommand(claudeSessionArgs(sessionID, skipFlag, prompt)))
 		winName := fmt.Sprintf("cc:%s:%s", sessionID[:4], slug)
 		sess, err := tmuxNewWindow(winName, shellCmd)
 		if err != nil {
@@ -193,12 +241,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		if err := m.saveSession(t, sessionID); err != nil {
 			m.showErrorToast("save session failed", err)
 		}
-		args := []string{"--session-id", sessionID}
-		if skipFlag != "" {
-			args = append(args, skipFlag)
-		}
-		args = append(args, prompt)
-		c := exec.Command("claude", args...)
+		c := exec.Command("claude", claudeSessionArgs(sessionID, skipFlag, prompt)...)
 		setDir(c)
 		origWin := tmuxGetWindowName()
 		tmuxRenameWindow(tmuxWindowName("cc", t.Meta.ID, sessionID))
@@ -212,7 +255,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		if err := m.saveSession(t, sessionID); err != nil {
 			m.showErrorToast("save session failed", err)
 		}
-		shellCmd := withCd(fmt.Sprintf("claude --session-id %s %s %s", sessionID, skipFlag, shellQuote(prompt)))
+		shellCmd := withCd(claudeShellCommand(claudeSessionArgs(sessionID, skipFlag, prompt)))
 		winName := tmuxWindowName("cc", t.Meta.ID, sessionID)
 		sess, err := tmuxNewWindow(winName, shellCmd)
 		if err != nil {
@@ -233,11 +276,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 			copyWorktreeFiles(projDir, wtName)
 		}
 		claim := m.pickWorktreeSlot(proj, t.Project, sessionID)
-		args := []string{"-w", wtName, "--session-id", sessionID}
-		if skipFlag != "" {
-			args = append(args, skipFlag)
-		}
-		args = append(args, prompt)
+		args := claudeWorktreeArgs(wtName, sessionID, skipFlag, prompt)
 		var c *exec.Cmd
 		if claim.lockCmd != "" {
 			// Claim the slot with the shell's pid, then exec claude so that
@@ -269,7 +308,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		// sh execs the trailing command (or waits on it), so the lock's $$
 		// tracks the session's lifetime either way.
 		inner := claim.lockCmd + claudeEnvPrefix(configDir, claim.env...) +
-			fmt.Sprintf("claude -w %s --session-id %s %s %s", shellQuote(wtName), sessionID, skipFlag, shellQuote(prompt))
+			claudeShellCommand(claudeWorktreeArgs(wtName, sessionID, skipFlag, prompt))
 		shellCmd := inner
 		if projDir != "" {
 			shellCmd = fmt.Sprintf("cd %s && %s", shellQuote(projDir), inner)
@@ -290,11 +329,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 			sessionID = lastSession(t)
 		}
 		m.resumeSessionID = ""
-		args := []string{"--resume", sessionID}
-		if skipFlag != "" {
-			args = append(args, skipFlag)
-		}
-		c := exec.Command("claude", args...)
+		c := exec.Command("claude", claudeResumeArgs(sessionID, skipFlag)...)
 		setResumeDir(c)
 		origWin := tmuxGetWindowName()
 		tmuxRenameWindow(tmuxWindowName("cc", t.Meta.ID, sessionID))
@@ -309,7 +344,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 			sessionID = lastSession(t)
 		}
 		m.resumeSessionID = ""
-		shellCmd := withResumeCd(fmt.Sprintf("claude --resume %s %s", sessionID, skipFlag))
+		shellCmd := withResumeCd(claudeShellCommand(claudeResumeArgs(sessionID, skipFlag)))
 		winName := tmuxWindowName("cc", t.Meta.ID, sessionID)
 		sess, err := tmuxNewWindow(winName, shellCmd)
 		if err != nil {
@@ -331,11 +366,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		if err := m.saveSession(t, newID); err != nil {
 			m.showErrorToast("save session failed", err)
 		}
-		args := []string{"--resume", parentID, "--fork-session", "--session-id", newID}
-		if skipFlag != "" {
-			args = append(args, skipFlag)
-		}
-		c := exec.Command("claude", args...)
+		c := exec.Command("claude", claudeForkArgs(parentID, newID, skipFlag)...)
 		setResumeDir(c)
 		origWin := tmuxGetWindowName()
 		tmuxRenameWindow(tmuxWindowName("cc", t.Meta.ID, newID))
@@ -355,7 +386,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		if err := m.saveSession(t, newID); err != nil {
 			m.showErrorToast("save session failed", err)
 		}
-		shellCmd := withResumeCd(fmt.Sprintf("claude --resume %s --fork-session --session-id %s %s", parentID, newID, skipFlag))
+		shellCmd := withResumeCd(claudeShellCommand(claudeForkArgs(parentID, newID, skipFlag)))
 		winName := tmuxWindowName("cc", t.Meta.ID, newID)
 		sess, err := tmuxNewWindow(winName, shellCmd)
 		if err != nil {

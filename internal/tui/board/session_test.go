@@ -83,6 +83,29 @@ func TestClaudeEnvPrefix(t *testing.T) {
 			t.Fatalf("expected malformed pair dropped, got %q", got)
 		}
 	})
+
+	// Keys come from project.yaml (executor.env / worktree slot env), which is
+	// user-authored - unlike values, there is no quoting that makes an invalid
+	// shell identifier safe on the left of KEY=VALUE, so an invalid key must be
+	// dropped rather than spliced verbatim into the launched command line.
+	t.Run("key with a space is dropped (would splice an extra shell word)", func(t *testing.T) {
+		if got := claudeEnvPrefix("", "SIM UDID=2CE9"); got != "" {
+			t.Fatalf("expected invalid key dropped, got %q", got)
+		}
+	})
+
+	t.Run("key with shell metacharacters is dropped", func(t *testing.T) {
+		if got := claudeEnvPrefix("", "FOO;rm -rf ~=bar"); got != "" {
+			t.Fatalf("expected invalid key dropped, got %q", got)
+		}
+	})
+
+	t.Run("valid key survives alongside a dropped invalid one", func(t *testing.T) {
+		got := claudeEnvPrefix("", "BAD KEY=x", "SIM_UDID=2CE9")
+		if got != "SIM_UDID='2CE9' " {
+			t.Fatalf("prefix = %q, want only the valid key emitted", got)
+		}
+	})
 }
 
 func writeBoardSessionLock(t *testing.T, projDir string, slot, pid int) {
