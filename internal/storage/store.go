@@ -275,8 +275,19 @@ func (s *Store) MutateProject(slug string, fn func(*Project) error) (*Project, e
 	if err != nil {
 		return nil, err
 	}
+	before := p.Prefix
 	if err := fn(p); err != nil {
 		return nil, err
+	}
+	// Reject a mutation that INTRODUCES an unsafe prefix (the ID source for
+	// every auto-minted task - see CreateProject). Deliberately scoped to a
+	// CHANGE: a project.yaml that already carries a bad prefix from before the
+	// check must stay editable in every other field, or `pm executor init` and
+	// pm_update_project would refuse to touch it at all.
+	if p.Prefix != before {
+		if err := ValidateProjectPrefix(p.Prefix); err != nil {
+			return nil, err
+		}
 	}
 	if err := writeProject(s.ProjectYAML(slug), p); err != nil {
 		return nil, err

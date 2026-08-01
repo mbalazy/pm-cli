@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io"
 	"testing"
 	"time"
 
@@ -99,6 +100,8 @@ func TestReorderSerializesWithProjectLock(t *testing.T) {
 	go func() {
 		cmd := newReorderCmd(store)
 		cmd.SetArgs([]string{"proj-1", "proj-1-2", "proj-1-1"})
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
 		cmd.SilenceUsage = true
 		cmd.SilenceErrors = true
 		done <- cmd.Execute()

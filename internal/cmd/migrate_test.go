@@ -45,12 +45,29 @@ func TestMigrateIDsRejectsUnsafePrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A SECOND project with a safe prefix, ordered before the broken one by
+	// ListProjects' sort: it pins the preflight. Checking the prefix inside
+	// the rewrite loop would renumber this project (and os.Remove its files)
+	// and only then fail on "legacy", leaving a half-migrated store behind.
+	if err := store.CreateProject("aaa", &storage.Project{Name: "AAA", Prefix: "aa"}); err != nil {
+		t.Fatal(err)
+	}
+	addTask(t, store, "aaa", storage.TaskMeta{ID: "old-7", Title: "Untouched", Status: storage.StatusTodo}, "")
+
 	err := runMigrateIDsCmd(store)
 	if err == nil {
 		t.Fatal("migrate-ids accepted a traversing prefix")
 	}
-	if !strings.Contains(err.Error(), "invalid task id") {
-		t.Errorf("want a ValidateTaskID error, got: %v", err)
+	if !strings.Contains(err.Error(), "invalid prefix") {
+		t.Errorf("want a ValidateProjectPrefix error, got: %v", err)
+	}
+	// Nothing was renumbered anywhere - the abort happened before any write.
+	untouched, err := store.GetTasks("aaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(untouched) != 1 || untouched[0].Meta.ID != "old-7" {
+		t.Fatalf("a project ordered before the broken one was renumbered anyway: %+v", untouched)
 	}
 
 	// The original task is untouched and nothing escaped the project dir.
