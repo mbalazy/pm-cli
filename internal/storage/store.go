@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,12 @@ import (
 	"strconv"
 	"strings"
 )
+
+// ErrAmbiguousTask is what FindTask returns (wrapped) when a query matches
+// several tasks in ONE project. Callers that scan many projects test for it
+// with errors.Is: an ambiguous project is a project with candidates, not a
+// project with none.
+var ErrAmbiguousTask = errors.New("ambiguous task")
 
 type Store struct {
 	Root string // ~/.claude/pm
@@ -289,6 +296,17 @@ func (s *Store) AddTask(projectSlug string, t *Task) error {
 	// prompt). Validate BEFORE the O_EXCL claim below, so a rejected ID leaves
 	// no phantom file behind (same reason the mode/epic_mode pre-checks exist).
 	if err := ValidateTaskID(t.Meta.ID); err != nil {
+		// An auto-minted ID is "<prefix>-<n>", and `prefix` is free-form in
+		// project.yaml (hand-editable, settable over MCP, never validated) -
+		// so an unsafe prefix surfaces here as an error about an ID the user
+		// never typed. Name the actual culprit instead of leaving them to
+		// guess. The check is on the ID we were handed, so a caller passing an
+		// explicit bad --id still gets the plain error.
+		if prefix := s.ProjectPrefix(projectSlug); prefix != "" &&
+			strings.HasPrefix(t.Meta.ID, prefix) && ValidateTaskID(prefix) != nil {
+			return fmt.Errorf("%w - it was derived from the project's `prefix` %q, which is not a safe path component; fix it in %s",
+				err, prefix, s.ProjectYAML(projectSlug))
+		}
 		return err
 	}
 
@@ -450,7 +468,12 @@ func (s *Store) FindTask(projectSlug, query string) (*Task, error) {
 		return matches[0], nil
 	}
 	if len(matches) > 1 {
-		return nil, fmt.Errorf("ambiguous task %q: %d matches", query, len(matches))
+		// Wrapped sentinel (message unchanged): a caller scanning SEVERAL
+		// projects must be able to tell "this project holds no candidate"
+		// from "this project holds several" - collapsing both into a plain
+		// error makes an ambiguous project contribute nothing, so the scan
+		// happily resolves to some other project's task. See resolveWorkTask.
+		return nil, fmt.Errorf("%w %q: %d matches", ErrAmbiguousTask, query, len(matches))
 	}
 
 	return nil, fmt.Errorf("task not found: %q", query)

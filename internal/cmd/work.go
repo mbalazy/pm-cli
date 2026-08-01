@@ -210,35 +210,66 @@ func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*s
 	// SUBSTRING, so a short query ("auth") can hit several projects - and
 	// first-hit-wins in sorted ListProjects order silently picked one, which
 	// here means spawning a 60-minute worker that commits in the WRONG repo.
-	// Collect every match and refuse to guess, mirroring FindTask's own
-	// within-project ambiguity error.
+	//
+	// The scan keeps FindTask's OWN ranking rather than flattening it: an
+	// exact ID wins outright, and the fuzzy tier decides only when no project
+	// holds one. Treating the tiers as equals would make `pm work pm-cli-18`
+	// ambiguous merely because some other project has a task TITLED "... test
+	// for pm-cli-18" - which is not ambiguity, it is a weaker match.
 	projects, err := store.ListProjects()
 	if err != nil {
 		return nil, "", err
 	}
-	var (
-		matches      []*storage.Task
-		matchedSlugs []string
-	)
+
+	var exact []projectHit
 	for _, slug := range projects {
-		if t, err := store.FindTask(slug, query); err == nil {
-			matches = append(matches, t)
-			matchedSlugs = append(matchedSlugs, slug)
+		if t, err := store.FindTaskExact(slug, query); err == nil {
+			exact = append(exact, projectHit{task: t, slug: slug, label: slug + "/" + t.Meta.ID})
 		}
 	}
-	switch len(matches) {
-	case 1:
-		return matches[0], matchedSlugs[0], nil
-	case 0:
+	if len(exact) > 0 {
+		return resolveHits(exact, query, cmdName)
+	}
+
+	var fuzzy []projectHit
+	for _, slug := range projects {
+		t, err := store.FindTask(slug, query)
+		switch {
+		case err == nil:
+			fuzzy = append(fuzzy, projectHit{task: t, slug: slug, label: slug + "/" + t.Meta.ID})
+		case errors.Is(err, storage.ErrAmbiguousTask):
+			// Several candidates INSIDE this project. Without this branch the
+			// project contributes nothing to the scan, so a query that is
+			// ambiguous in alpha and matches one task in beta silently
+			// resolves to beta - first-wins again, by another route.
+			fuzzy = append(fuzzy, projectHit{slug: slug, label: slug + "/<several>"})
+		}
+	}
+	if len(fuzzy) == 0 {
 		return nil, "", fmt.Errorf("task %q not found in any project (try `pm %s <project> <task-id>`)", query, cmdName)
-	default:
-		listed := make([]string, len(matches))
-		for i, t := range matches {
-			listed[i] = fmt.Sprintf("%s/%s", matchedSlugs[i], t.Meta.ID)
-		}
-		return nil, "", fmt.Errorf("ambiguous task %q: matches %s (disambiguate with `pm %s <project> <task-id>`)",
-			query, strings.Join(listed, ", "), cmdName)
 	}
+	return resolveHits(fuzzy, query, cmdName)
+}
+
+// projectHit is one project's answer to a cross-project task scan. task is nil
+// when the project held SEVERAL candidates (ambiguous within itself) - such a
+// hit can only ever produce an error, never a resolution.
+type projectHit struct {
+	task  *storage.Task
+	slug  string
+	label string
+}
+
+func resolveHits(hits []projectHit, query, cmdName string) (*storage.Task, string, error) {
+	if len(hits) == 1 && hits[0].task != nil {
+		return hits[0].task, hits[0].slug, nil
+	}
+	labels := make([]string, len(hits))
+	for i, h := range hits {
+		labels[i] = h.label
+	}
+	return nil, "", fmt.Errorf("ambiguous task %q: matches %s (disambiguate with `pm %s <project> <task-id>`)",
+		query, strings.Join(labels, ", "), cmdName)
 }
 
 // resolveWorkBranch returns the branch a worker commits on: the task's explicit

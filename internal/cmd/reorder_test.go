@@ -89,6 +89,11 @@ func TestReorderSerializesWithProjectLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lock: %v", err)
 	}
+	// Deferred as well as released explicitly below (the closure is
+	// sync.Once): a t.Fatal between here and there exits via runtime.Goexit
+	// while still holding the flock, leaving the reorder goroutine blocked on
+	// it and the fd open for the life of the test binary.
+	defer release()
 
 	done := make(chan error, 1)
 	go func() {

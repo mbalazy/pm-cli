@@ -41,6 +41,55 @@ func TestResolveWorkTaskAmbiguousAcrossProjects(t *testing.T) {
 	}
 }
 
+// TestResolveWorkTaskExactIDBeatsTitleMention: FindTask ranks exact ID above
+// title substring WITHIN a project, and the cross-project scan must keep that
+// ranking. Flattening the tiers would make `pm work pm-cli-18` fail as
+// "ambiguous" merely because another project has a task TITLED "smoke-test for
+// pm-cli-18" - a weaker match, not a rival. (Real shape: this machine's
+// pm-cli-18 vs a atlas task mentioning it in its title.)
+func TestResolveWorkTaskExactIDBeatsTitleMention(t *testing.T) {
+	store := twoProjectStore(t)
+	addTask(t, store, "alpha", storage.TaskMeta{ID: "alpha-18", Title: "Smoke-test epic for beta-18", Status: storage.StatusTodo}, "")
+	addTask(t, store, "beta", storage.TaskMeta{ID: "beta-18", Title: "Executor", Status: storage.StatusTodo}, "")
+
+	task, slug, err := resolveWorkTask(store, []string{"beta-18"}, "work")
+	if err != nil {
+		t.Fatalf("exact id lost to a title mention: %v", err)
+	}
+	if slug != "beta" || task.Meta.ID != "beta-18" {
+		t.Fatalf("resolved %s/%s, want beta/beta-18", slug, task.Meta.ID)
+	}
+
+	// Two projects holding the SAME exact id is real ambiguity and must error.
+	addTask(t, store, "alpha", storage.TaskMeta{ID: "shared-1", Title: "A", Status: storage.StatusTodo}, "")
+	addTask(t, store, "beta", storage.TaskMeta{ID: "shared-1", Title: "B", Status: storage.StatusTodo}, "")
+	if _, _, err := resolveWorkTask(store, []string{"shared-1"}, "work"); err == nil {
+		t.Fatal("the same exact id in two projects must be ambiguous")
+	}
+}
+
+// TestResolveWorkTaskIntraProjectAmbiguityCounts: FindTask returns an error
+// for BOTH "no match here" and "several matches here". Collapsing them makes
+// an ambiguous project contribute nothing, so the scan resolves to whichever
+// OTHER project has a single hit - first-wins again, by another route, and
+// again with a 60-minute worker committing in the wrong repo.
+func TestResolveWorkTaskIntraProjectAmbiguityCounts(t *testing.T) {
+	store := twoProjectStore(t)
+	addTask(t, store, "alpha", storage.TaskMeta{ID: "alpha-1", Title: "Auth refresh", Status: storage.StatusTodo}, "")
+	addTask(t, store, "alpha", storage.TaskMeta{ID: "alpha-2", Title: "Auth screen", Status: storage.StatusTodo}, "")
+	addTask(t, store, "beta", storage.TaskMeta{ID: "beta-1", Title: "Auth cleanup", Status: storage.StatusTodo}, "")
+
+	_, _, err := resolveWorkTask(store, []string{"auth"}, "work")
+	if err == nil {
+		t.Fatal("a query ambiguous inside alpha resolved to beta instead of erroring")
+	}
+	for _, want := range []string{"ambiguous", "alpha/<several>", "beta/beta-1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error must name %q, got: %v", want, err)
+		}
+	}
+}
+
 // A query that matches exactly one project keeps resolving - the ambiguity
 // guard must not cost the single-project case its convenience.
 func TestResolveWorkTaskUniqueAcrossProjects(t *testing.T) {

@@ -33,16 +33,23 @@ func TestAddMintsUniqueIDsUnderConcurrency(t *testing.T) {
 	store, slug := tempStore(t)
 
 	const adders = 8
+	// Start barrier: without it the goroutines merely tend to overlap inside
+	// NextTaskID, so a reverted fix could pass green on a constrained runner
+	// (GOMAXPROCS=1 plus an unlucky schedule). Releasing them all at once
+	// makes the collision deterministic in practice.
+	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := 0; i < adders; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
+			<-start
 			if err := runAddCmd(store, slug, fmt.Sprintf("Parallel task %d", i)); err != nil {
 				t.Errorf("add %d: %v", i, err)
 			}
 		}(i)
 	}
+	close(start)
 	wg.Wait()
 
 	tasks, err := store.GetTasks(slug)

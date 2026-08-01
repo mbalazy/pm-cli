@@ -136,11 +136,19 @@ func ValidateSlug(slug string) error {
 var taskIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // ValidateTaskID checks that a task ID is safe as the leading component of the
-// task's file name. AddTask enforces it for every entry path (the `--id` flag,
-// MCP's `id` param, the board's add prompt) because the ID arrives from
-// OUTSIDE pm there: `pm add demo x --id ../../escaped` used to report success
-// and write the task file two directories above the pm root, where no
-// ReadTasksFromDir would ever find it again.
+// task's file name. AddTask enforces it on every path an ID reaches it by: the
+// `--id` flag, MCP's `id` param and the board's add prompt (all three take it
+// from OUTSIDE pm) plus NextTaskID/NextChildID, whose "<prefix>-<n>" inherits
+// the project's unvalidated `prefix` field. `pm add demo x --id ../../escaped`
+// used to report success and write the task file two directories above the pm
+// root, where no ReadTasksFromDir would ever find it again.
+//
+// Spaces and non-ASCII are rejected DELIBERATELY, not incidentally: such IDs
+// were technically functional (Filename only concatenates, and the ID is read
+// back from frontmatter, not from the name), but they are quoted into shell
+// commands, branch names and log paths all over the executor, and ValidateSlug
+// - the precedent this mirrors - draws the line in the same place. Widening it
+// later is safe; narrowing it after IDs exist is not.
 func ValidateTaskID(id string) error {
 	if !taskIDPattern.MatchString(id) {
 		return fmt.Errorf("invalid task id %q - must start with a letter or digit and contain only letters, digits, '.', '_' or '-' (no path separators)", id)
