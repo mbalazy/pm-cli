@@ -373,7 +373,7 @@ func (m Model) trackerBadges() map[string]string {
 	trackers, _ := storage.BuildTrackers(m.tasks)
 	out := make(map[string]string, len(trackers))
 	for _, tr := range trackers {
-		complete := tr.Progress[string(storage.StatusDone)] + tr.Progress["merged"]
+		complete := tr.Progress[string(storage.StatusDone)] + tr.Progress[string(storage.StatusMerged)]
 		out[tr.ID] = fmt.Sprintf("▸%d/%d", complete, tr.Total)
 	}
 	return out

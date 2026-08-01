@@ -78,12 +78,12 @@ func BriefLine(brief string) string {
 	return ""
 }
 
-// terminalStatus reports whether a task is closed for good. "merged" is a
+// terminalStatus reports whether a task is closed for good. StatusMerged is a
 // per-project status (the epic lifecycle todo -> doing -> merged -> done), so
 // it is matched by name here the same way the board's progress badge does.
 func terminalStatus(s TaskStatus) bool {
 	switch s {
-	case StatusDone, StatusArchived, "merged":
+	case StatusDone, StatusArchived, StatusMerged:
 		return true
 	}
 	return false

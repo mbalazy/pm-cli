@@ -109,7 +109,7 @@ func statusMark(status string) string {
 	switch status {
 	case "done":
 		return "✅"
-	case "merged":
+	case string(storage.StatusMerged):
 		return "🔀"
 	case "doing":
 		return "🔨"

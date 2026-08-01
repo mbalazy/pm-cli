@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -48,12 +47,7 @@ func (p *Project) ResolveClaudeConfigDir() string {
 	if p == nil || p.ClaudeConfigDir == "" {
 		return DefaultClaudeConfigDir()
 	}
-	dir := p.ClaudeConfigDir
-	if dir == "~" || strings.HasPrefix(dir, "~/") {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, strings.TrimPrefix(dir, "~"))
-	}
-	return dir
+	return expandTilde(p.ClaudeConfigDir)
 }
 
 func (p *Project) GetStatuses() []TaskStatus {

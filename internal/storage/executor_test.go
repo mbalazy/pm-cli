@@ -43,9 +43,6 @@ func TestGetExecutorMissingBlock(t *testing.T) {
 	if e.FixRounds != 3 {
 		t.Errorf("FixRounds = %d, want 3", e.FixRounds)
 	}
-	if e.Gate.PR != GateHuman || e.Gate.Merge != GateHuman {
-		t.Errorf("Gate = %q/%q, want human/human", e.Gate.PR, e.Gate.Merge)
-	}
 	// Every phase resolves to generic when no block exists.
 	for _, name := range ExecutorPhases {
 		if k := e.Phase(name).Kind(); k != BindGeneric {
@@ -64,9 +61,6 @@ executor:
   wip_status: doing
   done_status: merged
   fix_rounds: 5
-  gate:
-    pr: human
-    merge: auto
   phases:
     implement: { skill: "/implement" }
     test:      { skill: "/test" }
@@ -91,9 +85,6 @@ executor:
 	}
 	if e.FixRounds != 5 {
 		t.Errorf("FixRounds = %d, want 5", e.FixRounds)
-	}
-	if e.Gate.PR != GateHuman || e.Gate.Merge != GateAuto {
-		t.Errorf("Gate = %q/%q, want human/auto", e.Gate.PR, e.Gate.Merge)
 	}
 	if e.Notes == "" {
 		t.Error("Notes empty, want populated")
@@ -208,30 +199,8 @@ executor:
 		if e.FixRounds != 3 {
 			t.Errorf("FixRounds = %d, want default 3", e.FixRounds)
 		}
-		if e.Gate.PR != GateHuman || e.Gate.Merge != GateHuman {
-			t.Errorf("Gate = %q/%q, want default human/human", e.Gate.PR, e.Gate.Merge)
-		}
 		if e.DoneStatus != "merged" {
 			t.Errorf("DoneStatus = %q, want default merged", e.DoneStatus)
-		}
-	})
-
-	t.Run("partial gate keeps default for omitted side", func(t *testing.T) {
-		const data = `
-executor:
-  gate:
-    pr: auto
-`
-		var p Project
-		if err := yaml.Unmarshal([]byte(data), &p); err != nil {
-			t.Fatalf("Unmarshal: %v", err)
-		}
-		e := p.GetExecutor()
-		if e.Gate.PR != GateAuto {
-			t.Errorf("Gate.PR = %q, want auto", e.Gate.PR)
-		}
-		if e.Gate.Merge != GateHuman {
-			t.Errorf("Gate.Merge = %q, want default human", e.Gate.Merge)
 		}
 	})
 

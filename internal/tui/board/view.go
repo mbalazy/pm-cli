@@ -285,7 +285,7 @@ func statusGlyph(status storage.TaskStatus) string {
 	switch status {
 	case storage.StatusDone:
 		return "✅"
-	case "merged":
+	case storage.StatusMerged:
 		return "🔀"
 	case storage.StatusDoing:
 		return "🔨"

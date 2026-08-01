@@ -217,3 +217,28 @@ func TestNewSessionIDUnique(t *testing.T) {
 		t.Errorf("session id %q is not uuid-shaped", a)
 	}
 }
+
+func TestNewSessionIDVersionAndVariantBits(t *testing.T) {
+	id := NewSessionID()
+	// version nibble is the first char of the third group ("xxxx-xxxx-Vxxx-...")
+	if id[14] != '4' {
+		t.Errorf("session id %q has version nibble %q, want 4 (UUIDv4)", id, string(id[14]))
+	}
+	// variant bits are the top two bits of the first char of the fourth group,
+	// which must render as one of 8/9/a/b (RFC 4122 variant 10xx).
+	switch id[19] {
+	case '8', '9', 'a', 'b':
+	default:
+		t.Errorf("session id %q has variant nibble %q, want 8/9/a/b", id, string(id[19]))
+	}
+}
+
+func TestNewRunIDSameShapeAsSessionID(t *testing.T) {
+	id := NewRunID()
+	if len(id) != 36 {
+		t.Errorf("run id %q is not uuid-shaped", id)
+	}
+	if id[14] != '4' {
+		t.Errorf("run id %q has version nibble %q, want 4 (UUIDv4)", id, string(id[14]))
+	}
+}
