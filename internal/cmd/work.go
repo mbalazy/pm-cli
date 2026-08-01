@@ -83,7 +83,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
-			task, slug, err := resolveWorkTask(store, args)
+			task, slug, err := resolveWorkTask(store, args, "work")
 			if err != nil {
 				return err
 			}
@@ -183,8 +183,10 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 
 // resolveWorkTask resolves the project slug + task from the command args.
 // One arg: task id, project auto-detected from cwd or by scanning. Two args:
-// explicit project + task.
-func resolveWorkTask(store storage.TaskStore, args []string) (*storage.Task, string, error) {
+// explicit project + task. cmdName is the invoking command ("work",
+// "run-epic") - it only shapes the error text, so a `pm run-epic` miss does
+// not tell the user to retry with `pm work`.
+func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*storage.Task, string, error) {
 	if len(args) == 2 {
 		slug, err := store.ResolveProject(args[0])
 		if err != nil {
@@ -204,17 +206,39 @@ func resolveWorkTask(store storage.TaskStore, args []string) (*storage.Task, str
 			return t, slug, nil
 		}
 	}
-	// Fall back to scanning every project for the task id.
+	// Fall back to scanning every project. FindTask also matches on TITLE
+	// SUBSTRING, so a short query ("auth") can hit several projects - and
+	// first-hit-wins in sorted ListProjects order silently picked one, which
+	// here means spawning a 60-minute worker that commits in the WRONG repo.
+	// Collect every match and refuse to guess, mirroring FindTask's own
+	// within-project ambiguity error.
 	projects, err := store.ListProjects()
 	if err != nil {
 		return nil, "", err
 	}
+	var (
+		matches      []*storage.Task
+		matchedSlugs []string
+	)
 	for _, slug := range projects {
 		if t, err := store.FindTask(slug, query); err == nil {
-			return t, slug, nil
+			matches = append(matches, t)
+			matchedSlugs = append(matchedSlugs, slug)
 		}
 	}
-	return nil, "", fmt.Errorf("task %q not found in any project (try `pm work <project> <task-id>`)", query)
+	switch len(matches) {
+	case 1:
+		return matches[0], matchedSlugs[0], nil
+	case 0:
+		return nil, "", fmt.Errorf("task %q not found in any project (try `pm %s <project> <task-id>`)", query, cmdName)
+	default:
+		listed := make([]string, len(matches))
+		for i, t := range matches {
+			listed[i] = fmt.Sprintf("%s/%s", matchedSlugs[i], t.Meta.ID)
+		}
+		return nil, "", fmt.Errorf("ambiguous task %q: matches %s (disambiguate with `pm %s <project> <task-id>`)",
+			query, strings.Join(listed, ", "), cmdName)
+	}
 }
 
 // resolveWorkBranch returns the branch a worker commits on: the task's explicit

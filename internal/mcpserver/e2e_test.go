@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -923,10 +924,14 @@ func TestE2ECreateProject(t *testing.T) {
 	// and ProjectDir("MixedCase") are the SAME directory - an exact-case-only
 	// duplicate check would miss this and MkdirAll/writeProject would silently
 	// splice the new project's fields into the existing one's project.yaml.
-	// The pre-existing slug here is created directly through the store (like a
-	// CLI-created project, which has no slug validation) since ValidateSlug
-	// itself would reject a mixed-case slug on create.
-	if err := store.CreateProject("MixedCase", &storage.Project{Name: "Mixed"}); err != nil {
+	// The pre-existing slug here is planted on disk directly, bypassing
+	// Store.CreateProject: that path now runs ValidateSlug (pm-cli-74-1) and
+	// would reject a mixed-case slug, but such dirs EXIST in real data from
+	// before the check, and the handler must still refuse to collide with one.
+	if err := os.MkdirAll(store.ProjectDir("MixedCase"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.WriteProject(store.ProjectYAML("MixedCase"), &storage.Project{Name: "Mixed"}); err != nil {
 		t.Fatal(err)
 	}
 	t.Run("case-insensitive collision rejected", func(t *testing.T) {

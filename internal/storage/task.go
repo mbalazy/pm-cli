@@ -126,6 +126,28 @@ func ValidateSlug(slug string) error {
 	return nil
 }
 
+// taskIDPattern is slugPattern's shape, deliberately WIDER: a task ID is a
+// path component too (Filename renders "<id>-<title-slug>.md" under the
+// project dir) but, unlike a slug, is not always minted by pm - real data
+// holds legacy numeric IDs ("30422") and imported ticket keys ("ACME-253"), so
+// digits-only and uppercase must both stay legal. Requiring the first
+// character to be alphanumeric is what rejects "." / ".." / "../foo" and any
+// absolute path in one rule; excluding '/' from the body blocks the rest.
+var taskIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// ValidateTaskID checks that a task ID is safe as the leading component of the
+// task's file name. AddTask enforces it for every entry path (the `--id` flag,
+// MCP's `id` param, the board's add prompt) because the ID arrives from
+// OUTSIDE pm there: `pm add demo x --id ../../escaped` used to report success
+// and write the task file two directories above the pm root, where no
+// ReadTasksFromDir would ever find it again.
+func ValidateTaskID(id string) error {
+	if !taskIDPattern.MatchString(id) {
+		return fmt.Errorf("invalid task id %q - must start with a letter or digit and contain only letters, digits, '.', '_' or '-' (no path separators)", id)
+	}
+	return nil
+}
+
 type Task struct {
 	Meta     TaskMeta
 	Body     string

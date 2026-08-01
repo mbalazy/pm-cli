@@ -151,7 +151,7 @@ type epicPlan struct {
 // planEpic resolves and validates a `pm run-epic` invocation without mutating
 // anything: no branch is created, no status moves, no run-state is written.
 func planEpic(store storage.TaskStore, args []string, opts epicOptions) (*epicPlan, error) {
-	tracker, slug, err := resolveWorkTask(store, args)
+	tracker, slug, err := resolveWorkTask(store, args, "run-epic")
 	if err != nil {
 		return nil, err
 	}

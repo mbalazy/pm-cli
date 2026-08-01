@@ -118,7 +118,18 @@ func (s *Store) GetAllStatuses() []TaskStatus {
 // CreateProject writes a new project.yaml, creating the project dir first.
 // The lock is taken AFTER the dir exists (it lives inside that dir) and only
 // covers the write - callers must not hold the project lock themselves.
+//
+// The slug check lives HERE, not only in pm_create_project: MkdirAll happily
+// walks out of the pm root, so `pm projects add ../outside` created a
+// project.yaml outside the data dir, and `pm projects add MyProj` created a
+// project that `pm projects` lists but no command can address (ResolveProject
+// lowercases the query, never the candidates) - with no `pm projects rm` to
+// undo either. The MCP handler keeps its own pre-check on purpose: it also
+// enforces the case-insensitive duplicate rule, which is a handler concern.
 func (s *Store) CreateProject(slug string, p *Project) error {
+	if err := ValidateSlug(slug); err != nil {
+		return err
+	}
 	dir := s.ProjectDir(slug)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -265,7 +276,22 @@ func (s *Store) DeleteTask(t *Task) error {
 	return os.Remove(t.FilePath)
 }
 
+// AddTask creates a task file for t under the project dir.
+//
+// It does NOT take the project lock. Minting an ID and writing it is a
+// read-modify-write that must be serialized (see `pm add` / pm_add_task), but
+// the lock has to cover NextTaskID too, so it belongs at the CALLER - and
+// LockProject must never nest (a second flock on a fresh fd deadlocks against
+// our own), so it cannot live in both places.
 func (s *Store) AddTask(projectSlug string, t *Task) error {
+	// The ID becomes the leading component of the file name and arrives from
+	// outside pm on three paths (--id, MCP's id param, the board's add
+	// prompt). Validate BEFORE the O_EXCL claim below, so a rejected ID leaves
+	// no phantom file behind (same reason the mode/epic_mode pre-checks exist).
+	if err := ValidateTaskID(t.Meta.ID); err != nil {
+		return err
+	}
+
 	t.Project = projectSlug
 	t.FilePath = filepath.Join(s.ProjectDir(projectSlug), t.Filename())
 
