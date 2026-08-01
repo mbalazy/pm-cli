@@ -20,7 +20,6 @@ func Run(store storage.TaskStore) error {
 	)
 
 	registerTools(s, store)
-	registerResources(s, store)
 
 	return s.Run(context.Background(), &mcp.StdioTransport{})
 }
