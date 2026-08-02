@@ -14,11 +14,32 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Sub result vocabulary recorded in the run-state and the journal. Unlike the
+// worker envelope (which reports what the WORKER did - see workerVerified),
+// these report what the MANAGER did with the green result, which is exactly the
+// distinction the old shared "merged" erased: a batch sub was recorded as
+// merged while the manager had only pushed its branch.
+const (
+	subMerged   = "merged" // integration mode: merged back into the epic branch
+	subPushed   = "pushed" // independent mode: branch pushed, nothing merged
+	subBlocked  = "blocked"
+	subFailed   = "failed"
+	subConflict = "conflict"
+	subSkipped  = "skipped"
+	subManual   = "manual"
+)
+
+// greenSubResult reports whether a sub result means "the worker delivered and
+// the manager did its part" - the two landing words, whatever the mode.
+func greenSubResult(result string) bool {
+	return result == subMerged || result == subPushed
+}
+
 // subOutcome records what happened to one sub during a manager run, for the
 // end-of-run summary.
 type subOutcome struct {
 	id     string
-	result string // merged | blocked | failed | skipped | conflict | manual
+	result string // merged | pushed | blocked | failed | skipped | conflict | manual
 	note   string
 	branch string // branch the sub's work landed on; empty for skips (no worker ran)
 }
@@ -43,14 +64,15 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 		Short: "Sequentially drive a parent+subtask epic via isolated workers on an integration branch",
 		Long: "The manager loop. Creates an `epic/<tracker>` integration branch, then for each ready sub " +
 			"(by Order) branches `feat/<slug>` off it, runs `pm work` (the worker) there, and merges back on " +
-			"verify-green -> status merged. Async: a blocked/failed sub is parked (status + reason in pm) and " +
+			"verify-green -> executor.done_status (default `merged`). Async: a blocked/failed sub is parked (status + reason in pm) and " +
 			"the manager continues. Re-entrant: re-running skips merged/done subs. Ends by opening ONE draft " +
 			"epic->main PR for human review. Never auto-merges to main, force-pushes, or closes the parent.\n\n" +
 			"Independent (batch) mode - `epic_mode: independent` on the tracker, or --independent: for a batch " +
 			"of UNRELATED tasks. Each sub gets its own fresh branch off the base branch, the worker runs " +
 			"best-effort (records assumptions + handoff instead of parking), and the branch is pushed to origin " +
 			"when it carries commits. No integration branch, no merging, no epic PR - a human finishes each " +
-			"task on its own branch later.",
+			"task on its own branch later, so a green sub lands on executor.done_status_independent (default " +
+			"`pushed`), NOT on the integration `merged`.",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := epicOptions{
@@ -139,9 +161,13 @@ type epicPlan struct {
 	independent bool
 	startStatus storage.TaskStatus
 	doneStatus  storage.TaskStatus
-	epicBranch  string
-	baseBranch  string
-	slots       []storage.ResolvedWorktree
+	// doneStatusNote explains a done status that is not the configured first
+	// choice (see resolveEpicDoneStatus). Empty in the normal case; printed by
+	// both --dry-run and the real run so the fallback is never silent.
+	doneStatusNote string
+	epicBranch     string
+	baseBranch     string
+	slots          []storage.ResolvedWorktree
 	// workDir is where the run will happen - the main checkout, or (additional
 	// mode) a PROVISIONAL description of the slot pool for the dry-run display;
 	// the real slot is claimed in executeEpic.
@@ -199,20 +225,52 @@ func planEpic(store storage.TaskStore, args []string, opts epicOptions) (*epicPl
 		workDir = describeSlotPool(slots)
 	}
 
+	doneStatus, doneNote := resolveEpicDoneStatus(exc, independentMode, store.GetProjectStatuses(slug))
+
 	return &epicPlan{
-		tracker:     tracker,
-		slug:        slug,
-		proj:        proj,
-		exc:         exc,
-		subs:        subs,
-		independent: independentMode,
-		startStatus: storage.TaskStatus(exc.StartStatus),
-		doneStatus:  storage.TaskStatus(exc.DoneStatus),
-		epicBranch:  "epic/" + tracker.Meta.ID,
-		baseBranch:  resolveWorktreeBase(opts.base, execBase, "main"),
-		slots:       slots,
-		workDir:     workDir,
+		tracker:        tracker,
+		slug:           slug,
+		proj:           proj,
+		exc:            exc,
+		subs:           subs,
+		independent:    independentMode,
+		startStatus:    storage.TaskStatus(exc.StartStatus),
+		doneStatus:     doneStatus,
+		doneStatusNote: doneNote,
+		epicBranch:     "epic/" + tracker.Meta.ID,
+		baseBranch:     resolveWorktreeBase(opts.base, execBase, "main"),
+		slots:          slots,
+		workDir:        workDir,
 	}, nil
+}
+
+// resolveEpicDoneStatus picks the status a verify-green sub lands on. The two
+// modes land somewhere different because the manager DOES something different:
+// integration mode merges the sub into the epic branch (done_status, "merged"),
+// independent mode only pushes its branch (done_status_independent, "pushed").
+//
+// The one subtlety is the graceful degrade. A project whose `statuses` list
+// predates "pushed" would otherwise have every batch run refused by the gate in
+// executeEpic - an upgrade breaking runs that worked yesterday. So the BUILT-IN
+// default silently falls back to done_status (with a note the caller prints),
+// while an explicitly configured status is left alone to hit the gate: there,
+// an unlisted name is a typo in project.yaml, and failing loudly is the point.
+func resolveEpicDoneStatus(exc storage.Executor, independent bool, allowed []storage.TaskStatus) (storage.TaskStatus, string) {
+	if !independent {
+		return storage.TaskStatus(exc.DoneStatus), ""
+	}
+	want, explicit := exc.IndependentDoneStatus()
+	status := storage.TaskStatus(want)
+	if explicit || statusAllowed(status, allowed) {
+		return status, ""
+	}
+	fallback := storage.TaskStatus(exc.DoneStatus)
+	if !statusAllowed(fallback, allowed) {
+		return status, "" // neither is usable - let the gate report the real one
+	}
+	return fallback, fmt.Sprintf(
+		"independent subs land on %q: project statuses do not list %q. Nothing is merged in this mode - add %q to `statuses:` in project.yaml (or set executor.done_status_independent) so the board says what actually happened.",
+		fallback, want, want)
 }
 
 // printEpicDryRun renders the resolved plan (subs, branches, readiness) plus
@@ -220,6 +278,9 @@ func planEpic(store storage.TaskStore, args []string, opts epicOptions) (*epicPl
 func printEpicDryRun(plan *epicPlan, opts epicOptions) {
 	printEpicPlan(opts.stdout(), plan.tracker, plan.epicBranch, plan.baseBranch, plan.startStatus, plan.doneStatus,
 		plan.subs, opts.additional, plan.workDir, plan.independent)
+	if plan.doneStatusNote != "" {
+		fmt.Fprintf(opts.stdout(), "\nnote: %s\n", plan.doneStatusNote)
+	}
 	if opts.additional {
 		if prep := strings.TrimSpace(plan.exc.Prepare); prep != "" {
 			fmt.Fprintf(opts.stdout(), "\nprepare (once per run, in claimed slot): %s\n", prep)
@@ -246,6 +307,9 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	// not in planEpic: --dry-run has always printed the plan regardless.
 	if !statusAllowed(doneStatus, store.GetProjectStatuses(slug)) {
 		return fmt.Errorf("done status %q is not in project %s statuses - add it to project.yaml (statuses: [todo, doing, %s, ...]) before running the epic", doneStatus, slug, doneStatus)
+	}
+	if plan.doneStatusNote != "" {
+		fmt.Fprintf(errOut, "pm run-epic: %s\n", plan.doneStatusNote)
 	}
 
 	// Additional mode: the whole epic runs in ONE claimed worktree slot
@@ -498,17 +562,17 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 // worker but leaves it on its ready status so a later re-run picks it up.
 func classifySub(sub *storage.Task, byID map[string]*storage.Task, startStatus, doneStatus storage.TaskStatus) (oc subOutcome, drive bool, announce string) {
 	if sub.Meta.Status == doneStatus || sub.Meta.Status == storage.StatusDone {
-		return subOutcome{sub.Meta.ID, "skipped", "already " + string(sub.Meta.Status), ""}, false, ""
+		return subOutcome{sub.Meta.ID, subSkipped, "already " + string(sub.Meta.Status), ""}, false, ""
 	}
 	if sub.Meta.Mode == "manual" {
-		return subOutcome{sub.Meta.ID, "manual", "manual sub - run by hand, move to " + string(doneStatus) + " when done", ""},
+		return subOutcome{sub.Meta.ID, subManual, "manual sub - run by hand, move to " + string(doneStatus) + " when done", ""},
 			false, sub.Meta.ID + " skipped - manual sub (human-only)"
 	}
 	if sub.Meta.Status != startStatus {
-		return subOutcome{sub.Meta.ID, "skipped", "not ready (status " + string(sub.Meta.Status) + ")", ""}, false, ""
+		return subOutcome{sub.Meta.ID, subSkipped, "not ready (status " + string(sub.Meta.Status) + ")", ""}, false, ""
 	}
 	if reason := unmetDeps(sub, byID, doneStatus); reason != "" {
-		return subOutcome{sub.Meta.ID, "skipped", reason, ""}, false, sub.Meta.ID + " skipped - " + reason
+		return subOutcome{sub.Meta.ID, subSkipped, reason, ""}, false, sub.Meta.ID + " skipped - " + reason
 	}
 	return subOutcome{id: sub.Meta.ID}, true, ""
 }
@@ -676,8 +740,8 @@ func parkedFindings(res *workerResult) []string {
 // see them, and the human sees parked subs in one place). Falls back to the Log
 // when the parent has no Spec block. Per-sub dedupe: any prior lines for the
 // same subID are replaced, so re-running the epic refreshes a sub's note instead
-// of stacking duplicates. outcome != "merged" tags the line (e.g. "x2 · blocked")
-// so a parked sub reads differently from a merged sub's cross-cutting note.
+// of stacking duplicates. A non-green outcome tags the line (e.g. "x2 · blocked")
+// so a parked sub reads differently from a landed sub's cross-cutting note.
 func recordSubFeedback(store storage.TaskStore, parent *storage.Task, subID, outcome string, findings []string) error {
 	// The parent was read at run start and is rewritten after EVERY sub, while
 	// other sessions may be editing it - refresh under the project lock so a
@@ -738,7 +802,7 @@ func dropSubLines(body, subID string) string {
 
 func managerNoteBlock(subID, outcome string, findings []string) string {
 	tag := subID
-	if outcome != "" && outcome != "merged" {
+	if outcome != "" && !greenSubResult(outcome) {
 		tag = subID + " · " + outcome
 	}
 	var sb strings.Builder
@@ -748,9 +812,13 @@ func managerNoteBlock(subID, outcome string, findings []string) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
+// anyMerged reports whether at least one sub actually landed in the integration
+// branch, i.e. whether there is anything for the epic PR to contain. Only
+// integration mode reaches it (independent mode returns before the PR step), so
+// subPushed deliberately does not count.
 func anyMerged(outcomes []subOutcome) bool {
 	for _, o := range outcomes {
-		if o.result == "merged" {
+		if o.result == subMerged {
 			return true
 		}
 	}

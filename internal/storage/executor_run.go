@@ -61,8 +61,12 @@ type RunState struct {
 
 // SubRun is the per-sub progress/outcome within a run.
 type SubRun struct {
-	ID      string   `json:"id"`
-	Status  string   `json:"status"` // pending | running | merged | blocked | failed | conflict | skipped
+	ID string `json:"id"`
+	// pending | running | merged | pushed | verified | blocked | failed | conflict | skipped | manual.
+	// The three green words differ by what the RUN did with the work: merged
+	// into the epic branch, pushed to origin (independent), or verified only
+	// (standalone `pm work`, which ends in a draft PR).
+	Status  string   `json:"status"`
 	Session string   `json:"session,omitempty"`
 	Note    string   `json:"note,omitempty"`
 	Commits []string `json:"commits,omitempty"`

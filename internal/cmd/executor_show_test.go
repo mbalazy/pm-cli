@@ -23,6 +23,9 @@ func handoffProject(t *testing.T, playbook string) (*storage.Project, string) {
 	proj := &storage.Project{
 		Name: "Demo",
 		Path: repo,
+		// A project that actually runs epics lists both landing statuses;
+		// without them doctor rightly warns that a green sub has nowhere to go.
+		Statuses: []string{"todo", "doing", "merged", "pushed", "waiting", "done"},
 		Executor: &storage.Executor{
 			Enabled:    true,
 			BaseBranch: "development",

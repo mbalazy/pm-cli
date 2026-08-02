@@ -24,7 +24,7 @@ func newContextCmd(store storage.TaskStore) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			trackers, suppressed := storage.BuildTrackers(tasks)
+			trackers, suppressed := storage.BuildTrackers(tasks, store.GetLandingStatuses(slug)...)
 
 			counts := make(map[string]int)
 			var doing []*storage.Task
@@ -111,6 +111,8 @@ func statusMark(status string) string {
 		return "✅"
 	case string(storage.StatusMerged):
 		return "🔀"
+	case string(storage.StatusPushed):
+		return "📤"
 	case "doing":
 		return "🔨"
 	case "waiting":

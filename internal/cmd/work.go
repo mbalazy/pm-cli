@@ -17,10 +17,36 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Worker envelope status vocabulary - the manager<->worker JSON contract.
+//
+// "verified" replaced "merged" in 0.34.0. A worker NEVER merges anything: in
+// integration mode the manager does the merge after the fact, and in
+// independent mode nothing is merged at all, so the word described a git
+// operation the process it names cannot perform. What the worker actually
+// asserts is that it implemented, reviewed and verified the work.
+const (
+	workerVerified = "verified"
+	workerBlocked  = "blocked"
+	workerFailed   = "failed"
+	// workerVerifiedLegacy is the pre-0.34 spelling, accepted on input forever:
+	// journal lines written before the rename still carry it, as does any worker
+	// running an older prompt (e.g. a run started before an upgrade).
+	workerVerifiedLegacy = "merged"
+)
+
+// normalizeWorkerStatus folds the legacy spelling into the current one, so the
+// rest of the engine only ever compares against workerVerified.
+func normalizeWorkerStatus(status string) string {
+	if status == workerVerifiedLegacy {
+		return workerVerified
+	}
+	return status
+}
+
 // workerResult is the JSON contract returned by a headless worker (the
 // manager<->worker API). It is validated against workerResultSchema.
 type workerResult struct {
-	Status     string   `json:"status"` // merged | blocked | failed
+	Status     string   `json:"status"` // verified | blocked | failed ("merged" accepted as legacy)
 	Summary    string   `json:"summary"`
 	Branch     string   `json:"branch"`
 	Commits    []string `json:"commits"`
@@ -50,7 +76,7 @@ type claudeEnvelope struct {
 const workerResultSchema = `{
   "type": "object",
   "properties": {
-    "status": {"type": "string", "enum": ["merged", "blocked", "failed"]},
+    "status": {"type": "string", "enum": ["verified", "blocked", "failed"]},
     "summary": {"type": "string"},
     "branch": {"type": "string"},
     "commits": {"type": "array", "items": {"type": "string"}},
@@ -1029,6 +1055,10 @@ func parseClaudeResult(data []byte) (*workerResult, string, error) {
 	// output can't carry them - only the harness knows turns/cost).
 	env.StructuredOutput.Turns = env.NumTurns
 	env.StructuredOutput.CostUSD = env.TotalCostUSD
+	// One place folds the legacy "merged" spelling into "verified", so nothing
+	// downstream (verdict checks, briefs, run-state, journal) has to know two
+	// words for one outcome.
+	env.StructuredOutput.Status = normalizeWorkerStatus(env.StructuredOutput.Status)
 	return env.StructuredOutput, env.SessionID, nil
 }
 
@@ -1070,13 +1100,13 @@ func applyWorkerResult(errOut io.Writer, store storage.TaskStore, t *storage.Tas
 		t.Meta.Branch = branch
 	}
 
-	t.Meta.Brief = workerBrief(res, branch, standalone)
-	t.Body = appendLog(t.Body, workerLogEntry(res, branch, standalone))
+	t.Meta.Brief = workerBrief(res, branch, standalone, independent)
+	t.Body = appendLog(t.Body, workerLogEntry(res, branch, standalone, independent))
 
-	// Autonomy envelope: pm work never moves a task to done/merged on its own.
-	// A blocked worker parks the task on `waiting` (human attention) if that
+	// Autonomy envelope: pm work never moves a task to a landing status on its
+	// own. A blocked worker parks the task on `waiting` (human attention) if that
 	// status exists for the project; otherwise the status is left untouched.
-	if res.Status == "blocked" && !independent {
+	if res.Status == workerBlocked && !independent {
 		statuses := store.GetProjectStatuses(t.Project)
 		if statusAllowed(storage.StatusWaiting, statuses) {
 			// Write our mutations first, then hand off to MoveTask - it takes the
@@ -1102,19 +1132,28 @@ func statusAllowed(s storage.TaskStatus, allowed []storage.TaskStatus) bool {
 	return false
 }
 
-// displayStatus renders the worker status for human-facing brief/log text. In
-// standalone mode nothing is actually merged (the worker opens a draft PR), so
-// "merged" reads as "ready (draft PR)". The JSON contract enum is unchanged.
-func displayStatus(status string, standalone bool) string {
-	if standalone && status == "merged" {
-		return "ready (draft PR)"
+// displayStatus renders the worker status for human-facing brief/log text,
+// naming what actually happened to the work in each mode: a standalone run ends
+// in a draft PR, an independent (batch) sub ends pushed to origin awaiting a
+// human, and only an integration sub is genuinely merged (by the manager, right
+// after this text is written). The JSON contract enum is unaffected.
+func displayStatus(status string, standalone, independent bool) string {
+	if status != workerVerified {
+		return status
 	}
-	return status
+	switch {
+	case standalone:
+		return "ready (draft PR)"
+	case independent:
+		return "ready (pushed)"
+	default:
+		return "verified (merging into the epic branch)"
+	}
 }
 
-func workerBrief(res *workerResult, branch string, standalone bool) string {
+func workerBrief(res *workerResult, branch string, standalone, independent bool) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Worker %s on %s (%s). %s", displayStatus(res.Status, standalone), branch, modeLabel(standalone), strings.TrimSpace(res.Summary))
+	fmt.Fprintf(&sb, "Worker %s on %s (%s). %s", displayStatus(res.Status, standalone, independent), branch, modeLabel(standalone), strings.TrimSpace(res.Summary))
 	if len(res.Unresolved) > 0 {
 		fmt.Fprintf(&sb, " Unresolved: %s.", strings.Join(res.Unresolved, "; "))
 	}
@@ -1124,9 +1163,9 @@ func workerBrief(res *workerResult, branch string, standalone bool) string {
 	return sb.String()
 }
 
-func workerLogEntry(res *workerResult, branch string, standalone bool) string {
+func workerLogEntry(res *workerResult, branch string, standalone, independent bool) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "**Worker run (%s, %s)** - status: %s, branch: %s.\n", storage.Today(), modeLabel(standalone), displayStatus(res.Status, standalone), branch)
+	fmt.Fprintf(&sb, "**Worker run (%s, %s)** - status: %s, branch: %s.\n", storage.Today(), modeLabel(standalone), displayStatus(res.Status, standalone, independent), branch)
 	if s := strings.TrimSpace(res.Summary); s != "" {
 		fmt.Fprintf(&sb, "%s\n", s)
 	}

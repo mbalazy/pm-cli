@@ -32,8 +32,12 @@ const (
 // JournalSub is one sub's outcome inside an "end" event (a single entry for
 // `pm work`; one per sub for `pm run-epic`).
 type JournalSub struct {
-	ID        string  `json:"id"`
-	Result    string  `json:"result"` // merged | blocked | failed | conflict | skipped | manual
+	ID string `json:"id"`
+	// merged | pushed | verified | blocked | failed | conflict | skipped | manual.
+	// Lines written before 0.34.0 say "merged" for every green outcome,
+	// including batch subs nothing was ever merged for - they are never
+	// rewritten, so a consumer reading old history must keep that in mind.
+	Result    string  `json:"result"`
 	Note      string  `json:"note,omitempty"`
 	Branch    string  `json:"branch,omitempty"`     // the branch the sub's work landed on (key artifact in independent mode)
 	DurationS int     `json:"duration_s,omitempty"` // wall-clock of the driveSub/worker, 0 for skips

@@ -292,3 +292,66 @@ func TestExecuteEpicRejectsAnUnlistedDoneStatus(t *testing.T) {
 		t.Errorf("the gate must refuse before driving a sub, got %q", sub.Meta.Status)
 	}
 }
+
+// The headline of the honest-status change, end to end: a green batch sub lands
+// on the independent status and is RECORDED as pushed, in the journal a retro
+// reads and on the board a human reads. Before this it landed on the same
+// "merged" as an integration sub, next to a note saying the branch was pushed.
+func TestExecuteEpicIndependentLandsOnPushed(t *testing.T) {
+	fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\necho '"+envelope(workerVerified, "all green")+"'")
+	store, _ := epicRunFixture(t)
+	if _, err := store.MutateProject("app", func(p *storage.Project) error {
+		p.Statuses = []string{"todo", "doing", "pushed", "waiting", "done"}
+		p.Executor.DoneStatusIndependent = "pushed"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runEpic(t, store, epicOptions{independent: true})
+
+	sub, _ := store.FindTask("app", "app-1-1")
+	if sub.Meta.Status != storage.TaskStatus("pushed") {
+		t.Errorf("a green batch sub must land on the independent status, got %q", sub.Meta.Status)
+	}
+	if strings.Contains(sub.Meta.Brief, "Worker merged") {
+		t.Errorf("the sub's brief must not claim a merge: %q", sub.Meta.Brief)
+	}
+	entries, _ := storage.ReadJournal(store.ProjectDir("app"))
+	end := entries[len(entries)-1]
+	if len(end.Subs) != 1 || end.Subs[0].Result != subPushed {
+		t.Fatalf("journal must record the sub as pushed, got %+v", end.Subs)
+	}
+}
+
+// The other side of the same coin: an integration sub really is merged, so it
+// keeps saying so - the rename must not blur the two modes into one word again.
+func TestExecuteEpicIntegrationStillRecordsMerged(t *testing.T) {
+	fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\necho '"+envelope(workerVerified, "all green")+"'")
+	store, _ := epicRunFixture(t)
+
+	runEpic(t, store, epicOptions{noPR: true})
+
+	entries, _ := storage.ReadJournal(store.ProjectDir("app"))
+	end := entries[len(entries)-1]
+	if len(end.Subs) != 1 || end.Subs[0].Result != subMerged {
+		t.Fatalf("journal must record an integration sub as merged, got %+v", end.Subs)
+	}
+}
+
+// A project whose statuses predate "pushed" must keep running batches: the
+// built-in default degrades to done_status and says so on stderr.
+func TestExecuteEpicIndependentDegradesWhenPushedIsNotAStatus(t *testing.T) {
+	fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\necho '"+envelope(workerVerified, "all green")+"'")
+	store, _ := epicRunFixture(t)
+
+	_, stderr := runEpic(t, store, epicOptions{independent: true})
+
+	sub, _ := store.FindTask("app", "app-1-1")
+	if sub.Meta.Status != storage.StatusDone {
+		t.Errorf("the run must still land the sub on done_status, got %q", sub.Meta.Status)
+	}
+	if !strings.Contains(stderr, "pushed") {
+		t.Errorf("the degrade must be announced, not silent:\n%s", stderr)
+	}
+}

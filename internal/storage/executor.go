@@ -2,7 +2,9 @@ package storage
 
 import (
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -13,7 +15,8 @@ import (
 //
 // A project with NO executor block resolves to all-generic defaults (see
 // defaultExecutor): every phase falls back to the engine's built-in generic,
-// additional_worktree is off, statuses are todo/doing/merged, fix_rounds is 3.
+// additional_worktree is off, statuses are todo/doing/merged (independent mode
+// lands on "pushed" instead - see DoneStatusIndependent), fix_rounds is 3.
 // The block is the ONLY project-specific piece of the engine.
 type Executor struct {
 	Enabled bool `yaml:"enabled"`
@@ -86,13 +89,60 @@ type Executor struct {
 	// and the runtime-driving skill live. Unlike every other field here it is
 	// consumed AFTER a run, by a human or a CC session (`pm executor show`),
 	// not by a worker prompt - pm never spawns the odbiór. See handoff.go.
-	Handoff     Handoff                 `yaml:"handoff,omitempty"`
-	StartStatus string                  `yaml:"start_status,omitempty"` // sub status meaning "ready to pick up"
-	WipStatus   string                  `yaml:"wip_status,omitempty"`
-	DoneStatus  string                  `yaml:"done_status,omitempty"` // where a verified sub lands
-	FixRounds   int                     `yaml:"fix_rounds,omitempty"`  // review->fix loop cap before escalating
-	Phases      map[string]PhaseBinding `yaml:"phases,omitempty"`
-	Notes       string                  `yaml:"notes,omitempty"`
+	Handoff     Handoff `yaml:"handoff,omitempty"`
+	StartStatus string  `yaml:"start_status,omitempty"` // sub status meaning "ready to pick up"
+	WipStatus   string  `yaml:"wip_status,omitempty"`
+	DoneStatus  string  `yaml:"done_status,omitempty"` // where a verified sub lands in INTEGRATION mode
+	// DoneStatusIndependent is where a verify-green sub lands in INDEPENDENT
+	// (batch) mode, where the manager pushes the sub's own branch and merges
+	// NOTHING. Reusing DoneStatus there made every batch sub land on "merged"
+	// while its journal note in the same breath read "pushed <branch>; TODO:
+	// verify on the simulator" - the status claimed work was integrated when it
+	// was sitting on origin waiting for a human. Empty = DefaultIndependentDoneStatus.
+	DoneStatusIndependent string                  `yaml:"done_status_independent,omitempty"`
+	FixRounds             int                     `yaml:"fix_rounds,omitempty"` // review->fix loop cap before escalating
+	Phases                map[string]PhaseBinding `yaml:"phases,omitempty"`
+	Notes                 string                  `yaml:"notes,omitempty"`
+}
+
+// DefaultIndependentDoneStatus is the landing status for a verify-green sub in
+// independent (batch) mode when the project does not name one. It says what the
+// manager actually did - it pushed the branch - and deliberately differs from
+// the integration-mode default ("merged"), which says what happens there.
+const DefaultIndependentDoneStatus = "pushed"
+
+// IndependentDoneStatus returns the landing status for independent (batch) mode
+// plus whether the project named it explicitly. The flag matters at the gate:
+// an explicitly configured status that the project's `statuses` list does not
+// contain is a config error worth failing on, whereas the built-in default
+// falling outside an older project's status list is not - that one degrades to
+// DoneStatus with a warning, so upgrading pm never breaks a batch mid-flight.
+func (e Executor) IndependentDoneStatus() (status string, explicit bool) {
+	if s := strings.TrimSpace(e.DoneStatusIndependent); s != "" {
+		return s, true
+	}
+	return DefaultIndependentDoneStatus, false
+}
+
+// LandingStatuses returns every status this project's executor moves a
+// verify-green sub to: the integration one and the independent one. This is the
+// answer to "is this task finished as far as the executor is concerned" -
+// consumers must ask for it instead of testing against the literal "merged",
+// which is only the DEFAULT of one of the two knobs (pm-cli-77).
+func (e Executor) LandingStatuses() []TaskStatus {
+	indep, _ := e.IndependentDoneStatus()
+	var out []TaskStatus
+	for _, s := range []string{e.DoneStatus, indep} {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		st := TaskStatus(s)
+		if !slices.Contains(out, st) {
+			out = append(out, st)
+		}
+	}
+	return out
 }
 
 // WorktreeSlot is one entry of the executor's worktree pool: where the

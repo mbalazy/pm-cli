@@ -93,7 +93,17 @@ func renderExecutorProfile(slug string, proj *storage.Project) string {
 	fmt.Fprintf(&b, "  base_branch:  %s\n", orUnset(e.BaseBranch))
 	fmt.Fprintf(&b, "  prepare:      %s\n", orUnset(e.Prepare))
 	fmt.Fprintf(&b, "  baseline:     %s\n", orUnset(e.Baseline))
+	// Two done statuses because the two epic modes do different things with a
+	// green sub: integration merges it into the epic branch, independent only
+	// pushes its branch. Printed side by side so the difference is visible
+	// without reading the code that resolves it.
+	indepDone, indepExplicit := e.IndependentDoneStatus()
+	indepSuffix := " (default)"
+	if indepExplicit {
+		indepSuffix = ""
+	}
 	fmt.Fprintf(&b, "  statuses:     start=%s wip=%s done=%s\n", e.StartStatus, e.WipStatus, e.DoneStatus)
+	fmt.Fprintf(&b, "                done (independent/batch)=%s%s\n", indepDone, indepSuffix)
 	fmt.Fprintf(&b, "  fix_rounds:   %d\n", e.FixRounds)
 	if len(e.SeedExclude) > 0 {
 		fmt.Fprintf(&b, "  seed_exclude: %s\n", strings.Join(e.SeedExclude, ", "))

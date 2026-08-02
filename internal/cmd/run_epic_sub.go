@@ -20,6 +20,11 @@ type subFlow struct {
 	// base is the branch the sub's own branch forks from: the integration
 	// branch, or the batch's base.
 	base string
+	// green is the outcome word recorded for a verify-green sub, naming what
+	// THIS mode did with the work: subMerged (integration) or subPushed
+	// (independent). It reaches the run-state, the journal and the parent's
+	// Manager Notes.
+	green string
 	// prepare runs before the sub's branch is created. Integration mode checks
 	// out the integration branch first, so the sub forks off the prior subs'
 	// merged work. A returned error fails the sub verbatim as its note.
@@ -56,7 +61,7 @@ func driveSubFlow(store storage.TaskStore, workDir, slug string, tracker, sub *s
 
 	if flow.prepare != nil {
 		if err := flow.prepare(dir); err != nil {
-			return subOutcome{sub.Meta.ID, "failed", err.Error(), branch}
+			return subOutcome{sub.Meta.ID, subFailed, err.Error(), branch}
 		}
 	}
 	// On the reused "additional" worktree, force a FRESH branch from the base
@@ -68,7 +73,7 @@ func driveSubFlow(store storage.TaskStore, workDir, slug string, tracker, sub *s
 		newBranch = gitFreshBranch
 	}
 	if err := newBranch(dir, branch, flow.base); err != nil {
-		return subOutcome{sub.Meta.ID, "failed", "create branch: " + err.Error(), branch}
+		return subOutcome{sub.Meta.ID, subFailed, "create branch: " + err.Error(), branch}
 	}
 
 	logIfErr(errOut, "move "+sub.Meta.ID+" to doing", store.MoveTask(sub, storage.StatusDoing))
@@ -76,7 +81,7 @@ func driveSubFlow(store storage.TaskStore, workDir, slug string, tracker, sub *s
 	plan, err := planWork(store, sub, slug, opts)
 	if err != nil {
 		flow.park(sub)
-		return subOutcome{sub.Meta.ID, "failed", err.Error(), branch}
+		return subOutcome{sub.Meta.ID, subFailed, err.Error(), branch}
 	}
 
 	// Surface the worker's session up front so the live agent-view knows which
@@ -89,7 +94,7 @@ func driveSubFlow(store storage.TaskStore, workDir, slug string, tracker, sub *s
 	res, err := executeWork(store, sub, plan, opts)
 	if err != nil {
 		flow.park(sub)
-		return subOutcome{sub.Meta.ID, "failed", flow.crashNote(dir, branch, err.Error()), branch}
+		return subOutcome{sub.Meta.ID, subFailed, flow.crashNote(dir, branch, err.Error()), branch}
 	}
 
 	// Stamp the worker's envelope stats onto the sub's run-state entry so the
@@ -98,7 +103,7 @@ func driveSubFlow(store storage.TaskStore, workDir, slug string, tracker, sub *s
 
 	note := flow.note(dir, branch, briefReason(res))
 
-	if res.Status != "merged" {
+	if res.Status != workerVerified {
 		// applyWorkerResult already parked a blocked sub on waiting; make sure a
 		// failed sub is parked too (not left dangling on doing).
 		if sub.Meta.Status != storage.StatusWaiting {
@@ -120,9 +125,9 @@ func driveSubFlow(store storage.TaskStore, workDir, slug string, tracker, sub *s
 
 	// Refresh the parent's Manager Notes for this sub: record cross-cutting
 	// findings for later subs, and (with empty findings) clear any stale parked
-	// note now that the sub has merged.
-	logIfErr(errOut, "refresh feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, "merged", res.Unresolved))
-	return subOutcome{sub.Meta.ID, "merged", note, branch}
+	// note now that the sub has landed.
+	logIfErr(errOut, "refresh feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, flow.green, res.Unresolved))
+	return subOutcome{sub.Meta.ID, flow.green, note, branch}
 }
 
 // driveSub runs one ready sub in INTEGRATION mode: branch off the integration
@@ -135,7 +140,8 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 		logIfErr(errOut, "park "+sub.Meta.ID, store.MoveTask(sub, storage.StatusWaiting))
 	}
 	flow := subFlow{
-		base: epicBranch,
+		base:  epicBranch,
+		green: subMerged,
 		// Branch the sub off the current integration branch (which already
 		// carries the prior subs - seams resolve via sequencing).
 		prepare: func(dir string) error {
@@ -151,13 +157,13 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 			// Verify-green: merge the sub back into the integration branch.
 			if err := gitEnsureBranch(dir, epicBranch, ""); err != nil {
 				park(sub)
-				return &subOutcome{sub.Meta.ID, "failed", "checkout integration to merge: " + err.Error(), branch}
+				return &subOutcome{sub.Meta.ID, subFailed, "checkout integration to merge: " + err.Error(), branch}
 			}
 			msg := fmt.Sprintf("Merge %s (%s) into %s", branch, sub.Meta.ID, epicBranch)
 			if err := gitMergeNoFF(dir, branch, msg); err != nil {
 				// A seam the ordering did not resolve - escalate to a human.
 				park(sub)
-				return &subOutcome{sub.Meta.ID, "conflict", err.Error(), branch}
+				return &subOutcome{sub.Meta.ID, subConflict, err.Error(), branch}
 			}
 			return nil
 		},
@@ -177,6 +183,9 @@ func driveSub(store storage.TaskStore, workDir, slug string, tracker, sub *stora
 func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker, sub *storage.Task, baseBranch string, doneStatus storage.TaskStatus, opts workOptions, rw *storage.RunWriter, worktree bool) subOutcome {
 	flow := subFlow{
 		base: baseBranch,
+		// Nothing is merged here - the manager pushes the branch and that is the
+		// whole of it, so the sub is recorded (and lands) as pushed.
+		green: subPushed,
 		// No prepare: a batch sub forks straight off the base, never off a
 		// sibling's work.
 		park: func(*storage.Task) {},

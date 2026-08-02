@@ -202,3 +202,30 @@ func TestBuildTrackersCollapseDoesNotAffectSuppression(t *testing.T) {
 		t.Errorf("suppressed = %v, want both parent and child", suppressed)
 	}
 }
+
+// The whole point of extraTerminal: a project that renamed its landing statuses
+// used to lose the collapse entirely, because "merged" was hardcoded here.
+func TestBuildTrackersHonoursProjectLandingStatuses(t *testing.T) {
+	tasks := []*Task{
+		statusTask("p-9", "", StatusDone, ""),
+		statusTask("p-9-1", "p-9", "pushed", "kid brief"),
+		statusTask("p-9-2", "p-9", "review", "kid brief"),
+	}
+
+	t.Run("unknown landing statuses keep the tracker open", func(t *testing.T) {
+		trackers, _ := BuildTrackers(tasks)
+		if trackers[0].ChildrenOmitted {
+			t.Error("without the project's landing statuses these children are not terminal - the tracker must stay expanded")
+		}
+	})
+
+	t.Run("the project's own names collapse it", func(t *testing.T) {
+		trackers, _ := BuildTrackers(tasks, TaskStatus("pushed"), TaskStatus("review"))
+		if !trackers[0].ChildrenOmitted {
+			t.Error("every child sits on a landing status - the finished tracker must collapse")
+		}
+		if trackers[0].Total != 2 {
+			t.Errorf("Total = %d, want 2 (progress survives the collapse)", trackers[0].Total)
+		}
+	})
+}

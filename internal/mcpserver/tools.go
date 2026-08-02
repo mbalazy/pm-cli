@@ -980,7 +980,7 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 	}
 
 	tasks, _ := store.GetTasks(slug)
-	trackers, suppressed := storage.BuildTrackers(tasks)
+	trackers, suppressed := storage.BuildTrackers(tasks, store.GetLandingStatuses(slug)...)
 	counts := make(map[string]int)
 	doing := []taskDetail{}
 	for _, t := range tasks {
@@ -1047,7 +1047,7 @@ func crossProjectContext(store storage.TaskStore, note string) (*mcp.CallToolRes
 			ps.Repo = proj.Repo
 		}
 		tasks, _ := store.GetTasks(slug)
-		trackers, suppressed := storage.BuildTrackers(tasks)
+		trackers, suppressed := storage.BuildTrackers(tasks, store.GetLandingStatuses(slug)...)
 		ps.Trackers = trackers
 		for _, t := range tasks {
 			ps.TaskCounts[string(t.Meta.Status)]++

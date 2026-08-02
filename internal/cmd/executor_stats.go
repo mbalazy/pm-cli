@@ -36,7 +36,11 @@ var runStatusOrder = []string{
 // sub histogram prints ALL of these (zeros included) so "0 conflict" is
 // visibly different from "conflict is not tracked"; unknown values sort
 // alphabetically after them.
-var subResultOrder = []string{"merged", "blocked", "failed", "conflict", "skipped", "manual"}
+// "verified" is what a standalone `pm work` run records (it neither merges nor
+// pushes - it opens a draft PR); "merged" and "pushed" are the manager's two
+// landing words. All three are green. Journals written before 0.34.0 only ever
+// say "merged", which still prints in its own row - they are not rewritten.
+var subResultOrder = []string{"verified", "merged", "pushed", "blocked", "failed", "conflict", "skipped", "manual"}
 
 // numStat accumulates a metric plus the number of SAMPLES behind it. Two adders
 // because the two levels differ: every end line carries a run duration, so

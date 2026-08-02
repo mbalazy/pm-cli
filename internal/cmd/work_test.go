@@ -25,7 +25,7 @@ func TestResolveWorkBranch(t *testing.T) {
 
 func TestParseClaudeResult(t *testing.T) {
 	t.Run("success with structured output", func(t *testing.T) {
-		data := []byte(`{"type":"result","subtype":"success","is_error":false,"result":"Done.","session_id":"abc-123","num_turns":42,"total_cost_usd":1.25,"structured_output":{"status":"merged","summary":"did the thing","branch":"feat/x","commits":["a1b2c3"],"unresolved":[]}}`)
+		data := []byte(`{"type":"result","subtype":"success","is_error":false,"result":"Done.","session_id":"abc-123","num_turns":42,"total_cost_usd":1.25,"structured_output":{"status":"verified","summary":"did the thing","branch":"feat/x","commits":["a1b2c3"],"unresolved":[]}}`)
 		res, sid, err := parseClaudeResult(data)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -33,7 +33,7 @@ func TestParseClaudeResult(t *testing.T) {
 		if sid != "abc-123" {
 			t.Errorf("session id = %q, want abc-123", sid)
 		}
-		if res.Status != "merged" || res.Branch != "feat/x" || res.Summary != "did the thing" {
+		if res.Status != workerVerified || res.Branch != "feat/x" || res.Summary != "did the thing" {
 			t.Errorf("unexpected result: %+v", res)
 		}
 		if len(res.Commits) != 1 || res.Commits[0] != "a1b2c3" {
@@ -165,18 +165,37 @@ func TestBuildWorkerPrompt(t *testing.T) {
 
 func TestDisplayStatus(t *testing.T) {
 	tests := []struct {
-		status     string
-		standalone bool
-		want       string
+		name        string
+		status      string
+		standalone  bool
+		independent bool
+		want        string
 	}{
-		{"merged", true, "ready (draft PR)"},
-		{"merged", false, "merged"},
-		{"blocked", true, "blocked"},
-		{"failed", true, "failed"},
+		{"standalone ends in a draft PR", workerVerified, true, false, "ready (draft PR)"},
+		{"batch sub is pushed, never merged", workerVerified, false, true, "ready (pushed)"},
+		{"integration sub really is merged", workerVerified, false, false, "verified (merging into the epic branch)"},
+		{"non-green statuses are verbatim", workerBlocked, true, false, "blocked"},
+		{"failed is verbatim in batch mode too", workerFailed, false, true, "failed"},
 	}
 	for _, tt := range tests {
-		if got := displayStatus(tt.status, tt.standalone); got != tt.want {
-			t.Errorf("displayStatus(%q, %v) = %q, want %q", tt.status, tt.standalone, got, tt.want)
+		t.Run(tt.name, func(t *testing.T) {
+			if got := displayStatus(tt.status, tt.standalone, tt.independent); got != tt.want {
+				t.Errorf("displayStatus(%q, standalone=%v, independent=%v) = %q, want %q",
+					tt.status, tt.standalone, tt.independent, got, tt.want)
+			}
+		})
+	}
+}
+
+// The pre-0.34 spelling still arrives from an in-flight worker started before an
+// upgrade, so it has to keep resolving to the same verdict as the new one.
+func TestNormalizeWorkerStatusFoldsLegacyMerged(t *testing.T) {
+	if got := normalizeWorkerStatus("merged"); got != workerVerified {
+		t.Errorf("legacy %q must normalize to %q, got %q", "merged", workerVerified, got)
+	}
+	for _, s := range []string{workerVerified, workerBlocked, workerFailed, "weird"} {
+		if got := normalizeWorkerStatus(s); got != s {
+			t.Errorf("normalizeWorkerStatus(%q) = %q, want it untouched", s, got)
 		}
 	}
 }
@@ -326,14 +345,23 @@ func TestWorkerEnvPinsConfigDir(t *testing.T) {
 func TestWorkerBriefAndLog(t *testing.T) {
 	res := &workerResult{Status: "blocked", Summary: "made progress", Branch: "feat/x",
 		Commits: []string{"a1", "b2"}, Unresolved: []string{"flaky test"}}
-	brief := workerBrief(res, "feat/x", true)
+	brief := workerBrief(res, "feat/x", true, false)
 	mustContain(t, brief, "Worker blocked on feat/x")
 	mustContain(t, brief, "flaky test")
 	mustContain(t, brief, "a1, b2")
 
-	log := workerLogEntry(res, "feat/x", true)
+	log := workerLogEntry(res, "feat/x", true, false)
 	mustContain(t, log, "status: blocked")
 	mustContain(t, log, "- flaky test")
+
+	// A green batch sub must never read as merged: nothing is merged in that
+	// mode, the branch is pushed and a human still owes the acceptance pass.
+	green := &workerResult{Status: workerVerified, Summary: "done", Branch: "feat/x"}
+	batchBrief := workerBrief(green, "feat/x", false, true)
+	mustContain(t, batchBrief, "ready (pushed)")
+	if strings.Contains(batchBrief, "Worker merged") {
+		t.Errorf("batch brief must not claim a merge: %q", batchBrief)
+	}
 }
 
 func TestAppendLog(t *testing.T) {
@@ -412,7 +440,7 @@ func TestApplyWorkerResultFreshRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res := &workerResult{Status: "merged", Summary: "done", Branch: "feat/x", Commits: []string{"abc"}}
+	res := &workerResult{Status: workerVerified, Summary: "done", Branch: "feat/x", Commits: []string{"abc"}}
 	if err := applyWorkerResult(os.Stderr, store, stale, "feat/x", "sess-1", res, true, false); err != nil {
 		t.Fatal(err)
 	}

@@ -15,6 +15,11 @@ type TaskStore interface {
 	GetProject(slug string) (*Project, error)
 	GetProjectStatuses(slug string) []TaskStatus
 	GetAllStatuses() []TaskStatus
+	// Landing statuses = where the executor parks a verify-green sub
+	// (done_status / done_status_independent). Ask for these instead of
+	// comparing a status to the literal "merged".
+	GetLandingStatuses(slug string) []TaskStatus
+	GetAllLandingStatuses() []TaskStatus
 	ProjectPrefix(slug string) string
 	ResolveProject(input string) (string, error)
 

@@ -15,7 +15,7 @@ import (
 // `claude` that sleeps long enough to cross a second boundary (RFC3339 stamps
 // have second granularity).
 func TestExecuteWorkHeartbeatsWhileWorkerRuns(t *testing.T) {
-	fakeClaude(t, "sleep 2\necho '"+envelope("merged", "done")+"'")
+	fakeClaude(t, "sleep 2\necho '"+envelope(workerVerified, "done")+"'")
 	store, task, plan, opts := executorFixture(t)
 
 	prev := workerHeartbeatInterval
@@ -78,7 +78,7 @@ func TestExecuteWorkHeartbeatsWhileWorkerRuns(t *testing.T) {
 // dies with the worker, so a finished run's Updated stays the end stamp (which
 // is what the board renders as the run's elapsed time).
 func TestExecuteWorkHeartbeatStopsWithTheWorker(t *testing.T) {
-	fakeClaude(t, "echo '"+envelope("merged", "done")+"'")
+	fakeClaude(t, "echo '"+envelope(workerVerified, "done")+"'")
 	store, task, plan, opts := executorFixture(t)
 
 	prev := workerHeartbeatInterval
@@ -111,7 +111,7 @@ func TestExecuteWorkHeartbeatStopsWithTheWorker(t *testing.T) {
 // epic-level run-state, handed down through workOptions.runWriter. Without this
 // the standalone tests would stay green with the whole epic path deleted.
 func TestExecuteWorkHeartbeatsEpicManagerRunState(t *testing.T) {
-	fakeClaude(t, "sleep 2\necho '"+envelope("merged", "done")+"'")
+	fakeClaude(t, "sleep 2\necho '"+envelope(workerVerified, "done")+"'")
 	store, task, plan, opts := executorFixture(t)
 
 	prevInterval := workerHeartbeatInterval
@@ -194,7 +194,7 @@ func TestExecuteWorkHeartbeatsEpicManagerRunState(t *testing.T) {
 func TestDriveSubIndependentHeartbeatsTheEpicRunState(t *testing.T) {
 	// The fake worker commits (so pushIfAhead has something to see) and lives
 	// long enough for several beats.
-	fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\nsleep 2\necho '"+envelope("merged", "done")+"'")
+	fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\nsleep 2\necho '"+envelope(workerVerified, "done")+"'")
 	store, sub, _, opts := executorFixture(t)
 
 	prevInterval := workerHeartbeatInterval
@@ -224,7 +224,9 @@ func TestDriveSubIndependentHeartbeatsTheEpicRunState(t *testing.T) {
 	oc := driveSubIndependent(store, proj.Path, "app", tracker, sub, gitHeadBranch(t, proj.Path), storage.StatusDone, opts, rw, false)
 	writes := stopWatch()
 
-	if oc.result != "merged" {
+	// Independent mode merges nothing - the manager pushed the branch, so that
+	// is the word that reaches the run-state, the journal and the board.
+	if oc.result != subPushed {
 		t.Fatalf("sub outcome = %+v", oc)
 	}
 	if writes < 20 {
@@ -235,7 +237,7 @@ func TestDriveSubIndependentHeartbeatsTheEpicRunState(t *testing.T) {
 
 // Same guard for integration mode: driveSub must hand its worker the writer too.
 func TestDriveSubHeartbeatsTheEpicRunState(t *testing.T) {
-	fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\nsleep 2\necho '"+envelope("merged", "done")+"'")
+	fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\nsleep 2\necho '"+envelope(workerVerified, "done")+"'")
 	store, sub, _, opts := executorFixture(t)
 
 	prevInterval := workerHeartbeatInterval
@@ -266,7 +268,7 @@ func TestDriveSubHeartbeatsTheEpicRunState(t *testing.T) {
 	oc := driveSub(store, proj.Path, "app", tracker, sub, "epic/app-t", storage.StatusDone, opts, rw, false)
 	writes := stopWatch()
 
-	if oc.result != "merged" {
+	if oc.result != subMerged {
 		t.Fatalf("sub outcome = %+v", oc)
 	}
 	if writes < 20 {

@@ -1553,3 +1553,37 @@ func TestOpenExecutorMenu(t *testing.T) {
 		}
 	})
 }
+
+// The card badge and the detail table both count "how far is this epic", and
+// both used to hardcode `merged`. With batch subs landing on `pushed`, a
+// hardcoded counter reports a finished batch as 0/N.
+func TestTrackerBadgeCountsTheProjectsLandingStatuses(t *testing.T) {
+	base := &storage.Store{Root: t.TempDir()}
+	if err := base.CreateProject("p", &storage.Project{
+		Name:     "P",
+		Statuses: []string{"todo", "doing", "merged", "pushed", "done"},
+		Executor: &storage.Executor{Enabled: true, StartStatus: "todo", DoneStatus: "merged"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	add := func(id, parent string, status storage.TaskStatus) {
+		t.Helper()
+		if err := base.AddTask("p", &storage.Task{Meta: storage.TaskMeta{
+			ID: id, Title: id, Status: status, Parent: parent,
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("p-1", "", storage.StatusDoing)
+	add("p-1-1", "p-1", "pushed")
+	add("p-1-2", "p-1", "merged")
+	add("p-1-3", "p-1", storage.StatusDone)
+	add("p-1-4", "p-1", storage.StatusTodo)
+
+	m := &Model{store: base, projects: []string{"all", "p"}, activeProject: 1}
+	m.reload()
+
+	if got := m.trackerBadges()["p-1"]; got != "▸3/4" {
+		t.Errorf("badge = %q, want ▸3/4 (pushed + merged + done complete, todo outstanding)", got)
+	}
+}
