@@ -247,6 +247,9 @@ func preservedFieldNotes(existing *storage.Executor) []string {
 	if existing.DoneStatus != base.DoneStatus {
 		note("done_status")
 	}
+	if existing.DoneStatusIndependent != "" {
+		note("done_status_independent")
+	}
 	if existing.FixRounds != base.FixRounds {
 		note("fix_rounds")
 	}

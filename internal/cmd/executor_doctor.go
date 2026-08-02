@@ -143,9 +143,34 @@ func runExecutorDoctor(proj *storage.Project) []check {
 	}
 
 	e := proj.GetExecutor()
+	out = append(out, checkLandingStatuses(e, proj.GetStatuses())...)
 	out = append(out, checkContextRepos(e)...)
 	out = append(out, checkSlots(e, proj.Path)...)
 	out = append(out, checkHandoff(e, proj.Path)...)
+	return out
+}
+
+// checkLandingStatuses reports landing statuses the project's `statuses` list
+// does not contain. A missing integration done_status is fatal at run start
+// (run-epic hard-gates it), while a missing independent one degrades to
+// done_status with a note - hence WARN, not ERROR: the run still works, it just
+// records batch subs as "merged" when nothing was merged, which is the exact
+// confusion the separate status exists to end.
+func checkLandingStatuses(e storage.Executor, statuses []storage.TaskStatus) []check {
+	var out []check
+	indep, _ := e.IndependentDoneStatus()
+	for _, s := range e.LandingStatuses() {
+		if statusAllowed(s, statuses) {
+			continue
+		}
+		hint := fmt.Sprintf("add `%s` to `statuses:` in project.yaml", s)
+		if string(s) == indep {
+			hint += " - without it a verify-green batch sub falls back to `" + e.DoneStatus + "`, claiming a merge that never happened"
+		} else {
+			hint += " - `pm run-epic` refuses to start an integration epic without it"
+		}
+		out = append(out, check{Level: levelWarn, Msg: "landing status not in the project's statuses: " + string(s), Hint: hint})
+	}
 	return out
 }
 

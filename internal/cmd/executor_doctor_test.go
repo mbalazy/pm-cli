@@ -227,3 +227,32 @@ func TestDoctorCmdReturnsErrorInsteadOfExiting(t *testing.T) {
 		t.Fatalf("want errFound, got %v", err)
 	}
 }
+
+func TestDoctorLandingStatusNotInProjectStatuses(t *testing.T) {
+	t.Run("missing independent status warns without failing", func(t *testing.T) {
+		proj, _ := handoffProject(t, "# playbook\nmeasure-element.py, read-rn-logs.sh\n")
+		proj.Statuses = []string{"todo", "doing", "merged", "done"} // no `pushed`
+
+		checks := runExecutorDoctor(proj)
+		c := findCheck(checks, "landing status not in the project's statuses: pushed")
+		if c == nil {
+			t.Fatalf("expected a finding for the unlisted landing status: %s", formatChecks(checks))
+		}
+		if c.Level != levelWarn {
+			t.Error("the run still works (it degrades to done_status), so this is a WARN, not an ERROR")
+		}
+		if !strings.Contains(c.Hint, "claiming a merge that never happened") {
+			t.Errorf("the hint must say what goes wrong, got %q", c.Hint)
+		}
+		if failed(checks, false) {
+			t.Error("a warning must not fail the command by default")
+		}
+	})
+
+	t.Run("a fully listed profile says nothing", func(t *testing.T) {
+		proj, _ := handoffProject(t, "# playbook\nmeasure-element.py, read-rn-logs.sh\n")
+		if c := findCheck(runExecutorDoctor(proj), "landing status"); c != nil {
+			t.Errorf("unexpected finding: [%s] %s", c.Level.tag(), c.Msg)
+		}
+	})
+}
