@@ -220,10 +220,14 @@ type Model struct {
 	pickerState
 	menuState
 
-	store         storage.TaskStore
-	tasks         []*storage.Task
-	projects      []string
-	statuses      []storage.TaskStatus
+	store    storage.TaskStore
+	tasks    []*storage.Task
+	projects []string
+	statuses []storage.TaskStatus
+	// landing = where the executor parks a verify-green sub in the active tab's
+	// project(s): done_status + done_status_independent, "merged"/"pushed" by
+	// default. Cached by loadStatuses because the render path reads it per frame.
+	landing       []storage.TaskStatus
 	activeProject int // 0 = all, 1+ = specific project
 	activeCol     int
 	cursors       []int

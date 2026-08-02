@@ -2,6 +2,7 @@ package board
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/glamour"
@@ -68,7 +69,7 @@ func (m Model) renderTaskDetail(t *storage.Task) string {
 	out.WriteString(glamourRender(head.String(), contentWidth))
 	// Subtask table (tracker -> children): real bordered rows, press p to pick.
 	if kids := m.taskChildren(t); len(kids) > 0 {
-		out.WriteString(renderSubtaskTable(kids, contentWidth))
+		out.WriteString(renderSubtaskTable(kids, contentWidth, m.landing))
 		out.WriteString("\n")
 	}
 	// Executor run dashboard (live or last run), for a tracker or standalone task.
@@ -139,10 +140,12 @@ func glamourRender(md string, contentWidth int) string {
 
 // renderSubtaskTable renders a tracker's children as a bordered table with a
 // horizontal rule between every row and titles wrapped to at most two lines.
-func renderSubtaskTable(kids []*storage.Task, width int) string {
+// landing = the project's executor landing statuses; a child sitting on one of
+// them counts towards the header's N/M, same rule as the card badge.
+func renderSubtaskTable(kids []*storage.Task, width int, landing []storage.TaskStatus) string {
 	done := 0
 	for _, k := range kids {
-		if k.Meta.Status == storage.StatusDone || k.Meta.Status == storage.StatusMerged {
+		if k.Meta.Status == storage.StatusDone || slices.Contains(landing, k.Meta.Status) {
 			done++
 		}
 	}

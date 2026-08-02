@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,25 +79,30 @@ func BriefLine(brief string) string {
 	return ""
 }
 
-// terminalStatus reports whether a task is closed for good. StatusMerged is a
-// per-project status (the epic lifecycle todo -> doing -> merged -> done), so
-// it is matched by name here the same way the board's progress badge does.
-func terminalStatus(s TaskStatus) bool {
+// terminalStatus reports whether a task is closed for good: done/archived, plus
+// the executor's landing statuses for the project the tasks came from (passed in
+// by the caller as extra - see Store.GetLandingStatuses).
+//
+// StatusMerged is in the base set because it is the built-in default
+// done_status, so it stays terminal for a caller that has no project context.
+// It is a DEFAULT, not the rule: a project that renamed done_status supplies its
+// own name through extra, which is exactly what the literal used to prevent.
+func terminalStatus(s TaskStatus, extra []TaskStatus) bool {
 	switch s {
 	case StatusDone, StatusArchived, StatusMerged:
 		return true
 	}
-	return false
+	return slices.Contains(extra, s)
 }
 
 // trackerFinished reports whether a tracker is done being watched: the parent
 // itself is closed AND every child reached a terminal status.
-func trackerFinished(parent *Task, kids []*Task) bool {
-	if !terminalStatus(parent.Meta.Status) {
+func trackerFinished(parent *Task, kids []*Task, extra []TaskStatus) bool {
+	if !terminalStatus(parent.Meta.Status, extra) {
 		return false
 	}
 	for _, k := range kids {
-		if !terminalStatus(k.Meta.Status) {
+		if !terminalStatus(k.Meta.Status, extra) {
 			return false
 		}
 	}
@@ -111,7 +117,12 @@ func trackerFinished(parent *Task, kids []*Task) bool {
 // every tracker itself - they belong under the tracker view). A child whose
 // parent is archived or missing (an orphan) is never suppressed, so it falls
 // back to the flat list like an ordinary task instead of disappearing.
-func BuildTrackers(tasks []*Task) ([]Tracker, map[string]bool) {
+//
+// extraTerminal names the project's executor landing statuses (see
+// terminalStatus). It is variadic because most callers - and every test that
+// only cares about grouping - have no project context; the ones that decide
+// whether a tracker is finished pass Store.GetLandingStatuses(slug).
+func BuildTrackers(tasks []*Task, extraTerminal ...TaskStatus) ([]Tracker, map[string]bool) {
 	byID := make(map[string]*Task, len(tasks))
 	for _, t := range tasks {
 		byID[t.Meta.ID] = t
@@ -171,7 +182,7 @@ func BuildTrackers(tasks []*Task) ([]Tracker, map[string]bool) {
 		// makes their child lists the one part of the rollup that grows without
 		// bound. Anything still open (e.g. a waiting child under a closed
 		// parent) keeps the full list.
-		if trackerFinished(t, kids) {
+		if trackerFinished(t, kids, extraTerminal) {
 			tr.Children = nil
 			tr.ChildrenOmitted = true
 		}

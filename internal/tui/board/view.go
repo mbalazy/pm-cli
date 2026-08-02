@@ -287,6 +287,8 @@ func statusGlyph(status storage.TaskStatus) string {
 		return "✅"
 	case storage.StatusMerged:
 		return "🔀"
+	case storage.StatusPushed:
+		return "📤"
 	case storage.StatusDoing:
 		return "🔨"
 	case storage.StatusWaiting:

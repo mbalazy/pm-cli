@@ -141,13 +141,35 @@ func (m Model) nextVisibleProject(dir int) int {
 	return 0
 }
 
+// loadStatuses refreshes both status sets for the active tab: the columns, and
+// the executor's landing statuses (where a verify-green sub lands - "merged"
+// and "pushed" by default, but project-configurable). The landing set is cached
+// here rather than resolved on demand because the render path asks for it every
+// frame and resolving it re-reads project.yaml (every project's, on the ALL tab).
 func (m *Model) loadStatuses() {
 	if m.activeProject == 0 {
 		m.statuses = m.store.GetAllStatuses()
+		m.landing = m.store.GetAllLandingStatuses()
 	} else {
 		slug := m.projects[m.activeProject]
 		m.statuses = m.store.GetProjectStatuses(slug)
+		m.landing = m.store.GetLandingStatuses(slug)
 	}
+}
+
+// completeCount counts the children a tracker is DONE with as far as the
+// executor is concerned: closed by a human (done) or landed by a run (the
+// project's landing statuses). Shared by the card badge and the detail table so
+// the two can never disagree.
+func (m Model) completeCount(progress map[string]int) int {
+	n := progress[string(storage.StatusDone)]
+	for _, s := range m.landing {
+		if s == storage.StatusDone {
+			continue
+		}
+		n += progress[string(s)]
+	}
+	return n
 }
 
 // reload is the canonical refresh: ONE store read pass (GetAllTasks) feeds
@@ -367,14 +389,14 @@ func (m Model) selectedTask() *storage.Task {
 	return tasks[idx]
 }
 
-// trackerBadges returns a "▸done+merged/total" progress badge keyed by tracker
+// trackerBadges returns a "▸complete/total" progress badge keyed by tracker
 // task ID (a parent that has children). Used to mark parent cards on the board.
+// Complete = done + the project's executor landing statuses (see completeCount).
 func (m Model) trackerBadges() map[string]string {
-	trackers, _ := storage.BuildTrackers(m.tasks)
+	trackers, _ := storage.BuildTrackers(m.tasks, m.landing...)
 	out := make(map[string]string, len(trackers))
 	for _, tr := range trackers {
-		complete := tr.Progress[string(storage.StatusDone)] + tr.Progress[string(storage.StatusMerged)]
-		out[tr.ID] = fmt.Sprintf("▸%d/%d", complete, tr.Total)
+		out[tr.ID] = fmt.Sprintf("▸%d/%d", m.completeCount(tr.Progress), tr.Total)
 	}
 	return out
 }
