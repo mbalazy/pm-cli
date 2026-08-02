@@ -30,7 +30,7 @@ func epicFixture(t *testing.T, exc *storage.Executor) (*storage.Store, string) {
 	t.Helper()
 	store := &storage.Store{Root: t.TempDir()}
 	repo := t.TempDir()
-	gitT(t, repo, "init", "-q")
+	gitInitRepo(t, repo)
 	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644); err != nil {
 		t.Fatal(err)
 	}

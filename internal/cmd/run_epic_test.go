@@ -556,7 +556,7 @@ func TestIsGitRepoOnPlainDir(t *testing.T) {
 // development-only commit in its diff.
 func TestOpenEpicPRUsesResolvedBase(t *testing.T) {
 	repo := t.TempDir()
-	gitT(t, repo, "init", "-q")
+	gitInitRepo(t, repo)
 	gitT(t, repo, "checkout", "-q", "-b", "development")
 	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("base\n"), 0644); err != nil {
 		t.Fatal(err)

@@ -14,18 +14,10 @@ import (
 // + lock, then release. Uses a real git repo, no claude.
 func TestPrepareWorktree(t *testing.T) {
 	repo := t.TempDir()
-	gitRun := func(args ...string) {
-		c := exec.Command("git", append([]string{"-C", repo}, args...)...)
-		c.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
-		if out, err := c.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	gitRun("init", "-q")
+	gitInitRepo(t, repo)
 	os.WriteFile(filepath.Join(repo, "README.md"), []byte("hi\n"), 0644)
-	gitRun("add", "README.md")
-	gitRun("commit", "-q", "-m", "init")
+	gitT(t, repo, "add", "README.md")
+	gitT(t, repo, "commit", "-q", "-m", "init")
 	// A gitignored config that must be seeded into the worktree.
 	os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".env\n"), 0644)
 	os.WriteFile(filepath.Join(repo, ".env"), []byte("PORT=8090\n"), 0600)
@@ -75,7 +67,7 @@ func TestPlanWorkAdditionalGating(t *testing.T) {
 	root := t.TempDir()
 	store := &storage.Store{Root: root}
 	repo := t.TempDir()
-	gitT(t, repo, "init", "-q")
+	gitInitRepo(t, repo)
 	gitT(t, repo, "checkout", "-q", "-b", "development")
 	os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
 	gitT(t, repo, "add", ".")
@@ -200,7 +192,7 @@ func TestPlanWorkRejectsEmptyResolvedBase(t *testing.T) {
 	root := t.TempDir()
 	store := &storage.Store{Root: root}
 	repo := t.TempDir()
-	gitT(t, repo, "init", "-q")
+	gitInitRepo(t, repo)
 	gitT(t, repo, "checkout", "-q", "-b", "development")
 	os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
 	gitT(t, repo, "add", ".")
@@ -244,7 +236,7 @@ func TestPlanWorkEpicSubIgnoresUnresolvableMainCheckoutBase(t *testing.T) {
 	root := t.TempDir()
 	store := &storage.Store{Root: root}
 	repo := t.TempDir()
-	gitT(t, repo, "init", "-q")
+	gitInitRepo(t, repo)
 	gitT(t, repo, "checkout", "-q", "-b", "development")
 	os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
 	gitT(t, repo, "add", ".")
@@ -356,7 +348,7 @@ executor:
 func TestAcquireWorktreeSlot(t *testing.T) {
 	newRepo := func(t *testing.T) *storage.Project {
 		repo := t.TempDir()
-		gitT(t, repo, "init", "-q")
+		gitInitRepo(t, repo)
 		os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
 		gitT(t, repo, "add", ".")
 		gitT(t, repo, "commit", "-q", "-m", "init")

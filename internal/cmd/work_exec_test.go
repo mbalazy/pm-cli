@@ -33,7 +33,7 @@ func executorFixture(t *testing.T) (*storage.Store, *storage.Task, *workPlan, wo
 	t.Helper()
 	store := &storage.Store{Root: t.TempDir()}
 	repo := t.TempDir()
-	gitT(t, repo, "init", "-q")
+	gitInitRepo(t, repo)
 	os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
 	gitT(t, repo, "add", ".")
 	gitT(t, repo, "commit", "-q", "-m", "init")

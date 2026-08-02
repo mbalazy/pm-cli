@@ -10,7 +10,9 @@ import (
 	"github.com/mbalazy/pm/internal/storage"
 )
 
-// gitT runs a git command in dir, failing the test on error.
+// gitT runs a git command in dir, failing the test on error. The identity is
+// injected per-command, which covers gitT's OWN commits but nothing else - see
+// gitInitRepo for why that is not enough.
 func gitT(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	c := exec.Command("git", append([]string{"-C", dir}, args...)...)
@@ -19,6 +21,27 @@ func gitT(t *testing.T, dir string, args ...string) {
 	if out, err := c.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
+}
+
+// gitInitRepo creates a fixture repo and writes the test identity into the
+// repo's OWN config. Use it instead of a bare `gitInitRepo(t, dir)`.
+//
+// gitT's environment reaches only the commands gitT itself runs. Most commits
+// in a fixture repo are made by somebody else: the code under test shelling out
+// to git, or the fake `claude` worker's script. Those inherit the TEST PROCESS
+// environment, where the identity comes from the developer's global gitconfig -
+// which a CI runner does not have. There git derives one from the OS account,
+// whose name field is empty, and refuses: "fatal: empty ident name not allowed".
+//
+// The failure mode is silent and CI-only: the commit never happens, and only a
+// test that ASSERTS on that commit goes red - on the runner, never on a laptop.
+// Repo-level config is what travels with the directory into every subprocess,
+// so it is the only fix that covers all three writers.
+func gitInitRepo(t *testing.T, dir string) {
+	t.Helper()
+	gitT(t, dir, "init", "-q")
+	gitT(t, dir, "config", "user.email", "t@t")
+	gitT(t, dir, "config", "user.name", "t")
 }
 
 // fakeGitFailing installs a fake `git` at the front of PATH that fails with
@@ -55,7 +78,7 @@ func fakeGitFailing(t *testing.T, failSuffix, stderr string) {
 // deps/configs (node_modules, .env).
 func TestGitFreshBranchOnReusedWorktree(t *testing.T) {
 	repo := t.TempDir()
-	gitT(t, repo, "init", "-q")
+	gitInitRepo(t, repo)
 	gitT(t, repo, "checkout", "-q", "-b", "development")
 	if err := os.WriteFile(filepath.Join(repo, "app.txt"), []byte("v1\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -119,7 +142,7 @@ func TestGitFreshBranchOnReusedWorktree(t *testing.T) {
 // keeps committed history and ignored files, without switching branches.
 func TestGitCleanWorktreePreservesCommitsAndIgnored(t *testing.T) {
 	repo := t.TempDir()
-	gitT(t, repo, "init", "-q")
+	gitInitRepo(t, repo)
 	gitT(t, repo, "checkout", "-q", "-b", "epic/x")
 	os.WriteFile(filepath.Join(repo, "a.txt"), []byte("committed\n"), 0644)
 	os.WriteFile(filepath.Join(repo, ".gitignore"), []byte(".env\n"), 0644)
@@ -155,7 +178,7 @@ func TestGitCleanWorktreePreservesCommitsAndIgnored(t *testing.T) {
 // without a remote reports that instead of failing the run.
 func TestGitAheadCountAndPushIfAhead(t *testing.T) {
 	repo := t.TempDir()
-	gitT(t, repo, "init", "-q")
+	gitInitRepo(t, repo)
 	gitT(t, repo, "checkout", "-q", "-b", "development")
 	os.WriteFile(filepath.Join(repo, "a.txt"), []byte("base\n"), 0644)
 	gitT(t, repo, "add", ".")
@@ -213,7 +236,7 @@ func TestGitAheadCountAndPushIfAhead(t *testing.T) {
 func TestGitThinWrappersSurfaceStderr(t *testing.T) {
 	t.Run("gitCheckoutBranch: invalid branch name", func(t *testing.T) {
 		repo := t.TempDir()
-		gitT(t, repo, "init", "-q")
+		gitInitRepo(t, repo)
 		gitT(t, repo, "checkout", "-q", "-b", "main")
 		os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
 		gitT(t, repo, "add", ".")
@@ -230,7 +253,7 @@ func TestGitThinWrappersSurfaceStderr(t *testing.T) {
 
 	t.Run("gitEnsureBranch: checkout blocked by conflicting local changes", func(t *testing.T) {
 		repo := t.TempDir()
-		gitT(t, repo, "init", "-q")
+		gitInitRepo(t, repo)
 		gitT(t, repo, "checkout", "-q", "-b", "main")
 		os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
 		gitT(t, repo, "add", ".")
@@ -252,7 +275,7 @@ func TestGitThinWrappersSurfaceStderr(t *testing.T) {
 
 	t.Run("gitDeleteBranch: branch not fully merged", func(t *testing.T) {
 		repo := t.TempDir()
-		gitT(t, repo, "init", "-q")
+		gitInitRepo(t, repo)
 		gitT(t, repo, "checkout", "-q", "-b", "main")
 		os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
 		gitT(t, repo, "add", ".")
@@ -282,7 +305,7 @@ func TestGitThinWrappersSurfaceStderr(t *testing.T) {
 // protect uncommitted work from a branch switch.
 func TestRequireCleanWorkingTreePropagatesStatusError(t *testing.T) {
 	repo := t.TempDir()
-	gitT(t, repo, "init", "-q")
+	gitInitRepo(t, repo)
 	gitT(t, repo, "checkout", "-q", "-b", "main")
 	os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
 	gitT(t, repo, "add", ".")
@@ -298,7 +321,7 @@ func TestRequireCleanWorkingTreePropagatesStatusError(t *testing.T) {
 // cases, kept alongside the error-propagation test above for contrast.
 func TestRequireCleanWorkingTreeCleanAndDirty(t *testing.T) {
 	repo := t.TempDir()
-	gitT(t, repo, "init", "-q")
+	gitInitRepo(t, repo)
 	gitT(t, repo, "checkout", "-q", "-b", "main")
 	os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644)
 	gitT(t, repo, "add", ".")
