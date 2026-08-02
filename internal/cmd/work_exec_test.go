@@ -58,15 +58,15 @@ func executorFixture(t *testing.T) (*storage.Store, *storage.Task, *workPlan, wo
 	return store, task, plan, opts
 }
 
-func TestExecuteWorkMergedRecordsEverything(t *testing.T) {
-	fakeClaude(t, "echo '"+envelope("merged", "implemented + verified")+"'")
+func TestExecuteWorkVerifiedRecordsEverything(t *testing.T) {
+	fakeClaude(t, "echo '"+envelope(workerVerified, "implemented + verified")+"'")
 	store, task, plan, opts := executorFixture(t)
 
 	res, err := executeWork(store, task, plan, opts)
 	if err != nil {
 		t.Fatalf("executeWork: %v", err)
 	}
-	if res.Status != "merged" || res.Turns != 3 || res.CostUSD != 0.25 {
+	if res.Status != workerVerified || res.Turns != 3 || res.CostUSD != 0.25 {
 		t.Fatalf("result not lifted from envelope: %+v", res)
 	}
 
@@ -78,7 +78,7 @@ func TestExecuteWorkMergedRecordsEverything(t *testing.T) {
 		t.Fatalf("worker session not attached: %v", final.Meta.Sessions)
 	}
 	if final.Meta.Status != storage.StatusDoing {
-		t.Fatalf("merged must NEVER auto-move the task (autonomy envelope), got %s", final.Meta.Status)
+		t.Fatalf("a verified worker must NEVER auto-move the task (autonomy envelope), got %s", final.Meta.Status)
 	}
 
 	run, err := storage.ReadRunState(store.ProjectDir("app"), "app-1")
@@ -152,7 +152,7 @@ func TestExecuteWorkWorkerCrashRecordsFailure(t *testing.T) {
 // fresh re-read inside applyWorkerResult picks it up, and the final
 // store.WriteTask rejects it via storage.ValidateMode.
 func TestExecuteWorkApplyResultErrorStillJournalsEnd(t *testing.T) {
-	fakeClaude(t, "echo '"+envelope("merged", "implemented + verified")+"'")
+	fakeClaude(t, "echo '"+envelope(workerVerified, "implemented + verified")+"'")
 	store, task, plan, opts := executorFixture(t)
 
 	raw, err := os.ReadFile(task.FilePath)

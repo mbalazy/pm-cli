@@ -203,7 +203,7 @@ func TestRunWorkerOrphanHoldingStdoutDoesNotHang(t *testing.T) {
 	// Worker finishes cleanly but leaves a background process on the inherited
 	// stdout: Wait must be bounded by WaitDelay rather than by that process, and
 	// the completed run's envelope must survive.
-	fakeClaude(t, spawnGrandchild(grandchild)+"echo '"+envelope("merged", "done")+"'\n")
+	fakeClaude(t, spawnGrandchild(grandchild)+"echo '"+envelope(workerVerified, "done")+"'\n")
 
 	var res *workerResult
 	var err error
@@ -217,7 +217,7 @@ func TestRunWorkerOrphanHoldingStdoutDoesNotHang(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a finished worker's result must survive its background leftovers: %v", err)
 	}
-	if res == nil || res.Status != "merged" {
+	if res == nil || res.Status != workerVerified {
 		t.Fatalf("result not parsed: %+v", res)
 	}
 	f.requireGone(pid, "the orphan holding stdout")

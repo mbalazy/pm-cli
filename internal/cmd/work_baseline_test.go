@@ -115,7 +115,7 @@ func TestExecuteWorkInjectsCapturedBaseline(t *testing.T) {
 
 	promptFile := filepath.Join(t.TempDir(), "prompt.txt")
 	fakeClaude(t, `printf '%s' "$2" > `+promptFile+`
-echo '`+envelope("merged", "done")+`'`)
+echo '`+envelope(workerVerified, "done")+`'`)
 
 	opts := workOptions{standalone: true, model: "opus", maxTurns: 10, timeout: 30 * 1e9}
 	plan, err := planWork(store, task, "app", opts)
@@ -137,7 +137,7 @@ echo '`+envelope("merged", "done")+`'`)
 
 func TestExecuteWorkJournalsBaselineUsage(t *testing.T) {
 	store, task := baselineFixture(t, "true")
-	fakeClaude(t, "echo '"+envelope("merged", "done")+"'")
+	fakeClaude(t, "echo '"+envelope(workerVerified, "done")+"'")
 
 	opts := workOptions{standalone: true, model: "opus", maxTurns: 10, timeout: 30 * 1e9}
 	plan, err := planWork(store, task, "app", opts)

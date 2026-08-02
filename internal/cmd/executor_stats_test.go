@@ -797,7 +797,7 @@ func TestRenderJournalStats(t *testing.T) {
 
 	// The sub histogram prints the whole vocabulary, in subResultOrder, zeros
 	// included - one contiguous block, so this pins the render's ordering.
-	subBlock := "merged    1\n  blocked   0\n  failed    0\n  conflict  0\n  skipped   1  (gate)\n  manual    0  (gate)\n"
+	subBlock := "verified  0\n  merged    1\n  pushed    0\n  blocked   0\n  failed    0\n  conflict  0\n  skipped   1  (gate)\n  manual    0  (gate)\n"
 	if !strings.Contains(out, subBlock) {
 		t.Errorf("sub histogram block missing or misordered, want:\n%s\n---got---\n%s", subBlock, out)
 	}

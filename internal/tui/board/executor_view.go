@@ -387,7 +387,7 @@ func execSubGlyph(status string) string {
 	switch status {
 	case storage.RunStatusRunning:
 		return "▶"
-	case "merged", "done":
+	case "merged", "pushed", "verified", "done":
 		return "✓"
 	case "blocked", "failed", "conflict":
 		return "✗"

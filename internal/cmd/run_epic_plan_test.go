@@ -374,3 +374,60 @@ func TestRecordSubFeedbackRefusesToResurrectADeletedParent(t *testing.T) {
 		t.Fatalf("the deleted parent file is back at %s (err=%v)", filePath, statErr)
 	}
 }
+
+// The green sub lands where the manager's own action puts it: merged into the
+// epic branch, or pushed on its own branch. The fallback exists so upgrading pm
+// never refuses a batch on a project whose statuses predate "pushed".
+func TestResolveEpicDoneStatus(t *testing.T) {
+	statuses := func(ss ...string) []storage.TaskStatus {
+		out := make([]storage.TaskStatus, len(ss))
+		for i, s := range ss {
+			out[i] = storage.TaskStatus(s)
+		}
+		return out
+	}
+	base := func() storage.Executor {
+		return storage.Executor{DoneStatus: "merged"}
+	}
+
+	t.Run("integration mode uses done_status", func(t *testing.T) {
+		got, note := resolveEpicDoneStatus(base(), false, statuses("todo", "doing", "merged", "done"))
+		if got != "merged" || note != "" {
+			t.Errorf("got (%q, %q), want (merged, no note)", got, note)
+		}
+	})
+
+	t.Run("independent mode defaults to pushed when the project lists it", func(t *testing.T) {
+		got, note := resolveEpicDoneStatus(base(), true, statuses("todo", "doing", "merged", "pushed", "done"))
+		if got != "pushed" || note != "" {
+			t.Errorf("got (%q, %q), want (pushed, no note)", got, note)
+		}
+	})
+
+	t.Run("unlisted default degrades to done_status with a note", func(t *testing.T) {
+		got, note := resolveEpicDoneStatus(base(), true, statuses("todo", "doing", "merged", "done"))
+		if got != "merged" {
+			t.Errorf("got %q, want the merged fallback so the run still works", got)
+		}
+		if !strings.Contains(note, "pushed") || !strings.Contains(note, "statuses") {
+			t.Errorf("the degrade must say what to add and why, got %q", note)
+		}
+	})
+
+	t.Run("explicit unlisted status is left for the gate to reject", func(t *testing.T) {
+		exc := base()
+		exc.DoneStatusIndependent = "reviewd" // typo in project.yaml
+		got, note := resolveEpicDoneStatus(exc, true, statuses("todo", "doing", "merged", "done"))
+		if got != "reviewd" || note != "" {
+			t.Errorf("got (%q, %q) - a configured status must reach the gate verbatim, not silently fall back", got, note)
+		}
+	})
+
+	t.Run("neither usable: report the real independent status", func(t *testing.T) {
+		exc := storage.Executor{DoneStatus: "landed"}
+		got, note := resolveEpicDoneStatus(exc, true, statuses("todo", "doing", "done"))
+		if got != "pushed" || note != "" {
+			t.Errorf("got (%q, %q), want (pushed, no note) so the gate names the status the run actually wanted", got, note)
+		}
+	})
+}
