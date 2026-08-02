@@ -128,7 +128,7 @@ func (e Executor) IndependentDoneStatus() (status string, explicit bool) {
 // verify-green sub to: the integration one and the independent one. This is the
 // answer to "is this task finished as far as the executor is concerned" -
 // consumers must ask for it instead of testing against the literal "merged",
-// which is only the DEFAULT of one of the two knobs (pm-cli-77).
+// which is only the DEFAULT of one of the two knobs (pm-cli-82).
 func (e Executor) LandingStatuses() []TaskStatus {
 	indep, _ := e.IndependentDoneStatus()
 	var out []TaskStatus
