@@ -153,9 +153,16 @@ func (m Model) updateLinksMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case key.Matches(msg, common.Keys.Enter):
 		if m.linksCursor < len(m.linkItems) {
-			// Run() (not Start()) so the process is reaped instead of leaking
-			// a zombie per open link - "open" returns almost immediately.
-			_ = exec.Command("open", m.linkItems[m.linksCursor].url).Run()
+			// Start(), not Run(): Run() blocks the bubbletea event loop until
+			// LaunchServices returns, which is a visible stall. A background
+			// Wait() still reaps the child once it exits so it never lingers as
+			// a zombie - Start() alone only avoids blocking, not reaping.
+			c := exec.Command("open", m.linkItems[m.linksCursor].url)
+			if err := c.Start(); err != nil {
+				m.showErrorToast("open link failed", err)
+			} else {
+				go func() { _ = c.Wait() }()
+			}
 		}
 		if len(m.linkItems) <= 1 {
 			m.linksMenu = false

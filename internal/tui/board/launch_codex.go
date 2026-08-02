@@ -139,7 +139,10 @@ func (m Model) launchCodex(kind string) (tea.Model, tea.Cmd) {
 			return ""
 		}
 		wtName := worktreeName(t)
-		copyWorktreeFiles(projDir, wtName)
+		// Error ignored deliberately (unlike the launchClaude worktree paths,
+		// out of this task's scope): a failed copy leaves wtPath absent, and the
+		// os.Stat check below already falls back to the plain project dir.
+		_ = copyWorktreeFiles(projDir, wtName)
 		wtPath := filepath.Join(projDir, ".claude", "worktrees", wtName)
 		if info, err := os.Stat(wtPath); err == nil && info.IsDir() {
 			return wtPath

@@ -73,6 +73,10 @@ func (m Model) launchProjectClaude(kind string) (tea.Model, tea.Cmd) {
 
 	proj, err := m.store.GetProject(slug)
 	if err != nil || proj == nil {
+		if err == nil {
+			err = fmt.Errorf("project %q not found", slug)
+		}
+		m.showErrorToast("launch failed", err)
 		return m, nil
 	}
 
@@ -273,7 +277,10 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 		wtName := worktreeName(t)
 		if projDir != "" {
-			copyWorktreeFiles(projDir, wtName)
+			if err := copyWorktreeFiles(projDir, wtName); err != nil {
+				m.showErrorToast("worktree setup failed", err)
+				return m, nil
+			}
 		}
 		claim := m.pickWorktreeSlot(proj, t.Project, sessionID)
 		args := claudeWorktreeArgs(wtName, sessionID, skipFlag, prompt)
@@ -301,7 +308,10 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 		wtName := worktreeName(t)
 		if projDir != "" {
-			copyWorktreeFiles(projDir, wtName)
+			if err := copyWorktreeFiles(projDir, wtName); err != nil {
+				m.showErrorToast("worktree setup failed", err)
+				return m, nil
+			}
 		}
 		claim := m.pickWorktreeSlot(proj, t.Project, sessionID)
 		// Lock write goes between `cd` and the env-prefixed claude command;

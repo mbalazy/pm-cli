@@ -325,11 +325,16 @@ func (m Model) updateFocus(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil {
 			m.focusPlan.Remove(t.Meta.ID)
 			m.focusPlan.Date = storage.Today()
-			m.saveFocusPlan()
+			saved := m.saveFocusPlan()
 			m.rebuildFocusSet()
 			m.fixFocusCursor()
-			m.toastMsg = "Removed from focus"
-			m.toastExpiry = time.Now().Add(2 * time.Second)
+			// Only on a successful save - otherwise this clobbers the error
+			// toast saveFocusPlan just set with a misleading "Removed" success
+			// message and a shortened 2s expiry.
+			if saved {
+				m.toastMsg = "Removed from focus"
+				m.toastExpiry = time.Now().Add(2 * time.Second)
+			}
 		}
 
 	case key.Matches(msg, common.Keys.ReorderDown):

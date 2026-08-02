@@ -31,8 +31,19 @@ func (m *Model) loadFocusPlan() bool {
 	return true
 }
 
-func (m *Model) saveFocusPlan() {
-	storage.WriteFocusPlan(m.store.RootDir(), m.focusPlan)
+// saveFocusPlan persists the plan and toasts on a write failure - mirrors
+// loadFocusPlan's toast on a READ failure. Without this, a failed write
+// silently reverts the user's reorder/hide on the next reload(). Reports
+// whether the save succeeded so a caller that follows up with its own
+// success toast can skip it - otherwise the unconditional success toast
+// (2s/4s expiry) clobbers the error toast this function just set (15s
+// expiry, sometimes the message text too) in the very same synchronous call.
+func (m *Model) saveFocusPlan() bool {
+	if err := storage.WriteFocusPlan(m.store.RootDir(), m.focusPlan); err != nil {
+		m.showErrorToast("focus plan", err)
+		return false
+	}
+	return true
 }
 
 func (m *Model) handleStalePlan() {
@@ -43,9 +54,9 @@ func (m *Model) handleStalePlan() {
 	m.focusPlan.Cleanup(allTasks)
 	n := len(m.focusPlan.Tasks)
 	m.focusPlan.Date = storage.Today()
-	m.saveFocusPlan()
+	saved := m.saveFocusPlan()
 	m.rebuildFocusSet()
-	if n > 0 {
+	if saved && n > 0 {
 		m.toastMsg = fmt.Sprintf("Focus carried over from yesterday (%d tasks)", n)
 		m.toastExpiry = time.Now().Add(4 * time.Second)
 	}

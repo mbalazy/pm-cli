@@ -36,9 +36,15 @@ func openEditor(path string) tea.Cmd {
 		editor = "nvim"
 	}
 	c := exec.Command(editor, path)
-	return tea.ExecProcess(c, func(err error) tea.Msg {
-		return reloadMsg{}
-	})
+	return tea.ExecProcess(c, editorFinished)
+}
+
+// editorFinished is openEditor's tea.ExecProcess callback, named rather than
+// inline so the error can actually be asserted on: tea.ExecProcess hands back
+// an unexported message type, so an inline closure is unreachable from a test
+// and a regression to the old `return reloadMsg{}` passes the whole suite.
+func editorFinished(err error) tea.Msg {
+	return editorResultMsg{err: err}
 }
 
 func shortenPath(path string) string {

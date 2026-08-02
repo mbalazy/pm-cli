@@ -121,10 +121,12 @@ func (m *Model) saveTUIState() {
 		}
 	}
 	sort.Strings(hidden)
-	saveTUIConfig(m.store.RootDir(), tuiConfig{
+	if err := saveTUIConfig(m.store.RootDir(), tuiConfig{
 		HiddenProjects: hidden,
 		ProjectOrder:   m.projects[1:], // skip "all"
-	})
+	}); err != nil {
+		m.showErrorToast("save project order/hidden state failed", err)
+	}
 }
 
 // updateProjectPicker owns the keyboard while the project picker is up. The
