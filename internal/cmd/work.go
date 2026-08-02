@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -83,7 +84,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
-			task, slug, err := resolveWorkTask(store, args)
+			task, slug, err := resolveWorkTask(store, args, "work")
 			if err != nil {
 				return err
 			}
@@ -183,8 +184,10 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 
 // resolveWorkTask resolves the project slug + task from the command args.
 // One arg: task id, project auto-detected from cwd or by scanning. Two args:
-// explicit project + task.
-func resolveWorkTask(store storage.TaskStore, args []string) (*storage.Task, string, error) {
+// explicit project + task. cmdName is the invoking command ("work",
+// "run-epic") - it only shapes the error text, so a `pm run-epic` miss does
+// not tell the user to retry with `pm work`.
+func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*storage.Task, string, error) {
 	if len(args) == 2 {
 		slug, err := store.ResolveProject(args[0])
 		if err != nil {
@@ -198,23 +201,136 @@ func resolveWorkTask(store storage.TaskStore, args []string) (*storage.Task, str
 	}
 
 	query := args[0]
-	// Prefer the project of the current directory.
-	if slug := detectProjectFromCwd(store); slug != "" {
-		if t, err := store.FindTask(slug, query); err == nil {
-			return t, slug, nil
-		}
-	}
-	// Fall back to scanning every project for the task id.
-	projects, err := store.ListProjects()
+	// The project of the current directory is a PREFERENCE, applied inside a
+	// tier (below), not a short-circuit. It used to run FindTask on the cwd
+	// project first and return whatever came back - so a TITLE mention in the
+	// repo you happen to stand in beat another project's EXACT id: run
+	// `pm work pm-cli-18` from a repo holding "Port pm-cli-18 learnings" and
+	// the 60-minute worker committed there. Standing somewhere breaks a tie;
+	// it does not outrank a stronger match.
+	cwdSlug := detectProjectFromCwd(store)
+
+	// Scan every project. FindTask also matches on TITLE
+	// SUBSTRING, so a short query ("auth") can hit several projects - and
+	// first-hit-wins in sorted ListProjects order silently picked one, which
+	// here means spawning a 60-minute worker that commits in the WRONG repo.
+	//
+	// The scan keeps FindTask's OWN three-tier ranking rather than flattening
+	// it: exact ID, then unique ID prefix, then title substring - each tier
+	// decides alone, and a later tier is consulted only when the earlier one
+	// is empty. Treating the tiers as equals would make `pm work pm-cli-18`
+	// ambiguous merely because some other project has a task TITLED "... test
+	// for pm-cli-18" - which is not ambiguity, it is a weaker match.
+	//
+	// ARCHIVED projects are excluded (GetAllTasks/pm context do the same): a
+	// shelved client repo holding an imported ticket key must not make every
+	// query for that key ambiguous forever. The explicit two-arg form still
+	// reaches them - ResolveProject sees every project.
+	projects, err := store.ListActiveProjects()
 	if err != nil {
 		return nil, "", err
 	}
+	// ...except the one you are standing in: if that project is archived, the
+	// cwd says plainly which one is meant, so excluding it would be perverse.
+	if cwdSlug != "" && !slices.Contains(projects, cwdSlug) {
+		projects = append(projects, cwdSlug)
+	}
+
+	var exact []projectHit
 	for _, slug := range projects {
-		if t, err := store.FindTask(slug, query); err == nil {
-			return t, slug, nil
+		if t, err := store.FindTaskExact(slug, query); err == nil {
+			exact = append(exact, projectHit{task: t, slug: slug, label: slug + "/" + t.Meta.ID})
 		}
 	}
-	return nil, "", fmt.Errorf("task %q not found in any project (try `pm work <project> <task-id>`)", query)
+	if len(exact) > 0 {
+		return resolveHits(exact, cwdSlug, query, cmdName)
+	}
+
+	// Tier 2: ID prefix. Mirrors FindTask's middle tier (internal/storage/
+	// store.go) - several hits INSIDE one project make that project ambiguous
+	// rather than silently dropping out of the scan.
+	var byIDPrefix []projectHit
+	for _, slug := range projects {
+		tasks, err := store.GetTasks(slug)
+		if err != nil {
+			continue
+		}
+		var hits []*storage.Task
+		for _, t := range tasks {
+			if strings.HasPrefix(strings.ToLower(t.Meta.ID), strings.ToLower(query)) {
+				hits = append(hits, t)
+			}
+		}
+		switch len(hits) {
+		case 0:
+		case 1:
+			byIDPrefix = append(byIDPrefix, projectHit{task: hits[0], slug: slug, label: slug + "/" + hits[0].Meta.ID})
+		default:
+			byIDPrefix = append(byIDPrefix, projectHit{slug: slug, label: slug + "/<several>"})
+		}
+	}
+	if len(byIDPrefix) > 0 {
+		return resolveHits(byIDPrefix, cwdSlug, query, cmdName)
+	}
+
+	var fuzzy []projectHit
+	for _, slug := range projects {
+		t, err := store.FindTask(slug, query)
+		switch {
+		case err == nil:
+			fuzzy = append(fuzzy, projectHit{task: t, slug: slug, label: slug + "/" + t.Meta.ID})
+		case errors.Is(err, storage.ErrAmbiguousTask):
+			// Several candidates INSIDE this project. Without this branch the
+			// project contributes nothing to the scan, so a query that is
+			// ambiguous in alpha and matches one task in beta silently
+			// resolves to beta - first-wins again, by another route.
+			fuzzy = append(fuzzy, projectHit{slug: slug, label: slug + "/<several>"})
+		}
+	}
+	if len(fuzzy) == 0 {
+		return nil, "", fmt.Errorf("task %q not found in any project (try `pm %s <project> <task-id>`)", query, cmdName)
+	}
+	return resolveHits(fuzzy, cwdSlug, query, cmdName)
+}
+
+// projectHit is one project's answer to a cross-project task scan. task is nil
+// when the project held SEVERAL candidates (ambiguous within itself) - such a
+// hit can only ever produce an error, never a resolution.
+type projectHit struct {
+	task  *storage.Task
+	slug  string
+	label string
+}
+
+// resolveHits picks the winner of ONE tier. Several projects matching equally
+// is real ambiguity - except when one of them is the project the user is
+// standing in, which is as explicit a statement of intent as the two-arg form.
+func resolveHits(hits []projectHit, cwdSlug, query, cmdName string) (*storage.Task, string, error) {
+	if len(hits) == 1 && hits[0].task != nil {
+		return hits[0].task, hits[0].slug, nil
+	}
+	for _, h := range hits {
+		if h.slug == cwdSlug && h.task != nil {
+			return h.task, h.slug, nil
+		}
+	}
+	labels := make([]string, len(hits))
+	several := false
+	for i, h := range hits {
+		labels[i] = h.label
+		if h.task == nil {
+			several = true
+		}
+	}
+	// The remedy has to fit the failure: for a query that is ambiguous INSIDE
+	// a project, `pm work <project> <query>` just fails the same way again -
+	// what is needed there is a narrower query, not a project name.
+	remedy := fmt.Sprintf("disambiguate with `pm %s <project> <task-id>`", cmdName)
+	if several {
+		remedy = fmt.Sprintf("use the exact task id, or `pm %s <project> <task-id>` for a project that matched once", cmdName)
+	}
+	return nil, "", fmt.Errorf("ambiguous task %q: matches %s (%s)",
+		query, strings.Join(labels, ", "), remedy)
 }
 
 // resolveWorkBranch returns the branch a worker commits on: the task's explicit

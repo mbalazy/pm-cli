@@ -126,6 +126,52 @@ func ValidateSlug(slug string) error {
 	return nil
 }
 
+// taskIDPattern is slugPattern's shape, deliberately WIDER: a task ID is a
+// path component too (Filename renders "<id>-<title-slug>.md" under the
+// project dir) but, unlike a slug, is not always minted by pm - real data
+// holds legacy numeric IDs ("30422") and imported ticket keys ("ACME-253"), so
+// digits-only and uppercase must both stay legal. Requiring the first
+// character to be alphanumeric is what rejects "." / ".." / "../foo" and any
+// absolute path in one rule; excluding '/' from the body blocks the rest.
+var taskIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// ValidateTaskID checks that a task ID is safe as the leading component of the
+// task's file name. AddTask enforces it on every path an ID reaches it by: the
+// `--id` flag, MCP's `id` param and the board's add prompt (all three take it
+// from OUTSIDE pm) plus NextTaskID/NextChildID, whose "<prefix>-<n>" inherits
+// the project's unvalidated `prefix` field. `pm add demo x --id ../../escaped`
+// used to report success and write the task file two directories above the pm
+// root, where no ReadTasksFromDir would ever find it again.
+//
+// Spaces and non-ASCII are rejected DELIBERATELY, not incidentally: such IDs
+// were technically functional (Filename only concatenates, and the ID is read
+// back from frontmatter, not from the name), but they are quoted into shell
+// commands, branch names and log paths all over the executor, and ValidateSlug
+// - the precedent this mirrors - draws the line in the same place. Widening it
+// later is safe; narrowing it after IDs exist is not.
+func ValidateTaskID(id string) error {
+	if !taskIDPattern.MatchString(id) {
+		return fmt.Errorf("invalid task id %q - must start with a letter or digit and contain only letters, digits, '.', '_' or '-' (no path separators)", id)
+	}
+	return nil
+}
+
+// ValidateProjectPrefix checks a project's `prefix` field, which is the ID
+// SOURCE for every auto-minted task ("<prefix>-<n>" from NextTaskID). It has
+// to pass the same bar as an ID: an unsafe prefix used to produce merely ugly
+// task files, but now that AddTask validates, it would lock the project out of
+// task creation entirely - and every add would fail naming an ID nobody typed.
+// Empty is fine (the slug is used, and slugs are validated on create).
+func ValidateProjectPrefix(prefix string) error {
+	if prefix == "" {
+		return nil
+	}
+	if err := ValidateTaskID(prefix); err != nil {
+		return fmt.Errorf("invalid prefix %q - task ids are minted as \"<prefix>-<n>\", so the prefix must start with a letter or digit and contain only letters, digits, '.', '_' or '-' (no path separators or spaces)", prefix)
+	}
+	return nil
+}
+
 type Task struct {
 	Meta     TaskMeta
 	Body     string

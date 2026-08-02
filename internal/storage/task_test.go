@@ -139,6 +139,147 @@ func TestValidateSlug(t *testing.T) {
 	}
 }
 
+// TestValidateTaskID: the ID is a path component (Filename renders
+// "<id>-<title>.md"), so traversal must be impossible - while every ID shape
+// that exists in real data keeps working (legacy numeric "30422", imported
+// ticket keys "ACME-253", hierarchical sub ids "pm-cli-72-3").
+func TestValidateTaskID(t *testing.T) {
+	for _, ok := range []string{
+		"pm-cli-72-3", "30422", "ACME-253", "a", "1", "app.orbit-1",
+		"full_project-2", "orbit2-16",
+	} {
+		if err := ValidateTaskID(ok); err != nil {
+			t.Errorf("ValidateTaskID(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"", "..", ".", "../foo", "../../escaped", "foo/bar", "/etc/passwd",
+		"foo/../bar", ".hidden", "-foo", "foo bar", "~foo", "a\\b",
+	} {
+		if err := ValidateTaskID(bad); err == nil {
+			t.Errorf("ValidateTaskID(%q) = nil, want error", bad)
+		}
+	}
+}
+
+// TestValidateProjectPrefix: the prefix is the ID source for every auto-minted
+// task, so it has to pass the ID bar - otherwise a project accepts creation
+// and then rejects every single `pm add` on it.
+func TestValidateProjectPrefix(t *testing.T) {
+	for _, ok := range []string{"", "pm-cli", "best", "rc", "a1", "app.le"} {
+		if err := ValidateProjectPrefix(ok); err != nil {
+			t.Errorf("ValidateProjectPrefix(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"My Proj", "../x", "sub/dir", ".hidden", "-lead"} {
+		if err := ValidateProjectPrefix(bad); err == nil {
+			t.Errorf("ValidateProjectPrefix(%q) = nil, want error", bad)
+		}
+	}
+}
+
+// TestCreateProjectRejectsUnsafeSlug pins the check at the STORAGE layer, not
+// only in `pm projects add`: pm_create_project's handler pre-check would
+// otherwise mask a missing guard here, leaving every future caller (a new
+// command, an importer) able to MkdirAll its way out of the pm root.
+func TestCreateProjectRejectsUnsafeSlug(t *testing.T) {
+	root := t.TempDir()
+	s := &Store{Root: filepath.Join(root, "pm")}
+	if err := os.MkdirAll(s.Root, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, slug := range []string{"../outside", "MyProj", "sub/dir", "..", ""} {
+		err := s.CreateProject(slug, &Project{Name: "X"})
+		if err == nil {
+			t.Fatalf("CreateProject(%q) returned nil", slug)
+		}
+		if !strings.Contains(err.Error(), "invalid slug") {
+			t.Errorf("slug %q: want a ValidateSlug error, got: %v", slug, err)
+		}
+	}
+	// Nothing was created inside the pm root...
+	entries, err := os.ReadDir(s.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("rejected creates left %d entr(ies) in the pm root: %v", len(entries), entries[0].Name())
+	}
+	// ...nor next to it, where "../outside" would have landed.
+	entries, err = os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "pm" {
+		t.Fatalf("rejected create escaped the pm root: %v", entries)
+	}
+}
+
+// TestMutateProjectRejectsNewUnsafePrefix: CreateProject guards the prefix on
+// creation, but the partial-edit path must not be able to introduce one later
+// (the same asymmetry argument the slug check makes). A pre-existing bad
+// prefix stays editable - refusing there would make the project unfixable.
+func TestMutateProjectRejectsNewUnsafePrefix(t *testing.T) {
+	s := &Store{Root: t.TempDir()}
+	if err := s.CreateProject("app", &Project{Name: "App", Prefix: "ap"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.MutateProject("app", func(p *Project) error {
+		p.Prefix = "My Proj"
+		return nil
+	}); err == nil {
+		t.Fatal("MutateProject accepted an unsafe prefix")
+	}
+	proj, err := s.GetProject("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proj.Prefix != "ap" {
+		t.Fatalf("rejected mutation still wrote the prefix: %q", proj.Prefix)
+	}
+
+	// A project that ALREADY carries a bad prefix stays editable elsewhere.
+	dir := s.ProjectDir("legacy")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteProject(s.ProjectYAML("legacy"), &Project{Name: "Legacy", Prefix: "My Proj"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MutateProject("legacy", func(p *Project) error {
+		p.Notes = "still editable"
+		return nil
+	}); err != nil {
+		t.Fatalf("an untouched legacy prefix must not block other edits: %v", err)
+	}
+}
+
+// TestCreateProjectRejectsUnsafePrefix: rejected at creation, so the lockout
+// (project exists, no task can ever be added to it) cannot be created at all.
+func TestCreateProjectRejectsUnsafePrefix(t *testing.T) {
+	s := &Store{Root: t.TempDir()}
+	err := s.CreateProject("acme", &Project{Name: "Acme", Prefix: "Acme Corp"})
+	if err == nil {
+		t.Fatal("an unsafe prefix was accepted at create")
+	}
+	if !strings.Contains(err.Error(), "invalid prefix") {
+		t.Errorf("want an invalid-prefix error, got: %v", err)
+	}
+	if _, statErr := os.Stat(s.ProjectYAML("acme")); !os.IsNotExist(statErr) {
+		t.Errorf("rejected create still wrote project.yaml (stat err = %v)", statErr)
+	}
+
+	// The valid case is untouched, including an empty prefix (slug is used).
+	if err := s.CreateProject("acme", &Project{Name: "Acme", Prefix: "ac"}); err != nil {
+		t.Fatalf("valid prefix rejected: %v", err)
+	}
+	if err := s.CreateProject("plain", &Project{Name: "Plain"}); err != nil {
+		t.Fatalf("empty prefix rejected: %v", err)
+	}
+}
+
 func TestValidateStatus(t *testing.T) {
 	allowed := []TaskStatus{StatusTodo, StatusDoing, StatusDone}
 

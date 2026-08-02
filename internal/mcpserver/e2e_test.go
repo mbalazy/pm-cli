@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -267,6 +268,105 @@ func TestE2EInvalidStatusRejected(t *testing.T) {
 
 	if text, isErr = call(t, sess, "pm_move_task", map[string]any{"project": "test", "task_id": "t-1", "new_status": "archived"}); isErr {
 		t.Fatalf("archived must always be movable to: %s", text)
+	}
+}
+
+// TestE2EAddTaskRejectsTraversingID: pm_add_task's `id` param is raw input
+// that becomes the leading component of the task's file name, exactly like the
+// CLI's --id - so the traversal hole was never CLI-only. The guard lives in
+// Store.AddTask (storage.ValidateTaskID), which is why driving the real
+// handler end to end is the test that proves BOTH entry paths are covered.
+func TestE2EAddTaskRejectsTraversingID(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+	root := store.RootDir()
+
+	before, err := store.GetTasks("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []string{"../escaped", "../../escaped", "sub/dir-1"} {
+		text, isErr := call(t, sess, "pm_add_task", map[string]any{
+			"project": "test", "title": "Escaping task", "id": id,
+		})
+		if !isErr {
+			t.Fatalf("id %q must be a tool error, got: %s", id, text)
+		}
+		// Pin the message to ValidateTaskID's own wording: a looser assertion
+		// would still pass if the validator were dropped and the call failed
+		// for some other reason (e.g. an SDK-level decode error).
+		if !strings.Contains(text, "invalid task id") {
+			t.Errorf("id %q: error must come from ValidateTaskID, got: %s", id, text)
+		}
+	}
+
+	after, err := store.GetTasks("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("rejected adds created tasks (%d -> %d)", len(before), len(after))
+	}
+	// And nothing landed outside the project dir - in the pm root or above it.
+	for _, dir := range []string{root, filepath.Dir(root)} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.Contains(e.Name(), "escap") {
+				t.Fatalf("task file escaped to %s", filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+
+	// A legit ID still round-trips - this is hardening, not a schema change.
+	if text, isErr := call(t, sess, "pm_add_task", map[string]any{
+		"project": "test", "title": "Explicit id", "id": "t-99",
+	}); isErr {
+		t.Fatalf("valid explicit id rejected: %s", text)
+	}
+	if _, err := store.FindTaskExact("test", "t-99"); err != nil {
+		t.Fatalf("valid explicit id not created: %v", err)
+	}
+}
+
+// TestE2EUnsafePrefixRejected: `prefix` is the ID source for every auto-minted
+// task ("<prefix>-<n>"), and AddTask validates the result - so accepting an
+// unsafe prefix here would hand back a project that looks fine and then
+// refuses every pm_add_task on it, blaming an ID nobody typed. Both write
+// points must refuse it, and a rejected update must leave the project alone.
+func TestE2EUnsafePrefixRejected(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_create_project", map[string]any{"slug": "acme", "prefix": "Acme Corp"})
+	if !isErr {
+		t.Fatalf("unsafe prefix on create must be a tool error, got: %s", text)
+	}
+	if !strings.Contains(text, "invalid prefix") {
+		t.Errorf("error must come from ValidateProjectPrefix, got: %s", text)
+	}
+	if _, err := store.GetProject("acme"); err == nil {
+		t.Fatal("rejected create still made the project")
+	}
+
+	text, isErr = call(t, sess, "pm_update_project", map[string]any{"project": "test", "prefix": "My Proj"})
+	if !isErr {
+		t.Fatalf("unsafe prefix on update must be a tool error, got: %s", text)
+	}
+	proj, err := store.GetProject("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proj.Prefix != "t" {
+		t.Fatalf("rejected update changed the prefix to %q", proj.Prefix)
+	}
+
+	// The project still mints and accepts task ids, i.e. no lockout.
+	if text, isErr := call(t, sess, "pm_add_task", map[string]any{"project": "test", "title": "Still works"}); isErr {
+		t.Fatalf("add after the rejected prefix update failed: %s", text)
 	}
 }
 
@@ -923,10 +1023,14 @@ func TestE2ECreateProject(t *testing.T) {
 	// and ProjectDir("MixedCase") are the SAME directory - an exact-case-only
 	// duplicate check would miss this and MkdirAll/writeProject would silently
 	// splice the new project's fields into the existing one's project.yaml.
-	// The pre-existing slug here is created directly through the store (like a
-	// CLI-created project, which has no slug validation) since ValidateSlug
-	// itself would reject a mixed-case slug on create.
-	if err := store.CreateProject("MixedCase", &storage.Project{Name: "Mixed"}); err != nil {
+	// The pre-existing slug here is planted on disk directly, bypassing
+	// Store.CreateProject: that path now runs ValidateSlug (pm-cli-74-1) and
+	// would reject a mixed-case slug, but such dirs EXIST in real data from
+	// before the check, and the handler must still refuse to collide with one.
+	if err := os.MkdirAll(store.ProjectDir("MixedCase"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.WriteProject(store.ProjectYAML("MixedCase"), &storage.Project{Name: "Mixed"}); err != nil {
 		t.Fatal(err)
 	}
 	t.Run("case-insensitive collision rejected", func(t *testing.T) {

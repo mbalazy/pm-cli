@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,12 @@ import (
 	"strconv"
 	"strings"
 )
+
+// ErrAmbiguousTask is what FindTask returns (wrapped) when a query matches
+// several tasks in ONE project. Callers that scan many projects test for it
+// with errors.Is: an ambiguous project is a project with candidates, not a
+// project with none.
+var ErrAmbiguousTask = errors.New("ambiguous task")
 
 type Store struct {
 	Root string // ~/.claude/pm
@@ -118,7 +125,26 @@ func (s *Store) GetAllStatuses() []TaskStatus {
 // CreateProject writes a new project.yaml, creating the project dir first.
 // The lock is taken AFTER the dir exists (it lives inside that dir) and only
 // covers the write - callers must not hold the project lock themselves.
+//
+// The slug check lives HERE, not only in pm_create_project: MkdirAll happily
+// walks out of the pm root, so `pm projects add ../outside` created a
+// project.yaml outside the data dir, and `pm projects add MyProj` created a
+// project that `pm projects` lists but no command can address (ResolveProject
+// lowercases the query, never the candidates) - with no `pm projects rm` to
+// undo either. The MCP handler keeps its own pre-check on purpose: it also
+// enforces the case-insensitive duplicate rule, which is a handler concern.
 func (s *Store) CreateProject(slug string, p *Project) error {
+	if err := ValidateSlug(slug); err != nil {
+		return err
+	}
+	// The prefix is the ID source for every auto-minted task, so an unsafe one
+	// creates a project that cannot hold a task - the failure would only
+	// surface later, on the first add, blaming an ID nobody typed.
+	if p != nil {
+		if err := ValidateProjectPrefix(p.Prefix); err != nil {
+			return err
+		}
+	}
 	dir := s.ProjectDir(slug)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -249,8 +275,19 @@ func (s *Store) MutateProject(slug string, fn func(*Project) error) (*Project, e
 	if err != nil {
 		return nil, err
 	}
+	before := p.Prefix
 	if err := fn(p); err != nil {
 		return nil, err
+	}
+	// Reject a mutation that INTRODUCES an unsafe prefix (the ID source for
+	// every auto-minted task - see CreateProject). Deliberately scoped to a
+	// CHANGE: a project.yaml that already carries a bad prefix from before the
+	// check must stay editable in every other field, or `pm executor init` and
+	// pm_update_project would refuse to touch it at all.
+	if p.Prefix != before {
+		if err := ValidateProjectPrefix(p.Prefix); err != nil {
+			return nil, err
+		}
 	}
 	if err := writeProject(s.ProjectYAML(slug), p); err != nil {
 		return nil, err
@@ -265,7 +302,38 @@ func (s *Store) DeleteTask(t *Task) error {
 	return os.Remove(t.FilePath)
 }
 
+// AddTask creates a task file for t under the project dir.
+//
+// It does NOT take the project lock. Minting an ID and writing it is a
+// read-modify-write that must be serialized (see `pm add` / pm_add_task), but
+// the lock has to cover NextTaskID too, so it belongs at the CALLER - and
+// LockProject must never nest (a second flock on a fresh fd deadlocks against
+// our own), so it cannot live in both places.
 func (s *Store) AddTask(projectSlug string, t *Task) error {
+	// The ID becomes the leading component of the file name and arrives from
+	// outside pm on three paths (--id, MCP's id param, the board's add
+	// prompt). Validate BEFORE the O_EXCL claim below, so a rejected ID leaves
+	// no phantom file behind (same reason the mode/epic_mode pre-checks exist).
+	if err := ValidateTaskID(t.Meta.ID); err != nil {
+		// An auto-minted ID is "<prefix>-<n>", and a project.yaml predating the
+		// prefix check (or hand-edited since) can still carry an unsafe one -
+		// which surfaces here as an error about an ID the user never typed.
+		// Name the actual culprit. ProjectPrefix falls back to the SLUG when
+		// no prefix is set, so the two cases are worded apart: pointing at a
+		// `prefix:` key that isn't in the file would send the reader hunting
+		// for something that does not exist.
+		if prefix := s.ProjectPrefix(projectSlug); prefix != "" &&
+			strings.HasPrefix(t.Meta.ID, prefix) && ValidateTaskID(prefix) != nil {
+			if proj, perr := s.GetProject(projectSlug); perr == nil && proj.Prefix != "" {
+				return fmt.Errorf("%w - it was derived from the project's `prefix` %q, which is not a safe path component; fix it in %s",
+					err, prefix, s.ProjectYAML(projectSlug))
+			}
+			return fmt.Errorf("%w - it was derived from the project directory name %q (no `prefix` is set); set a safe `prefix` in %s",
+				err, prefix, s.ProjectYAML(projectSlug))
+		}
+		return err
+	}
+
 	t.Project = projectSlug
 	t.FilePath = filepath.Join(s.ProjectDir(projectSlug), t.Filename())
 
@@ -424,7 +492,12 @@ func (s *Store) FindTask(projectSlug, query string) (*Task, error) {
 		return matches[0], nil
 	}
 	if len(matches) > 1 {
-		return nil, fmt.Errorf("ambiguous task %q: %d matches", query, len(matches))
+		// Wrapped sentinel (message unchanged): a caller scanning SEVERAL
+		// projects must be able to tell "this project holds no candidate"
+		// from "this project holds several" - collapsing both into a plain
+		// error makes an ambiguous project contribute nothing, so the scan
+		// happily resolves to some other project's task. See resolveWorkTask.
+		return nil, fmt.Errorf("%w %q: %d matches", ErrAmbiguousTask, query, len(matches))
 	}
 
 	return nil, fmt.Errorf("task not found: %q", query)

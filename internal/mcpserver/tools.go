@@ -793,6 +793,15 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
 		}
+		// The prefix is the ID source for every auto-minted task
+		// ("<prefix>-<n>"), and AddTask validates the result - so an unsafe
+		// prefix accepted here would lock the project out of task creation,
+		// with every later add failing about an ID nobody typed. Checked
+		// BEFORE the mutation so a rejected call writes nothing.
+		if err := storage.ValidateProjectPrefix(in.Prefix); err != nil {
+			r, _ := toolError(err.Error())
+			return r, nil, nil
+		}
 		// The whole read -> patch -> write runs under the project lock, with
 		// the project re-read FRESH inside it: this handler only sets the
 		// fields the caller passed, so a copy read before the lock would

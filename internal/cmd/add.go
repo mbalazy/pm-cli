@@ -23,6 +23,23 @@ func newAddCmd(store storage.TaskStore) *cobra.Command {
 				return err
 			}
 
+			// Serialize NextTaskID -> AddTask against other pm processes
+			// (parallel `pm add`, a CC session's MCP server, the board): the ID
+			// is derived from the tasks on disk, so two unlocked adds read the
+			// same max and mint the SAME id - O_EXCL only protects the file
+			// NAME, and two different titles produce two different names, so
+			// both writes succeed and the duplicate becomes unaddressable
+			// (findByExactID returns whichever ReadDir yields first).
+			//
+			// The lock lives here, at the caller, exactly like pm_add_task's -
+			// it has to cover NextTaskID, which is outside AddTask, and
+			// LockProject must never nest (the MCP handler already holds it
+			// when it calls AddTask). Best-effort: a lock failure degrades to
+			// the previous unlocked behaviour rather than blocking the add.
+			if release, lockErr := store.LockProject(projectSlug); lockErr == nil {
+				defer release()
+			}
+
 			title := args[1]
 			t := storage.NewTask("", title, projectSlug)
 
@@ -53,7 +70,7 @@ func newAddCmd(store storage.TaskStore) *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("Created task: %s → %s\n", t.Meta.ID, t.FilePath)
+			fmt.Fprintf(cmd.OutOrStdout(), "Created task: %s → %s\n", t.Meta.ID, t.FilePath)
 			return nil
 		},
 	}
