@@ -2,6 +2,7 @@ package storage
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -248,4 +249,52 @@ func TestExecutorBaseline(t *testing.T) {
 	if got := bare.GetExecutor().Baseline; got != "" {
 		t.Errorf("Baseline must default to empty, got %q", got)
 	}
+}
+
+// The two epic modes land a green sub in different places because the manager
+// does different things with it: integration merges, independent only pushes.
+func TestExecutorLandingStatuses(t *testing.T) {
+	t.Run("defaults are merged + pushed", func(t *testing.T) {
+		e := defaultExecutor()
+		indep, explicit := e.IndependentDoneStatus()
+		if indep != DefaultIndependentDoneStatus || explicit {
+			t.Errorf("IndependentDoneStatus() = (%q, %v), want (%q, false)", indep, explicit, DefaultIndependentDoneStatus)
+		}
+		want := []TaskStatus{"merged", "pushed"}
+		if got := e.LandingStatuses(); !slices.Equal(got, want) {
+			t.Errorf("LandingStatuses() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("explicit independent status is reported as explicit", func(t *testing.T) {
+		data := "name: X\nexecutor:\n  enabled: true\n  done_status_independent: review\n"
+		var p Project
+		if err := yaml.Unmarshal([]byte(data), &p); err != nil {
+			t.Fatalf("Unmarshal: %v", err)
+		}
+		e := p.GetExecutor()
+		indep, explicit := e.IndependentDoneStatus()
+		if indep != "review" || !explicit {
+			t.Errorf("IndependentDoneStatus() = (%q, %v), want (review, true)", indep, explicit)
+		}
+		if got := e.LandingStatuses(); !slices.Equal(got, []TaskStatus{"merged", "review"}) {
+			t.Errorf("LandingStatuses() = %v, want [merged review]", got)
+		}
+	})
+
+	t.Run("one status configured for both modes is not listed twice", func(t *testing.T) {
+		e := defaultExecutor()
+		e.DoneStatusIndependent = e.DoneStatus
+		if got := e.LandingStatuses(); !slices.Equal(got, []TaskStatus{"merged"}) {
+			t.Errorf("LandingStatuses() = %v, want [merged]", got)
+		}
+	})
+
+	t.Run("an empty done_status drops out instead of landing on \"\"", func(t *testing.T) {
+		e := defaultExecutor()
+		e.DoneStatus = "  "
+		if got := e.LandingStatuses(); !slices.Equal(got, []TaskStatus{"pushed"}) {
+			t.Errorf("LandingStatuses() = %v, want [pushed]", got)
+		}
+	})
 }

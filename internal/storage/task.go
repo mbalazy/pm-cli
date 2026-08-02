@@ -39,6 +39,15 @@ const (
 	// DefaultStatuses - it only exists on projects that opt into it via
 	// project.yaml's `statuses` list.
 	StatusMerged TaskStatus = "merged"
+	// StatusPushed is the independent (batch) counterpart of StatusMerged: the
+	// manager pushed the sub's own branch and merged nothing, so the work is on
+	// origin awaiting a human's acceptance + PR. Same deal as StatusMerged - a
+	// per-project status, opted into via project.yaml.
+	//
+	// Both constants exist for display only (glyphs, default configs). Code that
+	// asks "did the executor finish this task" must resolve the project's
+	// Executor.LandingStatuses(), never compare against these literals.
+	StatusPushed TaskStatus = "pushed"
 )
 
 func ParseStatus(s string) TaskStatus {

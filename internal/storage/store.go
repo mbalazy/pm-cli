@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -94,6 +95,39 @@ func (s *Store) GetProjectStatuses(slug string) []TaskStatus {
 		return DefaultStatuses
 	}
 	return p.GetStatuses()
+}
+
+// GetLandingStatuses returns the statuses this project's executor moves a
+// verify-green sub to (see Executor.LandingStatuses): "merged" and "pushed" by
+// default, whatever the project configured otherwise. Consumers that need to
+// know whether the executor is done with a task ask HERE instead of comparing
+// against a hardcoded name - done_status/done_status_independent are
+// configurable, and a hardcoded literal silently ignores them.
+func (s *Store) GetLandingStatuses(slug string) []TaskStatus {
+	p, err := s.GetProject(slug)
+	if err != nil {
+		return defaultExecutor().LandingStatuses()
+	}
+	return p.GetExecutor().LandingStatuses()
+}
+
+// GetAllLandingStatuses is GetLandingStatuses across every active project, for
+// the cross-project views (pm_context unscoped, the board's ALL tab) that hold
+// tasks from more than one project at once.
+func (s *Store) GetAllLandingStatuses() []TaskStatus {
+	projects, err := s.ListActiveProjects()
+	if err != nil {
+		return defaultExecutor().LandingStatuses()
+	}
+	var result []TaskStatus
+	for _, slug := range projects {
+		for _, st := range s.GetLandingStatuses(slug) {
+			if !slices.Contains(result, st) {
+				result = append(result, st)
+			}
+		}
+	}
+	return result
 }
 
 // GetAllStatuses returns the union of statuses across all active (non-archived) projects, preserving order.
