@@ -231,6 +231,16 @@ func TestBuildWorkerSystemPrompt(t *testing.T) {
 			t.Error("integration epic mode must not carry the best-effort protocol")
 		}
 	})
+	t.Run("verify verdict is measured by the gate only (pm-cli-84)", func(t *testing.T) {
+		for _, independent := range []bool{false, true} {
+			got := buildWorkerSystemPrompt(exec, false, independent)
+			mustContain(t, got, "The gate is the ONLY measure of verify-green")
+			mustContain(t, got, `Do NOT run additional suites beyond it "for extra confidence"`)
+			mustContain(t, got, "A check outside the gate NEVER demotes the verdict")
+			mustContain(t, got, "a still-running background process is never a reason for a non-green status")
+			mustContain(t, got, "zero NEW failures ON THE GATE")
+		}
+	})
 }
 
 func TestBuildClaudeArgs(t *testing.T) {
