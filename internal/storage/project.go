@@ -23,6 +23,11 @@ type Project struct {
 	Notes    string            `yaml:"notes,omitempty"`
 	Archived bool              `yaml:"archived,omitempty"`
 	Executor *Executor         `yaml:"executor,omitempty"`
+	// Journals declares which subsystems this project keeps a running record
+	// of (see journal.go). This list IS the whole of the journal mechanism's
+	// project-awareness: pm never infers a subject, so nothing in the code
+	// knows what a simulator rig or a flaky sandbox is.
+	Journals []JournalSubject `yaml:"journals,omitempty"`
 	// ClaudeConfigDir overrides the Claude Code config dir for this project
 	// (the dir CLAUDE_CONFIG_DIR points at - holds projects/, credentials, MCP).
 	// Empty = the default ~/.claude. Set it when a project runs claude under a
@@ -88,6 +93,7 @@ var knownProjectKeys = map[string]bool{
 	"name": true, "prefix": true, "path": true, "repo": true, "stack": true,
 	"links": true, "tags": true, "statuses": true, "notes": true,
 	"archived": true, "executor": true, "claude_config_dir": true,
+	"journals": true,
 }
 
 // writeProject persists a project WITHOUT destroying what a plain struct
