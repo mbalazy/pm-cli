@@ -898,6 +898,8 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		})
 		return r, nil, err
 	})
+
+	registerJournalTools(s, store)
 }
 
 // --- Context helpers ---
@@ -1013,6 +1015,18 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 	if proj != nil && proj.HasExecutor() {
 		result["executor_profile"] = "run `pm executor show " + slug +
 			"` for phase bindings, worktree slot runtimes (ports/device ids), context repos and the handoff playbook"
+	}
+
+	// Journals: counts only, for the same reason as the profile above. A
+	// journal only ever grows, so putting its content here would put an
+	// unbounded, permanently growing payload in every session's window - and
+	// its readers are the sessions about to touch that subsystem, not all of
+	// them. The counts are what makes those sessions ask.
+	if proj != nil {
+		if counts, err := storage.JournalCounts(store.ProjectDir(slug), proj); err == nil && len(counts) > 0 {
+			result["journals"] = counts
+			result["journals_note"] = "subsystems this project keeps a running incident record for. Call pm_journal_list with the name BEFORE touching one of them; record what bit you with pm_journal_add."
+		}
 	}
 
 	if focus := focusTaskSummaries(store); len(focus) > 0 {

@@ -71,8 +71,19 @@ func newContextCmd(store storage.TaskStore) *cobra.Command {
 			// One line, only when there is a profile to point at. `pm context`
 			// runs at the start of EVERY session, so the full profile belongs in
 			// `pm executor show` - only whoever needs it pays for it.
-			if proj, err := store.GetProject(slug); err == nil && proj.HasExecutor() {
+			proj, projErr := store.GetProject(slug)
+			if projErr == nil && proj.HasExecutor() {
 				fmt.Printf("## Executor: pm executor show %s\n", slug)
+			}
+			// Same rule as the executor profile above: a POINTER, never the
+			// content. A journal only grows, and this runs at the start of
+			// every session - the counts are enough to notice something is
+			// accumulating, and whoever is about to touch the subsystem pulls
+			// the entries themselves.
+			if projErr == nil {
+				if counts, cerr := storage.JournalCounts(store.ProjectDir(slug), proj); cerr == nil && len(counts) > 0 {
+					fmt.Printf("## Journals: %s\n", journalPointer(counts))
+				}
 			}
 			return nil
 		},
