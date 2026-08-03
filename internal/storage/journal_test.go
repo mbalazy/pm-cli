@@ -338,3 +338,131 @@ func TestJournalsSurviveProjectRoundTrip(t *testing.T) {
 		t.Fatalf("journals dropped on rewrite: %+v", again.Journals)
 	}
 }
+
+// Append-only means an open entry can never be edited to carry its fix, so the
+// fix arrives as a LATER entry pointing back. Without this the open count could
+// only grow and the backlog would rot - the exact failure the journal prevents.
+func TestResolvesClosesAnEarlierEntry(t *testing.T) {
+	dir := t.TempDir()
+	first := &Incident{Symptom: "sim-ui.sh screenshot returned a stale frame", TS: "2026-08-03T10:00:00Z"}
+	if err := AppendIncident(dir, "sim-rig", first); err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == "" {
+		t.Fatal("no id stamped - nothing could ever close this entry")
+	}
+
+	before := AggregateIncidents(mustRead(t, dir, "sim-rig"))
+	if before.Open != 1 || before.ClosedLater != 0 {
+		t.Fatalf("before the review: %+v", before)
+	}
+
+	review := &Incident{
+		Symptom:  "journal review 2026-08-10",
+		TS:       "2026-08-10T10:00:00Z",
+		Fix:      "sim-ui.sh screenshot now falls back to xcrun simctl io",
+		Resolves: []string{first.ID},
+	}
+	if err := AppendIncident(dir, "sim-rig", review); err != nil {
+		t.Fatalf("append review: %v", err)
+	}
+
+	after := AggregateIncidents(mustRead(t, dir, "sim-rig"))
+	if after.Total != 2 {
+		t.Fatalf("Total = %d, want 2 - closing is a new EVENT, the original stays", after.Total)
+	}
+	if after.Open != 0 {
+		t.Fatalf("Open = %d, want 0 - the review closed the only open entry", after.Open)
+	}
+	// The effect has to stay visible; otherwise resolved incidents just quietly
+	// disappear from the count with nothing saying they were dealt with.
+	if after.ClosedLater != 1 {
+		t.Fatalf("ClosedLater = %d, want 1", after.ClosedLater)
+	}
+	if len(after.OpenList) != 0 {
+		t.Fatalf("OpenList still holds a closed entry: %+v", after.OpenList)
+	}
+}
+
+// A resolves id that matches nothing is always a typo, and it fails SILENTLY:
+// the entry lands, the target stays open, and nobody re-derives the count.
+func TestAppendIncidentRejectsUnknownResolvesID(t *testing.T) {
+	dir := t.TempDir()
+	if err := AppendIncident(dir, "sim-rig", &Incident{Symptom: "real one", TS: "2026-08-03T10:00:00Z"}); err != nil {
+		t.Fatal(err)
+	}
+	err := AppendIncident(dir, "sim-rig", &Incident{
+		Symptom:  "review",
+		TS:       "2026-08-10T10:00:00Z",
+		Resolves: []string{"20260803-dead"},
+	})
+	if err == nil {
+		t.Fatal("expected an error for an unknown resolves id")
+	}
+	if !strings.Contains(err.Error(), "20260803-dead") {
+		t.Fatalf("error must name the miss: %v", err)
+	}
+	if got := mustRead(t, dir, "sim-rig"); len(got) != 1 {
+		t.Fatalf("the rejected entry was written anyway: %+v", got)
+	}
+}
+
+// Entries written before the id field existed must still be referenceable, or
+// the whole pre-existing backlog could never be closed. The id is derived from
+// stored fields, so reading computes the same value a write would have stamped.
+func TestReadIncidentsDerivesMissingIDs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".journal"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"ts":"2026-07-30T10:00:00Z","symptom":"written before ids existed"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".journal", "sim-rig.jsonl"), []byte(line), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := mustRead(t, dir, "sim-rig")
+	if len(got) != 1 || got[0].ID == "" {
+		t.Fatalf("no id derived: %+v", got)
+	}
+	// Stable across reads, and equal to what a write would have produced.
+	again := mustRead(t, dir, "sim-rig")
+	if again[0].ID != got[0].ID {
+		t.Fatalf("derived id is not stable: %q vs %q", got[0].ID, again[0].ID)
+	}
+	if want := incidentID("2026-07-30T10:00:00Z", "written before ids existed"); got[0].ID != want {
+		t.Fatalf("derived id = %q, want %q", got[0].ID, want)
+	}
+	// And it can be closed like any other entry.
+	if err := AppendIncident(dir, "sim-rig", &Incident{
+		Symptom: "review", TS: "2026-08-03T10:00:00Z", Fix: "done", Resolves: []string{got[0].ID},
+	}); err != nil {
+		t.Fatalf("closing a pre-id entry: %v", err)
+	}
+	if st := AggregateIncidents(mustRead(t, dir, "sim-rig")); st.Open != 0 {
+		t.Fatalf("Open = %d, want 0", st.Open)
+	}
+}
+
+func TestIncidentIDShape(t *testing.T) {
+	id := incidentID("2026-08-03T10:00:00Z", "something happened")
+	if !strings.HasPrefix(id, "20260803-") {
+		t.Fatalf("id should lead with the UTC day: %q", id)
+	}
+	// Different content on the same day must not collide.
+	if other := incidentID("2026-08-03T10:00:00Z", "something else happened"); other == id {
+		t.Fatalf("two different entries got the same id: %q", id)
+	}
+	// An undated entry still gets a usable handle.
+	if u := incidentID("", "no date"); !strings.HasPrefix(u, "undated-") {
+		t.Fatalf("undated id: %q", u)
+	}
+}
+
+func mustRead(t *testing.T, dir, name string) []Incident {
+	t.Helper()
+	got, err := ReadIncidents(dir, name)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	return got
+}

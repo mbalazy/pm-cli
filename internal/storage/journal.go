@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -47,6 +48,12 @@ type JournalSubject struct {
 
 // Incident is one entry: an EVENT that happened, never edited afterwards.
 type Incident struct {
+	// ID identifies this entry so a LATER entry can close it (see Resolves).
+	// Derived from ts+symptom rather than minted from a counter, which means
+	// ReadIncidents can compute it for lines written before the field existed
+	// - the whole history stays referenceable without rewriting one byte of an
+	// append-only file. Stamped on write too, so the file is self-describing.
+	ID string `json:"id,omitempty"`
 	TS string `json:"ts"` // RFC3339, stamped by AppendIncident if empty
 	// Symptom is what it looked like from the outside, before the cause was
 	// known - the thing a future reader will recognise the situation by.
@@ -69,10 +76,55 @@ type Incident struct {
 	// signal that a tool fix is overdue.
 	Tags    []string `json:"tags,omitempty"`
 	Session string   `json:"session,omitempty"` // Claude session id, if written from one
+	// Resolves lists the IDs of EARLIER entries this one closes. Append-only
+	// storage means an open entry can never be edited to carry its fix, so the
+	// fix arrives as a new event pointing back - which is also exactly what a
+	// periodic review produces ("reviewed up to <date>, these are now fixed").
+	// Without this the open count could only ever grow and the backlog would
+	// rot, which is the failure the journal exists to prevent.
+	Resolves []string `json:"resolves,omitempty"`
 }
 
-// Open reports whether the incident still argues for an unmade change.
-func (i Incident) Open() bool { return strings.TrimSpace(i.Fix) == "" }
+// SelfClosed reports whether the entry arrived with its own fix recorded. It is
+// only half the answer - use OpenIncidents/StillOpen for the real one, which
+// also accounts for a later entry having closed this one.
+func (i Incident) SelfClosed() bool { return strings.TrimSpace(i.Fix) != "" }
+
+// Open reports whether the entry, read ALONE, still argues for an unmade
+// change. Callers holding the whole journal must use StillOpen instead.
+func (i Incident) Open() bool { return !i.SelfClosed() }
+
+// incidentID derives a short, stable handle: the UTC day (so it reads as
+// roughly when, and sorts) plus a hash of the fields that make the entry what
+// it is. Deterministic on purpose - the same entry gets the same id whether it
+// was stamped at write time or computed while reading an older line.
+func incidentID(ts, symptom string) string {
+	day := "undated"
+	if t, err := time.Parse(time.RFC3339, ts); err == nil {
+		day = t.UTC().Format("20060102")
+	}
+	sum := sha256.Sum256([]byte(ts + "\x00" + symptom))
+	return fmt.Sprintf("%s-%x", day, sum[:2])
+}
+
+// ResolvedIDs collects every entry id that some OTHER entry claims to close.
+func ResolvedIDs(incidents []Incident) map[string]bool {
+	out := map[string]bool{}
+	for _, in := range incidents {
+		for _, id := range in.Resolves {
+			if id = strings.TrimSpace(id); id != "" {
+				out[id] = true
+			}
+		}
+	}
+	return out
+}
+
+// StillOpen is the real open test: no fix of its own, and nobody has since
+// closed it.
+func StillOpen(in Incident, resolved map[string]bool) bool {
+	return in.Open() && !resolved[in.ID]
+}
 
 // When parses TS. The bool is false for an entry whose timestamp is missing or
 // unparseable - a real possibility, since the file is plain JSONL a human may
@@ -129,11 +181,37 @@ func AppendIncident(projectDir, name string, in *Incident) error {
 	if strings.TrimSpace(in.Symptom) == "" {
 		return fmt.Errorf("an incident needs a symptom - what did it look like before you knew the cause?")
 	}
-	if err := os.MkdirAll(journalDir(projectDir), 0755); err != nil {
-		return err
-	}
 	if in.TS == "" {
 		in.TS = time.Now().UTC().Format(time.RFC3339)
+	}
+	if in.ID == "" {
+		in.ID = incidentID(in.TS, in.Symptom)
+	}
+	// A resolves id that matches nothing is always a typo, and it would fail
+	// SILENTLY - the entry lands, the target stays open, and the count nobody
+	// re-derives keeps saying so. Check before writing, and name the misses.
+	if len(in.Resolves) > 0 {
+		existing, err := ReadIncidents(projectDir, name)
+		if err != nil {
+			return err
+		}
+		known := make(map[string]bool, len(existing))
+		for _, e := range existing {
+			known[e.ID] = true
+		}
+		var missing []string
+		for _, id := range in.Resolves {
+			if id = strings.TrimSpace(id); id != "" && !known[id] {
+				missing = append(missing, id)
+			}
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("resolves names %d entr%s this journal does not have: %s (list ids with `pm journal show %s`)",
+				len(missing), map[bool]string{true: "y", false: "ies"}[len(missing) == 1], strings.Join(missing, ", "), name)
+		}
+	}
+	if err := os.MkdirAll(journalDir(projectDir), 0755); err != nil {
+		return err
 	}
 	data, err := json.Marshal(in)
 	if err != nil {
@@ -171,6 +249,12 @@ func ReadIncidents(projectDir, name string) ([]Incident, error) {
 	for sc.Scan() {
 		var in Incident
 		if json.Unmarshal(sc.Bytes(), &in) == nil && in.Symptom != "" {
+			// Lines written before the id field existed get theirs computed
+			// here, from the same inputs a write would have used - so history
+			// becomes referenceable without rewriting an append-only file.
+			if in.ID == "" {
+				in.ID = incidentID(in.TS, in.Symptom)
+			}
 			out = append(out, in)
 		}
 	}
@@ -202,9 +286,10 @@ func JournalCounts(projectDir string, p *Project) ([]JournalCount, error) {
 		if err != nil {
 			return nil, err
 		}
+		resolved := ResolvedIDs(incidents)
 		for _, in := range incidents {
 			c.Total++
-			if in.Open() {
+			if StillOpen(in, resolved) {
 				c.Open++
 			}
 		}
@@ -239,6 +324,11 @@ type JournalStats struct {
 	Months   []MonthCount `json:"months,omitempty"`
 	OpenList []Incident   `json:"open_list,omitempty"`
 	Undated  int          `json:"undated,omitempty"` // entries whose ts did not parse
+	// ClosedLater = entries that arrived open and were closed by a LATER entry
+	// (a review, typically). Reported separately from Open so a review's effect
+	// is visible: otherwise five incidents resolved last week simply vanish
+	// from the open count with nothing saying they were ever dealt with.
+	ClosedLater int `json:"closed_later,omitempty"`
 }
 
 // AggregateIncidents is the pure rollup behind `pm journal stats`, kept free of
@@ -254,12 +344,19 @@ func AggregateIncidents(incidents []Incident) JournalStats {
 	tags := map[string]*TagCount{}
 	months := map[string]int{}
 	var first, last time.Time
+	// Resolution is a property of the WHOLE journal, not of one entry: a later
+	// entry closes an earlier one. Collect it once, up front.
+	resolved := ResolvedIDs(incidents)
 
 	for _, in := range incidents {
 		st.Total++
-		if in.Open() {
+		open := StillOpen(in, resolved)
+		if open {
 			st.Open++
 			st.OpenList = append(st.OpenList, in)
+		}
+		if resolved[in.ID] && in.Open() {
+			st.ClosedLater++
 		}
 		if in.CostMin > 0 {
 			st.CostMin += in.CostMin
@@ -290,7 +387,7 @@ func AggregateIncidents(incidents []Incident) JournalStats {
 				tags[tag] = tc
 			}
 			tc.Count++
-			if in.Open() {
+			if open {
 				tc.Open++
 			}
 		}

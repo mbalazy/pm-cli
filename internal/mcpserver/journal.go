@@ -28,6 +28,7 @@ type journalAddInput struct {
 	Tags            []string `json:"tags,omitempty" jsonschema:"Tags grouping incidents that share a cause. Reuse the tags already in the journal (pm_journal_list returns them) - a cluster is what argues for a tool fix, and a synonym splits one."`
 	Session         string   `json:"session,omitempty" jsonschema:"Claude session id (pm session-id), so the entry can be traced back to a transcript"`
 	Date            string   `json:"date,omitempty" jsonschema:"Back-date the entry as YYYY-MM-DD when seeding history. Omit for something that just happened."`
+	Resolves        []string `json:"resolves,omitempty" jsonschema:"IDs of EARLIER entries this one closes (ids come from pm_journal_list). The journal is append-only, so an open entry can never be edited to carry its fix - the fix arrives as a new entry pointing back. This is how a review lands: one entry recording what was fixed AND closing what it fixed. An id that matches no entry is rejected."`
 }
 
 type journalListInput struct {
@@ -44,18 +45,19 @@ const defaultJournalLimit = 20
 // whether something recurs, and a caller who has to make a second call for the
 // counts will skip it.
 type journalEntriesOutput struct {
-	Project  string                 `json:"project"`
-	Name     string                 `json:"name"`
-	Subject  string                 `json:"subject,omitempty"`
-	Total    int                    `json:"total"`
-	Shown    int                    `json:"shown"`
-	Open     int                    `json:"open"`
-	CostMin  int                    `json:"cost_min,omitempty"`
-	Tags     []storage.TagCount     `json:"tags,omitempty"`
-	Months   []storage.MonthCount   `json:"months,omitempty"`
-	Entries  []storage.Incident     `json:"entries"`
-	Note     string                 `json:"note,omitempty"`
-	Declared []storage.JournalCount `json:"declared,omitempty"`
+	Project     string                 `json:"project"`
+	Name        string                 `json:"name"`
+	Subject     string                 `json:"subject,omitempty"`
+	Total       int                    `json:"total"`
+	Shown       int                    `json:"shown"`
+	Open        int                    `json:"open"`
+	ClosedLater int                    `json:"closed_later,omitempty"`
+	CostMin     int                    `json:"cost_min,omitempty"`
+	Tags        []storage.TagCount     `json:"tags,omitempty"`
+	Months      []storage.MonthCount   `json:"months,omitempty"`
+	Entries     []storage.Incident     `json:"entries"`
+	Note        string                 `json:"note,omitempty"`
+	Declared    []storage.JournalCount `json:"declared,omitempty"`
 }
 
 func registerJournalTools(s *mcp.Server, store storage.TaskStore) {
@@ -65,7 +67,7 @@ func registerJournalTools(s *mcp.Server, store storage.TaskStore) {
 		Description: "Record one incident in a project's subsystem journal - a per-project running record of how a chosen, repeatedly-troublesome subsystem (a simulator rig, a flaky sandbox, a deploy pipeline) actually behaves. " +
 			"Write an entry WHEN IT HAPPENS, while the symptom and the wrong conclusion are still in hand: that is the only moment the information exists. " +
 			"An entry is an EVENT (dated, append-only, never rewritten), which is what separates it from a memory file or a doc holding a RULE. Put the rule where rules live; put the event here, and let the entry name the rule it produced via 'fix'. " +
-			"Leave 'fix' empty while the fix has not been made - the open set is the backlog. Journals must be declared in project.yaml; pm_journal_list shows which exist.",
+			"Leave 'fix' empty while the fix has not been made - the open set is the backlog. To close entries that were already open, list their ids in 'resolves'. Journals must be declared in project.yaml; pm_journal_list shows which exist.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in journalAddInput) (*mcp.CallToolResult, any, error) {
 		slug, proj, err := resolveJournalProject(store, in.Project)
 		if err != nil {
@@ -85,6 +87,7 @@ func registerJournalTools(s *mcp.Server, store storage.TaskStore) {
 			Fix:             in.Fix,
 			Tags:            in.Tags,
 			Session:         in.Session,
+			Resolves:        in.Resolves,
 		}
 		if in.Date != "" {
 			ts, derr := parseJournalDate(in.Date)
@@ -167,17 +170,18 @@ func registerJournalTools(s *mcp.Server, store storage.TaskStore) {
 		}
 
 		out := journalEntriesOutput{
-			Project: slug,
-			Name:    subject.Name,
-			Subject: subject.Subject,
-			Total:   st.Total,
-			Shown:   len(shown),
-			Open:    st.Open,
-			CostMin: st.CostMin,
-			Tags:    st.Tags,
-			Months:  st.Months,
-			Entries: shown,
-			Note:    note,
+			Project:     slug,
+			Name:        subject.Name,
+			Subject:     subject.Subject,
+			Total:       st.Total,
+			Shown:       len(shown),
+			Open:        st.Open,
+			ClosedLater: st.ClosedLater,
+			CostMin:     st.CostMin,
+			Tags:        st.Tags,
+			Months:      st.Months,
+			Entries:     shown,
+			Note:        note,
 		}
 		r, err := jsonText(out)
 		return r, nil, err
@@ -200,8 +204,12 @@ func journalAddNote(in storage.Incident, st storage.JournalStats) string {
 			}
 		}
 	}
+	if len(in.Resolves) > 0 {
+		parts = append(parts, fmt.Sprintf("closed %d earlier entr%s", len(in.Resolves),
+			map[bool]string{true: "y", false: "ies"}[len(in.Resolves) == 1]))
+	}
 	if in.Open() {
-		parts = append(parts, "this one is OPEN - record the fix here once it is made")
+		parts = append(parts, "this one is OPEN - close it later with a new entry naming it in resolves")
 	}
 	return strings.Join(parts, "; ")
 }
@@ -209,9 +217,10 @@ func journalAddNote(in storage.Incident, st storage.JournalStats) string {
 // newestFirst orders for reading (the file itself stays in append order),
 // putting undated entries last for the same reason the CLI does.
 func newestFirst(incidents []storage.Incident, openOnly bool) []storage.Incident {
+	resolved := storage.ResolvedIDs(incidents)
 	out := make([]storage.Incident, 0, len(incidents))
 	for _, in := range incidents {
-		if openOnly && !in.Open() {
+		if openOnly && !storage.StillOpen(in, resolved) {
 			continue
 		}
 		out = append(out, in)

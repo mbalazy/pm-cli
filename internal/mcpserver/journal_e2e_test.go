@@ -303,3 +303,82 @@ func TestE2EContextOmitsJournalsWhenNoneDeclared(t *testing.T) {
 		t.Fatalf("journals key present with none declared:\n%s", text)
 	}
 }
+
+// The full loop the review skill depends on: an entry lands open, a later
+// entry closes it by id, and the open count actually drops.
+func TestE2EJournalResolvesClosesEarlierEntry(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	declareJournals(t, store, storage.JournalSubject{Name: "sim-rig"})
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_journal_add", map[string]any{
+		"project": "test", "name": "sim-rig", "date": "2026-08-03",
+		"symptom": "screenshot returned a stale frame",
+	})
+	if isErr {
+		t.Fatalf("seed: %s", text)
+	}
+	var added journalAddResult
+	mustUnmarshal(t, text, &added)
+	if added.Entry.ID == "" {
+		t.Fatal("no id returned - nothing could ever close this entry")
+	}
+	if added.Open != 1 {
+		t.Fatalf("open = %d, want 1", added.Open)
+	}
+
+	text, isErr = call(t, sess, "pm_journal_add", map[string]any{
+		"project": "test", "name": "sim-rig", "date": "2026-08-10",
+		"symptom":  "journal review 2026-08-10",
+		"fix":      "sim-ui.sh screenshot falls back to xcrun simctl io",
+		"resolves": []string{added.Entry.ID},
+	})
+	if isErr {
+		t.Fatalf("review: %s", text)
+	}
+	mustUnmarshal(t, text, &added)
+	if added.Open != 0 {
+		t.Fatalf("open = %d after the review, want 0", added.Open)
+	}
+	if !strings.Contains(added.Note, "closed 1 earlier entry") {
+		t.Fatalf("the note should say what it closed: %q", added.Note)
+	}
+
+	text, _ = call(t, sess, "pm_journal_list", map[string]any{"project": "test", "name": "sim-rig"})
+	var out journalEntriesOutput
+	mustUnmarshal(t, text, &out)
+	if out.Total != 2 || out.Open != 0 || out.ClosedLater != 1 {
+		t.Fatalf("rollup after the review: %+v", out)
+	}
+	// --open must not surface an entry a later one already closed.
+	text, _ = call(t, sess, "pm_journal_list", map[string]any{"project": "test", "name": "sim-rig", "open": true})
+	mustUnmarshal(t, text, &out)
+	if out.Shown != 0 {
+		t.Fatalf("open filter returned %d closed entries: %+v", out.Shown, out.Entries)
+	}
+}
+
+func TestE2EJournalResolvesRejectsUnknownID(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	declareJournals(t, store, storage.JournalSubject{Name: "sim-rig"})
+	sess := startMCP(t, store)
+
+	if _, isErr := call(t, sess, "pm_journal_add", map[string]any{
+		"project": "test", "name": "sim-rig", "symptom": "real one",
+	}); isErr {
+		t.Fatal("seed failed")
+	}
+	text, isErr := call(t, sess, "pm_journal_add", map[string]any{
+		"project": "test", "name": "sim-rig", "symptom": "review",
+		"resolves": []string{"20260803-dead"},
+	})
+	if !isErr {
+		t.Fatalf("expected a tool error, got: %s", text)
+	}
+	if !strings.Contains(text, "20260803-dead") {
+		t.Fatalf("error must name the miss: %s", text)
+	}
+	if got, _ := storage.ReadIncidents(store.ProjectDir("test"), "sim-rig"); len(got) != 1 {
+		t.Fatalf("the rejected entry was written anyway: %+v", got)
+	}
+}

@@ -173,9 +173,10 @@ func renderJournalEntries(slug string, subject *storage.JournalSubject, incident
 	}
 	b.WriteString("\n")
 
+	resolved := storage.ResolvedIDs(incidents)
 	shown := make([]storage.Incident, 0, len(incidents))
 	for _, in := range incidents {
-		if openOnly && !in.Open() {
+		if openOnly && !storage.StillOpen(in, resolved) {
 			continue
 		}
 		shown = append(shown, in)
@@ -207,17 +208,23 @@ func renderJournalEntries(slug string, subject *storage.JournalSubject, incident
 	}
 
 	for _, in := range shown {
-		fmt.Fprintf(&b, "%s  %s\n", journalDate(in), in.Symptom)
+		fmt.Fprintf(&b, "%s  %-13s %s\n", journalDate(in), in.ID, in.Symptom)
 		if in.FalseConclusion != "" {
 			fmt.Fprintf(&b, "    concluded (wrongly): %s\n", in.FalseConclusion)
 		}
 		if in.Cause != "" {
 			fmt.Fprintf(&b, "    cause:               %s\n", in.Cause)
 		}
-		if in.Fix != "" {
+		switch {
+		case in.Fix != "":
 			fmt.Fprintf(&b, "    fix:                 %s\n", in.Fix)
-		} else {
+		case resolved[in.ID]:
+			fmt.Fprintf(&b, "    fix:                 closed by a later entry\n")
+		default:
 			fmt.Fprintf(&b, "    fix:                 OPEN\n")
+		}
+		if len(in.Resolves) > 0 {
+			fmt.Fprintf(&b, "    closes:              %s\n", strings.Join(in.Resolves, ", "))
 		}
 		var meta []string
 		if in.CostMin > 0 {
@@ -255,7 +262,9 @@ func newJournalAddCmd(store storage.TaskStore) *cobra.Command {
 		Long: "Appends one incident. --symptom is required: it is what a future reader will recognise the " +
 			"situation by, before the cause is known.\n\n" +
 			"Leave --fix empty while the fix is not made yet - an entry with no fix is OPEN, and the open set " +
-			"is what `pm journal stats` turns into a backlog. Do not fill it with \"n/a\".",
+			"is what `pm journal stats` turns into a backlog. Do not fill it with \"n/a\".\n\n" +
+			"To close entries that were already open, pass their ids to --resolves (ids come from `pm journal show`). " +
+			"That is how a review lands: one entry recording what was fixed AND closing what it fixed.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			slug, proj, err := journalProject(cmd, store)
@@ -294,6 +303,7 @@ func newJournalAddCmd(store storage.TaskStore) *cobra.Command {
 	cmd.Flags().StringVar(&in.Fix, "fix", "", "the flow/tool change it argues for, and where it landed (empty = open)")
 	cmd.Flags().StringSliceVar(&in.Tags, "tag", nil, "tag grouping incidents that share a cause (repeatable)")
 	cmd.Flags().StringVar(&in.Session, "session", "", "Claude session id")
+	cmd.Flags().StringSliceVar(&in.Resolves, "resolves", nil, "id(s) of earlier entries this one closes (repeatable). Append-only means an open entry cannot be edited to carry its fix - the fix arrives as a new entry pointing back.")
 	cmd.Flags().StringVar(&when, "date", "", "back-date the entry (YYYY-MM-DD) when seeding history")
 	return cmd
 }
@@ -347,6 +357,9 @@ func renderIncidentStats(slug string, subject *storage.JournalSubject, st storag
 	}
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "open:    %d\n", st.Open)
+	if st.ClosedLater > 0 {
+		fmt.Fprintf(&b, "closed:  %d by a later entry (a review that landed its fixes)\n", st.ClosedLater)
+	}
 	if st.CostMin > 0 {
 		// The average's denominator is the entries that RECORDED a cost -
 		// dividing by st.Total would report a cheaper subsystem the more
@@ -376,7 +389,7 @@ func renderIncidentStats(slug string, subject *storage.JournalSubject, st storag
 	if len(st.OpenList) > 0 {
 		b.WriteString("\n## Open - no fix recorded yet\n")
 		for _, in := range st.OpenList {
-			fmt.Fprintf(&b, "  %s  %s\n", journalDate(in), in.Symptom)
+			fmt.Fprintf(&b, "  %s  %-13s %s\n", journalDate(in), in.ID, in.Symptom)
 			if in.Cause != "" {
 				fmt.Fprintf(&b, "              cause: %s\n", in.Cause)
 			}
