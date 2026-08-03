@@ -40,6 +40,7 @@ func NewRootCmd() *cobra.Command {
 		newWorkCmd(store),
 		newRunEpicCmd(store),
 		newExecutorCmd(store),
+		newJournalCmd(store),
 		newMcpCmd(store),
 		newMigrateIDsCmd(store),
 		newSessionIDCmd(),
