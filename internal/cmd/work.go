@@ -858,6 +858,13 @@ func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, y
 	if sessionID != "" {
 		args = append(args, "--session-id", sessionID)
 	}
+	// The hook guard rides along in BOTH modes: --yolo waives permission prompts,
+	// not the project's right to have its commits pass its own hooks. --settings
+	// merges with the repo's settings.json rather than replacing it, so the
+	// project's own hooks keep firing (verified against a probe repo).
+	if guard := workerGuardSettings(); guard != "" {
+		args = append(args, "--settings", guard)
+	}
 	if yolo {
 		args = append(args, "--dangerously-skip-permissions")
 	} else {
@@ -879,9 +886,33 @@ const workerAllowedTools = "Edit Write Read Grep Glob Task TodoWrite " +
 	"Bash(cd:*) Bash(ls:*) Bash(cat:*) Bash(grep:*) Bash(rg:*) Bash(find:*) Bash(echo:*) Bash(sed:*) Bash(awk:*)"
 
 // workerDisallowedTools enforces the autonomy envelope: never force-push, never
-// merge to main, never hard-reset.
+// merge to main, never hard-reset, never neuter the project's git hooks.
+//
+// The hook entries are not theoretical. A worker whose pre-commit hook died on a
+// tool missing from the runner (`gitleaks: not found`) tried the legitimate
+// workarounds first - `PATH=... git commit`, `export PATH=...` - and the
+// allowlist denied every one of them, because each needs a shell construct the
+// envelope withholds. The one form it did NOT deny was
+// `git -c core.hooksPath=/dev/null commit`, so that is what landed: an
+// unreviewed commit that reads as hook-checked and never went through secret
+// scanning. The envelope must not leave the forbidden door as the only open one.
+//
+// Every pattern here was verified against a live `claude -p` in a probe repo
+// (2026-08-06), because these rules match on WHOLE TOKENS, not raw string
+// prefixes, and guessing gets it wrong in both directions:
+//   - `Bash(git -c core.hooksPath:*)` does NOT match
+//     `git -c core.hooksPath=/dev/null commit` (the token carries the `=value`),
+//     so it is spelled `Bash(git -c *)` instead - which also costs the worker
+//     benign `git -c user.name=...`, an acceptable trade for an airtight rule.
+//   - Prefix matching cannot see a flag that comes AFTER other arguments:
+//     `git commit -m x --no-verify` runs under every pattern below. That hole is
+//     closed by the PreToolUse guard (see worker_guard.go), which reads the whole
+//     command; these patterns are the cheap first line, not the wall.
 const workerDisallowedTools = "Bash(git push --force:*) Bash(git push -f:*) Bash(git push --force-with-lease:*) " +
-	"Bash(git reset --hard:*) Bash(gh pr merge:*) Bash(git merge:*)"
+	"Bash(git reset --hard:*) Bash(gh pr merge:*) Bash(git merge:*) " +
+	"Bash(git commit --no-verify:*) Bash(git commit -n:*) Bash(git push --no-verify:*) " +
+	"Bash(git -c *) Bash(git --config-env:*) " +
+	"Bash(git config core.hooksPath:*) Bash(git config --local core.hooksPath:*)"
 
 // prepareTimeout caps executor.prepare (a dependency install is minutes, a hang
 // must not eat the whole worker timeout).
@@ -989,14 +1020,14 @@ func runWorker(errOut io.Writer, dir string, args []string, timeout time.Duratio
 		// If the envelope made it through first, the run really did finish -
 		// honour the result instead of discarding a completed worker's work.
 		if errors.Is(err, exec.ErrWaitDelay) {
-			if res, sessionID, perr := parseClaudeResult(stdout.Bytes()); perr == nil {
+			if res, sessionID, perr := parseWorkerOutput(stdout.Bytes(), errOut, configDir, dir); perr == nil {
 				fmt.Fprintf(errOut, "pm work: worker left background processes holding stdout - killed them after %s\n", procWaitDelay)
 				return res, sessionID, nil
 			}
 		}
 		return nil, "", fmt.Errorf("claude worker failed: %w", err)
 	}
-	return parseClaudeResult(stdout.Bytes())
+	return parseWorkerOutput(stdout.Bytes(), errOut, configDir, dir)
 }
 
 // workerEnv returns the worker's environment with ANTHROPIC_API_KEY /

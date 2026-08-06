@@ -241,6 +241,26 @@ func TestBuildWorkerSystemPrompt(t *testing.T) {
 			mustContain(t, got, "zero NEW failures ON THE GATE")
 		}
 	})
+	t.Run("hooks may never be bypassed, a missing tool is an env defect", func(t *testing.T) {
+		for _, independent := range []bool{false, true} {
+			got := buildWorkerSystemPrompt(exec, false, independent)
+			mustContain(t, got, "NEVER bypass or neuter the project's git hooks")
+			mustContain(t, got, "core.hooksPath")
+			mustContain(t, got, "BLOCKED-ENV:")
+		}
+	})
+	t.Run("the bound verify command is the project's full validation", func(t *testing.T) {
+		got := buildWorkerSystemPrompt(exec, false, true)
+		mustContain(t, got, "use THE VERIFY PHASE'S BOUND COMMAND, verbatim")
+		mustContain(t, got, "may be a tuned wrapper")
+		mustContain(t, got, "- implement: ")
+		mustContain(t, got, "the verify phase's bound command if there is one")
+	})
+	t.Run("the structured result must be the last act", func(t *testing.T) {
+		got := buildWorkerSystemPrompt(exec, false, false)
+		mustContain(t, got, "Emit the structured result as your FINAL act")
+		mustContain(t, got, "retrieve (or kill) every background task")
+	})
 }
 
 func TestBuildClaudeArgs(t *testing.T) {
