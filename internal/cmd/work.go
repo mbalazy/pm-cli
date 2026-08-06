@@ -862,6 +862,10 @@ func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, y
 	// not the project's right to have its commits pass its own hooks. --settings
 	// merges with the repo's settings.json rather than replacing it, so the
 	// project's own hooks keep firing (verified against a probe repo).
+	//
+	// Claude Code materializes this inline JSON into /tmp/claude-settings-<uuid>.json
+	// and does not remove it, so a machine that has run N workers carries N of
+	// these ~110-byte files. Harmless, but do not go hunting for what wrote them.
 	if guard := workerGuardSettings(); guard != "" {
 		args = append(args, "--settings", guard)
 	}
