@@ -140,11 +140,12 @@ func buildWorkerSystemPrompt(exec storage.Executor, standalone, independent bool
 - Stay STRICTLY within the task's Acceptance Criteria. Do NOT add unrequested features, refactors, or "improvements" beyond the AC. Scope creep is a failure, not a bonus.
 - NEVER merge to main/master. NEVER force-push. NEVER hard-reset or delete branches you did not create.
 - Work ONLY on the current git branch. Do not switch branches.
+- NEVER bypass or neuter the project's git hooks. No ` + "`--no-verify`" + `/` + "`-n`" + `, no ` + "`git -c core.hooksPath=...`" + `, no ` + "`HUSKY=0`" + `-style env kills, no editing or deleting hook files. Hooks are where the project gates secret scanning, lint and formatting; a commit that skipped them is worse than no commit, because it reads as checked and is not. If a hook fails because a tool it needs is MISSING FROM THIS MACHINE (` + "`gitleaks: not found`" + `, ` + "`command not found`" + `), that is a defect of the runner, not an obstacle to route around: leave the change uncommitted, record ` + "`BLOCKED-ENV: <hook> needs <tool>, not installed on this runner - work is in the working tree, uncommitted`" + ` in ` + "`unresolved`" + `, carry on with whatever does not need a commit, and return "blocked". A human installing one binary is cheap; an unvetted commit on a shared branch is not.
 - Commit early and often: after each meaningful, self-contained change, make a small logical commit with a concise imperative message. Uncommitted work is lost if the run dies. But do NOT split ONE self-contained change across several commits for tidiness: where pre-commit hooks run, every commit pays their full cost, so a 3-way split of one small change triples it. One commit per separate unit of work, never per file.
 
 ## Inner loop
 Run these phases in order. The user prompt gives the BINDING for each phase (skill | cmd | generic | skip):
-1. implement - write the code. Per checkpoint: code -> CHEAP scoped checks only (lint the files you touched, in ONE pass with the linter's autofix enabled - e.g. ` + "`eslint --fix <files>`" + ` - never check, then fix, then check again: on a slow machine each extra invocation costs more than the fix itself) -> commit. Do NOT run the full type-check or test suite per checkpoint - in a large repo that burns minutes re-verifying what already passed. Instead run ONE full lint + typecheck pass when the implementation is complete, fix what it finds, and commit - review must see compiling code.
+1. implement - write the code. Per checkpoint: code -> CHEAP scoped checks only (lint the files you touched, in ONE pass with the linter's autofix enabled - e.g. ` + "`eslint --fix <files>`" + ` - never check, then fix, then check again: on a slow machine each extra invocation costs more than the fix itself) -> commit. Do NOT run the full type-check or test suite per checkpoint - in a large repo that burns minutes re-verifying what already passed. Instead run ONE full lint + typecheck pass when the implementation is complete, fix what it finds, and commit - review must see compiling code. For that pass use THE VERIFY PHASE'S BOUND COMMAND, verbatim, whenever the user prompt gives one: that command is this project's full validation as far as you are concerned, and it may be a tuned wrapper around the very script the repo's docs name (same checks, a fraction of the runtime). Running the documented equivalent instead - because CLAUDE.md or a README says to - pays the untuned cost, in full, twice per task.
 2. test - add/extend automated tests for what you built; commit them.
 3. review - get a FRESH, adversarial, diff-only review. This MUST be a different perspective than the implementer (a bound review skill, or independent reviewer subagents). Reviewers see ONLY the diff + the AC.
 4. fix - apply fixes for valid findings (review is read-only, so fixing is a separate step), commit, then re-review.
@@ -168,6 +169,8 @@ Run these phases in order. The user prompt gives the BINDING for each phase (ski
 - branch: the git branch you committed on.
 - commits: short hashes of the commits you created (empty if none).
 - unresolved: unresolved findings / blockers / open questions (empty if clean).
+
+Emit the structured result as your FINAL act, with nothing still running behind you. Before you emit it, retrieve (or kill) every background task you started, so no completion notification can arrive afterwards. The harness only reports the result while it is the last thing in the run: anything that forces one more turn after it - a late background notification is the usual culprit - discards the result, and pm then records your finished, committed work as a failed run.
 `)
 	if standalone {
 		sb.WriteString("\nStandalone mode: after a green verify, run the `pr` phase to open a DRAFT pull request for this branch. Leave it as a draft - a human reviews and merges.\n")
@@ -195,7 +198,7 @@ This task is one of several UNRELATED tasks in a batch. A human returns to every
 func genericPhasePrompt(phase string) string {
 	switch phase {
 	case storage.PhaseImplement:
-		return "Implement the smallest change that satisfies the AC, matching the repo's existing style and conventions. Commit after each logical unit, running only cheap scoped checks per commit - lint the changed files in ONE pass with autofix enabled (e.g. `eslint --fix <files>`), not check-then-fix-then-recheck. When the implementation is complete, run the repo's full linter + type-checker ONCE, fix findings, commit. Save the full test suite for the verify phase."
+		return "Implement the smallest change that satisfies the AC, matching the repo's existing style and conventions. Commit after each logical unit, running only cheap scoped checks per commit - lint the changed files in ONE pass with autofix enabled (e.g. `eslint --fix <files>`), not check-then-fix-then-recheck. When the implementation is complete, run the full linter + type-checker ONCE - the verify phase's bound command if there is one, otherwise the repo's own - fix findings, commit. Save the full test suite for the verify phase."
 	case storage.PhaseTest:
 		return "Add or extend automated tests covering the behavior you implemented, following the repo's existing test conventions. Commit them."
 	case storage.PhaseReview:
