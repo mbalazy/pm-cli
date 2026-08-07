@@ -9,6 +9,12 @@ type TaskStore interface {
 	ProjectDir(slug string) string
 	ProjectYAML(slug string) string
 
+	// Global config (<root>/config.yaml) - the registry of remote pm runners.
+	// Global rather than per project because one remote runner serves many
+	// projects; see storage/config.go.
+	ConfigPath() string
+	LoadConfig() (*PMConfig, error)
+
 	// Projects - read
 	ListProjects() ([]string, error)
 	ListActiveProjects() ([]string, error)
