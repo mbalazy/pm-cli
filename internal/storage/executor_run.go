@@ -136,6 +136,14 @@ func FinishRunLogPath(projectDir, taskID string) string {
 	return filepath.Join(executorRunDir(projectDir), taskID+finishRunInfix+".log")
 }
 
+// FinishReportPath is where an acceptance run's final markdown report is
+// written - the artifact a human reads in the morning, beside the run-state it
+// belongs to. Deliberately NOT a `.json`, so readRunStatesDir never has to
+// consider it at all.
+func FinishReportPath(projectDir, taskID string) string {
+	return filepath.Join(executorRunDir(projectDir), taskID+finishRunInfix+".md")
+}
+
 // runStatePath is the ONE place that decides which file a run-state belongs in.
 // Keeping the decision here (rather than in a second write function callers
 // must remember to pick) is why WriteRunState/RunWriter need no finish-aware

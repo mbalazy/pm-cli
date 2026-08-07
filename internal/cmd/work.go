@@ -888,18 +888,57 @@ func modeLabel(standalone bool) string {
 	return "epic"
 }
 
+// claudeRun is what genuinely differs between the two kinds of headless run pm
+// spawns: the WORKER (`pm work` / `pm run-epic`) and the ACCEPTANCE
+// (`pm finish`). Everything else about the invocation - the config-dir pinning,
+// the process group, the guard hook - is identical for both, so only the pieces
+// that vary live here.
+type claudeRun struct {
+	prompt    string
+	sysPrompt string
+	sessionID string
+	model     string
+	maxTurns  int
+	yolo      bool
+	// schema validates the run's structured output. It is a parameter rather
+	// than a constant inside buildClaudeArgsFor because the two contracts are
+	// different shapes: an acceptance forced into workerResultSchema would have
+	// to drop its per-sub verdicts, and with them the visual_claims_open counts
+	// that are the whole point of accepting a batch nobody watched.
+	schema string
+	// agents is the --agents payload; empty attaches none. The acceptance run
+	// has no review phase, so defining a reviewer agent type for it would
+	// describe an agent nothing spawns.
+	agents string
+	guard  guardOptions
+}
+
 // buildClaudeArgs assembles the `claude -p` argv for a worker run.
 func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, yolo bool, guard guardOptions) []string {
+	return buildClaudeArgsFor(claudeRun{
+		prompt: prompt, sysPrompt: sysPrompt, sessionID: sessionID,
+		model: model, maxTurns: maxTurns, yolo: yolo,
+		schema: workerResultSchema,
+		// The reviewer agent type is defined by pm, never by a file in the
+		// project repo: `pm work` requires a clean tree, so a `.claude/agents/`
+		// file written per run would dirty it on every single one.
+		agents: reviewerAgentsJSON(guard.reviewModel),
+		guard:  guard,
+	})
+}
+
+// buildClaudeArgsFor assembles the `claude -p` argv for any headless run.
+func buildClaudeArgsFor(r claudeRun) []string {
 	args := []string{
-		"-p", prompt,
-		"--append-system-prompt", sysPrompt,
+		"-p", r.prompt,
+		"--append-system-prompt", r.sysPrompt,
 		"--output-format", "json",
-		"--json-schema", workerResultSchema,
-		"--model", model,
-		"--max-turns", fmt.Sprintf("%d", maxTurns),
+		"--json-schema", r.schema,
+		"--model", r.model,
+		"--max-turns", fmt.Sprintf("%d", r.maxTurns),
 	}
-	if sessionID != "" {
-		args = append(args, "--session-id", sessionID)
+	if r.sessionID != "" {
+		args = append(args, "--session-id", r.sessionID)
 	}
 	// The hook guard rides along in BOTH modes: --yolo waives permission prompts,
 	// not the project's right to have its commits pass its own hooks. --settings
@@ -909,16 +948,13 @@ func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, y
 	// Claude Code materializes this inline JSON into /tmp/claude-settings-<uuid>.json
 	// and does not remove it, so a machine that has run N workers carries N of
 	// these ~110-byte files. Harmless, but do not go hunting for what wrote them.
-	if settings := workerGuardSettings(guard); settings != "" {
+	if settings := workerGuardSettings(r.guard); settings != "" {
 		args = append(args, "--settings", settings)
 	}
-	// The reviewer agent type is defined by pm, never by a file in the project
-	// repo: `pm work` requires a clean tree, so a `.claude/agents/` file written
-	// per run would dirty it on every single one.
-	if agents := reviewerAgentsJSON(guard.reviewModel); agents != "" {
-		args = append(args, "--agents", agents)
+	if r.agents != "" {
+		args = append(args, "--agents", r.agents)
 	}
-	if yolo {
+	if r.yolo {
 		args = append(args, "--dangerously-skip-permissions")
 	} else {
 		args = append(args,
@@ -1055,6 +1091,22 @@ func captureBaseline(errOut io.Writer, dir, command string) string {
 // worker that dies without an envelope can still be asked what it said - see
 // workerLastWords.
 func runWorker(errOut io.Writer, dir string, args []string, timeout time.Duration, configDir string, extraEnv []string, sessionID string, onSpawn func(pgid int)) (*workerResult, string, error) {
+	return runHeadless(errOut, "pm work", dir, args, timeout, configDir, extraEnv, sessionID, onSpawn, parseWorkerOutput)
+}
+
+// envelopeParser turns a `claude -p --output-format json` envelope into a typed
+// result plus the session id. It is the ONLY thing runHeadless needs to know
+// about the shape of the run it is driving, which is what lets the worker and
+// the acceptance share every line of the process handling below - the deadline,
+// the process group, the stderr tail, the WaitDelay recovery and the
+// last-words death report are all properties of running `claude -p`, not of
+// either contract.
+type envelopeParser[T any] func(data []byte, errOut io.Writer, configDir, dir string) (*T, string, error)
+
+// runHeadless invokes claude headless in dir under a wall-clock deadline and
+// parses its envelope with parse. label prefixes the progress lines so a reader
+// of a run log can tell which command produced them.
+func runHeadless[T any](errOut io.Writer, label, dir string, args []string, timeout time.Duration, configDir string, extraEnv []string, sessionID string, onSpawn func(pgid int), parse envelopeParser[T]) (*T, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -1080,14 +1132,14 @@ func runWorker(errOut io.Writer, dir string, args []string, timeout time.Duratio
 		// If the envelope made it through first, the run really did finish -
 		// honour the result instead of discarding a completed worker's work.
 		if errors.Is(err, exec.ErrWaitDelay) {
-			if res, sessionID, perr := parseWorkerOutput(stdout.Bytes(), errOut, configDir, dir); perr == nil {
-				fmt.Fprintf(errOut, "pm work: worker left background processes holding stdout - killed them after %s\n", procWaitDelay)
+			if res, sessionID, perr := parse(stdout.Bytes(), errOut, configDir, dir); perr == nil {
+				fmt.Fprintf(errOut, "%s: worker left background processes holding stdout - killed them after %s\n", label, procWaitDelay)
 				return res, sessionID, nil
 			}
 		}
 		return nil, sessionID, workerDeathError(configDir, dir, sessionID, stderrTail.String(), err)
 	}
-	return parseWorkerOutput(stdout.Bytes(), errOut, configDir, dir)
+	return parse(stdout.Bytes(), errOut, configDir, dir)
 }
 
 // workerDeathError turns a bare non-zero exit into an error that says what the
