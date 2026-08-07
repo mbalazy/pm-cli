@@ -44,6 +44,11 @@ type JournalSub struct {
 	Session   string  `json:"session,omitempty"`    // worker session id -> transcript .jsonl
 	Turns     int     `json:"turns,omitempty"`      // claude envelope num_turns (0 for skips)
 	CostUSD   float64 `json:"cost_usd,omitempty"`   // claude envelope total_cost_usd
+	// Review is the review-phase rollup (spawns, rounds, model). Absent on every
+	// line written before it existed, which is why it is a pointer: a retro
+	// comparing against the pre-change baseline must be able to tell "no
+	// telemetry recorded" from "zero reviewers spawned".
+	Review *ReviewTelemetry `json:"review,omitempty"`
 }
 
 // JournalEntry is one line in the executor journal.

@@ -73,6 +73,10 @@ type SubRun struct {
 	// Worker run stats from the claude envelope (0 for skips/manual).
 	Turns   int     `json:"turns,omitempty"`
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// Review is what the worker's review phase actually did - spawns, rounds and
+	// model, collected by the worker guard hook. Nil when nothing was observed
+	// (a skip, a sub that spawned nothing, or a run from before this existed).
+	Review *ReviewTelemetry `json:"review,omitempty"`
 }
 
 func executorRunDir(projectDir string) string {

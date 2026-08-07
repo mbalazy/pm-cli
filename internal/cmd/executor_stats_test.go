@@ -989,3 +989,74 @@ func TestExecutorStatsCmdRegistered(t *testing.T) {
 	}
 	t.Fatal("`stats` is not registered under `pm executor`")
 }
+
+// The review section must survive a journal that mixes lines written before the
+// telemetry existed with lines written after. That mix is the normal state of
+// every real journal - orbit's carries entries back to June 2026 - and a
+// retro comparing against the pre-change baseline reads both halves at once.
+func TestRenderJournalStatsReviewSectionAcrossOldAndNewEntries(t *testing.T) {
+	st := aggregateJournal([]storage.JournalEntry{
+		startEntry("run-epic", "app-1", 100),
+		{
+			Event: storage.JournalEventEnd, Kind: "run-epic", TaskID: "app-1", PID: 100,
+			Status: "done", DurationS: 900,
+			Subs: []storage.JournalSub{
+				// Pre-telemetry: no Review field at all.
+				{ID: "app-1-1", Result: "merged", DurationS: 400, Turns: 50, CostUSD: 3},
+				{ID: "app-1-2", Result: "merged", DurationS: 500, Turns: 60, CostUSD: 4},
+			},
+		},
+		startEntry("run-epic", "app-2", 101),
+		{
+			Event: storage.JournalEventEnd, Kind: "run-epic", TaskID: "app-2", PID: 101,
+			Status: "done", DurationS: 600,
+			Subs: []storage.JournalSub{
+				{ID: "app-2-1", Result: "merged", DurationS: 300, Turns: 20, CostUSD: 1,
+					Review: &storage.ReviewTelemetry{Spawns: 4, Rounds: 3, Nested: 1, Models: "opus"}},
+				// A worker that spawned nobody: a real measurement, and it must
+				// pull the average down rather than drop out of it.
+				{ID: "app-2-2", Result: "merged", DurationS: 200, Turns: 10, CostUSD: 1,
+					Review: &storage.ReviewTelemetry{Spawns: 0, Rounds: 0}},
+			},
+		},
+	}, ignoreRef(noneAlive), testNow)
+
+	if st.ReviewSubs != 2 {
+		t.Errorf("ReviewSubs = %d, want 2 (the pre-telemetry subs must not count)", st.ReviewSubs)
+	}
+	if st.Spawns.Total != 4 || st.Spawns.Samples != 2 {
+		t.Errorf("spawns = %+v, want 4 over 2 samples (zero is a sample)", st.Spawns)
+	}
+	if got := st.Spawns.avg(); got != 2 {
+		t.Errorf("spawn avg = %v, want 2 - averaging over measured subs only", got)
+	}
+	out := renderJournalStats("app", "/tmp/app/.executor/journal.jsonl", st)
+	for _, want := range []string{
+		"## Review phase (2 of 4 worker-backed sub(s) measured)",
+		"spawns    4 total, 2.0 avg per sub",
+		"rounds    3 total, 1.5 avg per sub",
+		"nested    1 spawn(s) issued from inside another subagent",
+		"model     opus",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stats output missing %q\n---\n%s", want, out)
+		}
+	}
+}
+
+// A journal with no telemetry at all prints no review section: a block of zeros
+// would read as "the review phase did nothing", which is a different claim from
+// "this was never measured".
+func TestRenderJournalStatsOmitsReviewSectionWhenUnmeasured(t *testing.T) {
+	st := aggregateJournal([]storage.JournalEntry{
+		startEntry("run-epic", "app-1", 100),
+		{
+			Event: storage.JournalEventEnd, Kind: "run-epic", TaskID: "app-1", PID: 100,
+			Status: "done", DurationS: 900,
+			Subs: []storage.JournalSub{{ID: "app-1-1", Result: "merged", Turns: 50, CostUSD: 3}},
+		},
+	}, ignoreRef(noneAlive), testNow)
+	if out := renderJournalStats("app", "/tmp/j.jsonl", st); strings.Contains(out, "Review phase") {
+		t.Errorf("unmeasured journal must not print a review section:\n%s", out)
+	}
+}

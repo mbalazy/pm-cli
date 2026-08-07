@@ -57,6 +57,10 @@ type workerResult struct {
 	// journal so retros can weigh outcomes by effort/cost.
 	Turns   int     `json:"turns,omitempty"`
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// Review is the review-phase telemetry the worker guard hook collected while
+	// this worker ran. Same standing as Turns/CostUSD: observed by pm, never
+	// claimed by the worker, and deliberately absent from workerResultSchema.
+	Review *storage.ReviewTelemetry `json:"review,omitempty"`
 }
 
 // claudeEnvelope is the `claude -p --output-format json` result envelope. The
@@ -460,6 +464,11 @@ type workPlan struct {
 	// worker (standalone runs only - epic subs receive the manager's shared
 	// capture via opts.baseline instead, already baked into prompt/cmdArgs).
 	baselineCmd string
+	// telemetryPath is where the worker guard hook records this worker's
+	// subagent spawns. Keyed by sessionID, so it is known before the worker
+	// starts and two concurrent workers never share a file. Lives in the pm data
+	// dir next to the run-state, NOT in the git repo.
+	telemetryPath string
 }
 
 // warnInertFlags surfaces flag combinations that silently do nothing. A
@@ -584,7 +593,8 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 	}
 	prompt := buildPrompt(workDir)
 	sysPrompt := buildWorkerSystemPrompt(exec, opts.standalone, opts.independent)
-	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo)
+	telemetryPath := storage.ReviewTelemetryPath(store.ProjectDir(task.Project), sessionID)
+	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo, telemetryPath)
 
 	// Standalone only: the epic manager runs prepare ITSELF, once per run,
 	// right after claiming the slot - not per sub (5 subs must not mean 5
@@ -604,7 +614,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		proj: proj, branch: branch, sessionID: sessionID,
 		prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs,
 		workDir: workDir, worktree: opts.additional, base: base, env: env, slots: slots,
-		prepare: prepare, baselineCmd: baselineCmd,
+		prepare: prepare, baselineCmd: baselineCmd, telemetryPath: telemetryPath,
 		buildPrompt: buildPrompt, opts: opts,
 	}, nil
 }
@@ -618,7 +628,7 @@ func (p *workPlan) retarget(dir string, env []string) {
 	p.workDir = dir
 	p.env = env
 	p.prompt = p.buildPrompt(dir)
-	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.maxTurns, p.opts.yolo)
+	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.maxTurns, p.opts.yolo, p.telemetryPath)
 }
 
 // workerHeartbeatInterval is how often a live worker's run-state is re-stamped.
@@ -680,7 +690,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		fmt.Fprintf(opts.stderr(), "pm work: baseline in %s: %s\n", dir, plan.baselineCmd)
 		if section := captureBaseline(opts.stderr(), dir, plan.baselineCmd); section != "" {
 			plan.prompt += "\n" + section
-			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo)
+			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.telemetryPath)
 			baselineUsed = plan.baselineCmd
 		}
 	}
@@ -757,6 +767,10 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	if runw != nil {
 		hbw = runw
 	}
+	// Create the telemetry file before the worker starts, so a worker that
+	// spawned nobody leaves an empty file rather than no file - see
+	// storage.InitReviewTelemetry.
+	storage.InitReviewTelemetry(plan.telemetryPath)
 	stopHeartbeat := hbw.Heartbeat(workerHeartbeatInterval)
 	// Stopping is idempotent, so the defer only matters if runWorker panics -
 	// without it a panic would leave a goroutine stamping "running" forever.
@@ -780,6 +794,15 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		run.CurrentSession = ""
 		run.WorkerPGID = 0
 	})
+	// Review telemetry is collected here, off the file the guard hook appended to
+	// during the run - BEFORE the error branches, because a worker that died is
+	// exactly the one whose review behaviour is worth having a record of. Keyed
+	// on plan.sessionID (what pm pinned and baked into the hook command), not on
+	// the id the envelope reports, which a dead worker never sends.
+	telemetry := storage.CollectReviewTelemetry(store.ProjectDir(task.Project), plan.sessionID)
+	if res != nil {
+		res.Review = telemetry
+	}
 	if err != nil {
 		if runw != nil {
 			_ = runw.Update(func(run *storage.RunState) {
@@ -789,10 +812,11 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 				if len(run.Subs) > 0 {
 					run.Subs[0].Status = storage.RunStatusFailed
 					run.Subs[0].Note = err.Error()
+					run.Subs[0].Review = telemetry
 				}
 			})
 			journalEnd(storage.RunStatusFailed, err.Error(),
-				storage.JournalSub{Result: "failed", Note: err.Error(), Session: plan.sessionID})
+				storage.JournalSub{Result: "failed", Note: err.Error(), Session: plan.sessionID, Review: telemetry})
 		}
 		return nil, err
 	}
@@ -807,6 +831,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 					run.Subs[0].Note = err.Error()
 					run.Subs[0].Turns = res.Turns
 					run.Subs[0].CostUSD = res.CostUSD
+					run.Subs[0].Review = telemetry
 				}
 			})
 			// The worker itself succeeded here (only the post-processing
@@ -814,7 +839,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			// off the claude envelope - unlike the runWorker-failure branch
 			// above, where res is nil and those fields stay zero.
 			journalEnd(storage.RunStatusFailed, err.Error(),
-				storage.JournalSub{Result: "failed", Note: err.Error(), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD})
+				storage.JournalSub{Result: "failed", Note: err.Error(), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Review: telemetry})
 		}
 		return nil, err
 	}
@@ -830,10 +855,11 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 				run.Subs[0].Commits = res.Commits
 				run.Subs[0].Turns = res.Turns
 				run.Subs[0].CostUSD = res.CostUSD
+				run.Subs[0].Review = telemetry
 			}
 		})
 		journalEnd(storage.RunStatusDone, "",
-			storage.JournalSub{Result: res.Status, Note: strings.TrimSpace(res.Summary), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD})
+			storage.JournalSub{Result: res.Status, Note: strings.TrimSpace(res.Summary), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Review: telemetry})
 	}
 	return res, nil
 }
@@ -846,7 +872,7 @@ func modeLabel(standalone bool) string {
 }
 
 // buildClaudeArgs assembles the `claude -p` argv for a worker run.
-func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, yolo bool) []string {
+func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, yolo bool, telemetryPath string) []string {
 	args := []string{
 		"-p", prompt,
 		"--append-system-prompt", sysPrompt,
@@ -866,7 +892,7 @@ func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, y
 	// Claude Code materializes this inline JSON into /tmp/claude-settings-<uuid>.json
 	// and does not remove it, so a machine that has run N workers carries N of
 	// these ~110-byte files. Harmless, but do not go hunting for what wrote them.
-	if guard := workerGuardSettings(); guard != "" {
+	if guard := workerGuardSettings(telemetryPath); guard != "" {
 		args = append(args, "--settings", guard)
 	}
 	if yolo {

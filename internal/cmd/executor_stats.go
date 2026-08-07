@@ -95,6 +95,16 @@ type journalStats struct {
 	SubDuration numStat
 	Turns       numStat
 	Cost        numStat
+	// Review-phase telemetry, over the subs that carry it. ReviewSubs is its own
+	// denominator on purpose: subs from before the telemetry existed report
+	// nothing, and averaging over all subs would quietly dilute the very number
+	// a retro is checking.
+	ReviewSubs   int
+	Spawns       numStat
+	Rounds       numStat
+	NestedSpawns int
+	DiffSpawns   int
+	ReviewModels map[string]int // model (or "inherit") -> subs that asked for it
 }
 
 // runKey identifies a run across its start/terminal lines.
@@ -323,6 +333,25 @@ func (s *journalStats) addSubs(subs []storage.JournalSub) {
 		s.SubDuration.add(float64(sub.DurationS))
 		s.Turns.add(float64(sub.Turns))
 		s.Cost.add(sub.CostUSD)
+		if r := sub.Review; r != nil {
+			s.ReviewSubs++
+			// addSample, not add: a sub that spawned zero reviewers is a real
+			// observation and must pull the average DOWN, which is the whole
+			// point of measuring. (add() skips zeros, which is right for
+			// turns/cost - there a zero means "not reported".)
+			s.Spawns.addSample(float64(r.Spawns))
+			s.Rounds.addSample(float64(r.Rounds))
+			s.NestedSpawns += r.Nested
+			s.DiffSpawns += r.WithDiff
+			if s.ReviewModels == nil {
+				s.ReviewModels = map[string]int{}
+			}
+			models := r.Models
+			if models == "" {
+				models = "unknown"
+			}
+			s.ReviewModels[models]++
+		}
 	}
 }
 
@@ -458,7 +487,35 @@ func renderJournalStats(slug, path string, st journalStats) string {
 		st.Turns.Total, st.Turns.avg(), st.Turns.Samples)
 	fmt.Fprintf(&b, "  cost      $%.2f total, $%.2f avg (%d sub(s))\n",
 		st.Cost.Total, st.Cost.avg(), st.Cost.Samples)
+	renderReviewStats(&b, st)
 	return b.String()
+}
+
+// renderReviewStats prints the review-phase section. Omitted entirely when no
+// sub carries telemetry - on a journal written before it existed there is
+// nothing to say, and a block of zeros would read as "the review phase did
+// nothing" rather than "this was not measured".
+func renderReviewStats(b *strings.Builder, st journalStats) {
+	if st.ReviewSubs == 0 {
+		return
+	}
+	worked, _ := st.workerBacked()
+	fmt.Fprintf(b, "\n## Review phase (%d of %d worker-backed sub(s) measured)\n", st.ReviewSubs, worked)
+	fmt.Fprintf(b, "  spawns    %.0f total, %.1f avg per sub\n", st.Spawns.Total, st.Spawns.avg())
+	fmt.Fprintf(b, "  rounds    %.0f total, %.1f avg per sub\n", st.Rounds.Total, st.Rounds.avg())
+	if st.Spawns.Total > 0 {
+		fmt.Fprintf(b, "  with diff %d of %.0f spawn(s) were handed the diff\n", st.DiffSpawns, st.Spawns.Total)
+	}
+	if st.NestedSpawns > 0 {
+		// Called out rather than folded into the total: these are spawned from
+		// inside another subagent, so a cap that only watches the worker never
+		// sees them (orbit-106-3: one reviewer's own Explore subagent
+		// burned 6.1M tokens over 65 tool calls).
+		fmt.Fprintf(b, "  nested    %d spawn(s) issued from inside another subagent\n", st.NestedSpawns)
+	}
+	for _, m := range orderedKeys(st.ReviewModels, nil, false) {
+		fmt.Fprintf(b, "  model     %-16s %d sub(s)\n", m, st.ReviewModels[m])
+	}
 }
 
 // fmtDuration renders seconds as a compact human duration (e.g. "1h04m", "7m12s").

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/mbalazy/pm/internal/storage"
 	"github.com/spf13/cobra"
 )
 
@@ -150,12 +151,61 @@ func guardWriteDenyMessage(p string) string {
 }
 
 // hookEvent is the PreToolUse payload Claude Code writes to the hook's stdin.
+//
+// AgentID/AgentType are present ONLY when the call comes from inside a subagent
+// (measured 2026-08-07 against claude 2.1.224) - that is what makes a nested
+// spawn distinguishable from one the worker issued itself. SessionID is NOT a
+// discriminator: the worker and its subagents share it.
 type hookEvent struct {
 	ToolName  string `json:"tool_name"`
+	SessionID string `json:"session_id"`
+	AgentID   string `json:"agent_id"`
+	AgentType string `json:"agent_type"`
 	ToolInput struct {
-		Command  string `json:"command"`
-		FilePath string `json:"file_path"`
+		Command      string `json:"command"`
+		FilePath     string `json:"file_path"`
+		Model        string `json:"model"`
+		SubagentType string `json:"subagent_type"`
+		Prompt       string `json:"prompt"`
 	} `json:"tool_input"`
+}
+
+// agentToolNames are the spellings of the subagent-spawning tool. Both are
+// live in ONE build: claude 2.1.224 sends `tool_name: "Agent"` to the hook and
+// reports the very same call as `"tool_name": "Task"` in the envelope's
+// permission_denials (measured 2026-08-07), and older builds used Task
+// throughout. Matching one name only would miss half the reality.
+var agentToolNames = map[string]bool{"Agent": true, "Task": true}
+
+// diffMarkers are the shapes a real diff carries in a prompt. Used to record
+// whether the worker handed its reviewer the diff or sent it to go dig one up
+// itself - the 16 reviewers in epic orbit-106 pulled 2.27M characters
+// out of the repo because they were handed a 1.9-4.8kB prompt and no diff.
+var diffMarkers = []string{"diff --git", "\n@@ ", "```diff"}
+
+func promptCarriesDiff(prompt string) bool {
+	for _, m := range diffMarkers {
+		if strings.Contains(prompt, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// recordReviewSpawn writes one telemetry line for a subagent spawn. Best-effort
+// by design: this is observability, and a worker must never die because a
+// telemetry file could not be written.
+func recordReviewSpawn(telemetryPath string, ev hookEvent) {
+	if telemetryPath == "" {
+		return
+	}
+	_ = storage.AppendReviewSpawn(telemetryPath, storage.ReviewSpawn{
+		Model:        ev.ToolInput.Model,
+		SubagentType: ev.ToolInput.SubagentType,
+		HasDiff:      promptCarriesDiff(ev.ToolInput.Prompt),
+		Nested:       ev.AgentID != "",
+		AgentType:    ev.AgentType,
+	})
 }
 
 // runWorkerGuard implements the hook: exit 2 (with the reason on stderr) blocks
@@ -165,7 +215,7 @@ type hookEvent struct {
 // 0. A guard that fails closed would break every worker on the machine the first
 // time the payload shape changes, and it is not the last line of defence: the
 // disallow list and the prompt rule cover the same ground.
-func runWorkerGuard(in io.Reader, errOut io.Writer) int {
+func runWorkerGuard(in io.Reader, errOut io.Writer, telemetryPath string) int {
 	data, err := io.ReadAll(io.LimitReader(in, 1<<20))
 	if err != nil || len(data) == 0 {
 		return 0
@@ -185,30 +235,37 @@ func runWorkerGuard(in io.Reader, errOut io.Writer) int {
 			fmt.Fprintln(errOut, guardWriteDenyMessage(ev.ToolInput.FilePath))
 			return 2
 		}
+	case agentToolNames[ev.ToolName]:
+		// Observation only for now - the spawn is always allowed. Enforcing a
+		// cap here is a separate change with its own probe.
+		recordReviewSpawn(telemetryPath, ev)
 	}
 	return 0
 }
 
 func newWorkerGuardCmd() *cobra.Command {
-	return &cobra.Command{
+	var telemetry string
+	c := &cobra.Command{
 		Use:    "worker-guard",
 		Short:  "PreToolUse hook for headless workers (internal)",
-		Long:   "Reads a Claude Code PreToolUse payload on stdin and blocks Bash commands that would bypass the project's git hooks. Attached automatically to every executor worker; not meant to be run by hand.",
+		Long:   "Reads a Claude Code PreToolUse payload on stdin, blocks Bash commands and file writes that would bypass the project's git hooks, and records subagent spawns for review telemetry. Attached automatically to every executor worker; not meant to be run by hand.",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if code := runWorkerGuard(cmd.InOrStdin(), cmd.ErrOrStderr()); code != 0 {
+			if code := runWorkerGuard(cmd.InOrStdin(), cmd.ErrOrStderr(), telemetry); code != 0 {
 				os.Exit(code)
 			}
 			return nil
 		},
 	}
+	c.Flags().StringVar(&telemetry, "telemetry", "", "path to the review telemetry JSONL for this worker")
+	return c
 }
 
 // workerGuardSettings renders the --settings payload that attaches the guard to a
 // worker, or "" when pm cannot resolve its own binary (the guard is then simply
 // absent - the disallow list and prompt rule still stand).
-func workerGuardSettings() string {
+func workerGuardSettings(telemetryPath string) string {
 	exe, err := os.Executable()
 	if err != nil || exe == "" {
 		return ""
@@ -221,7 +278,11 @@ func workerGuardSettings() string {
 		Matcher string    `json:"matcher"`
 		Hooks   []hookCmd `json:"hooks"`
 	}
-	hook := []hookCmd{{Type: "command", Command: quoteForShell(exe) + " worker-guard"}}
+	cmdLine := quoteForShell(exe) + " worker-guard"
+	if telemetryPath != "" {
+		cmdLine += " --telemetry " + quoteForShell(telemetryPath)
+	}
+	hook := []hookCmd{{Type: "command", Command: cmdLine}}
 	// Two entries, not one alternation: the "Bash" matcher is the one verified
 	// against a live claude (2026-08-06) and stays spelled exactly as it was.
 	// The write matcher is a second, independent entry, so if this build of
@@ -235,11 +296,18 @@ func workerGuardSettings() string {
 	// guard is attached in --yolo too, where the allow/disallow lists are not
 	// passed at all - a rule that only exists in the allowlist protects exactly
 	// the runs that need it least.
+	//
+	// The third entry is the subagent-spawn tool, matched under BOTH its
+	// spellings (see agentToolNames). It is observation-only today: the guard
+	// records the spawn and allows it. Measured 2026-08-07 on claude 2.1.224
+	// via this exact --settings path, with the repo's own settings.json removed:
+	// the matcher fires and the payload carries subagent_type/model/prompt.
 	payload := map[string]any{
 		"hooks": map[string]any{
 			"PreToolUse": []matcher{
 				{Matcher: "Bash", Hooks: hook},
 				{Matcher: "Write|Edit|MultiEdit|NotebookEdit", Hooks: hook},
+				{Matcher: "Agent|Task", Hooks: hook},
 			},
 		},
 	}
