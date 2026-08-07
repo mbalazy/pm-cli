@@ -33,6 +33,11 @@ func TestBashCommandBlocked(t *testing.T) {
 		{"tee into the hook", `echo "exit 0" | tee .git/hooks/pre-commit`},
 		{"copy over the hook", `cp /dev/null .git/hooks/pre-commit`},
 		{"quoted hook path", `echo "exit 0" > ".git/hooks/pre-commit"`},
+		// The message payload is stripped before matching; the flags around it
+		// are not, so a real bypass hiding behind a chatty message still lands.
+		{"prose plus a real trailing flag", `git commit -m "add -n flag support" -n`},
+		{"prose plus a real long flag", `git commit -m "describe the -n flag" --no-verify`},
+		{"message then a hook removal", `git commit -m "tidy up" && rm .husky/pre-commit`},
 	}
 	for _, c := range blocked {
 		if ok, _ := bashCommandBlocked(c.cmd); !ok {
@@ -59,11 +64,38 @@ func TestBashCommandBlocked(t *testing.T) {
 		{"redirect to a lookalike name", `git diff > .husky.diff`},
 		{"sed reading the hook", `sed -n "1,5p" .git/hooks/pre-commit`},
 		{"commit message mentioning the word", `git commit -m "document the no-verify ban"`},
+		// Prose in a commit message is not an action. Each of these was blocked
+		// before the payload was stripped, with a lecture about bypassing hooks.
+		{"message describing the -n flag", `git commit -m "add -n flag support to the parser"`},
+		{"message describing --no-verify", `git commit -m "document the --no-verify ban"`},
+		{"message mentioning core.hooksPath", `git commit -m "set core.hooksPath in the installer"`},
+		{"combined short flag", `git commit -am "drop the --no-verify escape hatch"`},
+		{"long message flag", `git commit --message="stop honouring HUSKY=0"`},
+		{"message naming a hook file", `git commit -m "regenerate .husky/pre-commit from the template"`},
+		{"single-quoted message", `git commit -m 'explain why -n is refused'`},
 		{"empty", ``},
 	}
 	for _, c := range allowed {
 		if ok, what := bashCommandBlocked(c.cmd); ok {
 			t.Errorf("%s: %q must be allowed, blocked as %s", c.name, c.cmd, what)
+		}
+	}
+}
+
+// The boundary of the message fix, stated directly: the payload goes, the flags
+// around it stay. A test on the tables alone would not say which half moved.
+func TestStripMessagePayload(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`git commit -m "add -n flag support"`, `git commit -m MSG`},
+		{`git commit -m "x" --no-verify`, `git commit -m MSG --no-verify`},
+		{`git commit -am 'both -n and --no-verify'`, `git commit -am MSG`},
+		{`git commit --message="HUSKY=0 is banned"`, `git commit --message MSG`},
+		{`git commit -m fix && rm .husky/pre-commit`, `git commit -m MSG && rm .husky/pre-commit`},
+		{`git push --no-verify origin HEAD`, `git push --no-verify origin HEAD`},
+	}
+	for _, c := range cases {
+		if got := stripMessagePayload(c.in); got != c.want {
+			t.Errorf("stripMessagePayload(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
