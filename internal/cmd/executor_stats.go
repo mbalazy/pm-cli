@@ -506,7 +506,13 @@ func renderReviewStats(b *strings.Builder, st journalStats) {
 	fmt.Fprintf(b, "  spawns    %.0f total, %.1f avg per sub\n", st.Spawns.Total, st.Spawns.avg())
 	fmt.Fprintf(b, "  rounds    %.0f total, %.1f avg per sub\n", st.Rounds.Total, st.Rounds.avg())
 	if st.Spawns.Total > 0 {
-		fmt.Fprintf(b, "  with diff %d of %.0f spawn(s) were handed the diff\n", st.DiffSpawns, st.Spawns.Total)
+		// Both this and the model line below report what the WORKER asked for,
+		// not what pm delivered - pm attaches the diff to the rest and pins the
+		// model on all of them. Reporting pm's own substitutions would make this
+		// agree with pm by construction; what is worth measuring is how far the
+		// prompt rules are followed on their own.
+		fmt.Fprintf(b, "  with diff %d of %.0f spawn(s) arrived carrying a diff (pm attached one to the rest)\n",
+			st.DiffSpawns, st.Spawns.Total)
 	}
 	if st.DeniedSpawns > 0 {
 		// The only visible evidence that the cap did anything. Without it an
@@ -521,7 +527,11 @@ func renderReviewStats(b *strings.Builder, st journalStats) {
 		fmt.Fprintf(b, "  nested    %d spawn(s) issued from inside another subagent\n", st.NestedSpawns)
 	}
 	for _, m := range orderedKeys(st.ReviewModels, nil, false) {
-		fmt.Fprintf(b, "  model     %-16s %d sub(s)\n", m, st.ReviewModels[m])
+		label := m
+		if m == "inherit" {
+			label = "inherit (pm pinned)"
+		}
+		fmt.Fprintf(b, "  model     %-20s %d sub(s)  (asked for by the worker)\n", label, st.ReviewModels[m])
 	}
 }
 
