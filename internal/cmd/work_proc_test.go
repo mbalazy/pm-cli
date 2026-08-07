@@ -159,7 +159,7 @@ func TestRunWorkerTimeoutKillsWholeWorkerTree(t *testing.T) {
 	var res *workerResult
 	var err error
 	f.run(func() {
-		res, _, err = runWorker(os.Stderr, t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil, nil)
+		res, _, err = runWorker(os.Stderr, t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil, "", nil)
 	})
 
 	gcPid, cPid := f.awaitPid(grandchild), f.awaitPid(child)
@@ -185,7 +185,7 @@ func TestRunWorkerTimeoutKillsWorkerIgnoringSIGTERM(t *testing.T) {
 
 	var err error
 	f.run(func() {
-		_, _, err = runWorker(os.Stderr, t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil, nil)
+		_, _, err = runWorker(os.Stderr, t.TempDir(), []string{"-p", "x"}, 1500*time.Millisecond, "", nil, "", nil)
 	})
 
 	pid := f.awaitPid(grandchild)
@@ -208,7 +208,7 @@ func TestRunWorkerOrphanHoldingStdoutDoesNotHang(t *testing.T) {
 	var res *workerResult
 	var err error
 	f.run(func() {
-		res, _, err = runWorker(os.Stderr, t.TempDir(), []string{"-p", "x"}, time.Minute, "", nil, nil)
+		res, _, err = runWorker(os.Stderr, t.TempDir(), []string{"-p", "x"}, time.Minute, "", nil, "", nil)
 	})
 
 	pid := f.awaitPid(grandchild)
@@ -273,7 +273,7 @@ const forwardChildEnv = "PM_TEST_FORWARD_CHILD"
 func TestForwardedSignalTakesTheWorkerTreeDown(t *testing.T) {
 	if dir := os.Getenv(forwardChildEnv); dir != "" {
 		// Manager role: block on a worker that would otherwise run for 10m.
-		_, _, _ = runWorker(os.Stderr, dir, []string{"-p", "x"}, 10*time.Minute, "", nil, nil)
+		_, _, _ = runWorker(os.Stderr, dir, []string{"-p", "x"}, 10*time.Minute, "", nil, "", nil)
 		return
 	}
 

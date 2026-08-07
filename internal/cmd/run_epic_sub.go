@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -93,6 +94,16 @@ func driveSubFlow(store storage.TaskStore, workDir, slug string, tracker, sub *s
 	opts.runWriter = rw
 	res, err := executeWork(store, sub, plan, opts)
 	if err != nil {
+		// An account wall is not this sub's failure - the next worker would hit
+		// the same one seconds later. Report it as `aborted` (the manager stops
+		// the run on that word) and deliberately do NOT park: parking on
+		// `waiting` would make a human flip every affected sub back by hand,
+		// when nothing about them is wrong. The manager returns the sub to its
+		// ready status instead, so a re-run after the wall clears just picks it up.
+		var wall *accountWallError
+		if errors.As(err, &wall) {
+			return subOutcome{sub.Meta.ID, subAborted, err.Error(), branch}
+		}
 		flow.park(sub)
 		return subOutcome{sub.Meta.ID, subFailed, flow.crashNote(dir, branch, err.Error()), branch}
 	}
