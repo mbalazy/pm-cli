@@ -271,6 +271,19 @@ func TestFinishDryRunClaimsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry-run: %v (out: %s)", err, out)
 	}
+	// The permissions line is the only place the --sim/--no-yolo wiring becomes
+	// visible without spending a token, so it is where an inverted flag is
+	// caught: yolo is the DEFAULT (a curated allowlist blocks an odbiór at 3am).
+	if !strings.Contains(out, "--dangerously-skip-permissions") {
+		t.Errorf("the default must be yolo:\n%s", out)
+	}
+	noYolo, err := runFinishCmd(t, store, "app-9", "--project", "app", "--dry-run", "--no-yolo")
+	if err != nil {
+		t.Fatalf("dry-run --no-yolo: %v (out: %s)", err, noYolo)
+	}
+	if strings.Contains(noYolo, "--dangerously-skip-permissions") || !strings.Contains(noYolo, "curated") {
+		t.Errorf("--no-yolo must actually switch permissions bypass off:\n%s", noYolo)
+	}
 	for _, want := range []string{"pm finish (dry-run)", "app-9", "claim: free (no claim)", "SYSTEM PROMPT", "batch-finish-auto"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("dry-run output missing %q:\n%s", want, out)
@@ -523,5 +536,80 @@ func TestWriteFinishReportIsAtomicAndOverwrites(t *testing.T) {
 		if strings.Contains(e.Name(), ".tmp.") {
 			t.Errorf("a scratch file was left behind: %s", e.Name())
 		}
+	}
+}
+
+// The status words the tests build their fixtures from must be the ones the
+// SCHEMA holds a real worker to. Without this the two can drift in opposite
+// directions - the suite stays green off the constants while a live worker's
+// verdict is rejected by the schema, or vice versa.
+func TestFinishStatusConstantsMatchTheSchemaEnum(t *testing.T) {
+	for _, status := range []string{finishDone, finishPartial, finishBlocked} {
+		if !strings.Contains(finishResultSchema, `"`+status+`"`) {
+			t.Errorf("status %q is not in finishResultSchema's enum - a worker emitting it would be rejected", status)
+		}
+	}
+	for _, verdict := range []string{"clean", "fixed", "blocked"} {
+		if !strings.Contains(finishResultSchema, `"`+verdict+`"`) {
+			t.Errorf("sub verdict %q is missing from the schema", verdict)
+		}
+	}
+	// visual_claims_open is REQUIRED, not merely present: made optional it
+	// would simply be omitted, and an omitted count reads as zero.
+	if !strings.Contains(finishResultSchema, `"required": ["id", "verdict", "visual_claims_open", "pushed_commits"]`) {
+		t.Error("visual_claims_open must be a required field of every sub entry")
+	}
+	var schema map[string]any
+	if err := json.Unmarshal([]byte(finishResultSchema), &schema); err != nil {
+		t.Fatalf("finishResultSchema is not valid JSON: %v", err)
+	}
+}
+
+// `pm finish` is re-runnable on the same tracker, so an acceptance that returns
+// no report must not leave the PREVIOUS run's report standing as if it were
+// this one's verdict.
+func TestFinishEmptyReportClearsAStaleOne(t *testing.T) {
+	store, plan, _ := finishRunFixture(t)
+	path := storage.FinishReportPath(store.ProjectDir("app"), "app-9")
+	if err := writeFinishReport(path, "# the previous run said this"); err != nil {
+		t.Fatal(err)
+	}
+	fakeClaudeEnvelope(t, finishEnvelopeJSON(t, finishBlocked, "could not find the run", ""))
+
+	if _, err := executeFinish(plan); err != nil {
+		t.Fatalf("executeFinish: %v", err)
+	}
+	if _, serr := os.Stat(path); !os.IsNotExist(serr) {
+		body, _ := os.ReadFile(path)
+		t.Errorf("a stale report survived a reportless acceptance and now reads as its verdict: %q", body)
+	}
+}
+
+// A Ctrl-C'd foreground acceptance leaves its claim behind. The refusal must
+// name the way out, not tell a user standing at the holder's own machine to
+// wait out a ten-minute TTL against a pid that is already gone.
+func TestFinishBusyClaimOnThisHostNamesTheReleaseCommand(t *testing.T) {
+	store, plan, _ := finishRunFixture(t)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	seedFinishClaim(t, store, "app", storage.FinishClaim{
+		TrackerID: "app-9", Host: storage.Hostname(), PID: 99999, Started: now, Refreshed: now,
+	})
+
+	_, err := executeFinish(plan)
+	if err == nil {
+		t.Fatal("a held claim must stop the run")
+	}
+	if !strings.Contains(err.Error(), "pm finish release app-9 --started "+now) {
+		t.Errorf("a claim held on THIS host must name the release command, got: %v", err)
+	}
+
+	// On another host waiting really is the answer - a pid over there cannot be
+	// verified from here - so no hint is added.
+	seedFinishClaim(t, store, "app", storage.FinishClaim{
+		TrackerID: "app-9", Host: "some-vps", PID: 99999, Started: now, Refreshed: now,
+	})
+	_, err = executeFinish(plan)
+	if err == nil || strings.Contains(err.Error(), "pm finish release") {
+		t.Errorf("a claim held elsewhere must not suggest releasing it from here, got: %v", err)
 	}
 }

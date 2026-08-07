@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -89,7 +90,14 @@ func newFinishCmd(store storage.TaskStore) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out, _ := json.MarshalIndent(res, "", "  ")
+			// The report is printed as its PATH, not its body. It has already
+			// been saved, and a detached run's stdout is the run log - repeating
+			// a report that epics 96/98 measured in the hundreds of lines would
+			// double it there for no reader's benefit.
+			fmt.Fprintf(stdout, "report: %s\n", plan.reportPath)
+			printed := *res
+			printed.Report = ""
+			out, _ := json.MarshalIndent(&printed, "", "  ")
 			fmt.Fprintln(stdout, string(out))
 			return nil
 		},
@@ -325,7 +333,7 @@ func executeFinish(plan *finishPlan) (*finishResult, error) {
 
 	claim, err := storage.AcquireFinishClaim(plan.stateDir, tracker, plan.sessionID)
 	if err != nil {
-		return nil, err
+		return nil, finishBusyHint(err)
 	}
 	// LIFO: stopRefresh (registered second) runs first, so nothing is still
 	// moving the claim's stamp when the release reads it.
@@ -336,6 +344,11 @@ func executeFinish(plan *finishPlan) (*finishResult, error) {
 	}()
 	defer startFinishClaimRefresh(errOut, plan.stateDir, tracker, claim, storage.FinishClaimRefreshInterval)()
 
+	// Nothing here checks whether the run being accepted has FINISHED, and that
+	// is deliberate: `batch-finish-auto` is built to start before the run ends
+	// and accept each sub as it lands, so a live run and a live acceptance of it
+	// are the designed state, not an error. The claim guards two ACCEPTANCES
+	// against each other, which is the collision that actually exists.
 	runID := storage.NewRunID()
 	run := &storage.RunState{
 		TaskID:  tracker,
@@ -428,12 +441,13 @@ func executeFinish(plan *finishPlan) (*finishResult, error) {
 	// run: the acceptance itself already happened, and reporting it as failed
 	// would say something untrue about the work.
 	note := strings.TrimSpace(res.Summary)
-	if werr := writeFinishReport(plan.reportPath, res.Report); werr != nil {
+	switch werr := writeFinishReport(plan.reportPath, res.Report); {
+	case werr != nil:
 		fmt.Fprintf(errOut, "pm finish: could not write the acceptance report to %s: %v\n", plan.reportPath, werr)
 		note = strings.TrimSpace(note + " [report not saved: " + werr.Error() + "]")
-	} else if strings.TrimSpace(res.Report) == "" {
+	case strings.TrimSpace(res.Report) == "":
 		fmt.Fprintf(errOut, "pm finish: the acceptance returned no report - nothing written to %s\n", plan.reportPath)
-	} else {
+	default:
 		fmt.Fprintf(errOut, "pm finish: report written to %s\n", plan.reportPath)
 	}
 
@@ -455,8 +469,31 @@ func executeFinish(plan *finishPlan) (*finishResult, error) {
 	return res, nil
 }
 
-// finishRunNote is what a board card and a journal line say about an
-// acceptance. The count of unsettled visual claims is carried into it because
+// finishBusyHint adds the way OUT to a busy-claim refusal, when there is one.
+//
+// storage's message is right for the cross-machine case it was written for
+// ("wait for it to finish or for the claim to expire") - but a `pm finish` run
+// is a two-hour FOREGROUND process, so the likeliest holder by far is a run on
+// this very machine that was Ctrl-C'd: its defers never fired, so the claim
+// sits there for the rest of the TTL naming a pid that is already gone. Telling
+// that user to wait ten minutes, when `pm finish release` exists and the stamp
+// is printed by `pm finish status`, is the sort of thing that gets a lock
+// deleted by hand. The hint is added only when the holder is THIS host - on any
+// other, waiting really is the answer, because a pid over there is
+// unverifiable from here (see the header of storage/finish_claim.go).
+func finishBusyHint(err error) error {
+	var busy *storage.FinishClaimBusyError
+	if !errors.As(err, &busy) || busy.Holder == nil || busy.Holder.Host != storage.Hostname() {
+		return err
+	}
+	return fmt.Errorf("%w\nThe holder is on THIS host: if that acceptance is gone (an interrupted run leaves its "+
+		"claim behind), take it back with `pm finish release %s --started %s`",
+		err, busy.Holder.TrackerID, busy.Holder.Started)
+}
+
+// finishRunNote is what a journal line - and, once the board learns to read an
+// acceptance run-state (pm-cli-100-5), a board card - says about an acceptance.
+// The count of unsettled visual claims is carried into it because
 // that is the number that decides whether "done" means done: a detached
 // acceptance never looks at a screen, so an accepted batch can still leave a
 // morning's worth of checking, and a note reading only "done" would hide it.
@@ -486,9 +523,18 @@ func finishRunNote(res *finishResult, summary string) string {
 // (WriteRunState, RefreshFinishClaim, the claim's link-from-scratch): a human
 // reads this file while the run is finishing, and only the rename publishes, so
 // they see a whole report or the previous one - never half of either.
+//
+// An EMPTY report writes no file and REMOVES any older one. Both halves matter,
+// and for opposite reasons: an empty file would read as "the acceptance looked
+// and had nothing to say", while a stale one - `pm finish` is re-runnable on
+// the same tracker, and nothing marks a tracker as accepted - would read as
+// THIS run's verdict, which is worse still.
 func writeFinishReport(path, report string) error {
 	report = strings.TrimSpace(report)
 	if report == "" {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
