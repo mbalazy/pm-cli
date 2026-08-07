@@ -302,9 +302,11 @@ func TestExecutorLandingStatuses(t *testing.T) {
 }
 
 func TestResolveReviewModel(t *testing.T) {
-	// The reviewers in epic orbit-106 ran on opus because nobody named a
-	// model for them, so the DEFAULT is the whole point: a project that says
-	// nothing must still get the cheap reviewer.
+	// The DEFAULT is the whole point, and gate G2 (pm-cli-96-6) is what decides
+	// it: a single sonnet reviewer holding the diff missed BOTH historical
+	// review-forced findings it was replayed against, while the same reviewer on
+	// opus reported both. The savings this ticket keeps are the reviewer COUNT,
+	// the round cap and the diff packet - not the model.
 	cases := []struct {
 		yaml string
 		want string

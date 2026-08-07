@@ -113,10 +113,41 @@ type Executor struct {
 }
 
 // DefaultReviewModel is what reviewer subagents run on when a project does not
-// say otherwise. Sonnet rather than the run's model: an adversarial reviewer
-// reads a bounded diff against stated criteria, which is not the part of the
-// loop that was buying opus its keep.
-const DefaultReviewModel = "sonnet"
+// say otherwise.
+//
+// This was "sonnet" for exactly as long as it took to measure it. Gate G2
+// (pm-cli-96-6, 2026-08-07) replayed two review-forced findings out of epic
+// orbit-106 through the new harness, each as a single reviewer holding
+// the diff packet with no Bash - once on sonnet, once on opus, everything else
+// identical:
+//
+//   - the four stage-advance sites firing two concurrent PATCHes to one JSONB
+//     field, where a failed one's rollback pushes a stale stage back;
+//   - the persisted onboarding screen having no forward ratchet, so one
+//     back-then-continue moves a provider's resume point permanently backwards.
+//
+// Opus reported both. Sonnet reported neither - and in both runs it named the
+// exact mechanism and then argued it away ("I traced the one plausible risk I
+// considered ... down to RTK Query's synchronous optimistic-dispatch behavior,
+// which rules it out"). A reviewer that misses a bug costs one bug; a reviewer
+// that examines it and clears it costs the bug AND the belief that it was
+// looked at.
+//
+// So the model is where the money does NOT get saved. The savings this ticket
+// keeps are structural and untouched by this line: pm sizes the reviewer count
+// from the diff (1-2, not 4-6), the round cap is 2 and a round only exists if
+// the last one found something (not a flat 3), and each reviewer is handed the
+// diff instead of pulling ~142kB out of the repo. Fewer, better-fed reviewers
+// on the better model.
+//
+// Pinning rather than inheriting is deliberate now that the two are separable:
+// review quality should not follow a run onto a cheap model chosen for a
+// trivial sub. A project that wants the old coupling sets review_model:
+// inherit.
+//
+// Re-run the gate before changing this: the method and its cost ($9.10, four
+// reviewer runs) are recorded in pm-cli-96-6.
+const DefaultReviewModel = "opus"
 
 // ReviewModelInherit is the opt-out spelling. It reads as what it does at the
 // call site ("let the reviewer inherit the run's model") where an empty string
