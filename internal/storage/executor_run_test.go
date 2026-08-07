@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -333,20 +335,27 @@ func TestReadRunStatesReadsFilesPmDidNotWrite(t *testing.T) {
 	}
 }
 
-// TestReadRunStatesSkipsAliasedFile: a task id may contain a dot, so task
-// "x.finish" owns the very file name the acceptance of "x" uses. Whichever way
-// it is read it belongs to somebody - the one thing it must never do is enter
-// the acceptance map under a run's id.
-func TestReadRunStatesSkipsAliasedFile(t *testing.T) {
+// TestRunStateOfAliasedTaskID: a task id may contain a dot, so the RUN of a
+// task named "x.finish" occupies the file where the ACCEPTANCE of "x" would
+// live. The file name alone cannot tell those apart - the state's own task id
+// can, and must, because a run that dropped out of ReadRunStates loses its
+// board badge, its dashboard and the ability to be killed.
+func TestRunStateOfAliasedTaskID(t *testing.T) {
 	dir := t.TempDir()
-	if err := WriteRunState(dir, &RunState{TaskID: "x.finish", Project: "p", Kind: RunKindWork}); err != nil {
+	if err := WriteRunState(dir, &RunState{TaskID: "x.finish", Project: "p", Kind: RunKindWork, Status: RunStatusRunning}); err != nil {
 		t.Fatalf("WriteRunState: %v", err)
 	}
-	if fins := ReadFinishRunStates(dir); len(fins) != 0 {
-		t.Errorf("a run of task \"x.finish\" is not an acceptance, got %v", keysOf(fins))
+	runs := ReadRunStates(dir)
+	if len(runs) != 1 || runs["x.finish"] == nil {
+		t.Errorf("the run of task \"x.finish\" must still be a run, got %v", keysOf(runs))
 	}
-	if runs := ReadRunStates(dir); len(runs) != 0 {
-		t.Errorf("its file name is the acceptance encoding, so it cannot be a run either, got %v", keysOf(runs))
+	if fins := ReadFinishRunStates(dir); len(fins) != 0 {
+		t.Errorf("it is nobody's acceptance, got %v", keysOf(fins))
+	}
+	// And the path-based reader must not hand that neighbour's run back as the
+	// acceptance of "x" - it says which task it belongs to.
+	if got, err := ReadFinishRunState(dir, "x"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("expected a not-exist error, got %+v err=%v", got, err)
 	}
 }
 
@@ -357,27 +366,6 @@ func keysOf(m map[string]*RunState) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func TestIsFinishRunStateFile(t *testing.T) {
-	cases := map[string]bool{
-		"p-1.finish.json":   true,
-		"p-1.finish.log":    true, // the infix sits before the extension in both
-		"p-1.json":          false,
-		"p-1.log":           false,
-		"p-1.finished.json": false,
-		"p-1.json.finish":   false,
-		"app-1.2.json":      false,
-		"journal.jsonl":     false,
-		"p-1.finish.claim":  true, // the acceptance claim is an acceptance artifact too
-		".finish.json":      true,
-		"p-1":               false,
-	}
-	for name, want := range cases {
-		if got := isFinishRunStateFile(name); got != want {
-			t.Errorf("isFinishRunStateFile(%q) = %v, want %v", name, got, want)
-		}
-	}
 }
 
 // TestRunStateFilesNeedNoMigration: the run's own paths are byte-for-byte what
