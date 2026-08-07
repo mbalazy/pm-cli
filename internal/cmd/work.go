@@ -765,7 +765,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// anything outside this process has on it. Publishing it lets the board kill
 	// the worker tree directly when it has to SIGKILL the manager - a signal the
 	// manager cannot forward (see storage.RunState.Kill).
-	res, sessionID, err := runWorker(opts.stderr(), dir, plan.cmdArgs, opts.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env,
+	res, sessionID, err := runWorker(opts.stderr(), dir, plan.cmdArgs, opts.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env, plan.sessionID,
 		func(pgid int) { _ = hbw.Update(func(run *storage.RunState) { run.WorkerPGID = pgid }) })
 	stopHeartbeat()
 	// The worker is gone and the heartbeat died with it, so drop the in-flight
@@ -1002,7 +1002,10 @@ func captureBaseline(errOut io.Writer, dir, command string) string {
 // claude is killed when the timeout elapses rather than blocking pm forever.
 // onSpawn (optional) receives the worker group's pgid once it is up; see
 // runGroupCmd.
-func runWorker(errOut io.Writer, dir string, args []string, timeout time.Duration, configDir string, extraEnv []string, onSpawn func(pgid int)) (*workerResult, string, error) {
+// sessionID is the id pm minted and pinned with `claude --session-id`, so a
+// worker that dies without an envelope can still be asked what it said - see
+// workerLastWords.
+func runWorker(errOut io.Writer, dir string, args []string, timeout time.Duration, configDir string, extraEnv []string, sessionID string, onSpawn func(pgid int)) (*workerResult, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -1013,7 +1016,11 @@ func runWorker(errOut io.Writer, dir string, args []string, timeout time.Duratio
 	c.Env = append(workerEnv(configDir), extraEnv...)
 	var stdout bytes.Buffer
 	c.Stdout = &stdout
-	c.Stderr = os.Stderr
+	// Stderr keeps streaming to the run log AND is tailed into a bounded buffer:
+	// on a death with no transcript (a missing binary, a rejected flag) it is
+	// the only thing the worker leaves behind, and the note used to get none of it.
+	stderrTail := &tailWriter{n: workerDeathTailBytes}
+	c.Stderr = io.MultiWriter(os.Stderr, stderrTail)
 	err := runGroupCmd(ctx, c, onSpawn)
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, "", fmt.Errorf("worker timed out after %s (raise --timeout if the task legitimately needs longer)", timeout)
@@ -1029,9 +1036,24 @@ func runWorker(errOut io.Writer, dir string, args []string, timeout time.Duratio
 				return res, sessionID, nil
 			}
 		}
-		return nil, "", fmt.Errorf("claude worker failed: %w", err)
+		return nil, sessionID, workerDeathError(configDir, dir, sessionID, stderrTail.String(), err)
 	}
 	return parseWorkerOutput(stdout.Bytes(), errOut, configDir, dir)
+}
+
+// workerDeathError turns a bare non-zero exit into an error that says what the
+// worker actually said, and marks it as an account wall when those last words
+// name one. Before this every such death read "claude worker failed: exit
+// status 1" and the reason lived only in a transcript nobody knew to open.
+func workerDeathError(configDir, dir, sessionID, stderrTail string, err error) error {
+	last := workerLastWords(configDir, dir, sessionID, stderrTail)
+	if last == "" {
+		return fmt.Errorf("claude worker failed: %w", err)
+	}
+	if reason := accountWallReason(last); reason != "" {
+		return &accountWallError{reason: reason, lastWords: last, err: err}
+	}
+	return fmt.Errorf("claude worker failed: %w - last worker message: %s", err, last)
 }
 
 // workerEnv returns the worker's environment with ANTHROPIC_API_KEY /

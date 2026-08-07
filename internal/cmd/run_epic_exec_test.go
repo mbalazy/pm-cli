@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -356,5 +357,148 @@ func TestExecuteEpicIndependentDegradesWhenPushedIsNotAStatus(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "pushed") {
 		t.Errorf("the degrade must be announced, not silent:\n%s", stderr)
+	}
+}
+
+// epicRunFixtureN builds the epic fixture with n subs and pins the project's
+// Claude config dir to a temp dir, so a fake worker can plant a transcript
+// where pm will look for it without touching the real ~/.claude.
+func epicRunFixtureN(t *testing.T, n int) (*storage.Store, string, string) {
+	t.Helper()
+	store, repo := epicRunFixture(t)
+	cfg := t.TempDir()
+	if _, err := store.MutateProject("app", func(p *storage.Project) error {
+		p.ClaudeConfigDir = cfg
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 2; i <= n; i++ {
+		addTask(t, store, "app", storage.TaskMeta{
+			ID: fmt.Sprintf("app-1-%d", i), Title: fmt.Sprintf("Sub %d", i),
+			Status: storage.StatusTodo, Parent: "app-1", Order: 10 * i,
+		}, "")
+	}
+	return store, repo, cfg
+}
+
+// TestExecuteEpicAbortsOnAnAccountWall is the whole point of pm-cli-89, end to
+// end. In run pm-cli-74 the first worker died on the account's monthly spend
+// limit and the manager, seeing only "exit status 1", spawned the next three
+// workers into the same wall - they died 112 s, 2 s and 7 s later, each recorded
+// as an ordinary failure with no cause anywhere in pm.
+func TestExecuteEpicAbortsOnAnAccountWall(t *testing.T) {
+	// The fake worker writes the limit message into the transcript pm pinned
+	// with --session-id, then exits 1 - exactly what the four real deaths did.
+	fakeClaude(t, `sid=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "--session-id" ]; then sid="$a"; fi
+  prev="$a"
+done
+mkdir -p "$PM_TEST_TRANSCRIPT_DIR"
+printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"You have hit your monthly spend limit - raise it at claude.ai/settings/usage\"}]}}" > "$PM_TEST_TRANSCRIPT_DIR/$sid.jsonl"
+exit 1`)
+	// (The real message uses a typographic apostrophe in "You've"; the matched
+	// substring starts at "hit your monthly spend limit", so the fake avoids a
+	// quote the shell would have to escape three times over. The verbatim line
+	// is asserted against accountWallReason in work_failure_test.go.)
+
+	store, repo, cfg := epicRunFixtureN(t, 3)
+	t.Setenv("PM_TEST_TRANSCRIPT_DIR", filepath.Join(cfg, "projects", encodeProjectPath(repo)))
+
+	_, errOut := runEpic(t, store, epicOptions{noPR: true})
+
+	if !strings.Contains(errOut, "ABORTING the run") {
+		t.Fatalf("the run must stop and say why:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, "spend limit") {
+		t.Errorf("the reason must be named, not left as an exit status:\n%s", errOut)
+	}
+
+	// The sub that hit the wall never got a fair run: back on its ready status,
+	// NOT parked on waiting (which a human would have to undo by hand).
+	sub1, _ := store.FindTask("app", "app-1-1")
+	if sub1.Meta.Status != storage.StatusTodo {
+		t.Errorf("app-1-1 must return to todo, got %q", sub1.Meta.Status)
+	}
+	// The later subs were never started at all.
+	for _, id := range []string{"app-1-2", "app-1-3"} {
+		s, _ := store.FindTask("app", id)
+		if s.Meta.Status != storage.StatusTodo {
+			t.Errorf("%s must be untouched on todo, got %q", id, s.Meta.Status)
+		}
+	}
+
+	entries, _ := storage.ReadJournal(store.ProjectDir("app"))
+	var end *storage.JournalEntry
+	for i := range entries {
+		if entries[i].Event == storage.JournalEventEnd {
+			end = &entries[i]
+		}
+	}
+	if end == nil {
+		t.Fatal("expected an end line in the journal")
+	}
+	if end.Status != storage.RunStatusFailed {
+		t.Errorf("an aborted run must not be journalled as done, got %q", end.Status)
+	}
+	if !strings.Contains(end.Error, "spend limit") {
+		t.Errorf("the run-level error must name the wall, got %q", end.Error)
+	}
+	// AC: distinguishable from an ordinary sub failure.
+	if len(end.Subs) != 3 {
+		t.Fatalf("every sub must be accounted for, got %d: %+v", len(end.Subs), end.Subs)
+	}
+	if end.Subs[0].Result != subAborted {
+		t.Errorf("the sub that hit the wall must read %q, not a plain failure, got %q", subAborted, end.Subs[0].Result)
+	}
+	for _, s := range end.Subs[1:] {
+		if s.Result != subSkipped {
+			t.Errorf("%s never ran, so it must be %q, got %q", s.ID, subSkipped, s.Result)
+		}
+		if !strings.Contains(s.Note, "run aborted") {
+			t.Errorf("%s's note must say why it did not run, got %q", s.ID, s.Note)
+		}
+	}
+}
+
+// A worker that dies for its OWN reason must still behave as before: one failed
+// sub, parked, and the manager carries on to the next one.
+func TestExecuteEpicContinuesAfterAnOrdinaryWorkerDeath(t *testing.T) {
+	fakeClaude(t, `sid=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "--session-id" ]; then sid="$a"; fi
+  prev="$a"
+done
+mkdir -p "$PM_TEST_TRANSCRIPT_DIR"
+printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"I could not find the module the spec names.\"}]}}" > "$PM_TEST_TRANSCRIPT_DIR/$sid.jsonl"
+exit 1`)
+
+	store, repo, cfg := epicRunFixtureN(t, 2)
+	t.Setenv("PM_TEST_TRANSCRIPT_DIR", filepath.Join(cfg, "projects", encodeProjectPath(repo)))
+
+	_, errOut := runEpic(t, store, epicOptions{noPR: true})
+
+	if strings.Contains(errOut, "ABORTING") {
+		t.Fatalf("an ordinary worker death must not stop the run:\n%s", errOut)
+	}
+	entries, _ := storage.ReadJournal(store.ProjectDir("app"))
+	var end *storage.JournalEntry
+	for i := range entries {
+		if entries[i].Event == storage.JournalEventEnd {
+			end = &entries[i]
+		}
+	}
+	if end == nil || len(end.Subs) != 2 {
+		t.Fatalf("both subs must have been attempted: %+v", end)
+	}
+	for _, s := range end.Subs {
+		if s.Result != subFailed {
+			t.Errorf("%s: want %q, got %q", s.ID, subFailed, s.Result)
+		}
+		// The headline of the other half: the note names a cause now.
+		if !strings.Contains(s.Note, "could not find the module") {
+			t.Errorf("%s's note must carry the worker's last message, got %q", s.ID, s.Note)
+		}
 	}
 }

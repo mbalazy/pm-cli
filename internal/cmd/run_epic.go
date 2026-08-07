@@ -27,6 +27,13 @@ const (
 	subConflict = "conflict"
 	subSkipped  = "skipped"
 	subManual   = "manual"
+	// subAborted: the worker died on an ACCOUNT-level wall (spend limit,
+	// credentials) - a condition the next worker hits identically, so it stops
+	// the whole run rather than being one sub's failure. Distinct from `failed`
+	// on purpose: in the journal it is the difference between "this sub could
+	// not be done" and "the machine ran out of account", and a retro reading
+	// them as one thing draws the wrong conclusion about the epic flow.
+	subAborted = "aborted"
 )
 
 // greenSubResult reports whether a sub result means "the worker delivered and
@@ -248,6 +255,28 @@ func planEpic(store storage.TaskStore, args []string, opts epicOptions) (*epicPl
 		slots:          slots,
 		workDir:        workDir,
 	}, nil
+}
+
+// abortSkips accounts for the subs an aborted run never reached. Without them
+// the summary and the journal would simply end mid-list, which reads as "these
+// subs do not exist" rather than "the run stopped before them".
+//
+// `skipped` is the right word and not a euphemism: it is what the depends_on
+// gate already uses for a sub no worker ran for, and like that one it leaves the
+// sub on its ready status for the next run to pick up.
+func abortSkips(subs []*storage.Task, done []subOutcome, abortedID string) []subOutcome {
+	seen := make(map[string]bool, len(done))
+	for _, oc := range done {
+		seen[oc.id] = true
+	}
+	var out []subOutcome
+	for _, s := range subs {
+		if seen[s.Meta.ID] {
+			continue
+		}
+		out = append(out, subOutcome{s.Meta.ID, subSkipped, "not started - run aborted at " + abortedID, ""})
+	}
+	return out
 }
 
 // resolveEpicDoneStatus picks the status a verify-green sub lands on. The two
@@ -501,6 +530,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	}
 
 	var outcomes []subOutcome
+	var abortReason string           // non-empty once an account wall stopped the run
 	subDurations := map[string]int{} // sub id -> driveSub wall-clock seconds
 	for _, sub := range subs {
 		// Decide, without spending a worker, whether this sub runs. Covers
@@ -541,9 +571,31 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 			run.CurrentSession = ""
 			updateSubRun(run, oc.id, oc.result, oc.note)
 		})
+
+		// An account wall stops the run. Continuing would spend the remaining
+		// subs on the same wall - measured in run pm-cli-74, where the three
+		// subs after the first wall died 112 s, 2 s and 7 s apart, each recorded
+		// as a plain failure. The sub that hit it goes BACK to its ready status
+		// (it never got a fair run) and the rest are recorded as skipped, so a
+		// re-run once the wall clears picks all of them up untouched.
+		if oc.result == subAborted {
+			abortReason = oc.note
+			logIfErr(errOut, "return "+oc.id+" to "+string(plan.startStatus), store.MoveTask(sub, plan.startStatus))
+			outcomes = append(outcomes, abortSkips(subs, outcomes, oc.id)...)
+			fmt.Fprintf(errOut, "\npm run-epic: ABORTING the run - %s\n", oc.note)
+			fmt.Fprintf(errOut, "pm run-epic: %s is back on %s and the remaining sub(s) were not started; re-run once this is resolved.\n", oc.id, plan.startStatus)
+			break
+		}
 	}
 
-	_ = rw.Update(func(run *storage.RunState) { run.Status = storage.RunStatusDone })
+	runStatus := storage.RunStatusDone
+	if abortReason != "" {
+		runStatus = storage.RunStatusFailed
+	}
+	_ = rw.Update(func(run *storage.RunState) {
+		run.Status = runStatus
+		run.Error = abortReason
+	})
 
 	// Journal end line: the run's durable record (outcome + duration per sub).
 	// The per-sub stats are read through the writer like every other access.
@@ -553,7 +605,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		Event: storage.JournalEventEnd, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID, RunID: runID,
 		PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Independent: independentMode, Branch: journalBranch,
 		WorkDir: journalDir, Baseline: baselineUsed,
-		Status: storage.RunStatusDone, DurationS: int(time.Since(epicStart).Seconds()),
+		Status: runStatus, Error: abortReason, DurationS: int(time.Since(epicStart).Seconds()),
 		Subs: jSubs,
 	})
 
