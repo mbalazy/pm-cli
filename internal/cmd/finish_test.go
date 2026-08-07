@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +18,10 @@ func runFinishCmd(t *testing.T, store storage.TaskStore, args ...string) (string
 	t.Helper()
 	cmd := newFinishCmd(store)
 	var out strings.Builder
-	cmd.SetArgs(args)
+	// Never a nil slice: cobra falls back to os.Args[1:] when args is nil, which
+	// would feed the test binary's own flags to the command (the same trap
+	// context_test.go guards against).
+	cmd.SetArgs(append([]string{}, args...))
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
 	cmd.SilenceUsage = true
@@ -25,19 +30,22 @@ func runFinishCmd(t *testing.T, store storage.TaskStore, args ...string) (string
 	return out.String(), err
 }
 
-// seedFinishClaim writes a claim into the project's data dir as if another
-// machine had taken it.
+// seedFinishClaim plants a claim in the project's data dir as if another
+// machine (or another session) had taken it - the public API only ever writes
+// THIS host's claim, so the fixture writes the file itself. Every field of c is
+// preserved: a helper that quietly substituted its own pid would have later
+// tests asserting the fixture instead of the code.
 func seedFinishClaim(t *testing.T, store *storage.Store, slug string, c storage.FinishClaim) {
 	t.Helper()
 	dir := store.ProjectDir(slug)
-	if _, err := storage.AcquireFinishClaim(dir, c.TrackerID, ""); err != nil {
-		t.Fatalf("seed: acquire %s: %v", c.TrackerID, err)
+	if err := os.MkdirAll(filepath.Dir(storage.FinishClaimPath(dir, c.TrackerID)), 0755); err != nil {
+		t.Fatalf("seed: mkdir: %v", err)
 	}
-	// Overwrite the just-created file with the claim we actually want (the
-	// public API only ever writes THIS host's claim).
-	data := `{"tracker_id":"` + c.TrackerID + `","host":"` + c.Host + `","pid":4711` +
-		`,"started":"` + c.Started + `","refreshed":"` + c.Refreshed + `"}`
-	if err := os.WriteFile(storage.FinishClaimPath(dir, c.TrackerID), []byte(data), 0644); err != nil {
+	data, err := json.Marshal(c)
+	if err != nil {
+		t.Fatalf("seed: marshal claim: %v", err)
+	}
+	if err := os.WriteFile(storage.FinishClaimPath(dir, c.TrackerID), data, 0644); err != nil {
 		t.Fatalf("seed: write claim: %v", err)
 	}
 }
@@ -66,7 +74,7 @@ func TestFinishClaimCmd(t *testing.T) {
 	t.Run("refuses a tracker somebody else holds, naming host and pid", func(t *testing.T) {
 		store, slug := tempStore(t)
 		seedFinishClaim(t, store, slug, storage.FinishClaim{
-			TrackerID: "proj-100", Host: "runner",
+			TrackerID: "proj-100", Host: "runner", PID: 4711,
 			Started:   time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339),
 			Refreshed: time.Now().UTC().Format(time.RFC3339),
 		})
@@ -85,7 +93,7 @@ func TestFinishClaimCmd(t *testing.T) {
 	t.Run("takes over a claim past its TTL", func(t *testing.T) {
 		store, slug := tempStore(t)
 		seedFinishClaim(t, store, slug, storage.FinishClaim{
-			TrackerID: "proj-100", Host: "runner",
+			TrackerID: "proj-100", Host: "runner", PID: 4711,
 			Started:   time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339),
 			Refreshed: time.Now().Add(-storage.FinishClaimTTL - time.Minute).UTC().Format(time.RFC3339),
 		})
@@ -101,13 +109,19 @@ func TestFinishClaimCmd(t *testing.T) {
 }
 
 func TestFinishReleaseCmd(t *testing.T) {
-	t.Run("releases our own claim, and says so when there is none", func(t *testing.T) {
+	// The claim it took is released by NAMING it - `pm finish claim` prints the
+	// stamp for exactly this.
+	t.Run("releases a claim named with --started, and says so when there is none", func(t *testing.T) {
 		store, slug := tempStore(t)
 		if _, err := runFinishCmd(t, store, "claim", "proj-100", "--project", slug); err != nil {
 			t.Fatalf("claim: %v", err)
 		}
+		mine, _ := storage.ReadFinishClaim(store.ProjectDir(slug), "proj-100")
+		if mine == nil {
+			t.Fatal("claim not on disk")
+		}
 
-		out, err := runFinishCmd(t, store, "release", "proj-100", "--project", slug)
+		out, err := runFinishCmd(t, store, "release", "proj-100", "--project", slug, "--started", mine.Started)
 		if err != nil {
 			t.Fatalf("release: %v (out: %s)", err, out)
 		}
@@ -127,16 +141,52 @@ func TestFinishReleaseCmd(t *testing.T) {
 		}
 	})
 
-	// A claim belongs to the machine that took it. Lifting another machine's
-	// claim would hand its run to a third session - which is the collision this
-	// whole lock exists to stop.
-	t.Run("refuses to release another host's claim and leaves it in place", func(t *testing.T) {
+	t.Run("--session identifies the claim just as well", func(t *testing.T) {
 		store, slug := tempStore(t)
-		seedFinishClaim(t, store, slug, storage.FinishClaim{
-			TrackerID: "proj-100", Host: "runner",
+		if _, err := runFinishCmd(t, store, "claim", "proj-100", "--project", slug, "--session", "sess-1"); err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		if _, err := runFinishCmd(t, store, "release", "proj-100", "--project", slug, "--session", "sess-1"); err != nil {
+			t.Fatalf("release by session: %v", err)
+		}
+		if h := storage.LiveFinishClaimHolder(store.ProjectDir(slug), "proj-100"); h != nil {
+			t.Errorf("holder = %+v after release, want nil", h)
+		}
+	})
+
+	// The hole this closes: `pm finish claim` exits immediately, so a release
+	// that lifted whatever claim it found would let the SECOND session on the
+	// same machine delete the first's live claim and then take the run - the
+	// exact collision the lock exists to stop. Two CC sessions on one box is the
+	// ordinary case, not an exotic one.
+	t.Run("refuses to lift a live claim the caller cannot name", func(t *testing.T) {
+		store, slug := tempStore(t)
+		if _, err := runFinishCmd(t, store, "claim", "proj-100", "--project", slug, "--session", "sess-a"); err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+
+		out, err := runFinishCmd(t, store, "release", "proj-100", "--project", slug)
+		if err == nil {
+			t.Fatalf("release with no identifier must fail (out: %s)", out)
+		}
+		if _, err := runFinishCmd(t, store, "release", "proj-100", "--project", slug, "--started", "2020-01-01T00:00:00Z"); err == nil {
+			t.Fatal("release with a WRONG identifier must fail")
+		}
+		if h := storage.LiveFinishClaimHolder(store.ProjectDir(slug), "proj-100"); h == nil || h.Session != "sess-a" {
+			t.Fatalf("holder = %+v, want the untouched live claim", h)
+		}
+	})
+
+	// A claim belongs to the machine that took it. Lifting another machine's
+	// live claim would hand its run to a third session.
+	t.Run("refuses to release another host's live claim and leaves it in place", func(t *testing.T) {
+		store, slug := tempStore(t)
+		theirs := storage.FinishClaim{
+			TrackerID: "proj-100", Host: "runner", PID: 4711,
 			Started:   time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
 			Refreshed: time.Now().UTC().Format(time.RFC3339),
-		})
+		}
+		seedFinishClaim(t, store, slug, theirs)
 
 		_, err := runFinishCmd(t, store, "release", "proj-100", "--project", slug)
 		if err == nil {
@@ -145,8 +195,56 @@ func TestFinishReleaseCmd(t *testing.T) {
 		if !strings.Contains(err.Error(), "runner") {
 			t.Errorf("error %q does not name the holding host", err)
 		}
+		// Even knowing its stamp: it is not this machine's to lift.
+		if _, err := runFinishCmd(t, store, "release", "proj-100", "--project", slug, "--started", theirs.Started); err == nil {
+			t.Error("another host's live claim must stay theirs even when named")
+		}
 		if h := storage.LiveFinishClaimHolder(store.ProjectDir(slug), "proj-100"); h == nil || h.Host != "runner" {
 			t.Errorf("holder = %+v, want the untouched runner claim", h)
+		}
+	})
+
+	// An expired claim reads as free to every other surface, so clearing it
+	// takes nothing from anybody - and needs no identifier, since whoever left
+	// it behind is by definition not coming back to name it.
+	t.Run("clears an expired claim without an identifier", func(t *testing.T) {
+		store, slug := tempStore(t)
+		seedFinishClaim(t, store, slug, storage.FinishClaim{
+			TrackerID: "proj-100", Host: "runner", PID: 4711,
+			Started:   time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339),
+			Refreshed: time.Now().Add(-storage.FinishClaimTTL - time.Hour).UTC().Format(time.RFC3339),
+		})
+
+		out, err := runFinishCmd(t, store, "release", "proj-100", "--project", slug)
+		if err != nil {
+			t.Fatalf("clearing an expired claim: %v", err)
+		}
+		if !strings.Contains(out, "expired") {
+			t.Errorf("output %q should say the claim had already expired", out)
+		}
+		if _, serr := os.Stat(storage.FinishClaimPath(store.ProjectDir(slug), "proj-100")); !os.IsNotExist(serr) {
+			t.Errorf("expired claim still on disk (stat err = %v)", serr)
+		}
+	})
+
+	// Everything else treats a corrupt claim as free; release must not be the
+	// one command that turns it into a dead end demanding a manual rm.
+	t.Run("an unreadable claim file is not an error", func(t *testing.T) {
+		store, slug := tempStore(t)
+		path := storage.FinishClaimPath(store.ProjectDir(slug), "proj-100")
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(`{"tracker_id":"proj-1`), 0644); err != nil {
+			t.Fatalf("seed corrupt claim: %v", err)
+		}
+
+		out, err := runFinishCmd(t, store, "release", "proj-100", "--project", slug)
+		if err != nil {
+			t.Fatalf("a corrupt claim must not fail the release, got: %v", err)
+		}
+		if !strings.Contains(out, "unreadable") {
+			t.Errorf("output %q should explain the claim file is unreadable", out)
 		}
 	})
 }
@@ -167,7 +265,7 @@ func TestFinishStatusCmd(t *testing.T) {
 		store, slug := tempStore(t)
 		started := time.Now().Add(-7 * time.Minute).UTC().Format(time.RFC3339)
 		seedFinishClaim(t, store, slug, storage.FinishClaim{
-			TrackerID: "proj-100", Host: "runner",
+			TrackerID: "proj-100", Host: "runner", PID: 4711,
 			Started:   started,
 			Refreshed: time.Now().UTC().Format(time.RFC3339),
 		})
@@ -188,7 +286,7 @@ func TestFinishStatusCmd(t *testing.T) {
 	t.Run("an expired claim reads as free, with the stale holder for context", func(t *testing.T) {
 		store, slug := tempStore(t)
 		seedFinishClaim(t, store, slug, storage.FinishClaim{
-			TrackerID: "proj-100", Host: "runner",
+			TrackerID: "proj-100", Host: "runner", PID: 4711,
 			Started:   time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339),
 			Refreshed: time.Now().Add(-storage.FinishClaimTTL - time.Hour).UTC().Format(time.RFC3339),
 		})
@@ -224,5 +322,31 @@ func TestFinishBareCommandIsASkeleton(t *testing.T) {
 
 	if _, err := runFinishCmd(t, store, "proj-100"); err == nil {
 		t.Error("`pm finish <tracker>` must not be accepted yet (it lands in pm-cli-100-4)")
+	}
+}
+
+// `pm finish` has to be reachable from the root command - a subcommand nobody
+// registered is a subcommand nobody can run.
+func TestFinishIsRegisteredOnRoot(t *testing.T) {
+	root := NewRootCmd()
+	for _, c := range root.Commands() {
+		if c.Name() == "finish" {
+			return
+		}
+	}
+	t.Fatal("`finish` is not registered on the root command")
+}
+
+// The tracker id becomes a file name, and release UNLINKS that file, so an id
+// carrying a path separator must be refused before either touches the disk.
+func TestFinishRejectsUnsafeTrackerID(t *testing.T) {
+	store, slug := tempStore(t)
+	for _, sub := range []string{"claim", "release"} {
+		if _, err := runFinishCmd(t, store, sub, "../escape", "--project", slug); err == nil {
+			t.Errorf("`pm finish %s ../escape` was accepted", sub)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(store.ProjectDir(slug)), "escape.finish.claim")); !os.IsNotExist(err) {
+		t.Errorf("a rejected id still wrote outside the project dir (stat err = %v)", err)
 	}
 }

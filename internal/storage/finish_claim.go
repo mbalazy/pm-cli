@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,6 +33,21 @@ import (
 //
 // PID is still recorded, but PURELY informationally (so a message can say
 // "held by pid 4711 on host mac since 22 min ago"). It never decides validity.
+//
+// WHAT "BOTH MACHINES SEE IT" MEANS. The claim is a file in the pm data dir of
+// the machine the RUN stands on, so a second machine reaches it the way it
+// reaches that pm at all - over ssh, running pm there (`ssh runner pm finish
+// claim ...`). Nothing here mounts or syncs anything: two acceptances collide
+// safely only while both operate the SAME data dir, which is exactly why the
+// claim sits with the run rather than with the accepting side.
+//
+// WHAT THE TTL ASSUMES. Comparing a stamp written on one machine against
+// another machine's clock assumes the two are roughly in step (ntp-level, not
+// exact). A machine whose clock lags by more than the TTL writes claims that
+// read as expired everywhere else; one that leads writes claims that outlive
+// their holder by the skew. That is the price of dropping the pid check, which
+// carried no such assumption - and the reason the TTL is minutes rather than
+// seconds.
 
 var (
 	// FinishClaimTTL is how long a claim stays valid without a refresh. Past
@@ -45,6 +61,15 @@ var (
 	// cmd.workerHeartbeatInterval is a var seeded from its const.
 	FinishClaimRefreshInterval = 60 * time.Second
 )
+
+// claimTimeLayout stamps a claim with NANOSECOND precision. The stamps are
+// still RFC3339 (time.Parse with the plain RFC3339 layout reads them, so a
+// hand-written second-granularity claim keeps working), but `started` is half
+// of the claim's IDENTITY - see sameFinishClaim - and second granularity makes
+// two claims taken on one host inside the same second indistinguishable, so a
+// stale copy of a released claim would pass the ownership test against its
+// successor and refresh or release somebody else's run.
+const claimTimeLayout = time.RFC3339Nano
 
 // finishClaimSeq makes every scratch file this process writes unique. The pid
 // alone is not enough: two goroutines in ONE process claiming the same tracker
@@ -60,7 +85,7 @@ type FinishClaim struct {
 	Host      string `json:"host"`
 	PID       int    `json:"pid"`               // informational only - see the note above
 	Session   string `json:"session,omitempty"` // CC session or run id, when known
-	Started   string `json:"started"`           // RFC3339
+	Started   string `json:"started"`           // RFC3339, also half of the claim's identity
 	Refreshed string `json:"refreshed"`         // RFC3339, moved forward while the acceptance runs
 }
 
@@ -71,6 +96,9 @@ type FinishClaimBusyError struct {
 }
 
 func (e *FinishClaimBusyError) Error() string {
+	if e.Holder == nil {
+		return "finish claim is held by another acceptance session"
+	}
 	return fmt.Sprintf("finish claim for %s is held by %s (pid %d), started %s, refreshed %s ago - "+
 		"wait for it to finish or for the claim to expire (%s without a refresh)",
 		e.Holder.TrackerID, e.Holder.Host, e.Holder.PID,
@@ -87,7 +115,17 @@ func FinishClaimPath(projectDir, trackerID string) string {
 // returns an error - callers deciding liveness treat that as free (see
 // LiveFinishClaimHolder), the same way a corrupt session lock does.
 func ReadFinishClaim(projectDir, trackerID string) (*FinishClaim, error) {
-	data, err := os.ReadFile(FinishClaimPath(projectDir, trackerID))
+	return readClaimFile(FinishClaimPath(projectDir, trackerID))
+}
+
+// readClaimFile reads a claim from an exact path (the live claim, or one
+// renamed aside mid-takeover). A parse failure is wrapped in
+// *corruptClaimError so a caller can tell "this file's CONTENT is garbage"
+// from "I could not read the file": the first justifies stealing the claim,
+// the second (EACCES, EIO, a stale handle on a shared dir) says nothing about
+// the holder and must never cost them their run.
+func readClaimFile(path string) (*FinishClaim, error) {
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -96,15 +134,38 @@ func ReadFinishClaim(projectDir, trackerID string) (*FinishClaim, error) {
 	}
 	var c FinishClaim
 	if err := json.Unmarshal(data, &c); err != nil {
-		return nil, err
+		return nil, &corruptClaimError{Path: path, Err: err}
 	}
 	return &c, nil
+}
+
+// corruptClaimError marks a claim file whose CONTENT could not be parsed.
+type corruptClaimError struct {
+	Path string
+	Err  error
+}
+
+func (e *corruptClaimError) Error() string {
+	return fmt.Sprintf("unreadable finish claim %s: %v", e.Path, e.Err)
+}
+
+func (e *corruptClaimError) Unwrap() error { return e.Err }
+
+// IsCorruptFinishClaim reports whether err came from an unparseable claim FILE,
+// as opposed to an I/O failure while reading it. The distinction decides who
+// may DESTROY the claim: garbage content is nobody's run, an unreadable file
+// may well be somebody's.
+func IsCorruptFinishClaim(err error) bool {
+	var c *corruptClaimError
+	return errors.As(err, &c)
 }
 
 // LiveFinishClaimHolder returns the holder only while the claim is still valid,
 // else nil. Expired, corrupt and unreadable all read as FREE: a truncated file
 // left by a crashed process must not wall off a run forever - the same rule
-// LiveSessionHolder follows.
+// LiveSessionHolder follows. (Reading unreadable as free is safe HERE because
+// this answers a question; AcquireFinishClaim, which DESTROYS what it reads as
+// free, is deliberately stricter - see isCorruptClaim.)
 func LiveFinishClaimHolder(projectDir, trackerID string) *FinishClaim {
 	c, err := ReadFinishClaim(projectDir, trackerID)
 	if err != nil || c == nil {
@@ -139,11 +200,23 @@ func (c *FinishClaim) Expired(now time.Time) bool {
 //     a rival never observes a half-written winner (a plain O_EXCL create +
 //     write has exactly that window). On EEXIST we read the incumbent and
 //     report it busy.
-//   - takeover of an expired claim = rename it aside, then retry in a loop. Two
-//     simultaneous takeovers race on the rename; the loser's rename fails with
-//     ENOENT and its next attempt sees the winner's fresh claim.
+//   - takeover of an expired claim = rename it aside, CHECK WHAT CAME ASIDE,
+//     then retry in a loop. The check is not optional: the decision to steal is
+//     made before the rename, so a rival that won the takeover in between can
+//     have linked its own FRESH claim at the path by the time we rename - and
+//     deleting that would hand the same run to two acceptances, each holding a
+//     nil error. What we move aside is therefore inspected and, when it turns
+//     out to be someone's live claim, put straight back; the next attempt then
+//     reports it busy.
 func AcquireFinishClaim(projectDir, trackerID, session string) (*FinishClaim, error) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	// The tracker id becomes a file name under .executor/ - validate it where
+	// it is WRITTEN, like every other identifier in this package (see
+	// ValidateTaskID / ValidateSlug). Unvalidated, `../../x` would place (and,
+	// via release, unlink) a file outside the project dir.
+	if err := ValidateTaskID(trackerID); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC().Format(claimTimeLayout)
 	claim := &FinishClaim{
 		TrackerID: trackerID,
 		Host:      hostname(),
@@ -165,6 +238,7 @@ func AcquireFinishClaim(projectDir, trackerID, session string) (*FinishClaim, er
 	for attempt := 0; attempt < 5; attempt++ {
 		tmp := scratchPath(path, "tmp")
 		if err := os.WriteFile(tmp, data, 0644); err != nil {
+			_ = os.Remove(tmp) // names are unique per call, so a leftover never gets reused
 			return nil, err
 		}
 		linkErr := os.Link(tmp, path)
@@ -177,30 +251,62 @@ func AcquireFinishClaim(projectDir, trackerID, session string) (*FinishClaim, er
 		}
 
 		existing, rerr := ReadFinishClaim(projectDir, trackerID)
-		if rerr == nil {
-			if existing == nil {
-				continue // released or stolen between EEXIST and the read - retry
-			}
-			if !existing.Expired(time.Now()) {
-				return nil, &FinishClaimBusyError{Holder: existing}
-			}
+		switch {
+		case rerr != nil && !IsCorruptFinishClaim(rerr):
+			// The file is there and we could not READ it (EACCES, EIO, a stale
+			// handle). That says nothing about the holder, and the branch below
+			// DESTROYS what it steals - so refuse rather than delete a live
+			// claim on the strength of an unrelated failure.
+			return nil, fmt.Errorf("read finish claim at %s: %w", path, rerr)
+		case rerr == nil && existing == nil:
+			continue // released or stolen between EEXIST and the read - retry
+		case rerr == nil && !existing.Expired(time.Now()):
+			return nil, &FinishClaimBusyError{Holder: existing}
 		}
-		// Expired, or corrupt (rerr != nil - a truncated file from a crashed
-		// process must not brick the run). Steal it atomically: rename aside and
-		// loop to re-claim. If a rival steals first our rename fails harmlessly
-		// and the next attempt sees their fresh claim.
-		steal := scratchPath(path, "steal")
-		if os.Rename(path, steal) == nil {
-			_ = os.Remove(steal)
-		}
+		// Expired, or corrupt (a truncated file from a crashed process must not
+		// brick the run). Steal it: rename aside, verify, loop to re-claim.
+		stealExpiredClaim(path)
 	}
 	return nil, fmt.Errorf("could not acquire finish claim at %s (takeover contention)", path)
 }
 
-// RefreshFinishClaim moves own's `refreshed` stamp forward, keeping the claim
-// alive past the TTL, and updates own in place so the caller's copy stays
-// current. If the claim was taken over in the meantime (a different
-// Host+Started) it returns an error INSTEAD of overwriting somebody else's.
+// stealExpiredClaim moves the claim at path aside so the caller can re-claim,
+// and puts it BACK if what came aside turns out to be a live claim - i.e. if a
+// rival won this same takeover and linked its fresh claim in the window between
+// our expiry decision and our rename. Restoring goes through link+remove, never
+// rename: rename would silently overwrite a THIRD claim that landed in the
+// meantime, which is the same double-grant one step further out.
+func stealExpiredClaim(path string) {
+	steal := scratchPath(path, "steal")
+	if os.Rename(path, steal) != nil {
+		// A rival stole it first (ENOENT) - harmless, the next attempt sees
+		// their fresh claim.
+		return
+	}
+	stolen, err := readClaimFile(steal)
+	if err == nil && stolen != nil && !stolen.Expired(time.Now()) {
+		if os.Link(steal, path) == nil {
+			_ = os.Remove(steal)
+			return
+		}
+	}
+	_ = os.Remove(steal)
+}
+
+// RefreshFinishClaim moves own's `refreshed` stamp forward - keeping a claim
+// alive past the point it would otherwise have expired - and updates own in
+// place so the caller's copy stays current. It refuses, rather than writing, in
+// three cases: the claim is gone, it is now somebody else's (a different
+// Host+Started), or it has ALREADY EXPIRED.
+//
+// The expired case is the subtle one. Every other surface already reports an
+// expired claim as free - LiveFinishClaimHolder returns nil, `pm finish status`
+// prints "free", AcquireFinishClaim steals it - so refreshing one would revive
+// a claim a rival may already have taken over, leaving two acceptances each
+// convinced they hold the run. A holder that let its claim lapse (a laptop
+// asleep for an hour) has to re-Acquire, which is the atomic path and reports
+// the rival honestly. A live refresher ticks at FinishClaimRefreshInterval
+// against a TTL ten times longer and never reaches this case.
 //
 // The write goes through a scratch file + rename, never in place: other
 // machines and processes read this file concurrently, would see the truncated
@@ -209,6 +315,9 @@ func AcquireFinishClaim(projectDir, trackerID, session string) (*FinishClaim, er
 func RefreshFinishClaim(projectDir, trackerID string, own *FinishClaim) error {
 	if own == nil {
 		return fmt.Errorf("refresh finish claim for %s: no claim to refresh", trackerID)
+	}
+	if err := ValidateTaskID(trackerID); err != nil {
+		return err
 	}
 	current, err := ReadFinishClaim(projectDir, trackerID)
 	if err != nil {
@@ -221,9 +330,14 @@ func RefreshFinishClaim(projectDir, trackerID string, own *FinishClaim) error {
 		return fmt.Errorf("refresh finish claim for %s: it is now held by %s (pid %d) since %s, not by us",
 			trackerID, current.Host, current.PID, current.Started)
 	}
+	if current.Expired(time.Now()) {
+		return fmt.Errorf("refresh finish claim for %s: it expired %s ago (no refresh for over %s) and reads as free "+
+			"to everyone else - take it again with a fresh claim instead of reviving this one",
+			trackerID, FinishClaimAge(current.Refreshed), FinishClaimTTL)
+	}
 
 	refreshed := *own
-	refreshed.Refreshed = time.Now().UTC().Format(time.RFC3339)
+	refreshed.Refreshed = time.Now().UTC().Format(claimTimeLayout)
 	data, err := json.MarshalIndent(&refreshed, "", "  ")
 	if err != nil {
 		return err
@@ -231,6 +345,7 @@ func RefreshFinishClaim(projectDir, trackerID string, own *FinishClaim) error {
 	path := FinishClaimPath(projectDir, trackerID)
 	tmp := scratchPath(path, "refresh")
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -248,6 +363,11 @@ func RefreshFinishClaim(projectDir, trackerID string, own *FinishClaim) error {
 func ReleaseFinishClaim(projectDir, trackerID string, own *FinishClaim) error {
 	if own == nil {
 		return fmt.Errorf("release finish claim for %s: no claim to release", trackerID)
+	}
+	// The id names the file this call UNLINKS - validate it here too, not only
+	// in AcquireFinishClaim (see ValidateTaskID there).
+	if err := ValidateTaskID(trackerID); err != nil {
+		return err
 	}
 	current, err := ReadFinishClaim(projectDir, trackerID)
 	if err != nil {
@@ -270,7 +390,9 @@ func ReleaseFinishClaim(projectDir, trackerID string, own *FinishClaim) error {
 // sameFinishClaim is the ownership test: Host+Started. The pid is deliberately
 // NOT part of it - it is unverifiable across machines, and the process that
 // wrote the claim (e.g. `pm finish claim`) may have exited long before the
-// acceptance it stands for is over.
+// acceptance it stands for is over. Started therefore has to be unique per
+// claim on a host, which is why it is stamped with claimTimeLayout's
+// nanoseconds rather than whole seconds.
 func sameFinishClaim(a, b *FinishClaim) bool {
 	return a.Host == b.Host && a.Started == b.Started
 }

@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -145,15 +146,15 @@ func TestAcquireFinishClaim(t *testing.T) {
 }
 
 func TestRefreshFinishClaim(t *testing.T) {
-	t.Run("refresh moves the stamp and keeps the claim alive past the TTL", func(t *testing.T) {
+	// The point of refreshing: a claim survives past the moment it would
+	// otherwise have lapsed. Asserted by shrinking the TTL AFTER the refresh, so
+	// the same claim that would now be long expired on its original stamp is
+	// live on its new one - no sleeping, no wall-clock luck.
+	t.Run("refresh moves the stamp and keeps the claim alive past its original TTL", func(t *testing.T) {
 		dir := t.TempDir()
-		// Claim taken well over a TTL ago: only a refresh can keep it valid.
-		old := time.Now().Add(-FinishClaimTTL - time.Minute).UTC().Format(time.RFC3339)
+		old := time.Now().Add(-9 * time.Minute).UTC().Format(claimTimeLayout)
 		own := &FinishClaim{TrackerID: "proj-100", Host: hostname(), PID: os.Getpid(), Started: old, Refreshed: old}
 		seedClaim(t, dir, *own)
-		if h := LiveFinishClaimHolder(dir, "proj-100"); h != nil {
-			t.Fatal("fixture must start expired")
-		}
 
 		if err := RefreshFinishClaim(dir, "proj-100", own); err != nil {
 			t.Fatalf("refresh: %v", err)
@@ -171,8 +172,39 @@ func TestRefreshFinishClaim(t *testing.T) {
 		if cur.Refreshed != own.Refreshed {
 			t.Errorf("on-disk refreshed = %q, want %q", cur.Refreshed, own.Refreshed)
 		}
+
+		orig := FinishClaimTTL
+		t.Cleanup(func() { FinishClaimTTL = orig })
+		FinishClaimTTL = 5 * time.Minute // the un-refreshed 9m-old stamp would be void
 		if h := LiveFinishClaimHolder(dir, "proj-100"); h == nil {
-			t.Error("holder = nil after a refresh - the claim must be live again")
+			t.Error("holder = nil - the refreshed claim must outlive its original stamp")
+		}
+	})
+
+	// Reviving an EXPIRED claim is the one thing a refresh must not do: every
+	// other surface has already reported it free, so a rival may hold it - and
+	// the refresh writes by rename, which would silently overwrite their claim
+	// and leave two acceptances each believing they own the run.
+	t.Run("refusing to revive an expired claim, leaving the file untouched", func(t *testing.T) {
+		dir := t.TempDir()
+		old := time.Now().Add(-FinishClaimTTL - time.Minute).UTC().Format(claimTimeLayout)
+		own := &FinishClaim{TrackerID: "proj-100", Host: hostname(), PID: os.Getpid(), Started: old, Refreshed: old}
+		seedClaim(t, dir, *own)
+		before := readRaw(t, FinishClaimPath(dir, "proj-100"))
+
+		err := RefreshFinishClaim(dir, "proj-100", own)
+		if err == nil {
+			t.Fatal("expected an error refreshing an expired claim")
+		}
+		if !strings.Contains(err.Error(), "expired") {
+			t.Errorf("error %q should say the claim expired", err)
+		}
+		if after := readRaw(t, FinishClaimPath(dir, "proj-100")); after != before {
+			t.Errorf("claim file changed:\nbefore %s\nafter  %s", before, after)
+		}
+		// And the way forward is a fresh claim, which is the atomic path.
+		if _, err := AcquireFinishClaim(dir, "proj-100", ""); err != nil {
+			t.Errorf("re-acquiring the lapsed claim: %v", err)
 		}
 	})
 
@@ -256,51 +288,205 @@ func TestReleaseFinishClaim(t *testing.T) {
 	})
 }
 
-// TestAcquireFinishClaimAtomicRace hammers the link(2) claim: two acquirers race
-// for the same tracker; exactly one must win and the loser must get a busy error
-// naming a holder - never two winners, never two losers. Modelled on
-// TestAcquireWorktreeLockAtomicRace, but the acquirers here need no distinct
-// pids: validity is the TTL, not the pid, precisely because a pid means nothing
-// across machines.
+// TestAcquireFinishClaimAtomicRace hammers both claim paths: two acquirers race
+// for the same tracker, once on an empty dir (the link(2)/EEXIST path) and once
+// over an already-expired claim (the takeover path, where the winner is decided
+// by a rename). Exactly one must win, the loser must get a busy error naming a
+// holder, and - the assertion that actually catches a double grant - the claim
+// left on disk must be the WINNER'S, not a survivor of two overlapping steals.
+// Modelled on TestAcquireWorktreeLockAtomicRace, but the acquirers here need no
+// distinct pids: validity is the TTL, not the pid, precisely because a pid means
+// nothing across machines.
 func TestAcquireFinishClaimAtomicRace(t *testing.T) {
-	for i := 0; i < 50; i++ {
-		dir := t.TempDir()
-		var wg sync.WaitGroup
-		claims := make([]*FinishClaim, 2)
-		errs := make([]error, 2)
-		for j := 0; j < 2; j++ {
-			wg.Add(1)
-			go func(j int) {
-				defer wg.Done()
-				claims[j], errs[j] = AcquireFinishClaim(dir, "proj-100", "sess")
-			}(j)
-		}
-		wg.Wait()
+	cases := []struct {
+		name string
+		seed func(t *testing.T, dir string)
+	}{
+		{name: "on a free tracker"},
+		{
+			name: "over an expired claim (the takeover path)",
+			seed: func(t *testing.T, dir string) {
+				seedClaim(t, dir, FinishClaim{
+					TrackerID: "proj-100", Host: "runner", PID: 4711,
+					Started:   time.Now().Add(-2 * time.Hour).UTC().Format(claimTimeLayout),
+					Refreshed: time.Now().Add(-FinishClaimTTL - time.Minute).UTC().Format(claimTimeLayout),
+				})
+			},
+		},
+	}
 
-		wins := 0
-		for j, err := range errs {
-			if err == nil {
-				wins++
-				if claims[j] == nil {
-					t.Fatalf("iteration %d: acquirer %d won but returned a nil claim", i, j)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for i := 0; i < 50; i++ {
+				dir := t.TempDir()
+				if tc.seed != nil {
+					tc.seed(t, dir)
 				}
-				continue
+				var wg sync.WaitGroup
+				claims := make([]*FinishClaim, 2)
+				errs := make([]error, 2)
+				for j := 0; j < 2; j++ {
+					wg.Add(1)
+					go func(j int) {
+						defer wg.Done()
+						claims[j], errs[j] = AcquireFinishClaim(dir, "proj-100", fmt.Sprintf("sess-%d", j))
+					}(j)
+				}
+				wg.Wait()
+
+				winner := -1
+				for j, err := range errs {
+					if err == nil {
+						if winner >= 0 {
+							t.Fatalf("iteration %d: two winners - both acquirers hold the run", i)
+						}
+						winner = j
+						if claims[j] == nil {
+							t.Fatalf("iteration %d: acquirer %d won but returned a nil claim", i, j)
+						}
+						continue
+					}
+					var busy *FinishClaimBusyError
+					if !errors.As(err, &busy) {
+						t.Fatalf("iteration %d: acquirer %d got a non-busy error: %v", i, j, err)
+					}
+					if busy.Holder == nil {
+						t.Fatalf("iteration %d: busy error carries no holder", i)
+					}
+				}
+				if winner < 0 {
+					t.Fatalf("iteration %d: no winner (errs: %v)", i, errs)
+				}
+				// The file must belong to whoever was TOLD they won - a takeover
+				// that deleted the winner's fresh claim would show up here.
+				h := LiveFinishClaimHolder(dir, "proj-100")
+				if h == nil {
+					t.Fatalf("iteration %d: no live holder after the race", i)
+				}
+				if h.Started != claims[winner].Started || h.Session != claims[winner].Session {
+					t.Fatalf("iteration %d: on-disk claim %+v is not the winner's %+v", i, h, claims[winner])
+				}
 			}
-			var busy *FinishClaimBusyError
-			if !errors.As(err, &busy) {
-				t.Fatalf("iteration %d: acquirer %d got a non-busy error: %v", i, j, err)
-			}
-			if busy.Holder == nil {
-				t.Fatalf("iteration %d: busy error carries no holder", i)
-			}
+		})
+	}
+}
+
+// stealExpiredClaim is the takeover primitive, and its whole job is knowing
+// what it moved aside. The decision to steal is made BEFORE the rename, so by
+// the time it fires the path may hold a rival's fresh claim - deleting that is
+// how one run ends up with two acceptances.
+func TestStealExpiredClaimOnlyTakesVoidClaims(t *testing.T) {
+	t.Run("a live claim is put straight back", func(t *testing.T) {
+		dir := t.TempDir()
+		live := FinishClaim{
+			TrackerID: "proj-100", Host: "mac", PID: 4711,
+			Started:   time.Now().UTC().Format(claimTimeLayout),
+			Refreshed: time.Now().UTC().Format(claimTimeLayout),
 		}
-		if wins != 1 {
-			t.Fatalf("iteration %d: expected exactly 1 winner, got %d (errs: %v)", i, wins, errs)
+		seedClaim(t, dir, live)
+		path := FinishClaimPath(dir, "proj-100")
+		before := readRaw(t, path)
+
+		stealExpiredClaim(path)
+
+		if after := readRaw(t, path); after != before {
+			t.Errorf("live claim not restored:\nbefore %s\nafter  %s", before, after)
 		}
-		// The winner's claim is the one on disk, whole and parseable.
-		if h := LiveFinishClaimHolder(dir, "proj-100"); h == nil {
-			t.Fatalf("iteration %d: no live holder after the race", i)
+		if h := LiveFinishClaimHolder(dir, "proj-100"); h == nil || h.Started != live.Started {
+			t.Errorf("holder = %+v, want the restored live claim", h)
 		}
+	})
+
+	t.Run("an expired claim is taken away", func(t *testing.T) {
+		dir := t.TempDir()
+		seedClaim(t, dir, FinishClaim{
+			TrackerID: "proj-100", Host: "mac", PID: 4711,
+			Started:   time.Now().Add(-2 * time.Hour).UTC().Format(claimTimeLayout),
+			Refreshed: time.Now().Add(-FinishClaimTTL - time.Minute).UTC().Format(claimTimeLayout),
+		})
+		path := FinishClaimPath(dir, "proj-100")
+
+		stealExpiredClaim(path)
+
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("expired claim still present (stat err = %v)", err)
+		}
+	})
+}
+
+// A claim that cannot be READ says nothing about its holder - unlike one whose
+// content is garbage. The takeover branch DESTROYS what it reads as free, so an
+// I/O failure must stop it rather than feed it. (A directory at the claim path
+// is the portable way to make a read fail without a permission trick that root
+// would sail through.)
+func TestAcquireFinishClaimRefusesOnUnreadableClaim(t *testing.T) {
+	dir := t.TempDir()
+	path := FinishClaimPath(dir, "proj-100")
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatalf("seed unreadable claim: %v", err)
+	}
+
+	_, err := AcquireFinishClaim(dir, "proj-100", "")
+	if err == nil {
+		t.Fatal("expected an error when the claim cannot be read")
+	}
+	var busy *FinishClaimBusyError
+	if errors.As(err, &busy) {
+		t.Errorf("err = %v, want a read failure, not a busy report", err)
+	}
+	if _, serr := os.Stat(path); serr != nil {
+		t.Errorf("the unreadable claim was destroyed: %v", serr)
+	}
+}
+
+// The tracker id becomes a file name under .executor/, so it is validated where
+// it is written - the repo's "identifiers are PATH COMPONENTS" rule. Without
+// this, `pm finish claim ../../x` writes outside the project dir and the
+// matching release is an arbitrary unlink.
+func TestFinishClaimRejectsUnsafeTrackerIDs(t *testing.T) {
+	dir := t.TempDir()
+	for _, bad := range []string{"../escape", "a/b", "", ".."} {
+		if _, err := AcquireFinishClaim(dir, bad, ""); err == nil {
+			t.Errorf("AcquireFinishClaim(%q) = nil error, want a rejection", bad)
+		}
+		own := &FinishClaim{TrackerID: bad, Host: hostname()}
+		if err := ReleaseFinishClaim(dir, bad, own); err == nil {
+			t.Errorf("ReleaseFinishClaim(%q) = nil error, want a rejection", bad)
+		}
+		if err := RefreshFinishClaim(dir, bad, own); err == nil {
+			t.Errorf("RefreshFinishClaim(%q) = nil error, want a rejection", bad)
+		}
+	}
+	// Nothing was created on the way out.
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+		t.Errorf("a rejected id left something behind: %v", entries)
+	}
+}
+
+// Started is half the claim's identity, so two claims taken back to back on one
+// host must not be interchangeable - at second granularity they were, and a
+// stale copy of a released claim would then release its successor.
+func TestFinishClaimStartedIsUniquePerClaim(t *testing.T) {
+	dir := t.TempDir()
+	first, err := AcquireFinishClaim(dir, "proj-100", "sess-1")
+	if err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	if err := ReleaseFinishClaim(dir, "proj-100", first); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	second, err := AcquireFinishClaim(dir, "proj-100", "sess-2")
+	if err != nil {
+		t.Fatalf("second acquire: %v", err)
+	}
+	if first.Started == second.Started {
+		t.Fatalf("both claims stamped %q - a stale claim would pass the ownership test", first.Started)
+	}
+	if err := ReleaseFinishClaim(dir, "proj-100", first); err == nil {
+		t.Error("the released claim's copy must not be able to release its successor")
+	}
+	if h := LiveFinishClaimHolder(dir, "proj-100"); h == nil || h.Session != "sess-2" {
+		t.Errorf("holder = %+v, want the second claim intact", h)
 	}
 }
 
