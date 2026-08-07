@@ -10,9 +10,11 @@ import (
 )
 
 // refreshRunStates reloads executor run-states for the visible project(s) into
-// m.runStates. Cheap (a small dir of small JSON files) so it runs on every tick.
+// m.runStates, and the acceptance run-states into m.finishStates. Cheap (a small
+// dir of small JSON files) so it runs on every tick.
 func (m *Model) refreshRunStates() {
 	states := map[string]*storage.RunState{}
+	finish := map[string]*storage.RunState{}
 	var slugs []string
 	if m.activeProject == 0 {
 		slugs = append(slugs, m.projects[1:]...) // "all": every project (skip the "all" pseudo-entry)
@@ -20,11 +22,19 @@ func (m *Model) refreshRunStates() {
 		slugs = append(slugs, m.projects[m.activeProject])
 	}
 	for _, slug := range slugs {
-		for id, st := range storage.ReadRunStates(m.store.ProjectDir(slug)) {
+		dir := m.store.ProjectDir(slug)
+		for id, st := range storage.ReadRunStates(dir) {
 			states[id] = st
+		}
+		// Separate map, separate reader: ReadRunStates and ReadFinishRunStates
+		// never return the same file, and the two results must not be poured
+		// into one map (see Model.finishStates).
+		for id, st := range storage.ReadFinishRunStates(dir) {
+			finish[id] = st
 		}
 	}
 	m.runStates = states
+	m.finishStates = finish
 }
 
 // runForTask returns the executor run-state to act on for task t: its own run,
@@ -42,6 +52,44 @@ func (m Model) runForTask(t *storage.Task) *storage.RunState {
 	return nil
 }
 
+// finishForTask is runForTask's mirror over the acceptance run-states: task t's
+// own acceptance, else the one covering its parent tracker.
+func (m Model) finishForTask(t *storage.Task) *storage.RunState {
+	if t == nil {
+		return nil
+	}
+	if st := m.finishStates[t.Meta.ID]; st != nil {
+		return st
+	}
+	if t.Meta.Parent != "" {
+		return m.finishStates[t.Meta.Parent]
+	}
+	return nil
+}
+
+// killTargetForTask picks which run-state K acts on for task t. A run and its
+// acceptance can be live AT THE SAME TIME - that is the designed state, not an
+// exception - so liveness decides first and the RUN wins a tie: it is the one
+// spending a worker on code, and an acceptance outliving it is harmless (it
+// re-reads what landed), while the reverse is not.
+//
+// This is why the agent-view can kill too: with both live, K here always means
+// the run, so stopping only the acceptance is done by opening it (W, then W to
+// switch) and pressing K on what is on screen.
+func (m Model) killTargetForTask(t *storage.Task) *storage.RunState {
+	run, fin := m.runForTask(t), m.finishForTask(t)
+	if run.IsLive() {
+		return run
+	}
+	if fin.IsLive() {
+		return fin
+	}
+	if run != nil {
+		return run
+	}
+	return fin
+}
+
 // execKillCheckMsg fires a short while after a kill so we can escalate to
 // SIGKILL if the process group survived the SIGTERM.
 type execKillCheckMsg struct {
@@ -53,6 +101,21 @@ type execKillCheckMsg struct {
 	pid     int
 	project string
 	taskID  string
+	// kind routes that re-read to the right FILE. A run and its acceptance share
+	// a task id, so without it the escalation of a killed acceptance would read
+	// the run's state instead - and, with a live run there, SIGKILL a healthy
+	// manager on the strength of somebody else's pid.
+	kind string
+}
+
+// readRunStateOfKind re-reads the run-state of kind for taskID. The kind is
+// what decides the file (storage.runStatePath); reading the wrong one is not a
+// miss but a confusion, since the two files describe different live processes.
+func readRunStateOfKind(stateDir, taskID, kind string) (*storage.RunState, error) {
+	if kind == storage.RunKindFinish {
+		return storage.ReadFinishRunState(stateDir, taskID)
+	}
+	return storage.ReadRunState(stateDir, taskID)
 }
 
 // killRun stops the executor run st: SIGTERM to its process group, then stamps
@@ -66,13 +129,20 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 	stateDir := m.store.ProjectDir(st.Project)
 	taskID := st.TaskID
 	proj := st.Project
+	kind := st.Kind
 	// Re-read the freshest run-state BEFORE signalling: the board's copy is up
 	// to a tick old, and WorkerPGID moves with every sub - signalling a stale
 	// one would miss the live worker (and, once its pid is recycled, could
-	// reach an unrelated group).
-	if fresh, err := storage.ReadRunState(stateDir, taskID); err == nil {
+	// reach an unrelated group). Routed by KIND, so killing an acceptance never
+	// reads (nor, below, writes over) the run-state of the run it accepts.
+	if fresh, err := readRunStateOfKind(stateDir, taskID, kind); err == nil {
 		st = fresh
+		// Read by kind, so write back by the same kind: WriteRunState routes on
+		// st.Kind, and a state whose kind disagreed with the file it came out of
+		// would be stamped over the OTHER run's file.
+		st.Kind = kind
 	}
+	acceptance := kind == storage.RunKindFinish
 	pid := st.PID
 	// A signal error is intentionally dropped: this is a TUI (bubbletea owns the
 	// screen, so stderr would corrupt the render), and the SIGTERM may legitimately
@@ -152,24 +222,48 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 		_ = storage.ReleaseWorktreeLock(st.RepoPath, pid)
 	}
 
+	// Same job for the acceptance claim, and for the same reason: the killed
+	// `pm finish` never runs its own deferred release, so without this the run
+	// stays locked against the next acceptance for the rest of the TTL - and a
+	// claim naming a pid that is already gone is exactly what gets a lock file
+	// deleted by hand.
+	if acceptance {
+		releaseKilledFinishClaim(stateDir, taskID, pid)
+	}
+
 	// Park the in-flight task on `waiting` so the board reflects the stop.
+	//
+	// Never for an acceptance: its one "sub" IS the tracker, and pm's rule is
+	// that the executor neither closes nor moves a parent tracker. Killing an
+	// acceptance says nothing about the state of the work it was accepting, so
+	// dragging the tracker to `waiting` would be a status change the user never
+	// asked for and did not cause.
 	var parkErr error
-	if inFlight != "" {
+	if inFlight != "" && !acceptance {
 		if t, err := m.store.FindTask(proj, inFlight); err == nil && t.Meta.Status != storage.StatusWaiting {
 			parkErr = m.store.MoveTask(t, storage.StatusWaiting)
 		}
 	}
 	m.reload()
 	m.refreshRunStates()
-	verb := "Stopped executor run "
+	noun := "executor run "
+	if acceptance {
+		noun = "acceptance run "
+	}
+	verb := "Stopped " + noun
 	if alreadyGone {
 		verb = "Run already gone (nothing signalled), state reconciled: "
 	}
-	if parkErr != nil {
+	switch {
+	case parkErr != nil:
 		// MoveTask can legally fail (e.g. the task file was deleted while the
 		// run was live) - the old unconditional toast lied about the park.
 		m.showErrorToast(verb+taskID+", but failed to park "+inFlight, parkErr)
-	} else {
+	case acceptance:
+		// No park to report, and saying so would invent one.
+		m.toastMsg = verb + taskID + " (claim released)"
+		m.toastExpiry = time.Now().Add(5 * time.Second)
+	default:
 		m.toastMsg = verb + taskID + " (parked " + inFlight + " on waiting)"
 		m.toastExpiry = time.Now().Add(5 * time.Second)
 	}
@@ -179,25 +273,60 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 		return nil
 	}
 	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-		return execKillCheckMsg{pid: pid, project: proj, taskID: taskID}
+		return execKillCheckMsg{pid: pid, project: proj, taskID: taskID, kind: kind}
 	})
+}
+
+// releaseKilledFinishClaim drops the acceptance claim held by the process this
+// kill just stopped, on its behalf.
+//
+// The ownership test is deliberately narrower than `pm finish release`'s: the
+// claim must name THIS host AND the very pid that was signalled. A claim is
+// identified by Host+Started for storage's purposes, but here the question is
+// not "is this claim mine" - it is "is this claim the killed run's", and
+// anything else (a second acceptance that took the run over after this one
+// lapsed, a claim taken by hand) must be left exactly where it is. Failures are
+// silent for the same reason every other write in killRun is: this is a TUI,
+// and the claim expires on its own within the TTL regardless.
+func releaseKilledFinishClaim(stateDir, tracker string, pid int) {
+	claim, err := storage.ReadFinishClaim(stateDir, tracker)
+	if err != nil || claim == nil {
+		return
+	}
+	if claim.Host != storage.Hostname() || claim.PID != pid {
+		return
+	}
+	_ = storage.ReleaseFinishClaim(stateDir, tracker, claim)
 }
 
 // runBadge returns a compact card badge for an executor run on taskID, or "".
 // A finished (done) run is intentionally not badged - the task's own status
 // already moved; only active/attention-worthy runs are surfaced.
 func (m Model) runBadge(taskID string) string {
-	st := m.runStates[taskID]
+	return stateBadge(m.runStates[taskID], "▶ running", "▷ stopped", "✗ run failed")
+}
+
+// finishBadge is runBadge's counterpart for the acceptance of a run. It is a
+// SEPARATE badge, rendered alongside rather than instead: a card can carry both
+// at once, because a run and its acceptance are routinely live together.
+func (m Model) finishBadge(taskID string) string {
+	return stateBadge(m.finishStates[taskID], "▶ accepting", "▷ accept stopped", "✗ accept failed")
+}
+
+// stateBadge is the shared shape of both badges: live, marked-running-but-gone,
+// failed - and nothing at all for a run that finished cleanly (the work's own
+// status has moved on by then).
+func stateBadge(st *storage.RunState, live, stopped, failed string) string {
 	if st == nil {
 		return ""
 	}
 	switch {
 	case st.IsLive():
-		return "▶ running"
+		return live
 	case st.Status == storage.RunStatusRunning: // marked running but the process is gone
-		return "▷ stopped"
+		return stopped
 	case st.Status == storage.RunStatusFailed:
-		return "✗ run failed"
+		return failed
 	}
 	return ""
 }

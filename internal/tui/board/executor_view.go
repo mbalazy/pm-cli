@@ -33,13 +33,20 @@ var (
 // openExecutorView opens the live agent-view for task t (or, if t is a sub
 // without its own run, its parent tracker's run). Returns false when there is
 // no executor run to watch.
+//
+// The RUN opens by default and the acceptance only when there is no run at all
+// - never the other way round, even with both live: the run is where a worker
+// is writing code, and the acceptance is one W away.
 func (m *Model) openExecutorView(t *storage.Task) bool {
 	if t == nil {
 		return false
 	}
-	st := m.runStates[t.Meta.ID]
-	if st == nil && t.Meta.Parent != "" {
-		st = m.runStates[t.Meta.Parent]
+	st := m.runForTask(t)
+	kind := ""
+	if st != nil {
+		kind = st.Kind // "work" / "run-epic" - anything but the acceptance
+	} else if st = m.finishForTask(t); st != nil {
+		kind = storage.RunKindFinish
 	}
 	if st == nil {
 		return false
@@ -48,6 +55,7 @@ func (m *Model) openExecutorView(t *storage.Task) bool {
 	m.currentView = viewExecutor
 	m.executorRunTaskID = st.TaskID
 	m.executorRunProj = st.Project
+	m.executorRunKind = kind
 	m.executorFollow = true
 	m.executorSessionIdx = 0
 	m.executorViewport = viewport.New(m.width, executorBodyHeight(m.height))
@@ -93,6 +101,72 @@ func (m *Model) switchExecutorWorker(dir int) {
 	m.toastExpiry = time.Now().Add(2 * time.Second)
 }
 
+// watchingFinish reports whether the agent-view is showing the ACCEPTANCE of
+// the run rather than the run itself.
+func (m Model) watchingFinish() bool { return m.executorRunKind == storage.RunKindFinish }
+
+// otherRunKind is the kind W switches to.
+func (m Model) otherRunKind() string {
+	if m.watchingFinish() {
+		return storage.RunKindEpic // any non-finish kind routes to the run's own file
+	}
+	return storage.RunKindFinish
+}
+
+// otherRunKindLabel names the counterpart for a toast/hint, in the words the
+// rest of pm uses for the two: a run, and the acceptance (odbiór) of one.
+func (m Model) otherRunKindLabel() string {
+	if m.watchingFinish() {
+		return "the executor run"
+	}
+	return "the acceptance run"
+}
+
+// otherRunKindExists reports whether the counterpart run-state is on disk. Read
+// straight from the file rather than from the board's maps: those hold only the
+// projects currently on screen, and the agent-view can be open on a run whose
+// project the user has since tabbed away from.
+func (m Model) otherRunKindExists() bool {
+	if m.store == nil || m.executorRunTaskID == "" {
+		return false
+	}
+	_, err := readRunStateOfKind(m.store.ProjectDir(m.executorRunProj), m.executorRunTaskID, m.otherRunKind())
+	return err == nil
+}
+
+// switchExecutorRunKind flips the agent-view between a run and its acceptance.
+// Deliberately a toggle INSIDE this view rather than a second key on the board:
+// the two runs are one task's story, and the board already spends X/W/K on the
+// executor.
+func (m *Model) switchExecutorRunKind() {
+	if !m.otherRunKindExists() {
+		what := "acceptance run"
+		if m.watchingFinish() {
+			what = "executor run"
+		}
+		m.toastMsg = "no " + what + " recorded for " + m.executorRunTaskID
+		m.toastExpiry = time.Now().Add(2 * time.Second)
+		return
+	}
+	m.executorRunKind = m.otherRunKind()
+	// Re-derive everything the previous kind's state seeded: which transcripts
+	// are watchable, which one is in flight, and the scroll position.
+	m.executorSessionIdx = 0
+	m.executorFollow = true
+	m.refreshExecutorView()
+	if m.executorRun != nil {
+		m.executorSessionIdx = defaultSessionIdx(m.executorSessions, m.executorRun.CurrentSession)
+	}
+	m.renderExecutorContent()
+	m.executorViewport.GotoBottom()
+	what := "executor run"
+	if m.watchingFinish() {
+		what = "acceptance run"
+	}
+	m.toastMsg = "watching the " + what + " for " + m.executorRunTaskID
+	m.toastExpiry = time.Now().Add(2 * time.Second)
+}
+
 func executorBodyHeight(h int) int {
 	// header (3) + footer (1)
 	body := h - 4
@@ -107,11 +181,20 @@ func executorBodyHeight(h int) int {
 // agent-view is open.
 func (m *Model) refreshExecutorView() {
 	projDir := m.store.ProjectDir(m.executorRunProj)
-	run, err := storage.ReadRunState(projDir, m.executorRunTaskID)
+	// The counterpart is re-checked on every refresh, not once when the view
+	// opened: an acceptance routinely STARTS while its run is being watched
+	// (batch-finish-auto accepts subs as they land), and a toggle hint that only
+	// reflected the moment of opening would hide it until the view was reopened.
+	m.executorHasOther = m.otherRunKindExists()
+	run, err := readRunStateOfKind(projDir, m.executorRunTaskID, m.executorRunKind)
 	if err != nil {
 		m.executorRun = nil
 		m.executorSessions = nil
-		m.executorViewport.SetContent(helpStyle.Render("\n  Run-state is gone (deleted?). Press esc to go back."))
+		msg := "\n  Run-state is gone (deleted?). Press esc to go back."
+		if m.executorHasOther {
+			msg += "\n  Press W to switch to " + m.otherRunKindLabel() + "."
+		}
+		m.executorViewport.SetContent(helpStyle.Render(msg))
 		return
 	}
 	m.executorRun = run
@@ -207,6 +290,13 @@ func (m Model) updateExecutorView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.confirmTaskID = st.TaskID
 		return m, nil
 
+	case key.Matches(msg, common.Keys.WatchExecutor):
+		// The key that opened this view switches which of the task's two runs it
+		// shows. No new board key: W already means "watch this task's run", and
+		// here it means "watch the other one".
+		m.switchExecutorRunKind()
+		return m, nil
+
 	case msg.String() == "v":
 		m.executorVerbose = !m.executorVerbose
 		m.renderExecutorContent()
@@ -273,7 +363,15 @@ func (m Model) viewExecutor() string {
 		chip = lipgloss.NewStyle().Foreground(lipgloss.Color("#888")).Render("▷ " + statusStr)
 	}
 
-	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render("Executor · " + m.executorRunTaskID)
+	label := "Executor"
+	if m.watchingFinish() {
+		// Named for what it is, not for the command: this is the odbiór, and a
+		// header reading "Executor" over it would make the two runs of one
+		// tracker indistinguishable at a glance - which is the whole reason they
+		// are separate states.
+		label = "Acceptance"
+	}
+	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render(label + " · " + m.executorRunTaskID)
 	header := title + "  " + chip
 	if kind != "" {
 		header += "  " + helpStyle.Render("("+kind+")")
@@ -315,11 +413,21 @@ func (m Model) viewExecutor() string {
 	if run != nil && run.IsLive() {
 		killHint = " · K kill"
 	}
+	switchHint := ""
+	if m.executorHasOther {
+		switchHint = " · W " + m.otherRunKindLabel()
+	}
 	var footer string
 	if m.confirmAction == "kill-run" {
-		footer = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F7768E")).Render("press K again to STOP this run (parks the worker on waiting) · any other key cancels")
+		stopped := "parks the worker on waiting"
+		if m.watchingFinish() {
+			// The acceptance parks nothing (see killRun) - promising it here would
+			// be the confirmation prompt describing a different action.
+			stopped = "releases the acceptance claim"
+		}
+		footer = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F7768E")).Render("press K again to STOP this run (" + stopped + ") · any other key cancels")
 	} else {
-		footer = helpStyle.Render(worker + "v " + mode + " · f follow:" + follow + " · j/k C-j/k scroll · r" + killHint + " · esc")
+		footer = helpStyle.Render(worker + "v " + mode + " · f follow:" + follow + " · j/k C-j/k scroll · r" + killHint + switchHint + " · esc")
 	}
 
 	return m.applyToast(strings.Join([]string{header, tabs, m.executorViewport.View(), footer}, "\n"))
@@ -343,7 +451,11 @@ func renderExecutorDashboard(run *storage.RunState, width int) string {
 	default:
 		chip = lipgloss.NewStyle().Foreground(lipgloss.Color("#888")).Render("▷ " + run.Status)
 	}
-	hdr := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render("Executor run") + "  " + chip
+	title := "Executor run"
+	if run.Kind == storage.RunKindFinish {
+		title = "Acceptance run (pm finish)"
+	}
+	hdr := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render(title) + "  " + chip
 	if run.Started != "" {
 		hdr += helpStyle.Render("  ⏱ " + execElapsed(run.Started, run))
 	}
@@ -379,7 +491,11 @@ func renderExecutorDashboard(run *storage.RunState, width int) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString(helpStyle.Render("  press W to watch the live transcript"))
+	hint := "  press W to watch the live transcript"
+	if run.Kind == storage.RunKindFinish {
+		hint += " (W again switches run ↔ acceptance)"
+	}
+	b.WriteString(helpStyle.Render(hint))
 	return b.String()
 }
 
@@ -391,6 +507,10 @@ func execSubGlyph(status string) string {
 		return "✓"
 	case "blocked", "failed", "conflict":
 		return "✗"
+	case "partial":
+		// An acceptance verdict of its own: it accepted, with work left over.
+		// Without a glyph it fell through to "·", which reads as "not started".
+		return "◐"
 	default:
 		return "·"
 	}

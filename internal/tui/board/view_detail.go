@@ -77,6 +77,13 @@ func (m Model) renderTaskDetail(t *storage.Task) string {
 		out.WriteString(renderExecutorDashboard(run, contentWidth))
 		out.WriteString("\n\n")
 	}
+	// The acceptance of that run gets its OWN dashboard below, never a merged
+	// one: both can be live at once, and each has its own status, clock and
+	// verdict.
+	if fin := m.finishStates[t.Meta.ID]; fin != nil {
+		out.WriteString(renderExecutorDashboard(fin, contentWidth))
+		out.WriteString("\n\n")
+	}
 	out.WriteString(glamourRender(rest.String(), contentWidth))
 
 	pad := (termWidth - contentWidth) / 2

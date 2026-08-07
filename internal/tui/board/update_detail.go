@@ -247,7 +247,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, common.Keys.KillRun):
 		if t != nil {
-			st := m.runForTask(t)
+			st := m.killTargetForTask(t)
 			if st == nil || !st.IsLive() {
 				m.toastMsg = "no live executor run to stop"
 				m.toastExpiry = time.Now().Add(3 * time.Second)
