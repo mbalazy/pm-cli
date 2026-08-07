@@ -2,7 +2,9 @@ package board
 
 import (
 	"errors"
+	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -19,6 +21,24 @@ type moveTaskFailStore struct {
 
 func (s *moveTaskFailStore) MoveTask(t *storage.Task, newStatus storage.TaskStatus) error {
 	return s.err
+}
+
+// liveRunPID starts a detached sleeper and returns its pid, so a run-state
+// fixture can name a process that genuinely exists. Since 0.37.1 a kill refuses
+// to signal a pid it cannot prove belongs to the run, so a fixture pid that was
+// never alive no longer exercises the "stopped it" path at all - it exercises
+// the refusal. The sleeper leads its own group (like a detached manager) and is
+// reaped so a terminated child does not linger as a zombie.
+func liveRunPID(t *testing.T) int {
+	t.Helper()
+	c := exec.Command("sleep", "30")
+	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = c.Process.Wait() }()
+	t.Cleanup(func() { _ = c.Process.Kill() })
+	return c.Process.Pid
 }
 
 // TestKillRunJournalsSubsAndDuration covers Bug 2 (pm-cli-37): killRun's
@@ -84,7 +104,7 @@ func TestKillRunParkFailureShowsErrorToast(t *testing.T) {
 
 	run := &storage.RunState{
 		TaskID: "p-9", Project: "p", Kind: "run-epic", Status: storage.RunStatusRunning,
-		PID: 999999999, Started: time.Now().UTC().Format(time.RFC3339), CurrentSub: "p-2",
+		PID: liveRunPID(t), Started: time.Now().UTC().Format(time.RFC3339), CurrentSub: "p-2",
 	}
 	if err := storage.WriteRunState(stateDir, run); err != nil {
 		t.Fatal(err)
@@ -108,7 +128,7 @@ func TestKillRunParkSuccessShowsWaitingToast(t *testing.T) {
 
 	run := &storage.RunState{
 		TaskID: "p-9", Project: "p", Kind: "run-epic", Status: storage.RunStatusRunning,
-		PID: 999999999, Started: time.Now().UTC().Format(time.RFC3339), CurrentSub: "p-2",
+		PID: liveRunPID(t), Started: time.Now().UTC().Format(time.RFC3339), CurrentSub: "p-2",
 	}
 	if err := storage.WriteRunState(stateDir, run); err != nil {
 		t.Fatal(err)
@@ -119,6 +139,55 @@ func TestKillRunParkSuccessShowsWaitingToast(t *testing.T) {
 	want := "Stopped executor run p-9 (parked p-2 on waiting)"
 	if m.toastMsg != want {
 		t.Errorf("toastMsg = %q, want %q", m.toastMsg, want)
+	}
+}
+
+// A run-state outlives its process: a kill -9, an OOM or a reboot leaves
+// `status: running` behind with a pid nobody cleaned up, and after a reboot that
+// number gets handed to something else. Pressing K on that card must not fire a
+// SIGTERM (and two seconds later a SIGKILL) at a stranger's process GROUP - and
+// the user must be told the run was already gone rather than that it was
+// stopped, with no escalation scheduled against the pid pm just refused.
+func TestKillRunOnAStaleRunStateSignalsNothing(t *testing.T) {
+	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-2", Title: "in flight", Status: storage.StatusDoing}})
+	stateDir := m.store.ProjectDir("p")
+
+	// pid 1 is alive on every machine and demonstrably did NOT start in 2019:
+	// the recycled-number shape, without a test ever naming a real victim.
+	run := &storage.RunState{
+		TaskID: "p-9", Project: "p", Kind: "run-epic", Status: storage.RunStatusRunning,
+		PID: 1, Started: "2019-01-01T00:00:00Z", CurrentSub: "p-2",
+		Subs: []storage.SubRun{{ID: "p-2", Status: storage.RunStatusRunning}},
+	}
+	if err := storage.WriteRunState(stateDir, run); err != nil {
+		t.Fatal(err)
+	}
+
+	if cmd := m.killRun(run); cmd != nil {
+		t.Error("nothing was signalled, so no SIGKILL escalation may be scheduled")
+	}
+	if !strings.Contains(m.toastMsg, "already gone") || !strings.Contains(m.toastMsg, "nothing signalled") {
+		t.Errorf("toastMsg = %q, want it to say the run was already gone and nothing was signalled", m.toastMsg)
+	}
+
+	// The state is still reconciled with reality - that is the honest outcome
+	// of pressing K on a run that is not there.
+	got, err := storage.ReadRunState(stateDir, "p-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != storage.RunStatusFailed {
+		t.Errorf("run status = %q, want failed", got.Status)
+	}
+	if got.Subs[0].Status != "blocked" {
+		t.Errorf("in-flight sub status = %q, want blocked", got.Subs[0].Status)
+	}
+	parked, err := m.store.FindTask("p", "p-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parked.Meta.Status != storage.StatusWaiting {
+		t.Errorf("parked task status = %q, want waiting", parked.Meta.Status)
 	}
 }
 

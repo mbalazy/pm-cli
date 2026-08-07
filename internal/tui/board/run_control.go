@@ -1,6 +1,7 @@
 package board
 
 import (
+	"errors"
 	"syscall"
 	"time"
 
@@ -44,13 +45,14 @@ func (m Model) runForTask(t *storage.Task) *storage.RunState {
 // execKillCheckMsg fires a short while after a kill so we can escalate to
 // SIGKILL if the process group survived the SIGTERM.
 type execKillCheckMsg struct {
-	pid int
-	// workerPGID is the in-flight worker's own process group (it is not in the
-	// manager's - see storage.RunState.WorkerPGID). Escalating against the
-	// manager alone would kill the one process able to forward to the worker.
-	workerPGID int
-	project    string
-	taskID     string
+	// pid is the manager pid this kill targeted. The escalation re-reads the
+	// run-state and refuses to signal when the pid there has moved on - the
+	// worker group to signal comes from that fresh state too (it is not in the
+	// manager's group - see storage.RunState.WorkerPGID - and it moves with
+	// every sub).
+	pid     int
+	project string
+	taskID  string
 }
 
 // killRun stops the executor run st: SIGTERM to its process group, then stamps
@@ -72,18 +74,30 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 		st = fresh
 	}
 	pid := st.PID
-	workerPGID := st.WorkerPGID
-	// Errors here are intentionally dropped: this is a TUI (bubbletea owns the
+	// A signal error is intentionally dropped: this is a TUI (bubbletea owns the
 	// screen, so stderr would corrupt the render), and the SIGTERM may legitimately
 	// fail because the process is already gone - the execKillCheckMsg follow-up
-	// re-checks liveness and escalates to SIGKILL if needed.
-	_ = st.Kill(syscall.SIGTERM)
+	// re-checks and escalates to SIGKILL if needed.
+	//
+	// A STALE run-state is different from a failed signal, and is the one case
+	// that must not be silent: nothing was signalled because the pid could no
+	// longer be shown to be this run's process (crashed run, reboot, recycled
+	// number). The state below is still reconciled - that is the honest outcome
+	// - but the user is told the run was already gone rather than that it was
+	// stopped, and no SIGKILL is scheduled against a pid pm just refused to
+	// signal.
+	var stale *storage.StaleRunError
+	alreadyGone := errors.As(st.Kill(syscall.SIGTERM), &stale)
 
 	// From here on st is the freshest state; stamp it stopped + park the
 	// in-flight sub.
+	stopNote := "stopped by user"
+	if alreadyGone {
+		stopNote = "stopped by user - the run was already gone, nothing was signalled"
+	}
 	st.Status = storage.RunStatusFailed
 	if st.Error == "" {
-		st.Error = "stopped by user"
+		st.Error = stopNote
 	}
 	inFlight := st.CurrentSub
 	if inFlight == "" {
@@ -93,7 +107,7 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 		if st.Subs[i].ID == inFlight && (st.Subs[i].Status == storage.RunStatusRunning || st.Subs[i].Status == "pending") {
 			st.Subs[i].Status = "blocked"
 			if st.Subs[i].Note == "" {
-				st.Subs[i].Note = "stopped by user"
+				st.Subs[i].Note = stopNote
 			}
 		}
 	}
@@ -125,7 +139,7 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 		// second run that reused the pid. A pre-0.27.0 manager wrote no id -
 		// the entry then falls back to {kind, task_id, pid} pairing.
 		Event: storage.JournalEventKilled, Kind: st.Kind, Project: proj, TaskID: taskID, RunID: st.RunID,
-		PID: pid, Status: storage.RunStatusFailed, Error: "stopped by user",
+		PID: pid, Status: storage.RunStatusFailed, Error: stopNote,
 		Subs: subs, DurationS: durationS,
 	})
 
@@ -147,16 +161,25 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 	}
 	m.reload()
 	m.refreshRunStates()
+	verb := "Stopped executor run "
+	if alreadyGone {
+		verb = "Run already gone (nothing signalled), state reconciled: "
+	}
 	if parkErr != nil {
 		// MoveTask can legally fail (e.g. the task file was deleted while the
 		// run was live) - the old unconditional toast lied about the park.
-		m.showErrorToast("Stopped executor run "+taskID+", but failed to park "+inFlight, parkErr)
+		m.showErrorToast(verb+taskID+", but failed to park "+inFlight, parkErr)
 	} else {
-		m.toastMsg = "Stopped executor run " + taskID + " (parked " + inFlight + " on waiting)"
+		m.toastMsg = verb + taskID + " (parked " + inFlight + " on waiting)"
 		m.toastExpiry = time.Now().Add(5 * time.Second)
 	}
+	if alreadyGone {
+		// Nothing was signalled, so there is nothing to escalate against - and
+		// scheduling one would only re-open the question of whose pid that is.
+		return nil
+	}
 	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-		return execKillCheckMsg{pid: pid, workerPGID: workerPGID, project: proj, taskID: taskID}
+		return execKillCheckMsg{pid: pid, project: proj, taskID: taskID}
 	})
 }
 
