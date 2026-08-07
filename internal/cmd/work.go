@@ -724,7 +724,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			TaskID:         task.Meta.ID,
 			RunID:          runID,
 			Project:        task.Project,
-			Kind:           "work",
+			Kind:           storage.RunKindWork,
 			Status:         storage.RunStatusRunning,
 			PID:            os.Getpid(),
 			RepoPath:       dir,

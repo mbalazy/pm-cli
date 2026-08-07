@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -289,6 +290,93 @@ func TestReadFinishRunStateMissing(t *testing.T) {
 	}
 	if got, err := ReadFinishRunState(dir, "nope"); !os.IsNotExist(err) {
 		t.Errorf("expected a not-exist error for an unknown task, got %+v err=%v", got, err)
+	}
+}
+
+// TestReadRunStatesReadsFilesPmDidNotWrite is the risky half of the split: the
+// new filter runs over files that are ALREADY on disk, written by an older pm
+// (no `kind` at all) or by hand. Going through WriteRunState would prove
+// nothing here - it would only show that the writer and the reader agree on the
+// same new rule - so these are placed raw.
+func TestReadRunStatesReadsFilesPmDidNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	execDir := filepath.Join(dir, ".executor")
+	if err := os.MkdirAll(execDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Names an older pm could have produced: no kind, a dotted id, and the
+	// neighbouring artifacts that share the directory.
+	raw := map[string]string{
+		"p-1.json":     `{"task_id":"p-1","project":"p","status":"running"}`,
+		"app-1.2.json": `{"task_id":"app-1.2","project":"p","kind":"work","status":"done"}`,
+	}
+	for name, body := range raw {
+		if err := os.WriteFile(filepath.Join(execDir, name), []byte(body), 0644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	for _, name := range []string{"p-1.log", "journal.jsonl", "p-1.finish.claim"} {
+		if err := os.WriteFile(filepath.Join(execDir, name), []byte("x"), 0644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	runs := ReadRunStates(dir)
+	if len(runs) != 2 || runs["p-1"] == nil || runs["app-1.2"] == nil {
+		t.Fatalf("pre-existing run-states must still be read, got %v", keysOf(runs))
+	}
+	if got, err := ReadRunState(dir, "p-1"); err != nil || got.TaskID != "p-1" {
+		t.Errorf("ReadRunState on a legacy file: %+v err=%v", got, err)
+	}
+	if fins := ReadFinishRunStates(dir); len(fins) != 0 {
+		t.Errorf("nothing here is an acceptance, got %v", keysOf(fins))
+	}
+}
+
+// TestReadRunStatesSkipsAliasedFile: a task id may contain a dot, so task
+// "x.finish" owns the very file name the acceptance of "x" uses. Whichever way
+// it is read it belongs to somebody - the one thing it must never do is enter
+// the acceptance map under a run's id.
+func TestReadRunStatesSkipsAliasedFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteRunState(dir, &RunState{TaskID: "x.finish", Project: "p", Kind: RunKindWork}); err != nil {
+		t.Fatalf("WriteRunState: %v", err)
+	}
+	if fins := ReadFinishRunStates(dir); len(fins) != 0 {
+		t.Errorf("a run of task \"x.finish\" is not an acceptance, got %v", keysOf(fins))
+	}
+	if runs := ReadRunStates(dir); len(runs) != 0 {
+		t.Errorf("its file name is the acceptance encoding, so it cannot be a run either, got %v", keysOf(runs))
+	}
+}
+
+func keysOf(m map[string]*RunState) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestIsFinishRunStateFile(t *testing.T) {
+	cases := map[string]bool{
+		"p-1.finish.json":   true,
+		"p-1.finish.log":    true, // the infix sits before the extension in both
+		"p-1.json":          false,
+		"p-1.log":           false,
+		"p-1.finished.json": false,
+		"p-1.json.finish":   false,
+		"app-1.2.json":      false,
+		"journal.jsonl":     false,
+		"p-1.finish.claim":  true, // the acceptance claim is an acceptance artifact too
+		".finish.json":      true,
+		"p-1":               false,
+	}
+	for name, want := range cases {
+		if got := isFinishRunStateFile(name); got != want {
+			t.Errorf("isFinishRunStateFile(%q) = %v, want %v", name, got, want)
+		}
 	}
 }
 

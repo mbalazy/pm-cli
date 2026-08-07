@@ -26,17 +26,23 @@ const (
 // acceptance of that same epic carry the SAME task id - the tracker's - so
 // without the split the acceptance would overwrite the run-state of the very
 // run it is accepting.
+// Nothing validates Kind, and the routing fails TOWARDS the run's own file:
+// any spelling other than RunKindFinish exactly (a typo, "Finish", a kind added
+// later) writes over the run-state of the run it means to accept, which is the
+// collision this exists to prevent. So an acceptance writer must carry
+// RunKindFinish verbatim, not a literal of its own.
 const (
 	RunKindWork   = "work"
 	RunKindEpic   = "run-epic"
 	RunKindFinish = "finish"
 )
 
-// RunState is the live state of an executor run (`pm work` / `pm run-epic`),
-// written by the executor process and read by the TUI for observability. One
-// file per top-level run, keyed by the task (work) or tracker (run-epic) id,
-// under the project's `.executor/` dir. The executor owns the file; the TUI
-// only reads it.
+// RunState is the live state of an executor run (`pm work` / `pm run-epic` /
+// the acceptance of one), written by the executor process and read by the TUI
+// for observability. One file per top-level run, keyed by the task (work) or
+// tracker (run-epic) id, under the project's `.executor/` dir - so a tracker
+// that has been accepted has TWO files there, the run's and its acceptance's
+// (see runStatePath). The executor owns the file; the TUI only reads it.
 type RunState struct {
 	TaskID string `json:"task_id"` // task (work) or tracker (run-epic) id
 	// RunID identifies this physical run (see NewRunID). Carried here so an
@@ -127,6 +133,14 @@ func FinishRunLogPath(projectDir, taskID string) string {
 // Keeping the decision here (rather than in a second write function callers
 // must remember to pick) is why WriteRunState/RunWriter need no finish-aware
 // variant: an acceptance writer just carries Kind: RunKindFinish.
+//
+// Writes route by KIND while the directory reads classify by NAME (see
+// readRunStatesDir), and the two only agree while a state's kind matches the
+// file it came out of. A hand-edited `<id>.json` carrying kind "finish" is
+// therefore read as a run and written back as an acceptance: the original file
+// keeps its last contents forever and a phantom acceptance appears beside it.
+// Nothing in pm can produce that state - only an editor can - so it is
+// documented rather than guarded.
 func runStatePath(projectDir, kind, taskID string) string {
 	if kind == RunKindFinish {
 		return FinishRunPath(projectDir, taskID)
@@ -303,11 +317,26 @@ func ReadFinishRunStates(projectDir string) map[string]*RunState {
 
 // readRunStatesDir collects either the run or the acceptance run-states. The
 // split is decided by the FILE NAME, not by the parsed Kind: the name is what
-// makes the two collide, and a state whose kind and path disagree (a
-// hand-edited file) still has to land in exactly one of the two maps.
+// makes the two collide, and a state whose kind and path disagree (only an
+// editor can produce that - see runStatePath) still has to land in exactly one
+// of the two maps.
+//
+// A file also has to be the one the state it holds would be WRITTEN to, or it
+// is skipped. That guard exists for one aliasing case: a task id may contain a
+// dot (ValidateTaskID permits it), so a task literally named "x.finish" has its
+// own run-state at `x.finish.json` - which is where the acceptance of "x"
+// lives. Without the check that file would enter the acceptance map keyed
+// "x.finish", i.e. a run reported as somebody's acceptance. Dropping it is the
+// honest outcome: the alternative is attributing a state to a task it does not
+// belong to. The path-based readers below cannot make this check (they are
+// asked for one id and have nothing to cross-check against), so
+// ReadFinishRunState("x") on such a directory does return that neighbour's
+// state; encoding the ambiguity away would have to rename every run-state file
+// already on disk, which this sub is required not to do.
 func readRunStatesDir(projectDir string, finish bool) map[string]*RunState {
+	dir := executorRunDir(projectDir)
 	out := map[string]*RunState{}
-	entries, err := os.ReadDir(executorRunDir(projectDir))
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return out
 	}
@@ -316,15 +345,22 @@ func readRunStatesDir(projectDir string, finish bool) map[string]*RunState {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		if isFinishRunFile(e.Name()) != finish {
+		if isFinishRunStateFile(e.Name()) != finish {
 			continue
 		}
 		names = append(names, e.Name())
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		st, err := readRunStateFile(filepath.Join(executorRunDir(projectDir), n))
+		st, err := readRunStateFile(filepath.Join(dir, n))
 		if err != nil {
+			continue
+		}
+		want := ExecutorRunPath(projectDir, st.TaskID)
+		if finish {
+			want = FinishRunPath(projectDir, st.TaskID)
+		}
+		if filepath.Base(want) != n {
 			continue
 		}
 		out[st.TaskID] = st
@@ -332,14 +368,14 @@ func readRunStatesDir(projectDir string, finish bool) map[string]*RunState {
 	return out
 }
 
-// isFinishRunFile reports whether name is an acceptance run-state file
-// (<taskID>.finish.json). Note the one ambiguity it cannot resolve: a task
-// literally named "x.finish" would have its own run-state read as the
-// acceptance of "x". ValidateTaskID permits the dot, so the case exists on
-// paper; it is left alone rather than special-cased, because any encoding that
-// removed it would rename the files of every run already on disk.
-func isFinishRunFile(name string) bool {
-	return filepath.Ext(strings.TrimSuffix(name, ".json")) == finishRunInfix
+// isFinishRunStateFile reports whether name belongs to an acceptance run rather
+// than to the run itself - `<taskID>.finish.json`, and equally `.finish.log`,
+// since the infix sits before the extension in both. Deliberately independent
+// of which extension it is handed: the callers filter by extension themselves,
+// and a predicate that silently answered "no" for every acceptance LOG would be
+// a trap for the view work that reads those logs.
+func isFinishRunStateFile(name string) bool {
+	return filepath.Ext(strings.TrimSuffix(name, filepath.Ext(name))) == finishRunInfix
 }
 
 // IsLive reports whether the run is marked running AND its process is still

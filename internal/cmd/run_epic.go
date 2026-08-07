@@ -483,7 +483,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		TaskID:   tracker.Meta.ID,
 		RunID:    runID,
 		Project:  slug,
-		Kind:     "run-epic",
+		Kind:     storage.RunKindEpic,
 		Status:   storage.RunStatusRunning,
 		PID:      os.Getpid(),
 		RepoPath: workDir,
