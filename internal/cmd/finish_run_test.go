@@ -116,8 +116,11 @@ func TestExecuteFinishGreenPathRecordsEverything(t *testing.T) {
 	if run.CurrentSession != "" || run.WorkerPGID != 0 {
 		t.Errorf("the in-flight markers must be cleared when the worker returns: session=%q pgid=%d", run.CurrentSession, run.WorkerPGID)
 	}
-	if len(run.Subs) != 1 || !strings.Contains(run.Subs[0].Note, "2 visual claim(s) still open") {
-		t.Errorf("the open visual claims must reach the run-state note, got %+v", run.Subs)
+	// One sub carries 2 open claims and the other carries none, so the note
+	// must say ONE sub - counting every sub looked at sends a human to the
+	// wrong ones.
+	if len(run.Subs) != 1 || !strings.Contains(run.Subs[0].Note, "2 visual claim(s) still open across 1 sub(s)") {
+		t.Errorf("the open visual claims must reach the run-state note, counted over the subs that have them: %+v", run.Subs)
 	}
 
 	kept, err := storage.ReadRunState(dir, "app-9")
@@ -219,6 +222,13 @@ func TestExecuteFinishWorkerDeathCarriesLastWords(t *testing.T) {
 	if len(entries) != 2 || entries[1].Status != storage.RunStatusFailed {
 		t.Fatalf("journal must record a failed end: %+v", entries)
 	}
+	// "failed", not the acceptance's own "blocked" verdict: the worker died
+	// before reaching any verdict, and booking a crash as "blocked" makes it
+	// indistinguishable in the stats histogram from an acceptance that looked
+	// at the batch and refused it.
+	if len(entries[1].Subs) != 1 || entries[1].Subs[0].Result != storage.RunStatusFailed {
+		t.Errorf("a dead worker is a failed sub, not a blocked verdict: %+v", entries[1].Subs)
+	}
 }
 
 // A live claim held by somebody else costs the error message and nothing else:
@@ -309,6 +319,15 @@ func TestFinishClaudeArgs(t *testing.T) {
 		}
 		if !strings.Contains(joined, "--allowedTools") || !strings.Contains(joined, "--disallowedTools") {
 			t.Error("without yolo the curated allow/disallow lists must be passed")
+		}
+		// The acceptance's whole first move is invoking a skill. On the
+		// WORKER's allowlist - which has no Skill - a headless run would be
+		// refused on turn one and return blocked having done nothing.
+		if !strings.Contains(joined, "Skill") {
+			t.Error("--no-yolo must still allow the Skill tool, or the acceptance cannot start at all")
+		}
+		if !strings.Contains(joined, "Bash(pm:*)") {
+			t.Error("the odbiór records its verdicts through pm - the allowlist must reach it")
 		}
 	})
 }
@@ -460,5 +479,49 @@ func TestFinishAdditionalIsRefusedNotIgnored(t *testing.T) {
 	_, err = planFinish(store, tracker, "app", finishOptions{model: "opus", maxTurns: 10, additional: true})
 	if err == nil || !strings.Contains(err.Error(), "pm-cli-100-5") {
 		t.Fatalf("--additional must be refused with a pointer to where it lands, got: %v", err)
+	}
+}
+
+// finishRunNote is the morning TODO line. It counts the subs that CARRY an open
+// claim, never every sub the acceptance looked at.
+func TestFinishRunNoteCountsOnlySubsWithOpenClaims(t *testing.T) {
+	res := &finishResult{Subs: []finishSub{
+		{ID: "a", VisualClaimsOpen: 0},
+		{ID: "b", VisualClaimsOpen: 2},
+		{ID: "c", VisualClaimsOpen: 0},
+		{ID: "d", VisualClaimsOpen: 1},
+	}}
+	got := finishRunNote(res, "accepted")
+	if !strings.Contains(got, "3 visual claim(s) still open across 2 sub(s)") {
+		t.Errorf("note = %q, want 3 claims across 2 subs (not across all 4)", got)
+	}
+	if note := finishRunNote(&finishResult{Subs: []finishSub{{ID: "a"}}}, "accepted"); note != "accepted" {
+		t.Errorf("nothing open must add nothing to the note, got %q", note)
+	}
+}
+
+// The report shares .executor/ with readers that poll it, so it is published by
+// rename like every other writer in there - never half-written in place.
+func TestWriteFinishReportIsAtomicAndOverwrites(t *testing.T) {
+	dir := t.TempDir()
+	path := storage.FinishReportPath(dir, "app-9")
+	if err := writeFinishReport(path, "first"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := writeFinishReport(path, "second"); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || strings.TrimSpace(string(got)) != "second" {
+		t.Fatalf("report = %q err=%v", got, err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp.") {
+			t.Errorf("a scratch file was left behind: %s", e.Name())
+		}
 	}
 }

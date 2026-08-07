@@ -910,7 +910,13 @@ type claudeRun struct {
 	// has no review phase, so defining a reviewer agent type for it would
 	// describe an agent nothing spawns.
 	agents string
-	guard  guardOptions
+	// allowedTools/disallowedTools are the curated permission lists used when
+	// yolo is off. They are parameters because the two runs need different
+	// tools: an implementer edits and builds, an acceptance run's whole first
+	// move is invoking a Skill.
+	allowedTools    string
+	disallowedTools string
+	guard           guardOptions
 }
 
 // buildClaudeArgs assembles the `claude -p` argv for a worker run.
@@ -922,8 +928,10 @@ func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, y
 		// The reviewer agent type is defined by pm, never by a file in the
 		// project repo: `pm work` requires a clean tree, so a `.claude/agents/`
 		// file written per run would dirty it on every single one.
-		agents: reviewerAgentsJSON(guard.reviewModel),
-		guard:  guard,
+		agents:          reviewerAgentsJSON(guard.reviewModel),
+		allowedTools:    workerAllowedTools,
+		disallowedTools: workerDisallowedTools,
+		guard:           guard,
 	})
 }
 
@@ -959,8 +967,8 @@ func buildClaudeArgsFor(r claudeRun) []string {
 	} else {
 		args = append(args,
 			"--permission-mode", "acceptEdits",
-			"--allowedTools", workerAllowedTools,
-			"--disallowedTools", workerDisallowedTools,
+			"--allowedTools", r.allowedTools,
+			"--disallowedTools", r.disallowedTools,
 		)
 	}
 	return args

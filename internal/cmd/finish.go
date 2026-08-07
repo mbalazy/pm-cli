@@ -68,9 +68,9 @@ func newFinishCmd(store storage.TaskStore) *cobra.Command {
 			}
 			opts.yolo = !noYolo
 			opts.errOut = stderr
-			if slotPin != 0 && !opts.additional {
-				fmt.Fprintf(stderr, "pm finish: --slot %d ignored without --additional (slots exist only in the worktree pool)\n", slotPin)
-			}
+			// Empty base: `pm finish` has no --base to warn about (the
+			// acceptance forks no branch of its own - it walks the subs').
+			warnInertFlags(stderr, "pm finish", opts.additional, slotPin, "")
 
 			tracker, slug, err := resolveFinishTracker(cmd, store, args[0])
 			if err != nil {
@@ -199,6 +199,13 @@ func planFinish(store storage.TaskStore, tracker *storage.Task, slug string, opt
 		return nil, fmt.Errorf("--additional is not wired up for `pm finish` yet (worktree slots for the acceptance run land in pm-cli-100-5) - run without it to accept in the main checkout at %s", proj.Path)
 	}
 
+	// There is deliberately NO clean-working-tree precondition here, unlike
+	// `pm work` and `pm run-epic`. Those two check out a branch in a checkout
+	// they do not own, so uncommitted work would be switched out from under the
+	// user; an acceptance forks no branch of its own - `batch-finish-auto` puts
+	// each sub's branch in a worktree it creates itself - so the main checkout
+	// is only where the run STANDS. Requiring it clean would refuse a legitimate
+	// acceptance because of unrelated edits sitting in the user's tree.
 	stateDir := store.ProjectDir(slug)
 	sessionID := storage.NewSessionID()
 	reportPath := storage.FinishReportPath(stateDir, tracker.Meta.ID)
@@ -242,10 +249,28 @@ func finishClaudeRun(prompt, sysPrompt, sessionID string, opts finishOptions) cl
 	return claudeRun{
 		prompt: prompt, sysPrompt: sysPrompt, sessionID: sessionID,
 		model: opts.model, maxTurns: opts.maxTurns, yolo: opts.yolo,
-		schema: finishResultSchema,
-		guard:  guardOptions{},
+		schema:          finishResultSchema,
+		allowedTools:    finishAllowedTools,
+		disallowedTools: workerDisallowedTools,
+		guard:           guardOptions{},
 	}
 }
+
+// finishAllowedTools is the curated allowlist `--no-yolo` falls back to, and it
+// is deliberately NOT workerAllowedTools. The acceptance run's entire first
+// move is invoking the Skill tool, and `Skill` is not on the worker's list - so
+// under the worker's allowlist a headless acceptance would be refused on turn
+// one (there is nobody to approve a prompt in `claude -p`) and return blocked
+// having done nothing at all. `pm` itself is on it because the odbiór records
+// its verdicts through pm, and `ssh` because discovery reaches the remote
+// runner that way.
+//
+// This list is still narrower than the procedure needs, and that is the point
+// of --no-yolo being the kill switch rather than the default: an odbiór walks
+// sub branches, worktrees and project runtime scripts, so a curated list will
+// block it somewhere. The default is yolo for exactly that reason, and the
+// worker guard hook rides along in both modes.
+const finishAllowedTools = workerAllowedTools + " Skill Bash(pm:*) Bash(ssh:*)"
 
 func printFinishDryRun(out io.Writer, plan *finishPlan) {
 	fmt.Fprintf(out, "# pm finish (dry-run)\nproject: %s\ntracker: %s %s\ncwd: %s\n",
@@ -295,7 +320,7 @@ func finishClaimLabel(stateDir, tracker string) string {
 // that a second acceptance of the same run never starts, so a busy claim must
 // cost nothing but the error message - no worker, no run-state, no journal line.
 func executeFinish(plan *finishPlan) (*finishResult, error) {
-	errOut := plan.opts.stderr()
+	errOut := &lockedWriter{w: plan.opts.stderr()}
 	tracker := plan.tracker.Meta.ID
 
 	claim, err := storage.AcquireFinishClaim(plan.stateDir, tracker, plan.sessionID)
@@ -388,8 +413,13 @@ func executeFinish(plan *finishPlan) (*finishResult, error) {
 				st.Subs[0].Note = err.Error()
 			}
 		})
+		// "failed", never the acceptance's own "blocked" verdict: the worker
+		// died - timed out, crashed, hit an account wall - so it never reached a
+		// verdict at all, and booking this as "blocked" would put every crash in
+		// the histogram row that means "the acceptance looked and refused".
+		// `pm work` records the same word on the same branch.
 		journalEnd(storage.RunStatusFailed, err.Error(),
-			storage.JournalSub{Result: finishBlocked, Note: err.Error(), Session: plan.sessionID})
+			storage.JournalSub{Result: storage.RunStatusFailed, Note: err.Error(), Session: plan.sessionID})
 		return nil, err
 	}
 
@@ -431,19 +461,31 @@ func executeFinish(plan *finishPlan) (*finishResult, error) {
 // acceptance never looks at a screen, so an accepted batch can still leave a
 // morning's worth of checking, and a note reading only "done" would hide it.
 func finishRunNote(res *finishResult, summary string) string {
-	open := 0
+	open, subs := 0, 0
 	for _, s := range res.Subs {
+		if s.VisualClaimsOpen <= 0 {
+			continue
+		}
 		open += s.VisualClaimsOpen
+		// Counted over the subs that actually carry an open claim, NOT over
+		// every sub the acceptance looked at: this line is the morning TODO
+		// list, and "across 5 subs" when the work sits in one sends a human to
+		// the wrong four.
+		subs++
 	}
 	if open == 0 {
 		return summary
 	}
-	return strings.TrimSpace(fmt.Sprintf("%s [%d visual claim(s) still open across %d sub(s)]", summary, open, len(res.Subs)))
+	return strings.TrimSpace(fmt.Sprintf("%s [%d visual claim(s) still open across %d sub(s)]", summary, open, subs))
 }
 
 // writeFinishReport saves the acceptance's markdown report. An empty report
 // writes nothing - an empty file would read as "the acceptance found nothing to
 // say", which is a different statement from "it said nothing".
+// The write is tmp+rename, like every other writer in .executor/
+// (WriteRunState, RefreshFinishClaim, the claim's link-from-scratch): a human
+// reads this file while the run is finishing, and only the rename publishes, so
+// they see a whole report or the previous one - never half of either.
 func writeFinishReport(path, report string) error {
 	report = strings.TrimSpace(report)
 	if report == "" {
@@ -452,7 +494,32 @@ func writeFinishReport(path, report string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(report+"\n"), 0644)
+	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
+	if err := os.WriteFile(tmp, []byte(report+"\n"), 0644); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// lockedWriter serializes writes to one stream from the run's own goroutine and
+// the claim refresher's. In production both end up on os.Stderr or the run log,
+// which tolerate it; a test buffer does not, and the refresher is the one
+// background goroutine here that reports anything at all (the heartbeat
+// deliberately says nothing).
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (w *lockedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.Write(p)
 }
 
 // startFinishClaimRefresh keeps a claim alive for as long as the acceptance
@@ -631,13 +698,16 @@ func newFinishClaimCmd(store storage.TaskStore) *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "  started: %s\n", claim.Started)
 			fmt.Fprintf(cmd.OutOrStdout(), "  release it with `pm finish release %s --started %s`\n",
 				claim.TrackerID, claim.Started)
-			// Say plainly that nothing refreshes it yet: the claim is honoured
-			// for the TTL and then reads as free, and NOTHING in pm currently
-			// moves the stamp - the acceptance worker that will is pm finish
-			// <tracker> (pm-cli-100-4). Promising a refresher that does not
-			// exist would be worse than saying so.
-			fmt.Fprintf(cmd.OutOrStdout(), "  valid for %s - nothing refreshes it yet, so a longer acceptance "+
-				"can be taken over once it lapses\n", storage.FinishClaimTTL)
+			// Be exact about what does and does not keep this alive. A claim
+			// taken BY HAND, here, has no refresher behind it: the process that
+			// took it has already exited, so the claim lapses after the TTL and
+			// the next acceptance takes it over mid-work. Only `pm finish
+			// <tracker>` refreshes its own claim for as long as it runs. This
+			// is the line somebody reads right before deciding whether a long
+			// acceptance is safe, so it must not imply the wrong one.
+			fmt.Fprintf(cmd.OutOrStdout(), "  valid for %s, and NOTHING refreshes a claim taken by hand - a longer "+
+				"acceptance can be taken over once it lapses (`pm finish %s` keeps its own claim alive instead)\n",
+				storage.FinishClaimTTL, claim.TrackerID)
 			return nil
 		},
 	}
