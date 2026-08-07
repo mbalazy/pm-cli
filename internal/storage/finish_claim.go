@@ -74,7 +74,7 @@ func (e *FinishClaimBusyError) Error() string {
 	return fmt.Sprintf("finish claim for %s is held by %s (pid %d), started %s, refreshed %s ago - "+
 		"wait for it to finish or for the claim to expire (%s without a refresh)",
 		e.Holder.TrackerID, e.Holder.Host, e.Holder.PID,
-		e.Holder.Started, fmtClaimAge(e.Holder.Refreshed), FinishClaimTTL)
+		e.Holder.Started, FinishClaimAge(e.Holder.Refreshed), FinishClaimTTL)
 }
 
 // FinishClaimPath is the claim path for a tracker, alongside its run-state.
@@ -281,6 +281,11 @@ func scratchPath(path, kind string) string {
 	return fmt.Sprintf("%s.%s.%d.%d", path, kind, os.Getpid(), finishClaimSeq.Add(1))
 }
 
+// Hostname is the host identity written into a claim (and the one a CLI
+// release compares against). Exported so a caller can ask "is this claim
+// ours?" without re-deriving the fallback.
+func Hostname() string { return hostname() }
+
 func hostname() string {
 	h, err := os.Hostname()
 	if err != nil || h == "" {
@@ -289,8 +294,10 @@ func hostname() string {
 	return h
 }
 
-// fmtClaimAge renders how long ago an RFC3339 stamp was, for humans.
-func fmtClaimAge(stamp string) string {
+// FinishClaimAge renders how long ago an RFC3339 stamp was, for humans - the
+// one formatting of a claim's age, shared by the busy error and `pm finish
+// status` so the two never drift.
+func FinishClaimAge(stamp string) string {
 	ts, err := time.Parse(time.RFC3339, stamp)
 	if err != nil {
 		return "unknown"
