@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,11 +21,28 @@ const (
 	RunStatusFailed  = "failed"
 )
 
-// RunState is the live state of an executor run (`pm work` / `pm run-epic`),
-// written by the executor process and read by the TUI for observability. One
-// file per top-level run, keyed by the task (work) or tracker (run-epic) id,
-// under the project's `.executor/` dir. The executor owns the file; the TUI
-// only reads it.
+// Executor run kinds (RunState.Kind). The kind is not decoration: it decides
+// WHICH FILE the run-state lives in (see WriteRunState). An epic run and the
+// acceptance of that same epic carry the SAME task id - the tracker's - so
+// without the split the acceptance would overwrite the run-state of the very
+// run it is accepting.
+// Nothing validates Kind, and the routing fails TOWARDS the run's own file:
+// any spelling other than RunKindFinish exactly (a typo, "Finish", a kind added
+// later) writes over the run-state of the run it means to accept, which is the
+// collision this exists to prevent. So an acceptance writer must carry
+// RunKindFinish verbatim, not a literal of its own.
+const (
+	RunKindWork   = "work"
+	RunKindEpic   = "run-epic"
+	RunKindFinish = "finish"
+)
+
+// RunState is the live state of an executor run (`pm work` / `pm run-epic` /
+// the acceptance of one), written by the executor process and read by the TUI
+// for observability. One file per top-level run, keyed by the task (work) or
+// tracker (run-epic) id, under the project's `.executor/` dir - so a tracker
+// that has been accepted has TWO files there, the run's and its acceptance's
+// (see runStatePath). The executor owns the file; the TUI only reads it.
 type RunState struct {
 	TaskID string `json:"task_id"` // task (work) or tracker (run-epic) id
 	// RunID identifies this physical run (see NewRunID). Carried here so an
@@ -33,7 +51,7 @@ type RunState struct {
 	// manager wrote on its own journal lines.
 	RunID    string `json:"run_id,omitempty"`
 	Project  string `json:"project"`
-	Kind     string `json:"kind"`   // "work" | "run-epic"
+	Kind     string `json:"kind"`   // RunKindWork | RunKindEpic | RunKindFinish
 	Status   string `json:"status"` // running | done | failed
 	PID      int    `json:"pid"`
 	RepoPath string `json:"repo_path,omitempty"` // git repo (worker cwd) - to resolve transcript .jsonl
@@ -93,8 +111,54 @@ func ExecutorLogPath(projectDir, taskID string) string {
 	return filepath.Join(executorRunDir(projectDir), taskID+".log")
 }
 
+// finishRunInfix separates an acceptance run's files from the run's own. The
+// run keeps <taskID>.json / <taskID>.log unchanged - no file on disk needs
+// migrating - and the acceptance gets <taskID>.finish.json / .finish.log.
+//
+// The encoding is not injective, and cannot be made so without renaming files
+// that already exist: a task id may contain a dot, so the run of a task named
+// "x.finish" and the acceptance of a task named "x" resolve to ONE path and
+// would overwrite each other. Reads survive it (the state's own task_id says
+// which one it is - see readRunStatesDir and ReadFinishRunState); two such
+// tasks existing in one project at once does not, and nothing here prevents it.
+const finishRunInfix = ".finish"
+
+// FinishRunPath is the run-state JSON path for the acceptance (odbiór) of the
+// run on taskID. Separate from ExecutorRunPath because the two runs share a
+// task id and would otherwise be one file.
+func FinishRunPath(projectDir, taskID string) string {
+	return filepath.Join(executorRunDir(projectDir), taskID+finishRunInfix+".json")
+}
+
+// FinishRunLogPath is the combined stdout/stderr log path for a background
+// acceptance run.
+func FinishRunLogPath(projectDir, taskID string) string {
+	return filepath.Join(executorRunDir(projectDir), taskID+finishRunInfix+".log")
+}
+
+// runStatePath is the ONE place that decides which file a run-state belongs in.
+// Keeping the decision here (rather than in a second write function callers
+// must remember to pick) is why WriteRunState/RunWriter need no finish-aware
+// variant: an acceptance writer just carries Kind: RunKindFinish.
+//
+// Writes route by KIND while reads classify by the file a state's TASK ID
+// resolves to (see readRunStatesDir), so the two agree only while a state's
+// kind matches the file it came out of. A hand-edited `<id>.json` carrying kind
+// "finish" is therefore read as that task's run and written back as its
+// acceptance: the original file keeps its last contents forever and a phantom
+// acceptance appears beside it. Nothing in pm can produce that state - only an
+// editor can - so it is documented rather than guarded.
+func runStatePath(projectDir, kind, taskID string) string {
+	if kind == RunKindFinish {
+		return FinishRunPath(projectDir, taskID)
+	}
+	return ExecutorRunPath(projectDir, taskID)
+}
+
 // WriteRunState atomically writes the run-state for st.TaskID under projectDir,
-// stamping Updated.
+// stamping Updated. The target file follows st.Kind: an acceptance run
+// (RunKindFinish) writes beside the run of the same task, never over it (the
+// one id where "beside" is still "over" is in finishRunInfix).
 func WriteRunState(projectDir string, st *RunState) error {
 	if err := os.MkdirAll(executorRunDir(projectDir), 0755); err != nil {
 		return err
@@ -104,7 +168,7 @@ func WriteRunState(projectDir string, st *RunState) error {
 	if err != nil {
 		return err
 	}
-	path := ExecutorRunPath(projectDir, st.TaskID)
+	path := runStatePath(projectDir, st.Kind, st.TaskID)
 	// The tmp name carries the writer's pid so two PROCESSES writing the same
 	// run-state cannot land in one another's os.WriteFile (truncate+write is
 	// not atomic) and rename a torn mixture of both. Real pairs: the board's
@@ -220,7 +284,32 @@ func (w *RunWriter) Heartbeat(interval time.Duration) func() {
 // ReadRunState reads the run-state for taskID under projectDir. Returns an error
 // (os.IsNotExist) when no run exists.
 func ReadRunState(projectDir, taskID string) (*RunState, error) {
-	data, err := os.ReadFile(ExecutorRunPath(projectDir, taskID))
+	return readRunStateFile(ExecutorRunPath(projectDir, taskID))
+}
+
+// ReadFinishRunState reads the acceptance run-state for taskID under
+// projectDir. Same contract as ReadRunState - an error (never a panic, never a
+// zero value) when no acceptance has run - plus one check ReadRunState cannot
+// make: the state found at that path must say it belongs to taskID. A task id
+// may contain a dot (ValidateTaskID permits it), so the run of a task literally
+// named "x.finish" occupies the file where the acceptance of "x" would live,
+// and returning it would report one task's run as another's acceptance. A
+// mismatch reads as fs.ErrNotExist, because for the caller that is what it is:
+// no acceptance of this task is recorded here.
+func ReadFinishRunState(projectDir, taskID string) (*RunState, error) {
+	st, err := readRunStateFile(FinishRunPath(projectDir, taskID))
+	if err != nil {
+		return nil, err
+	}
+	if st.TaskID != taskID {
+		return nil, fmt.Errorf("%s: run-state belongs to %q, not to %q: %w",
+			FinishRunPath(projectDir, taskID), st.TaskID, taskID, fs.ErrNotExist)
+	}
+	return st, nil
+}
+
+func readRunStateFile(path string) (*RunState, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -231,11 +320,42 @@ func ReadRunState(projectDir, taskID string) (*RunState, error) {
 	return &st, nil
 }
 
-// ReadRunStates returns all run-states under projectDir, keyed by task id.
+// ReadRunStates returns all RUN run-states under projectDir, keyed by task id -
+// acceptance run-states are deliberately excluded. Every consumer of this map
+// (the board's dashboard, killRun, the run badges) means runs, and an
+// acceptance shares its run's task id, so an unfiltered read would let one
+// evict the other in the map whichever way the directory happened to sort.
 // Missing/unreadable dir -> empty map (no error), so callers can poll cheaply.
 func ReadRunStates(projectDir string) map[string]*RunState {
+	return readRunStatesDir(projectDir, false)
+}
+
+// ReadFinishRunStates returns all ACCEPTANCE run-states under projectDir, keyed
+// by the task id of the run each one accepts. The mirror image of
+// ReadRunStates: the two never return the same file.
+func ReadFinishRunStates(projectDir string) map[string]*RunState {
+	return readRunStatesDir(projectDir, true)
+}
+
+// readRunStatesDir collects either the run or the acceptance run-states. A file
+// belongs to the requested set when it is the file the state INSIDE IT would be
+// written to - that one test classifies every file totally and unambiguously,
+// because a given name can be the run path of at most one task id and the
+// acceptance path of at most one other. Matching on the name alone would not:
+// a task id may contain a dot (ValidateTaskID permits it), so the run of a task
+// literally named "x.finish" lives at `x.finish.json`, and a name-only rule
+// would have to either hand that run to the acceptance map under the wrong task
+// or drop a live run the board still needs to show. Its own `task_id` settles
+// it. A file whose id matches neither path (empty, hand-edited, a legacy name
+// nothing would write today) is skipped rather than keyed on a guess.
+//
+// Kind is deliberately not consulted: the file name is what made the two runs
+// collide, and a state whose kind and path disagree can only come from an
+// editor (see runStatePath).
+func readRunStatesDir(projectDir string, finish bool) map[string]*RunState {
+	dir := executorRunDir(projectDir)
 	out := map[string]*RunState{}
-	entries, err := os.ReadDir(executorRunDir(projectDir))
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return out
 	}
@@ -247,15 +367,18 @@ func ReadRunStates(projectDir string) map[string]*RunState {
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		data, err := os.ReadFile(filepath.Join(executorRunDir(projectDir), n))
+		st, err := readRunStateFile(filepath.Join(dir, n))
 		if err != nil {
 			continue
 		}
-		var st RunState
-		if err := json.Unmarshal(data, &st); err != nil {
+		want := ExecutorRunPath(projectDir, st.TaskID)
+		if finish {
+			want = FinishRunPath(projectDir, st.TaskID)
+		}
+		if filepath.Base(want) != n {
 			continue
 		}
-		out[st.TaskID] = &st
+		out[st.TaskID] = st
 	}
 	return out
 }

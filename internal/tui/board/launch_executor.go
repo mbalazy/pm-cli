@@ -18,9 +18,12 @@ import (
 // task, `run-epic` for a tracker, plus optional --yolo / --dry-run. Pure so it
 // can be unit-tested without spawning a process.
 func executorPMArgs(t *storage.Task, isTracker, yolo, dryRun, additional bool) []string {
-	sub := "work"
+	// The subcommand name doubles as the run-state's Kind (see the seed below),
+	// and Kind now decides which FILE the run-state lives in - so these are the
+	// storage constants rather than two literals that merely look the same.
+	sub := storage.RunKindWork
 	if isTracker {
-		sub = "run-epic"
+		sub = storage.RunKindEpic
 	}
 	args := []string{sub, t.Project, t.Meta.ID}
 	if yolo {
