@@ -33,6 +33,13 @@ func startEntry(kind, taskID string, pid int) storage.JournalEntry {
 // is a crash. Cases that want the live-run branch pass their own.
 func noneAlive(int) bool { return false }
 
+// ignoreRef adapts the pid-only liveness stubs this table uses to the
+// predicate's (pid, ref) shape. What the reference time does to the answer is
+// storage's own test; here what matters is which pids count as live.
+func ignoreRef(f func(int) bool) func(int, time.Time) bool {
+	return func(pid int, _ time.Time) bool { return f(pid) }
+}
+
 // testNow is the fixed "now" the table aggregates against. AppendJournal stamps
 // TS with the real wall clock, so a far-future reference would push every
 // fixture entry outside liveWindow; this sits close enough to real time that
@@ -621,7 +628,7 @@ func TestAggregateJournal(t *testing.T) {
 			if alive == nil {
 				alive = noneAlive
 			}
-			got := aggregateJournal(entries, alive, testNow)
+			got := aggregateJournal(entries, ignoreRef(alive), testNow)
 
 			if got.Entries != len(tt.entries) {
 				t.Errorf("Entries = %d, want %d", got.Entries, len(tt.entries))
@@ -778,7 +785,7 @@ func TestRenderJournalStats(t *testing.T) {
 		startEntry("run-epic", "app-9", 202),
 		{Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-9", PID: 202},
 		startEntry("work", "app-2", 400), // crash
-	}, noneAlive, testNow)
+	}, ignoreRef(noneAlive), testNow)
 	out := renderJournalStats("app", "/tmp/app/.executor/journal.jsonl", st)
 
 	for _, want := range []string{
@@ -837,7 +844,7 @@ func TestRenderJournalStatsSeparatesGateDecisions(t *testing.T) {
 				{ID: "s5", Result: "manual"},
 			},
 		},
-	}, noneAlive, testNow)
+	}, ignoreRef(noneAlive), testNow)
 
 	worked, gated := st.workerBacked()
 	if worked != 2 || gated != 3 {
@@ -856,7 +863,7 @@ func TestRenderJournalStatsAlwaysPrintsTotals(t *testing.T) {
 		startEntry("run-epic", "app-5", 300),
 		{Event: storage.JournalEventKilled, Kind: "run-epic", TaskID: "app-5", PID: 300},
 		startEntry("work", "app-2", 400),
-	}, noneAlive, testNow)
+	}, ignoreRef(noneAlive), testNow)
 	out := renderJournalStats("app", "/tmp/j.jsonl", st)
 
 	for _, want := range []string{
@@ -874,7 +881,7 @@ func TestRenderJournalStatsAlwaysPrintsTotals(t *testing.T) {
 
 func TestRenderJournalStatsShowsRunningRun(t *testing.T) {
 	st := aggregateJournal([]storage.JournalEntry{startEntry("run-epic", "app-7", 700)},
-		func(pid int) bool { return pid == 700 }, testNow)
+		ignoreRef(func(pid int) bool { return pid == 700 }), testNow)
 	out := renderJournalStats("app", "/tmp/j.jsonl", st)
 
 	if !strings.Contains(out, "running 1 (no end/killed line yet, pid still alive)") {

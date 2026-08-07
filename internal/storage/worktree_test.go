@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 // gitInit creates a git repo with an initial commit in dir.
@@ -380,6 +382,58 @@ func TestSeedExcludesOverride(t *testing.T) {
 // acquirers (distinct pids) race for the same slot; exactly one must win and
 // the loser must get a busy error naming the winner - never two winners, never
 // two losers.
+// A pid outliving its owner is the ordinary case after a reboot or a kill -9:
+// the lock file survives, the number gets handed to somebody else, and a
+// liveness check that only asks "does this pid exist" keeps the slot busy until
+// a human deletes the file. pid 1 is the cheapest stand-in - alive on every
+// machine, and demonstrably NOT the process that stamped a lock dated 2020.
+func TestWorktreeLockIgnoresRecycledPID(t *testing.T) {
+	seed := func(t *testing.T, dir string, started string) {
+		t.Helper()
+		lk := WorktreeLock{PID: 1, TaskID: "task-gone", Kind: "run-epic", Started: started}
+		data, err := json.Marshal(lk)
+		if err != nil {
+			t.Fatalf("marshal lock: %v", err)
+		}
+		if err := os.WriteFile(worktreeLockPath(dir), data, 0644); err != nil {
+			t.Fatalf("seed lock: %v", err)
+		}
+	}
+
+	t.Run("a lock older than its holder is stale", func(t *testing.T) {
+		dir := t.TempDir()
+		seed(t, dir, "2020-01-01T00:00:00Z")
+
+		if h := LiveWorktreeHolder(dir); h != nil {
+			t.Errorf("holder = %+v, want nil - pid 1 did not start before 2020", h)
+		}
+		if err := AcquireWorktreeLock(dir, "task-new", "work", os.Getpid()); err != nil {
+			t.Fatalf("expected takeover of a recycled-pid lock, got: %v", err)
+		}
+		lk, _ := ReadWorktreeLock(dir)
+		if lk == nil || lk.TaskID != "task-new" || lk.PID != os.Getpid() {
+			t.Fatalf("takeover did not rewrite lock: %+v", lk)
+		}
+	})
+
+	// The other direction matters just as much: a live holder must keep its
+	// slot. Reading it as dead would hand a running worker's worktree to a
+	// second run.
+	t.Run("a live holder still holds", func(t *testing.T) {
+		dir := t.TempDir()
+		seed(t, dir, time.Now().Format(time.RFC3339))
+
+		if h := LiveWorktreeHolder(dir); h == nil {
+			t.Error("holder = nil, want the live pid-1 lock")
+		}
+		var busy *WorktreeBusyError
+		err := AcquireWorktreeLock(dir, "task-new", "work", os.Getpid())
+		if !errors.As(err, &busy) {
+			t.Fatalf("err = %v, want a busy error", err)
+		}
+	})
+}
+
 func TestAcquireWorktreeLockAtomicRace(t *testing.T) {
 	pids := []int{os.Getpid(), os.Getppid()} // both alive + signalable
 	for i := 0; i < 50; i++ {
