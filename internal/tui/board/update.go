@@ -67,18 +67,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, doTick()
 
 	case execKillCheckMsg:
-		// The group didn't die on SIGTERM - escalate to SIGKILL (group, then pid).
-		// Errors are dropped: the process may have exited in the gap (the next
-		// refreshRunStates reflects reality), and this is a TUI so stderr is unusable.
-		if storage.ProcessAlive(msg.pid) {
-			// The worker's own group first: SIGKILLing the manager is what makes
-			// the worker unreachable (it can no longer forward), so it must not
-			// happen before the worker itself is down.
-			if msg.workerPGID > 0 && msg.workerPGID != msg.pid {
-				_ = syscall.Kill(-msg.workerPGID, syscall.SIGKILL)
-			}
-			_ = syscall.Kill(-msg.pid, syscall.SIGKILL)
-			_ = syscall.Kill(msg.pid, syscall.SIGKILL)
+		// The group didn't die on SIGTERM - escalate to SIGKILL, through the same
+		// verified path as the SIGTERM (RunState.Kill: identity first, then the
+		// worker's own group before the manager's, since SIGKILLing the manager is
+		// what makes the worker unreachable).
+		//
+		// The state is re-read rather than trusted from the message: two seconds
+		// is ample for the manager to exit and, after a crash or a reboot, for
+		// its number to belong to something else - and a SIGKILL cannot be taken
+		// back. No fresh state, or a state whose pid has moved on to another run,
+		// means no proof, which means no signal. Errors are dropped: the process
+		// may legitimately have exited in the gap (the next refreshRunStates
+		// reflects reality), and this is a TUI so stderr is unusable.
+		if st, err := storage.ReadRunState(m.store.ProjectDir(msg.project), msg.taskID); err == nil && st.PID == msg.pid {
+			_ = st.Kill(syscall.SIGKILL)
 		}
 		m.refreshRunStates()
 		return m, nil

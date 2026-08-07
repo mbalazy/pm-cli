@@ -280,19 +280,52 @@ func (st *RunState) IsLive() bool {
 // unlock. Signalling both is safe - the worker group send is best-effort and its
 // error is intentionally not reported. Returns an error when there is no manager
 // pid to signal.
+// Nothing is signalled until the run's pid is PROVEN to still be the run's own
+// process. A run-state is a file that outlives its process - a `kill -9`, an OOM
+// or a reboot leaves `status: running` behind with a pid nobody cleaned up, and
+// after a reboot the numbers get handed out again from the bottom. Signalling
+// that number sends SIGTERM, and two seconds later SIGKILL, to a GROUP of
+// processes that have nothing to do with pm. Identity is the run's own Started
+// stamp against the process start time (see ProcessAliveSince).
 func (st *RunState) Kill(sig syscall.Signal) error {
 	if st == nil || st.PID <= 0 {
 		return fmt.Errorf("no pid to signal")
 	}
-	if st.WorkerPGID > 0 && st.WorkerPGID != st.PID {
-		_ = syscall.Kill(-st.WorkerPGID, sig)
+	if !ProcessAliveSinceStamp(st.PID, st.Started) {
+		return &StaleRunError{TaskID: st.TaskID, PID: st.PID}
+	}
+	// The worker group is signalled only because the MANAGER just proved to be
+	// alive: a live manager clears WorkerPGID the moment its worker returns, so
+	// the field names the worker in flight right now. (Its own start time cannot
+	// be the test - a worker starts DURING the run, i.e. after the stamp.) The
+	// liveness check is the cheap guard against the manager having died between
+	// the proof and here.
+	if st.WorkerPGID > 0 && st.WorkerPGID != st.PID && ProcessAlive(st.WorkerPGID) {
+		_ = killSignal(-st.WorkerPGID, sig)
 	}
 	// Negative pid targets the process group (pgid == manager pid for a detached
 	// run). Fall back to the bare pid if the process isn't a group leader.
-	if err := syscall.Kill(-st.PID, sig); err == nil {
+	if err := killSignal(-st.PID, sig); err == nil {
 		return nil
 	}
-	return syscall.Kill(st.PID, sig)
+	return killSignal(st.PID, sig)
+}
+
+// killSignal is syscall.Kill behind a seam so tests can assert WHAT a kill would
+// signal without a test process ever signalling a real group.
+var killSignal = syscall.Kill
+
+// StaleRunError is returned by Kill when the run-state's pid can no longer be
+// shown to belong to the run it describes: the process is gone, or it is a
+// different one wearing a recycled number. It carries the pid so the caller can
+// say so rather than reporting a silent no-op.
+type StaleRunError struct {
+	TaskID string
+	PID    int
+}
+
+func (e *StaleRunError) Error() string {
+	return fmt.Sprintf("run %s is no longer running (pid %d is gone or belongs to another process) - nothing was signalled", e.TaskID, e.PID)
 }
 
 // NewSessionID returns a random UUIDv4 used to pin a worker's session id up
