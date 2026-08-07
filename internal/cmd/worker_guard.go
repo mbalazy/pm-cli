@@ -59,12 +59,35 @@ var hookBypassPatterns = []struct {
 
 var gitCommitOrPush = regexp.MustCompile(`git\s+(commit|push)\b`)
 
+// commitMessageArg matches a message flag together with the payload that belongs
+// to it: `--message`, `-m`, and the combined short forms a model writes without
+// thinking (`-am`). The payload is a quoted string when there is one, otherwise
+// a single bare word - and never crosses a command separator, so
+// `git commit -m fix && rm .husky/pre-commit` keeps its second half.
+var commitMessageArg = regexp.MustCompile(`(^|\s)(--message|-[A-Za-z]*m)(=|\s+)("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|]+)`)
+
+// stripMessagePayload blanks out commit-message prose before the bypass patterns
+// ever see it. Describing a door is not opening one: `git commit -m "add -n flag
+// support"` is an ordinary commit, and the guard used to refuse it with a lecture
+// about bypassing hooks - a deny for something the worker did not do, which is
+// the same failure the guard exists to prevent, one level up (a guard that cries
+// wolf is a guard that gets worked around).
+//
+// Only the payload goes. The flags AROUND it stay exactly where they were, so
+// `git commit -m "x" --no-verify` and `git commit -m "x" -n` - the trailing form
+// that permission patterns cannot see and this guard is the only defence against
+// - are still blocked.
+func stripMessagePayload(cmd string) string {
+	return commitMessageArg.ReplaceAllString(cmd, "$1$2 MSG")
+}
+
 // bashCommandBlocked reports whether a Bash command tries to bypass git hooks,
 // and which shape it matched.
 func bashCommandBlocked(cmd string) (bool, string) {
 	if strings.TrimSpace(cmd) == "" {
 		return false, ""
 	}
+	cmd = stripMessagePayload(cmd)
 	isCommitOrPush := gitCommitOrPush.MatchString(cmd)
 	for _, p := range hookBypassPatterns {
 		if p.scoped && !isCommitOrPush {
