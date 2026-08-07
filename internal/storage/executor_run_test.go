@@ -206,6 +206,108 @@ func TestReadRunStatesMissingDir(t *testing.T) {
 	if got := ReadRunStates(t.TempDir()); len(got) != 0 {
 		t.Errorf("expected empty map for missing dir, got %v", got)
 	}
+	if got := ReadFinishRunStates(t.TempDir()); len(got) != 0 {
+		t.Errorf("expected empty map for missing dir, got %v", got)
+	}
+}
+
+// TestWriteRunStateKindPicksTheFile pins the routing: WriteRunState is the one
+// place that knows which file a run-state belongs in, so a caller only has to
+// carry the right Kind. An acceptance must never land on <id>.json - that file
+// belongs to the run being accepted.
+func TestWriteRunStateKindPicksTheFile(t *testing.T) {
+	dir := t.TempDir()
+	fin := &RunState{TaskID: "p-1", Project: "p", Kind: RunKindFinish, Status: RunStatusRunning}
+	if err := WriteRunState(dir, fin); err != nil {
+		t.Fatalf("WriteRunState(finish): %v", err)
+	}
+	if _, err := os.Stat(FinishRunPath(dir, "p-1")); err != nil {
+		t.Fatalf("finish run-state should exist at %s: %v", FinishRunPath(dir, "p-1"), err)
+	}
+	if _, err := os.Stat(ExecutorRunPath(dir, "p-1")); !os.IsNotExist(err) {
+		t.Errorf("finish write must not touch the run's own file (err=%v)", err)
+	}
+
+	// The RunWriter goes through WriteRunState, so it routes identically - that
+	// is why there is no finish-aware writer constructor.
+	if err := NewRunWriter(dir, &RunState{TaskID: "p-2", Project: "p", Kind: RunKindFinish}).Update(nil); err != nil {
+		t.Fatalf("RunWriter.Update(finish): %v", err)
+	}
+	if _, err := os.Stat(FinishRunPath(dir, "p-2")); err != nil {
+		t.Errorf("RunWriter should write the finish file: %v", err)
+	}
+	if _, err := os.Stat(ExecutorRunPath(dir, "p-2")); !os.IsNotExist(err) {
+		t.Errorf("RunWriter(finish) must not write the run's own file (err=%v)", err)
+	}
+}
+
+// TestRunAndFinishCoexist is the point of the split: an epic run and the
+// acceptance of that same epic carry the SAME task id. Both live on disk, and
+// neither read side may return the other - ReadRunStates keys by task id, so an
+// unfiltered read would let whichever sorted later evict the other.
+func TestRunAndFinishCoexist(t *testing.T) {
+	dir := t.TempDir()
+	run := &RunState{TaskID: "p-1", Project: "p", Kind: RunKindEpic, Status: RunStatusRunning, Phase: "epic"}
+	fin := &RunState{TaskID: "p-1", Project: "p", Kind: RunKindFinish, Status: RunStatusRunning, Phase: "acceptance"}
+	if err := WriteRunState(dir, run); err != nil {
+		t.Fatalf("WriteRunState(run): %v", err)
+	}
+	if err := WriteRunState(dir, fin); err != nil {
+		t.Fatalf("WriteRunState(finish): %v", err)
+	}
+
+	got, err := ReadRunState(dir, "p-1")
+	if err != nil || got.Phase != "epic" {
+		t.Errorf("ReadRunState should return the epic run: %+v err=%v", got, err)
+	}
+	gotFin, err := ReadFinishRunState(dir, "p-1")
+	if err != nil || gotFin.Phase != "acceptance" {
+		t.Errorf("ReadFinishRunState should return the acceptance: %+v err=%v", gotFin, err)
+	}
+
+	runs := ReadRunStates(dir)
+	if len(runs) != 1 || runs["p-1"] == nil || runs["p-1"].Phase != "epic" {
+		t.Errorf("ReadRunStates should return only the epic run, got %+v", runs)
+	}
+	fins := ReadFinishRunStates(dir)
+	if len(fins) != 1 || fins["p-1"] == nil || fins["p-1"].Phase != "acceptance" {
+		t.Errorf("ReadFinishRunStates should return only the acceptance, got %+v", fins)
+	}
+}
+
+// TestReadFinishRunStateMissing: same contract as ReadRunState on a run that
+// never happened - an error to branch on, not a panic and not a zero value.
+func TestReadFinishRunStateMissing(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteRunState(dir, &RunState{TaskID: "p-1", Project: "p", Kind: RunKindEpic}); err != nil {
+		t.Fatalf("WriteRunState: %v", err)
+	}
+	// A run WITHOUT an acceptance must not resolve to the run's own file.
+	got, err := ReadFinishRunState(dir, "p-1")
+	if !os.IsNotExist(err) {
+		t.Errorf("expected a not-exist error, got %+v err=%v", got, err)
+	}
+	if got, err := ReadFinishRunState(dir, "nope"); !os.IsNotExist(err) {
+		t.Errorf("expected a not-exist error for an unknown task, got %+v err=%v", got, err)
+	}
+}
+
+// TestRunStateFilesNeedNoMigration: the run's own paths are byte-for-byte what
+// they were before the split, so no file already on disk has to move.
+func TestRunStateFilesNeedNoMigration(t *testing.T) {
+	dir := t.TempDir()
+	for _, kind := range []string{RunKindWork, RunKindEpic, ""} {
+		if err := WriteRunState(dir, &RunState{TaskID: "p-9", Project: "p", Kind: kind}); err != nil {
+			t.Fatalf("WriteRunState(%q): %v", kind, err)
+		}
+		want := filepath.Join(dir, ".executor", "p-9.json")
+		if _, err := os.Stat(want); err != nil {
+			t.Errorf("kind %q should still write %s: %v", kind, want, err)
+		}
+		if _, err := os.Stat(FinishRunPath(dir, "p-9")); !os.IsNotExist(err) {
+			t.Errorf("kind %q must not write the finish file (err=%v)", kind, err)
+		}
+	}
 }
 
 func TestNewSessionIDUnique(t *testing.T) {
