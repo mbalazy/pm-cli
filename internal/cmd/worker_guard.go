@@ -194,6 +194,17 @@ func promptCarriesDiff(prompt string) bool {
 	return false
 }
 
+// guardDir is the repo the hook is judging. Claude Code sends the worker's cwd
+// in the payload; the process cwd is the fallback, and it is the same directory
+// in practice - the hook runs as a child of the worker.
+func guardDir(ev hookEvent) string {
+	if ev.Cwd != "" {
+		return ev.Cwd
+	}
+	dir, _ := os.Getwd()
+	return dir
+}
+
 // spawnRecord is the telemetry line for one observed spawn.
 func spawnRecord(ev hookEvent, now time.Time) storage.ReviewSpawn {
 	return storage.ReviewSpawn{
@@ -235,11 +246,7 @@ func judgeAgentSpawn(telemetryPath, diffBase string, ev hookEvent, now time.Time
 		_ = storage.AppendReviewSpawn(telemetryPath, rec)
 		return nestedDenyMessage
 	}
-	dir := ev.Cwd
-	if dir == "" {
-		dir, _ = os.Getwd()
-	}
-	files, lines, ok := diffStats(dir, diffBase)
+	files, lines, ok := diffStats(guardDir(ev), diffBase)
 	if !ok {
 		_ = storage.AppendReviewSpawn(telemetryPath, rec)
 		return ""
@@ -340,13 +347,16 @@ func runWorkerGuard(in io.Reader, out, errOut io.Writer, opts guardOptions) int 
 			fmt.Fprintln(errOut, reason)
 			return 2
 		}
-		// The spawn is allowed; the only question left is what it runs on. Note
-		// the ORDER: the telemetry above records the model the WORKER asked for,
-		// which is the measurement that says whether the prompt rule is being
-		// followed. Recording pm's own substitution instead would make the
-		// telemetry agree with pm by construction.
-		if ti := rawToolInput(data); pinReviewerAgent(ti, opts.reviewModel) {
-			writeUpdatedInput(out, ti, "pm pins reviewer subagents to "+opts.reviewModel)
+		// The spawn is allowed; what is left is what it runs on and what it is
+		// given. Note the ORDER: the telemetry above records the model and the
+		// prompt the WORKER asked for, which is the measurement that says
+		// whether the prompt rules are being followed. Recording pm's own
+		// substitutions instead would make the telemetry agree with pm by
+		// construction.
+		if ti := rawToolInput(data); ti != nil {
+			if applied := rewriteAgentSpawn(ti, guardDir(ev), opts.diffBase, opts.reviewModel); len(applied) > 0 {
+				writeUpdatedInput(out, ti, "pm "+strings.Join(applied, "; pm "))
+			}
 		}
 	}
 	return 0

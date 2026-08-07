@@ -28,11 +28,21 @@ import (
 
 const reviewerAgentType = "pm-reviewer"
 
-// reviewerAgentTools is what a reviewer may reach for. Agent is absent on
-// purpose: a reviewer spawning its own subagent is refused by the guard (see
-// review_cap.go), and leaving it off the definition means the reviewer never
-// tries in the first place - a refusal it never has to spend a turn on.
-var reviewerAgentTools = []string{"Read", "Grep", "Glob", "Bash"}
+// reviewerAgentTools is what a reviewer may reach for.
+//
+// Agent is absent because a reviewer spawning its own subagent is refused by the
+// guard (see review_cap.go), and leaving it off the definition means the
+// reviewer never tries in the first place - a refusal it never has to spend a
+// turn on.
+//
+// Bash is absent because it was the single largest way reviewers spent tokens:
+// 340 calls and 0.69M characters across the 16 reviewers of epic
+// orbit-106. A reviewer given the diff up front has nothing left to shell
+// out for. The deliberate loss is that it can no longer run the tests or read
+// `git log` - neither of which is its job. Verify is a separate phase of the
+// inner loop and it is the gate; a reviewer's job is to find what is wrong with
+// the change in front of it.
+var reviewerAgentTools = []string{"Read", "Grep", "Glob"}
 
 // reviewerAgentPrompt is the reviewer's system prompt. Deliberately thin: the
 // per-call prompt the worker writes carries the actual change, the AC and what
@@ -118,4 +128,45 @@ func pinReviewerAgent(ti map[string]any, model string) bool {
 		changed = true
 	}
 	return changed
+}
+
+// attachReviewPacket puts the change under review into the spawn's prompt, and
+// reports whether it did.
+//
+// Gated on the prompt not already carrying a diff, because a worker that did
+// the right thing must not be punished for it with a second copy - and the
+// telemetry's has_diff field, which measures exactly that, is recorded before
+// this runs, so pm's own attachment can never flatter the measurement.
+func attachReviewPacket(ti map[string]any, dir, baseSHA string) bool {
+	if ti == nil {
+		return false
+	}
+	subType, _ := ti["subagent_type"].(string)
+	if !genericSubagentTypes[strings.ToLower(strings.TrimSpace(subType))] {
+		return false
+	}
+	prompt, _ := ti["prompt"].(string)
+	if prompt == "" || promptCarriesDiff(prompt) {
+		return false
+	}
+	packet := buildReviewPacket(dir, baseSHA)
+	if packet == "" {
+		return false
+	}
+	ti["prompt"] = prompt + packet
+	return true
+}
+
+// rewriteAgentSpawn applies every policy pm has about a spawn it is allowing,
+// and returns what it changed - empty when it changed nothing, which is the
+// signal to stay silent rather than emit an inert rewrite.
+func rewriteAgentSpawn(ti map[string]any, dir, baseSHA, reviewModel string) []string {
+	var applied []string
+	if pinReviewerAgent(ti, reviewModel) {
+		applied = append(applied, "pinned reviewer subagents to "+reviewModel)
+	}
+	if attachReviewPacket(ti, dir, baseSHA) {
+		applied = append(applied, "attached the diff under review to the prompt")
+	}
+	return applied
 }

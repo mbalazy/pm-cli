@@ -157,7 +157,11 @@ func TestJudgeAgentSpawnEnforcesTheCap(t *testing.T) {
 	write("main.go", "package main\n\nfunc add(a, b int) int { return a + b }\n")
 	write("main_test.go", strings.Repeat("// filler\n", 90))
 
-	telemetry := filepath.Join(dir, "review.jsonl")
+	// OUTSIDE the repo, as in production (the pm data dir): untracked files
+	// inside the repo are part of the worker's change and count toward the cap,
+	// so a telemetry file sitting in the tree would size the review against pm's
+	// own bookkeeping.
+	telemetry := filepath.Join(t.TempDir(), "review.jsonl")
 	ev := hookEvent{ToolName: "Agent", Cwd: dir}
 	ev.ToolInput.SubagentType = "Explore"
 	ev.ToolInput.Prompt = "review this"
@@ -203,7 +207,11 @@ func TestJudgeAgentSpawnEnforcesTheCap(t *testing.T) {
 // worse failure.
 func TestJudgeAgentSpawnDegradesWhenItCannotMeasure(t *testing.T) {
 	dir := t.TempDir()
-	telemetry := filepath.Join(dir, "review.jsonl")
+	// OUTSIDE the repo, as in production (the pm data dir): untracked files
+	// inside the repo are part of the worker's change and count toward the cap,
+	// so a telemetry file sitting in the tree would size the review against pm's
+	// own bookkeeping.
+	telemetry := filepath.Join(t.TempDir(), "review.jsonl")
 	ev := hookEvent{ToolName: "Agent", Cwd: dir}
 	for i := 0; i < 5; i++ {
 		if reason := judgeAgentSpawn(telemetry, "", ev, time.Now()); reason != "" {
@@ -225,7 +233,7 @@ func TestReviewPromptDelegatesTheCount(t *testing.T) {
 			t.Errorf("review prompt must no longer state the sizing rule, still contains %q", gone)
 		}
 	}
-	for _, want := range []string{"Do NOT decide how many", "pm sizes the review", "FULL diff"} {
+	for _, want := range []string{"Do NOT decide how many", "pm sizes the review", "pm attaches the full change"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("review prompt must contain %q", want)
 		}

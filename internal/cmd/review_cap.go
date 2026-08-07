@@ -156,17 +156,20 @@ func parseNumstat(out string) (files, lines int) {
 // spawns, which is what makes this exact - a branch name would drift, and a
 // merge-base against an unknown trunk cannot be computed reliably from inside a
 // hook.
+// Untracked files count too (see gitDiffAll): `git diff` reads the index and
+// the tree, not the directory, so a worker that spawns its reviewers before
+// committing would otherwise be sized as having changed nothing - and a cap of
+// 1 on a 40-file change is a worse failure than no cap at all.
 func diffStats(dir, baseSHA string) (files, lines int, ok bool) {
 	if dir == "" || baseSHA == "" {
 		return 0, 0, false
 	}
-	c := exec.Command("git", "diff", "--numstat", baseSHA)
+	c := exec.Command("git", "rev-parse", "--git-dir")
 	c.Dir = dir
-	out, err := c.Output()
-	if err != nil {
+	if c.Run() != nil {
 		return 0, 0, false
 	}
-	files, lines = parseNumstat(string(out))
+	files, lines = parseNumstat(gitDiffAll(dir, baseSHA, "--numstat"))
 	return files, lines, true
 }
 
