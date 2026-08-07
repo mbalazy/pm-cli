@@ -264,10 +264,13 @@ func TestExecuteEpicOpensThePRWhenNotSuppressed(t *testing.T) {
 	}
 }
 
-// TestExecuteEpicRejectsAnUnlistedDoneStatus: the hard gate deliberately lives
-// in executeEpic, not planEpic (--dry-run has always printed the plan
-// regardless). Failing the merged-move AFTER the merge landed would desync the
-// re-entrant done check and re-drive the sub on the next run.
+// TestExecuteEpicRejectsAnUnlistedDoneStatus: the hard gate refuses before
+// anything is touched, because failing the merged-move AFTER the merge landed
+// would desync the re-entrant done check and re-drive the sub on the next run.
+//
+// planEpic resolves the verdict (so --dry-run reaches the same one - see
+// TestDryRunAppliesTheDoneStatusGate) but must still PLAN: the dry-run's whole
+// job is to print what it resolved before reporting the blocker.
 func TestExecuteEpicRejectsAnUnlistedDoneStatus(t *testing.T) {
 	store, _ := epicRunFixture(t)
 	if _, err := store.MutateProject("app", func(p *storage.Project) error {

@@ -378,6 +378,57 @@ func TestRecordSubFeedbackRefusesToResurrectADeletedParent(t *testing.T) {
 // The green sub lands where the manager's own action puts it: merged into the
 // epic branch, or pushed on its own branch. The fallback exists so upgrading pm
 // never refuses a batch on a project whose statuses predate "pushed".
+// TestDryRunAppliesTheDoneStatusGate closes the gap measured on a fresh
+// project: `pm executor doctor` reported 0 errors, `pm run-epic --dry-run`
+// printed a confident plan including "done status: merged" and exited 0, and
+// the real run then refused on its first line. A dry-run that reports readiness
+// it never checked is worse than none - it is the check people run INSTEAD of
+// the real thing.
+func TestDryRunAppliesTheDoneStatusGate(t *testing.T) {
+	// epicFixture's project has no `statuses`, so DefaultStatuses applies:
+	// [todo doing waiting done] - no `merged`. This is the fresh-project state.
+	store, _ := epicFixture(t, testExecutor())
+
+	plan, err := planEpic(store, []string{"app", "app-1"}, epicOptions{})
+	if err != nil {
+		t.Fatalf("planEpic must still plan - the dry-run has to print what it resolved: %v", err)
+	}
+	if plan.doneStatusGate == nil {
+		t.Fatal("the plan must carry the verdict, so both halves cannot drift apart again")
+	}
+
+	var out strings.Builder
+	err = printEpicDryRun(plan, epicOptions{out: &out, errOut: io.Discard})
+	if err == nil {
+		t.Fatal("--dry-run must exit non-zero for a run it can already see will refuse to start")
+	}
+	if !strings.Contains(err.Error(), `done status "merged" is not in project app statuses`) {
+		t.Errorf("dry-run must report the same refusal the real run does, got %v", err)
+	}
+	// The blocker does not replace the plan: the subs it resolved still print.
+	for _, want := range []string{"app-1-1", "app-1-3"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the full plan must print before the blocker, %q missing:\n%s", want, out.String())
+		}
+	}
+
+	t.Run("a project that lists the status is clean", func(t *testing.T) {
+		if _, err := store.MutateProject("app", func(p *storage.Project) error {
+			p.Statuses = []string{"todo", "doing", "merged", "waiting", "done"}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		plan, err := planEpic(store, []string{"app", "app-1"}, epicOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := printEpicDryRun(plan, epicOptions{out: io.Discard, errOut: io.Discard}); err != nil {
+			t.Fatalf("a ready project's dry-run must stay green: %v", err)
+		}
+	})
+}
+
 func TestResolveEpicDoneStatus(t *testing.T) {
 	statuses := func(ss ...string) []storage.TaskStatus {
 		out := make([]storage.TaskStatus, len(ss))
@@ -420,6 +471,16 @@ func TestResolveEpicDoneStatus(t *testing.T) {
 		got, note := resolveEpicDoneStatus(exc, true, statuses("todo", "doing", "merged", "done"))
 		if got != "reviewd" || note != "" {
 			t.Errorf("got (%q, %q) - a configured status must reach the gate verbatim, not silently fall back", got, note)
+		}
+	})
+
+	t.Run("gate is resolved in the plan", func(t *testing.T) {
+		if err := epicDoneStatusGate("merged", "app", statuses("todo", "doing", "merged")); err != nil {
+			t.Errorf("a listed status must pass the gate, got %v", err)
+		}
+		err := epicDoneStatusGate("merged", "app", statuses("todo", "doing", "done"))
+		if err == nil || !strings.Contains(err.Error(), `done status "merged" is not in project app statuses`) {
+			t.Errorf("an unlisted status must be refused by name, got %v", err)
 		}
 	})
 

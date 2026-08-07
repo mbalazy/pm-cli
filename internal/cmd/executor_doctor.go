@@ -130,6 +130,14 @@ func runExecutorDoctor(proj *storage.Project) []check {
 	if !proj.HasExecutor() {
 		add(levelWarn, "no `executor` block in project.yaml",
 			"`pm executor init` drafts one by scanning the repo's skills and stack")
+		// Deliberately NOT a return: a project with no executor block is the
+		// FRESH project, i.e. exactly the one whose `statuses` list still has
+		// no landing status and whose first `pm run-epic` dies at the gate.
+		// Stopping here reported that project as healthy - 0 errors, one
+		// warning about a block `init` would write anyway - which is the state
+		// this check exists to stop being invisible. GetExecutor() resolves the
+		// built-in defaults, and those are the statuses that run would use.
+		out = append(out, checkLandingStatuses(proj.GetExecutor(), proj.GetStatuses())...)
 		return out
 	}
 	if proj.Path == "" {
@@ -144,6 +152,7 @@ func runExecutorDoctor(proj *storage.Project) []check {
 
 	e := proj.GetExecutor()
 	out = append(out, checkLandingStatuses(e, proj.GetStatuses())...)
+	out = append(out, checkBaseline(e)...)
 	out = append(out, checkContextRepos(e)...)
 	out = append(out, checkSlots(e, proj.Path)...)
 	out = append(out, checkHandoff(e, proj.Path)...)
@@ -172,6 +181,34 @@ func checkLandingStatuses(e storage.Executor, statuses []storage.TaskStatus) []c
 		out = append(out, check{Level: levelWarn, Msg: "landing status not in the project's statuses: " + string(s), Hint: hint})
 	}
 	return out
+}
+
+// checkBaseline warns when the project has no verification baseline.
+//
+// Without one, every worker is told nothing about what was already broken, so
+// on a repo whose gate is red on pre-existing failures each worker rediagnoses
+// that same breakage and then books it against its own diff. That is the single
+// most expensive failure cluster the executor journal records, and it stayed
+// invisible for seven runs on a project doctor called healthy.
+//
+// WARN, not ERROR, per this file's split: a run without a baseline works - it
+// behaves exactly as every run did before the field existed. The finding is
+// about completeness, not about a broken project.
+func checkBaseline(e storage.Executor) []check {
+	if bl := strings.TrimSpace(e.Baseline); bl != "" {
+		return []check{{levelOK, "baseline -> " + bl, ""}}
+	}
+	hint := "set `baseline` to the project's full verification command (`pm executor init` detects one) " +
+		"so a worker can tell a failure it caused from one it inherited"
+	// A tuned verify command is the strongest available evidence of what the
+	// baseline should be, and the two being set independently is how the gap
+	// opens: `init` writes both, a hand-edited block predating the field keeps
+	// only one.
+	if v := strings.TrimSpace(e.Phases["verify"].Cmd); v != "" {
+		hint = fmt.Sprintf("verify runs %q - baseline is normally the same command, captured once per run "+
+			"so a worker can tell a failure it caused from one it inherited", v)
+	}
+	return []check{{levelWarn, "`baseline` is unset - workers get no list of pre-existing failures", hint}}
 }
 
 func checkContextRepos(e storage.Executor) []check {
