@@ -1,0 +1,121 @@
+package cmd
+
+import (
+	"encoding/json"
+	"strings"
+)
+
+// Reviewer subagents are the largest single line item the executor spends on:
+// in epic orbit-106 sixteen of them accounted for 55.3M tokens, 58% of
+// the whole epic, and every one of them ran on opus for no reason anybody chose
+// - a subagent with no model named inherits the session's, and the session was
+// the run's --model.
+//
+// Pinning them takes THREE layers, and the middle one is the reason the other
+// two exist:
+//
+//  1. pm hands `claude` an agent definition (--agents) whose model is fixed.
+//     Verified against claude 2.1.224 on 2026-08-07: a `pm-reviewer` type
+//     defined this way spawned with `agentType: "pm-reviewer"` in its
+//     .meta.json and answered on claude-haiku-4-5 while the session ran on
+//     something else - the definition's model is real, not advisory.
+//  2. The review prompt names the type and tells the worker not to pass a model.
+//  3. The guard hook rewrites the call anyway, because a `model` named BY THE
+//     CALLER beats the definition's - and the caller does name one: in sub
+//     orbit-106-3 the worker wrote `model: "opus"` into all three of its
+//     Agent calls unprompted, while in 106-1 and 106-2 it named none. Layer 2
+//     asks; layer 3 is what makes the answer not matter.
+
+const reviewerAgentType = "pm-reviewer"
+
+// reviewerAgentTools is what a reviewer may reach for. Agent is absent on
+// purpose: a reviewer spawning its own subagent is refused by the guard (see
+// review_cap.go), and leaving it off the definition means the reviewer never
+// tries in the first place - a refusal it never has to spend a turn on.
+var reviewerAgentTools = []string{"Read", "Grep", "Glob", "Bash"}
+
+// reviewerAgentPrompt is the reviewer's system prompt. Deliberately thin: the
+// per-call prompt the worker writes carries the actual change, the AC and what
+// to look at, and duplicating that here would put two sets of instructions in
+// front of the same agent.
+const reviewerAgentPrompt = "You are an adversarial code reviewer working for an automated executor. " +
+	"You are given a change and the criteria it must meet. Your job is to find what is WRONG with it: " +
+	"correctness bugs, unhandled cases, criteria the change does not actually satisfy, and claims in the " +
+	"change's own description that the code does not support. Report findings with file and line, each one " +
+	"concrete enough to act on, and say plainly when you found nothing rather than manufacturing a finding. " +
+	"You do not fix anything and you do not commit; the agent that spawned you decides what to do with what you report."
+
+const reviewerAgentDescription = "Adversarially reviews a change against its acceptance criteria and reports findings"
+
+// reviewerAgentsJSON renders the --agents payload. The type is defined even
+// when there is no model to pin (review_model: inherit) - the prompt names it
+// unconditionally, and a named type that does not exist is a failed spawn. What
+// "inherit" turns off is the model key alone, so the reviewer falls back to the
+// session's model exactly as it did before any of this existed, while keeping
+// its tool list and its system prompt.
+func reviewerAgentsJSON(model string) string {
+	def := map[string]any{
+		"description": reviewerAgentDescription,
+		"prompt":      reviewerAgentPrompt,
+		"tools":       reviewerAgentTools,
+	}
+	if m := strings.TrimSpace(model); m != "" {
+		def["model"] = m
+	}
+	b, err := json.Marshal(map[string]any{reviewerAgentType: def})
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// genericSubagentTypes are the built-in types that carry no model of their own
+// and therefore INHERIT the session's. They are the only types pm re-models,
+// and the reason is exactly that inheritance: pinning a model onto a type whose
+// own definition names one would be pm overruling a decision someone made on
+// purpose, which is not what this is for.
+//
+// Written lowercase and compared lowercase - the same type has been seen
+// spelled `Explore` and `general-purpose` in one transcript.
+var genericSubagentTypes = map[string]bool{
+	"explore":         true,
+	"general-purpose": true,
+	"plan":            true,
+	reviewerAgentType: true,
+}
+
+// pinReviewerAgent applies pm's model policy to one subagent spawn, mutating
+// the raw tool input in place and reporting whether anything changed.
+//
+// The raw map matters: the input carries fields pm has no opinion about
+// (`description`, `run_in_background`, and whatever a later build adds), and
+// updatedInput REPLACES the whole input - rebuilding it from pm's own struct
+// would silently drop them.
+//
+// Two rules, and the split between them is the AC of this change:
+//   - a spawn with no type at all becomes a reviewer. This is a safety net, not
+//     the main path: the tool requires the field, so in practice it never fires.
+//   - the model is pinned only on types that would otherwise inherit the run's.
+//     A spawn naming a custom type is left completely alone - that type has its
+//     own definition, and pm second-guessing it would be a different change from
+//     the one this is.
+func pinReviewerAgent(ti map[string]any, model string) bool {
+	if ti == nil || strings.TrimSpace(model) == "" {
+		return false
+	}
+	changed := false
+	subType, _ := ti["subagent_type"].(string)
+	if strings.TrimSpace(subType) == "" {
+		subType = reviewerAgentType
+		ti["subagent_type"] = subType
+		changed = true
+	}
+	if !genericSubagentTypes[strings.ToLower(strings.TrimSpace(subType))] {
+		return changed
+	}
+	if cur, _ := ti["model"].(string); cur != model {
+		ti["model"] = model
+		changed = true
+	}
+	return changed
+}

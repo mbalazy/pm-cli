@@ -298,3 +298,30 @@ func TestExecutorLandingStatuses(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveReviewModel(t *testing.T) {
+	// The reviewers in epic orbit-106 ran on opus because nobody named a
+	// model for them, so the DEFAULT is the whole point: a project that says
+	// nothing must still get the cheap reviewer.
+	cases := []struct {
+		yaml string
+		want string
+	}{
+		{"name: X\n", DefaultReviewModel},
+		{"name: X\nexecutor:\n  enabled: true\n", DefaultReviewModel},
+		{"name: X\nexecutor:\n  review_model: haiku\n", "haiku"},
+		{"name: X\nexecutor:\n  review_model: '  opus  '\n", "opus"},
+		// The rollback for this one change, without touching the cap or the
+		// telemetry that shipped alongside it.
+		{"name: X\nexecutor:\n  review_model: inherit\n", ""},
+	}
+	for _, c := range cases {
+		var p Project
+		if err := yaml.Unmarshal([]byte(c.yaml), &p); err != nil {
+			t.Fatalf("%q: %v", c.yaml, err)
+		}
+		if got := p.GetExecutor().ResolveReviewModel(); got != c.want {
+			t.Errorf("%q: ResolveReviewModel() = %q, want %q", c.yaml, got, c.want)
+		}
+	}
+}

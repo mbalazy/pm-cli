@@ -261,14 +261,61 @@ func judgeAgentSpawn(telemetryPath, diffBase string, ev hookEvent, now time.Time
 	return deny
 }
 
+// guardOptions is what the hook needs to know about the run it is guarding.
+// Grouped rather than passed positionally because this is the third thing to be
+// threaded through in as many tickets, and every one of them broke every call
+// site in the tests.
+type guardOptions struct {
+	telemetryPath string
+	diffBase      string
+	reviewModel   string
+}
+
+// rawToolInput pulls tool_input back out of the payload as an untyped map.
+// hookEvent's typed ToolInput is for DECIDING; this is for REWRITING, and the
+// two cannot be the same value: updatedInput replaces the entire input, so a
+// rewrite built from the typed struct would drop every field pm does not model
+// (`description`, `run_in_background`, whatever ships next).
+func rawToolInput(data []byte) map[string]any {
+	var outer struct {
+		ToolInput map[string]any `json:"tool_input"`
+	}
+	if json.Unmarshal(data, &outer) != nil {
+		return nil
+	}
+	return outer.ToolInput
+}
+
+// writeUpdatedInput emits the PreToolUse response that hands Claude Code a
+// rewritten tool input. Verified against claude 2.1.224 on 2026-08-07 on the
+// EFFECT side, not just the transcript: a subagent spawned through a rewrite
+// like this one recorded the substituted model in its own .meta.json and
+// answered on it.
+func writeUpdatedInput(out io.Writer, ti map[string]any, reason string) {
+	payload := map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":            "PreToolUse",
+			"permissionDecision":       "allow",
+			"permissionDecisionReason": reason,
+			"updatedInput":             ti,
+		},
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	fmt.Fprintln(out, string(b))
+}
+
 // runWorkerGuard implements the hook: exit 2 (with the reason on stderr) blocks
-// the call and hands the reason to the model; exit 0 lets it through.
+// the call and hands the reason to the model; exit 0 lets it through, optionally
+// with a rewritten input on stdout.
 //
 // Anything unexpected - unparseable payload, a different tool, no command - exits
 // 0. A guard that fails closed would break every worker on the machine the first
 // time the payload shape changes, and it is not the last line of defence: the
 // disallow list and the prompt rule cover the same ground.
-func runWorkerGuard(in io.Reader, errOut io.Writer, telemetryPath, diffBase string) int {
+func runWorkerGuard(in io.Reader, out, errOut io.Writer, opts guardOptions) int {
 	data, err := io.ReadAll(io.LimitReader(in, 1<<20))
 	if err != nil || len(data) == 0 {
 		return 0
@@ -289,38 +336,47 @@ func runWorkerGuard(in io.Reader, errOut io.Writer, telemetryPath, diffBase stri
 			return 2
 		}
 	case agentToolNames[ev.ToolName]:
-		if reason := judgeAgentSpawn(telemetryPath, diffBase, ev, time.Now()); reason != "" {
+		if reason := judgeAgentSpawn(opts.telemetryPath, opts.diffBase, ev, time.Now()); reason != "" {
 			fmt.Fprintln(errOut, reason)
 			return 2
+		}
+		// The spawn is allowed; the only question left is what it runs on. Note
+		// the ORDER: the telemetry above records the model the WORKER asked for,
+		// which is the measurement that says whether the prompt rule is being
+		// followed. Recording pm's own substitution instead would make the
+		// telemetry agree with pm by construction.
+		if ti := rawToolInput(data); pinReviewerAgent(ti, opts.reviewModel) {
+			writeUpdatedInput(out, ti, "pm pins reviewer subagents to "+opts.reviewModel)
 		}
 	}
 	return 0
 }
 
 func newWorkerGuardCmd() *cobra.Command {
-	var telemetry, diffBase string
+	var opts guardOptions
 	c := &cobra.Command{
 		Use:    "worker-guard",
 		Short:  "PreToolUse hook for headless workers (internal)",
-		Long:   "Reads a Claude Code PreToolUse payload on stdin, blocks Bash commands and file writes that would bypass the project's git hooks, and records subagent spawns for review telemetry. Attached automatically to every executor worker; not meant to be run by hand.",
+		Long:   "Reads a Claude Code PreToolUse payload on stdin, blocks Bash commands and file writes that would bypass the project's git hooks, caps and records subagent spawns for review telemetry, and pins reviewer subagents to the project's review model. Attached automatically to every executor worker; not meant to be run by hand.",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if code := runWorkerGuard(cmd.InOrStdin(), cmd.ErrOrStderr(), telemetry, diffBase); code != 0 {
+			if code := runWorkerGuard(cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), opts); code != 0 {
 				os.Exit(code)
 			}
 			return nil
 		},
 	}
-	c.Flags().StringVar(&telemetry, "telemetry", "", "path to the review telemetry JSONL for this worker")
-	c.Flags().StringVar(&diffBase, "diff-base", "", "commit the worker started from; the reviewer cap is sized against the diff since it")
+	c.Flags().StringVar(&opts.telemetryPath, "telemetry", "", "path to the review telemetry JSONL for this worker")
+	c.Flags().StringVar(&opts.diffBase, "diff-base", "", "commit the worker started from; the reviewer cap is sized against the diff since it")
+	c.Flags().StringVar(&opts.reviewModel, "review-model", "", "model to pin onto reviewer subagents (empty = leave the call's model alone)")
 	return c
 }
 
 // workerGuardSettings renders the --settings payload that attaches the guard to a
 // worker, or "" when pm cannot resolve its own binary (the guard is then simply
 // absent - the disallow list and prompt rule still stand).
-func workerGuardSettings(telemetryPath, diffBase string) string {
+func workerGuardSettings(opts guardOptions) string {
 	exe, err := os.Executable()
 	if err != nil || exe == "" {
 		return ""
@@ -334,11 +390,14 @@ func workerGuardSettings(telemetryPath, diffBase string) string {
 		Hooks   []hookCmd `json:"hooks"`
 	}
 	cmdLine := quoteForShell(exe) + " worker-guard"
-	if telemetryPath != "" {
-		cmdLine += " --telemetry " + quoteForShell(telemetryPath)
+	if opts.telemetryPath != "" {
+		cmdLine += " --telemetry " + quoteForShell(opts.telemetryPath)
 	}
-	if diffBase != "" {
-		cmdLine += " --diff-base " + quoteForShell(diffBase)
+	if opts.diffBase != "" {
+		cmdLine += " --diff-base " + quoteForShell(opts.diffBase)
+	}
+	if opts.reviewModel != "" {
+		cmdLine += " --review-model " + quoteForShell(opts.reviewModel)
 	}
 	hook := []hookCmd{{Type: "command", Command: cmdLine}}
 	// Two entries, not one alternation: the "Bash" matcher is the one verified
@@ -356,10 +415,12 @@ func workerGuardSettings(telemetryPath, diffBase string) string {
 	// the runs that need it least.
 	//
 	// The third entry is the subagent-spawn tool, matched under BOTH its
-	// spellings (see agentToolNames). It is observation-only today: the guard
-	// records the spawn and allows it. Measured 2026-08-07 on claude 2.1.224
-	// via this exact --settings path, with the repo's own settings.json removed:
-	// the matcher fires and the payload carries subagent_type/model/prompt.
+	// spellings (see agentToolNames). It does three things: records the spawn,
+	// refuses it past the round's cap (review_cap.go), and pins the model of a
+	// spawn that would otherwise inherit the run's (reviewer_agent.go). Measured
+	// 2026-08-07 on claude 2.1.224 via this exact --settings path, with the
+	// repo's own settings.json removed: the matcher fires and the payload
+	// carries subagent_type/model/prompt.
 	payload := map[string]any{
 		"hooks": map[string]any{
 			"PreToolUse": []matcher{

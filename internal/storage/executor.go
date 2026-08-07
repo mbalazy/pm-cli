@@ -103,6 +103,37 @@ type Executor struct {
 	FixRounds             int                     `yaml:"fix_rounds,omitempty"` // review->fix loop cap before escalating
 	Phases                map[string]PhaseBinding `yaml:"phases,omitempty"`
 	Notes                 string                  `yaml:"notes,omitempty"`
+	// ReviewModel is the model reviewer subagents run on, independent of the
+	// run's own --model. Reviewers were the single largest line item measured in
+	// epic orbit-106 (58% of the epic's tokens) and they inherited opus
+	// purely because nobody named a model for them. Empty = DefaultReviewModel;
+	// the literal "inherit" turns the pinning off and restores pre-0.38
+	// behaviour, which is also the rollback for this one change alone.
+	ReviewModel string `yaml:"review_model,omitempty"`
+}
+
+// DefaultReviewModel is what reviewer subagents run on when a project does not
+// say otherwise. Sonnet rather than the run's model: an adversarial reviewer
+// reads a bounded diff against stated criteria, which is not the part of the
+// loop that was buying opus its keep.
+const DefaultReviewModel = "sonnet"
+
+// ReviewModelInherit is the opt-out spelling. It reads as what it does at the
+// call site ("let the reviewer inherit the run's model") where an empty string
+// would be indistinguishable from "unset, so use the default".
+const ReviewModelInherit = "inherit"
+
+// ResolveReviewModel returns the model to pin onto reviewer subagents, or ""
+// when pm must not touch the model at all.
+func (e Executor) ResolveReviewModel() string {
+	switch strings.TrimSpace(e.ReviewModel) {
+	case "":
+		return DefaultReviewModel
+	case ReviewModelInherit:
+		return ""
+	default:
+		return strings.TrimSpace(e.ReviewModel)
+	}
 }
 
 // DefaultIndependentDoneStatus is the landing status for a verify-green sub in

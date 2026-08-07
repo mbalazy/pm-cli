@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -244,7 +245,7 @@ func TestWorkerGuardCapThroughCommand(t *testing.T) {
 		"agent_type": "Explore",
 	})
 	var errOut bytes.Buffer
-	code := runWorkerGuard(bytes.NewReader(payload), &errOut, filepath.Join(t.TempDir(), "t.jsonl"), "")
+	code := runWorkerGuard(bytes.NewReader(payload), io.Discard, &errOut, guardOptions{telemetryPath: filepath.Join(t.TempDir(), "t.jsonl")})
 	if code != 2 {
 		t.Fatalf("nested spawn exit = %d, want 2", code)
 	}

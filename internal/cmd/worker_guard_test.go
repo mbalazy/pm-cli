@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -121,7 +122,7 @@ func TestRunWorkerGuard(t *testing.T) {
 
 	t.Run("blocks with exit 2 and a reason", func(t *testing.T) {
 		var errOut bytes.Buffer
-		code := runWorkerGuard(strings.NewReader(payload("Bash", `git commit -m x --no-verify`)), &errOut, "", "")
+		code := runWorkerGuard(strings.NewReader(payload("Bash", `git commit -m x --no-verify`)), io.Discard, &errOut, guardOptions{})
 		if code != 2 {
 			t.Fatalf("exit code = %d, want 2 (the code Claude Code reads as a block)", code)
 		}
@@ -132,7 +133,7 @@ func TestRunWorkerGuard(t *testing.T) {
 
 	t.Run("passes ordinary commands", func(t *testing.T) {
 		var errOut bytes.Buffer
-		if code := runWorkerGuard(strings.NewReader(payload("Bash", `git commit -m x`)), &errOut, "", ""); code != 0 {
+		if code := runWorkerGuard(strings.NewReader(payload("Bash", `git commit -m x`)), io.Discard, &errOut, guardOptions{}); code != 0 {
 			t.Fatalf("exit code = %d, want 0", code)
 		}
 		if errOut.Len() != 0 {
@@ -141,7 +142,7 @@ func TestRunWorkerGuard(t *testing.T) {
 	})
 
 	t.Run("ignores other tools", func(t *testing.T) {
-		if code := runWorkerGuard(strings.NewReader(payload("Read", `git commit --no-verify`)), &bytes.Buffer{}, "", ""); code != 0 {
+		if code := runWorkerGuard(strings.NewReader(payload("Read", `git commit --no-verify`)), io.Discard, &bytes.Buffer{}, guardOptions{}); code != 0 {
 			t.Errorf("exit code = %d, want 0 - a command only counts as one on Bash", code)
 		}
 	})
@@ -151,7 +152,7 @@ func TestRunWorkerGuard(t *testing.T) {
 	// hook schema changed.
 	t.Run("fails open on junk", func(t *testing.T) {
 		for _, in := range []string{"", "not json", "{}", `{"tool_name":"Bash"}`} {
-			if code := runWorkerGuard(strings.NewReader(in), &bytes.Buffer{}, "", ""); code != 0 {
+			if code := runWorkerGuard(strings.NewReader(in), io.Discard, &bytes.Buffer{}, guardOptions{}); code != 0 {
 				t.Errorf("input %q: exit code = %d, want 0", in, code)
 			}
 		}
@@ -179,7 +180,7 @@ func TestRunWorkerGuardFileWrites(t *testing.T) {
 	}
 	for _, c := range blocked {
 		var errOut bytes.Buffer
-		if code := runWorkerGuard(strings.NewReader(payload(c.tool, c.path)), &errOut, "", ""); code != 2 {
+		if code := runWorkerGuard(strings.NewReader(payload(c.tool, c.path)), io.Discard, &errOut, guardOptions{}); code != 2 {
 			t.Errorf("%s: exit code = %d, want 2", c.name, code)
 		} else if !strings.Contains(errOut.String(), c.path) {
 			t.Errorf("%s: deny message must name the path, got %q", c.name, errOut.String())
@@ -197,14 +198,14 @@ func TestRunWorkerGuardFileWrites(t *testing.T) {
 	}
 	for _, c := range allowed {
 		var errOut bytes.Buffer
-		if code := runWorkerGuard(strings.NewReader(payload(c.tool, c.path)), &errOut, "", ""); code != 0 {
+		if code := runWorkerGuard(strings.NewReader(payload(c.tool, c.path)), io.Discard, &errOut, guardOptions{}); code != 0 {
 			t.Errorf("%s: exit code = %d, want 0 (%s)", c.name, code, errOut.String())
 		}
 	}
 }
 
 func TestWorkerGuardSettingsIsValidAndAttached(t *testing.T) {
-	s := workerGuardSettings("/tmp/pm-telemetry.jsonl", "abc123")
+	s := workerGuardSettings(guardOptions{telemetryPath: "/tmp/pm-telemetry.jsonl", diffBase: "abc123", reviewModel: "sonnet"})
 	if s == "" {
 		t.Fatal("guard settings must render (os.Executable resolves under go test)")
 	}
@@ -259,7 +260,7 @@ func TestWorkerGuardSettingsIsValidAndAttached(t *testing.T) {
 	// Both modes carry it: --yolo waives permission prompts, not the project's
 	// hooks.
 	for _, yolo := range []bool{false, true} {
-		args := strings.Join(buildClaudeArgs("p", "sp", "sess", "opus", 10, yolo, "/tmp/t.jsonl", "abc123"), " ")
+		args := strings.Join(buildClaudeArgs("p", "sp", "sess", "opus", 10, yolo, guardOptions{telemetryPath: "/tmp/t.jsonl", diffBase: "abc123", reviewModel: "sonnet"}), " ")
 		if !strings.Contains(args, "--settings") || !strings.Contains(args, "worker-guard") {
 			t.Errorf("yolo=%v: worker argv must attach the guard, got %s", yolo, args)
 		}
@@ -309,14 +310,14 @@ func TestWorkerGuardRecordsAgentSpawns(t *testing.T) {
 	// top-level spawn - what this case is about is what gets RECORDED.
 	for _, in := range []string{topLevel, legacyName} {
 		var errOut bytes.Buffer
-		if code := runWorkerGuard(strings.NewReader(in), &errOut, path, ""); code != 0 {
+		if code := runWorkerGuard(strings.NewReader(in), io.Discard, &errOut, guardOptions{telemetryPath: path}); code != 0 {
 			t.Fatalf("an unsized cap must allow the spawn, got %d (%s)", code, errOut.String())
 		}
 	}
 	// A nested spawn is refused regardless: it is the case a cap on the worker
 	// cannot see, and no diff size makes it acceptable.
 	var nestedOut bytes.Buffer
-	if code := runWorkerGuard(strings.NewReader(nested), &nestedOut, path, ""); code != 2 {
+	if code := runWorkerGuard(strings.NewReader(nested), io.Discard, &nestedOut, guardOptions{telemetryPath: path}); code != 2 {
 		t.Fatalf("a nested spawn must be refused, got %d (%s)", code, nestedOut.String())
 	}
 
@@ -351,7 +352,7 @@ func TestWorkerGuardTelemetryIsBestEffort(t *testing.T) {
 	agent := `{"tool_name":"Agent","tool_input":{"prompt":"x","subagent_type":"Explore"}}`
 	for _, path := range []string{"", filepath.Join(t.TempDir(), "no", "such", "dir", "..", "\x00bad")} {
 		var errOut bytes.Buffer
-		if code := runWorkerGuard(strings.NewReader(agent), &errOut, path, ""); code != 0 {
+		if code := runWorkerGuard(strings.NewReader(agent), io.Discard, &errOut, guardOptions{telemetryPath: path}); code != 0 {
 			t.Errorf("path %q: got exit %d, want 0", path, code)
 		}
 	}
@@ -363,7 +364,7 @@ func TestWorkerGuardStillBlocksWithTelemetryConfigured(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "review.jsonl")
 	in := `{"tool_name":"Bash","tool_input":{"command":"git commit -m x --no-verify"}}`
 	var errOut bytes.Buffer
-	if code := runWorkerGuard(strings.NewReader(in), &errOut, path, ""); code != 2 {
+	if code := runWorkerGuard(strings.NewReader(in), io.Discard, &errOut, guardOptions{telemetryPath: path}); code != 2 {
 		t.Errorf("got exit %d, want 2 (%s)", code, errOut.String())
 	}
 }

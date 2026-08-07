@@ -464,16 +464,16 @@ type workPlan struct {
 	// worker (standalone runs only - epic subs receive the manager's shared
 	// capture via opts.baseline instead, already baked into prompt/cmdArgs).
 	baselineCmd string
-	// telemetryPath is where the worker guard hook records this worker's
-	// subagent spawns. Keyed by sessionID, so it is known before the worker
-	// starts and two concurrent workers never share a file. Lives in the pm data
-	// dir next to the run-state, NOT in the git repo.
-	telemetryPath string
-	// diffBase is the commit the worker starts from, pinned right before it
-	// spawns. The guard hook sizes the reviewer cap against the diff since this
-	// sha - exact, unlike a branch name (which drifts as the worker commits) or
-	// a merge-base against a trunk whose name a hook cannot know.
-	diffBase string
+	// guard is what the PreToolUse hook needs to know about this run: where to
+	// record subagent spawns (telemetryPath - keyed by sessionID, so it is known
+	// before the worker starts and two concurrent workers never share a file;
+	// it lives in the pm data dir next to the run-state, NOT in the git repo),
+	// which commit to size the reviewer cap against (diffBase - pinned right
+	// before the worker spawns, exact in a way a branch name is not, since that
+	// drifts as the worker commits, and a merge-base against a trunk whose name
+	// a hook cannot know is not computable at all), and what reviewer subagents
+	// run on (reviewModel).
+	guard guardOptions
 }
 
 // warnInertFlags surfaces flag combinations that silently do nothing. A
@@ -598,8 +598,11 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 	}
 	prompt := buildPrompt(workDir)
 	sysPrompt := buildWorkerSystemPrompt(exec, opts.standalone, opts.independent)
-	telemetryPath := storage.ReviewTelemetryPath(store.ProjectDir(task.Project), sessionID)
-	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo, telemetryPath, "")
+	guard := guardOptions{
+		telemetryPath: storage.ReviewTelemetryPath(store.ProjectDir(task.Project), sessionID),
+		reviewModel:   exec.ResolveReviewModel(),
+	}
+	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo, guard)
 
 	// Standalone only: the epic manager runs prepare ITSELF, once per run,
 	// right after claiming the slot - not per sub (5 subs must not mean 5
@@ -619,7 +622,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		proj: proj, branch: branch, sessionID: sessionID,
 		prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs,
 		workDir: workDir, worktree: opts.additional, base: base, env: env, slots: slots,
-		prepare: prepare, baselineCmd: baselineCmd, telemetryPath: telemetryPath,
+		prepare: prepare, baselineCmd: baselineCmd, guard: guard,
 		buildPrompt: buildPrompt, opts: opts,
 	}, nil
 }
@@ -633,7 +636,7 @@ func (p *workPlan) retarget(dir string, env []string) {
 	p.workDir = dir
 	p.env = env
 	p.prompt = p.buildPrompt(dir)
-	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.maxTurns, p.opts.yolo, p.telemetryPath, p.diffBase)
+	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.maxTurns, p.opts.yolo, p.guard)
 }
 
 // workerHeartbeatInterval is how often a live worker's run-state is re-stamped.
@@ -695,7 +698,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		fmt.Fprintf(opts.stderr(), "pm work: baseline in %s: %s\n", dir, plan.baselineCmd)
 		if section := captureBaseline(opts.stderr(), dir, plan.baselineCmd); section != "" {
 			plan.prompt += "\n" + section
-			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.telemetryPath, plan.diffBase)
+			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.guard)
 			baselineUsed = plan.baselineCmd
 		}
 	}
@@ -775,14 +778,14 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// Create the telemetry file before the worker starts, so a worker that
 	// spawned nobody leaves an empty file rather than no file - see
 	// storage.InitReviewTelemetry.
-	storage.InitReviewTelemetry(plan.telemetryPath)
+	storage.InitReviewTelemetry(plan.guard.telemetryPath)
 	// Pin the commit the worker starts from. Everything after this is the
 	// worker's own diff, which is what the guard sizes the reviewer cap against.
 	// Best-effort: without it the cap degrades to allow-everything, exactly as
 	// before the cap existed.
-	if sha := gitHeadSHA(dir); sha != "" && sha != plan.diffBase {
-		plan.diffBase = sha
-		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.telemetryPath, plan.diffBase)
+	if sha := gitHeadSHA(dir); sha != "" && sha != plan.guard.diffBase {
+		plan.guard.diffBase = sha
+		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.guard)
 	}
 	stopHeartbeat := hbw.Heartbeat(workerHeartbeatInterval)
 	// Stopping is idempotent, so the defer only matters if runWorker panics -
@@ -885,7 +888,7 @@ func modeLabel(standalone bool) string {
 }
 
 // buildClaudeArgs assembles the `claude -p` argv for a worker run.
-func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, yolo bool, telemetryPath, diffBase string) []string {
+func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, yolo bool, guard guardOptions) []string {
 	args := []string{
 		"-p", prompt,
 		"--append-system-prompt", sysPrompt,
@@ -905,8 +908,14 @@ func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, y
 	// Claude Code materializes this inline JSON into /tmp/claude-settings-<uuid>.json
 	// and does not remove it, so a machine that has run N workers carries N of
 	// these ~110-byte files. Harmless, but do not go hunting for what wrote them.
-	if guard := workerGuardSettings(telemetryPath, diffBase); guard != "" {
-		args = append(args, "--settings", guard)
+	if settings := workerGuardSettings(guard); settings != "" {
+		args = append(args, "--settings", settings)
+	}
+	// The reviewer agent type is defined by pm, never by a file in the project
+	// repo: `pm work` requires a clean tree, so a `.claude/agents/` file written
+	// per run would dirty it on every single one.
+	if agents := reviewerAgentsJSON(guard.reviewModel); agents != "" {
+		args = append(args, "--agents", agents)
 	}
 	if yolo {
 		args = append(args, "--dangerously-skip-permissions")
