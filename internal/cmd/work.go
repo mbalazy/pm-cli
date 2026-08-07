@@ -601,6 +601,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 	guard := guardOptions{
 		telemetryPath: storage.ReviewTelemetryPath(store.ProjectDir(task.Project), sessionID),
 		reviewModel:   exec.ResolveReviewModel(),
+		fixRounds:     exec.FixRounds,
 	}
 	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo, guard)
 

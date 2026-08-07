@@ -27,7 +27,7 @@ handoff:
 	if e.Handoff.RuntimeSkill != "simulator-verify" {
 		t.Errorf("RuntimeSkill = %q", e.Handoff.RuntimeSkill)
 	}
-	if e.FixRounds != 3 || e.DoneStatus != "merged" {
+	if e.FixRounds != 2 || e.DoneStatus != "merged" {
 		t.Errorf("defaults clobbered: fix_rounds=%d done_status=%q", e.FixRounds, e.DoneStatus)
 	}
 }

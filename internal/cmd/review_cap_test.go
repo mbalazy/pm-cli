@@ -167,10 +167,10 @@ func TestJudgeAgentSpawnEnforcesTheCap(t *testing.T) {
 	ev.ToolInput.Prompt = "review this"
 
 	now := time.Now()
-	if reason := judgeAgentSpawn(telemetry, base, ev, now); reason != "" {
+	if reason := judgeAgentSpawn(guardOptions{telemetryPath: telemetry, diffBase: base}, ev, now); reason != "" {
 		t.Fatalf("first spawn must be allowed, got %q", reason)
 	}
-	reason := judgeAgentSpawn(telemetry, base, ev, now.Add(time.Second))
+	reason := judgeAgentSpawn(guardOptions{telemetryPath: telemetry, diffBase: base}, ev, now.Add(time.Second))
 	if reason == "" {
 		t.Fatal("second spawn in the same round must be refused for a 1-file, 2-line change")
 	}
@@ -182,7 +182,7 @@ func TestJudgeAgentSpawnEnforcesTheCap(t *testing.T) {
 		}
 	}
 	// A spawn far enough later is a NEW round and gets its budget back.
-	if reason := judgeAgentSpawn(telemetry, base, ev, now.Add(5*time.Minute)); reason != "" {
+	if reason := judgeAgentSpawn(guardOptions{telemetryPath: telemetry, diffBase: base}, ev, now.Add(5*time.Minute)); reason != "" {
 		t.Errorf("a new round must get a fresh budget, got %q", reason)
 	}
 
@@ -214,12 +214,12 @@ func TestJudgeAgentSpawnDegradesWhenItCannotMeasure(t *testing.T) {
 	telemetry := filepath.Join(t.TempDir(), "review.jsonl")
 	ev := hookEvent{ToolName: "Agent", Cwd: dir}
 	for i := 0; i < 5; i++ {
-		if reason := judgeAgentSpawn(telemetry, "", ev, time.Now()); reason != "" {
+		if reason := judgeAgentSpawn(guardOptions{telemetryPath: telemetry}, ev, time.Now()); reason != "" {
 			t.Fatalf("spawn %d refused with no diff base: %q", i, reason)
 		}
 	}
 	// Not a git repo at all - git fails, same degradation.
-	if reason := judgeAgentSpawn(telemetry, "deadbeef", ev, time.Now()); reason != "" {
+	if reason := judgeAgentSpawn(guardOptions{telemetryPath: telemetry, diffBase: "deadbeef"}, ev, time.Now()); reason != "" {
 		t.Errorf("a failing git must degrade to allow, got %q", reason)
 	}
 }
@@ -259,5 +259,100 @@ func TestWorkerGuardCapThroughCommand(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "may not spawn further subagents") {
 		t.Errorf("deny reason = %q", errOut.String())
+	}
+}
+
+func TestRoundIndex(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) string { return now.Add(d).Format(time.RFC3339Nano) }
+	cases := []struct {
+		name   string
+		spawns []storage.ReviewSpawn
+		want   int
+	}{
+		{"nothing yet is round one", nil, 1},
+		{
+			"a spawn joining the batch already in flight",
+			[]storage.ReviewSpawn{{TS: at(-2 * time.Second)}},
+			1,
+		},
+		{
+			"a spawn after the reviewers have run opens round two",
+			[]storage.ReviewSpawn{{TS: at(-10 * time.Minute)}, {TS: at(-10 * time.Minute)}},
+			2,
+		},
+		{
+			"two rounds behind us, so this is the third",
+			[]storage.ReviewSpawn{{TS: at(-20 * time.Minute)}, {TS: at(-10 * time.Minute)}},
+			3,
+		},
+		{
+			// Neither reviewed anything, so neither is a round.
+			"refused and nested spawns are not rounds",
+			[]storage.ReviewSpawn{
+				{TS: at(-20 * time.Minute), Denied: true},
+				{TS: at(-10 * time.Minute), Nested: true},
+			},
+			1,
+		},
+	}
+	for _, c := range cases {
+		if got := roundIndex(c.spawns, now, storage.ReviewRoundGap); got != c.want {
+			t.Errorf("%s: roundIndex = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// The round cap is the half of this that the prompt alone never delivered: all
+// three subs of epic orbit-106 hit the cap of 3, every time, and the
+// third round was a confirming pass rather than a fix.
+func TestJudgeAgentSpawnEnforcesTheRoundCap(t *testing.T) {
+	dir := t.TempDir()
+	telemetry := filepath.Join(t.TempDir(), "review.jsonl")
+	// No git repo here on purpose: without a measurable diff the reviewer-count
+	// cap degrades to allow, so what is left is the round cap alone.
+	opts := guardOptions{telemetryPath: telemetry, fixRounds: 2}
+	ev := hookEvent{ToolName: "Agent", Cwd: dir}
+	ev.ToolInput.SubagentType = reviewerAgentType
+
+	start := time.Now()
+	if reason := judgeAgentSpawn(opts, ev, start); reason != "" {
+		t.Fatalf("round 1 must be allowed: %q", reason)
+	}
+	if reason := judgeAgentSpawn(opts, ev, start.Add(5*time.Minute)); reason != "" {
+		t.Fatalf("round 2 must be allowed: %q", reason)
+	}
+	reason := judgeAgentSpawn(opts, ev, start.Add(10*time.Minute))
+	if reason == "" {
+		t.Fatal("round 3 must be refused with fix_rounds 2")
+	}
+	// The refusal has to say what to do instead, or the worker just tries again.
+	for _, want := range []string{"2 review round", "unresolved"} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("deny message must contain %q, got %q", want, reason)
+		}
+	}
+
+	// fix_rounds 0 = unbounded, which is what a hook invoked without the flag
+	// sees; it must behave exactly as it did before rounds were capped.
+	unbounded := guardOptions{telemetryPath: filepath.Join(t.TempDir(), "r.jsonl")}
+	for i := 0; i < 5; i++ {
+		if reason := judgeAgentSpawn(unbounded, ev, start.Add(time.Duration(i)*5*time.Minute)); reason != "" {
+			t.Fatalf("round %d refused with no cap configured: %q", i+1, reason)
+		}
+	}
+}
+
+// Two things the number alone does not fix: the loop's exit condition, and the
+// worker being told a number it can simply keep spending.
+func TestReviewLoopExitCondition(t *testing.T) {
+	sys := buildWorkerSystemPrompt(storage.Executor{FixRounds: 2}, true, false)
+	if strings.Contains(sys, "Repeat review->fix until the review is clean") {
+		t.Error("the old exit condition is what made the cap a plan: an adversarial reviewer never returns 'clean'")
+	}
+	for _, want := range []string{"ONLY IF", "valid finding", "Review->fix round cap: 2."} {
+		if !strings.Contains(sys, want) {
+			t.Errorf("system prompt must contain %q", want)
+		}
 	}
 }

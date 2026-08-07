@@ -3,6 +3,7 @@ package cmd
 import (
 	"os/exec"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -194,6 +195,55 @@ func spawnsThisRound(spawns []storage.ReviewSpawn, now time.Time, gap time.Durat
 		}
 	}
 	return n
+}
+
+// roundIndex is which review round a spawn happening at `now` belongs to,
+// 1-based, counting the rounds already recorded. It reads the same clusters
+// AggregateReviewSpawns reports, so the number a worker is refused on is the
+// number a retro later sees.
+//
+// Refused and nested spawns are skipped for the same reason they are skipped in
+// spawnsThisRound: a round is a round of REVIEW, and neither of those reviewed
+// anything.
+func roundIndex(spawns []storage.ReviewSpawn, now time.Time, gap time.Duration) int {
+	times := make([]time.Time, 0, len(spawns))
+	for _, s := range spawns {
+		if s.Nested || s.Denied {
+			continue
+		}
+		if ts, err := time.Parse(time.RFC3339Nano, s.TS); err == nil {
+			times = append(times, ts)
+		}
+	}
+	if len(times) == 0 {
+		return 1
+	}
+	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+	round := 1
+	for i := 1; i < len(times); i++ {
+		if times[i].Sub(times[i-1]) > gap {
+			round++
+		}
+	}
+	// A spawn far enough after the last one opens the next round.
+	if now.Sub(times[len(times)-1]) > gap {
+		round++
+	}
+	return round
+}
+
+// roundDenyMessage refuses a spawn that would open a round past the project's
+// cap. It names the alternative, because the loop this bounds is one a model
+// will otherwise keep feeding: an adversarial reviewer asked to refute a change
+// almost never returns an empty list, so "repeat until the review is clean" has
+// no natural end - measured on epic orbit-106, where all three subs hit
+// the cap of 3 and every third round was named some variant of "final
+// verification review".
+func roundDenyMessage(cap int) string {
+	return "pm review cap: this change has already had its " + strconv.Itoa(cap) +
+		" review round(s). Another round is not the way to close what is still open: " +
+		"fix what the reviews found, and record anything you could not settle in `unresolved` " +
+		"so a human sees it. A further confirming review would only restate what you already have."
 }
 
 // capDenyMessage is what a refused spawn tells the worker. It names the number

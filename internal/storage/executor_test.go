@@ -41,8 +41,8 @@ func TestGetExecutorMissingBlock(t *testing.T) {
 	if e.StartStatus != "todo" || e.WipStatus != "doing" || e.DoneStatus != "merged" {
 		t.Errorf("statuses = %q/%q/%q, want todo/doing/merged", e.StartStatus, e.WipStatus, e.DoneStatus)
 	}
-	if e.FixRounds != 3 {
-		t.Errorf("FixRounds = %d, want 3", e.FixRounds)
+	if e.FixRounds != 2 {
+		t.Errorf("FixRounds = %d, want 2", e.FixRounds)
 	}
 	// Every phase resolves to generic when no block exists.
 	for _, name := range ExecutorPhases {
@@ -197,8 +197,10 @@ executor:
 		if e.AdditionalWorktree {
 			t.Error("AdditionalWorktree = true, want false when unset")
 		}
-		if e.FixRounds != 3 {
-			t.Errorf("FixRounds = %d, want default 3", e.FixRounds)
+		// 2 since 0.38: all three subs of epic orbit-106 hit the old cap
+		// of 3 every time, and round 3 was a confirming pass, not a fix.
+		if e.FixRounds != 2 {
+			t.Errorf("FixRounds = %d, want default 2", e.FixRounds)
 		}
 		if e.DoneStatus != "merged" {
 			t.Errorf("DoneStatus = %q, want default merged", e.DoneStatus)

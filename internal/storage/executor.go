@@ -16,7 +16,7 @@ import (
 // A project with NO executor block resolves to all-generic defaults (see
 // defaultExecutor): every phase falls back to the engine's built-in generic,
 // additional_worktree is off, statuses are todo/doing/merged (independent mode
-// lands on "pushed" instead - see DoneStatusIndependent), fix_rounds is 3.
+// lands on "pushed" instead - see DoneStatusIndependent), fix_rounds is 2.
 // The block is the ONLY project-specific piece of the engine.
 type Executor struct {
 	Enabled bool `yaml:"enabled"`
@@ -303,7 +303,7 @@ func defaultExecutor() Executor {
 		StartStatus:        "todo",
 		WipStatus:          "doing",
 		DoneStatus:         "merged",
-		FixRounds:          3,
+		FixRounds:          2,
 	}
 }
 

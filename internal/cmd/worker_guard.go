@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -229,13 +230,15 @@ func spawnRecord(ev hookEvent, now time.Time) storage.ReviewSpawn {
 // the cap is doing something - and dropping it would leave the run looking like
 // one where the worker simply behaved.
 //
-// Degrades to allow-and-record on anything it cannot establish: no telemetry
-// path, no diff base, a git command that fails. A cap that guesses would refuse
-// legitimate work on a repo shape nobody anticipated, and the failure it is
-// guarding against costs tokens, not correctness.
-func judgeAgentSpawn(telemetryPath, diffBase string, ev hookEvent, now time.Time) string {
+// The two caps degrade differently, and the difference is not an oversight.
+// The COUNT cap needs a measurable diff, so no diff base or a failing git means
+// it does not apply - it would otherwise refuse legitimate work on a repo shape
+// nobody anticipated, and what it guards costs tokens, not correctness. The
+// ROUND cap needs nothing but the telemetry it writes itself, so it applies
+// whenever it is configured. Only a missing telemetry path takes both out.
+func judgeAgentSpawn(opts guardOptions, ev hookEvent, now time.Time) string {
 	rec := spawnRecord(ev, now)
-	if telemetryPath == "" {
+	if opts.telemetryPath == "" {
 		if rec.Nested {
 			return nestedDenyMessage
 		}
@@ -243,26 +246,31 @@ func judgeAgentSpawn(telemetryPath, diffBase string, ev hookEvent, now time.Time
 	}
 	if rec.Nested {
 		rec.Denied = true
-		_ = storage.AppendReviewSpawn(telemetryPath, rec)
+		_ = storage.AppendReviewSpawn(opts.telemetryPath, rec)
 		return nestedDenyMessage
 	}
-	files, lines, ok := diffStats(guardDir(ev), diffBase)
-	if !ok {
-		_ = storage.AppendReviewSpawn(telemetryPath, rec)
-		return ""
-	}
-	cap := reviewerCap(files, lines)
+	files, lines, sized := diffStats(guardDir(ev), opts.diffBase)
 
 	deny := ""
-	_ = storage.WithReviewTelemetryLock(telemetryPath, func() error {
-		spawns, err := storage.ReadReviewSpawns(telemetryPath)
-		if err == nil && spawnsThisRound(spawns, now, storage.ReviewRoundGap) >= cap {
-			deny = capDenyMessage(cap, files, lines)
-			rec.Denied = true
+	_ = storage.WithReviewTelemetryLock(opts.telemetryPath, func() error {
+		spawns, err := storage.ReadReviewSpawns(opts.telemetryPath)
+		if err == nil {
+			// Rounds first: being one round past the cap is a different refusal
+			// from being one reviewer past this round's budget, and telling the
+			// worker to add a reviewer to a round it may not open would send it
+			// straight back here.
+			switch {
+			case opts.fixRounds > 0 && roundIndex(spawns, now, storage.ReviewRoundGap) > opts.fixRounds:
+				deny = roundDenyMessage(opts.fixRounds)
+				rec.Denied = true
+			case sized && spawnsThisRound(spawns, now, storage.ReviewRoundGap) >= reviewerCap(files, lines):
+				deny = capDenyMessage(reviewerCap(files, lines), files, lines)
+				rec.Denied = true
+			}
 		}
 		// Recorded inside the lock, so a concurrent hook deciding the same round
 		// sees this spawn - and sees whether it was allowed.
-		_ = storage.AppendReviewSpawn(telemetryPath, rec)
+		_ = storage.AppendReviewSpawn(opts.telemetryPath, rec)
 		return nil
 	})
 	return deny
@@ -276,6 +284,7 @@ type guardOptions struct {
 	telemetryPath string
 	diffBase      string
 	reviewModel   string
+	fixRounds     int
 }
 
 // rawToolInput pulls tool_input back out of the payload as an untyped map.
@@ -343,7 +352,7 @@ func runWorkerGuard(in io.Reader, out, errOut io.Writer, opts guardOptions) int 
 			return 2
 		}
 	case agentToolNames[ev.ToolName]:
-		if reason := judgeAgentSpawn(opts.telemetryPath, opts.diffBase, ev, time.Now()); reason != "" {
+		if reason := judgeAgentSpawn(opts, ev, time.Now()); reason != "" {
 			fmt.Fprintln(errOut, reason)
 			return 2
 		}
@@ -380,6 +389,7 @@ func newWorkerGuardCmd() *cobra.Command {
 	c.Flags().StringVar(&opts.telemetryPath, "telemetry", "", "path to the review telemetry JSONL for this worker")
 	c.Flags().StringVar(&opts.diffBase, "diff-base", "", "commit the worker started from; the reviewer cap is sized against the diff since it")
 	c.Flags().StringVar(&opts.reviewModel, "review-model", "", "model to pin onto reviewer subagents (empty = leave the call's model alone)")
+	c.Flags().IntVar(&opts.fixRounds, "fix-rounds", 0, "how many review->fix rounds this run allows (0 = unbounded)")
 	return c
 }
 
@@ -408,6 +418,9 @@ func workerGuardSettings(opts guardOptions) string {
 	}
 	if opts.reviewModel != "" {
 		cmdLine += " --review-model " + quoteForShell(opts.reviewModel)
+	}
+	if opts.fixRounds > 0 {
+		cmdLine += " --fix-rounds " + strconv.Itoa(opts.fixRounds)
 	}
 	hook := []hookCmd{{Type: "command", Command: cmdLine}}
 	// Two entries, not one alternation: the "Bash" matcher is the one verified
