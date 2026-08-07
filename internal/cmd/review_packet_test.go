@@ -82,6 +82,43 @@ func TestBuildReviewPacketCarriesTheWholeDiff(t *testing.T) {
 	}
 }
 
+// A documentation-only change gets a different brief, because the generic one
+// is a category error on prose: it asks for correctness bugs and unhandled
+// cases in text that has neither, and what comes back is wording to argue
+// about. What can actually be wrong in a document is what it claims about the
+// code, so that is what the single reviewer is asked for.
+func TestBuildReviewPacketBriefsADocumentReviewerDifferently(t *testing.T) {
+	dir, base := packetRepo(t, map[string]string{
+		"docs/plan.md": "# Test plan\n\nRun `scripts/does-not-exist.sh` and read src/gone.ts.\n",
+	})
+	packet := buildReviewPacket(dir, base)
+	if packet == "" {
+		t.Fatal("a real diff must produce a packet")
+	}
+	for _, want := range []string{"Review it as a DOCUMENT", "does not exist or does not say", "Do NOT review wording", "attached by pm"} {
+		if !strings.Contains(packet, want) {
+			t.Errorf("the document brief must contain %q", want)
+		}
+	}
+	// The generic brief must be gone, not merely added to: two sets of
+	// instructions in front of one reviewer is how it ends up doing both jobs.
+	if strings.Contains(packet, "judge the change on what is here") {
+		t.Error("the generic code brief must not survive on a doc-only change")
+	}
+	if !strings.Contains(packet, "docs/plan.md") {
+		t.Error("the document itself must be in the packet")
+	}
+
+	// One code file alongside it and the change is a code change again.
+	dir2, base2 := packetRepo(t, map[string]string{
+		"docs/plan.md": "# Test plan\n",
+		"src/a.ts":     "export const a = 1\n",
+	})
+	if p := buildReviewPacket(dir2, base2); strings.Contains(p, "Review it as a DOCUMENT") {
+		t.Error("a change that touches code is not a documentation change")
+	}
+}
+
 func TestBuildReviewPacketDegradesOnALargeDiff(t *testing.T) {
 	files := map[string]string{}
 	// One clearly biggest file, plus enough others to blow the budget.

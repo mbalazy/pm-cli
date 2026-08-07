@@ -70,6 +70,20 @@ var productionExcludes = []func(name, base string) bool{
 	},
 }
 
+// proseExtensions are the file shapes whose content is documentation rather
+// than code. Deliberately a closed list of extensions rather than a path rule
+// like "under docs/": what decides how a change should be reviewed is what the
+// file IS, and a .ts file under docs/ is still code.
+var proseExtensions = map[string]bool{
+	".md": true, ".mdx": true, ".markdown": true,
+	".txt": true, ".rst": true, ".adoc": true, ".asciidoc": true, ".org": true,
+}
+
+// isProseFile reports whether a changed path is documentation.
+func isProseFile(name string) bool {
+	return proseExtensions[strings.ToLower(path.Ext(strings.TrimSpace(name)))]
+}
+
 // isProductionFile reports whether a changed path counts toward the review size.
 func isProductionFile(name string) bool {
 	name = strings.TrimSpace(name)
@@ -108,11 +122,33 @@ const (
 	reviewMaxAgents  = 3
 )
 
+// A documentation-only change gets one reviewer and one round, whatever its
+// size. The bands above are a proxy for how much can go wrong in a change, and
+// on prose the proxy simply does not hold: a long document is longer, not
+// riskier, and nothing in it can break at runtime.
+//
+// This is the case epic pm-cli-96 measured and did not fix. Sub
+// orbit-106-3 delivered ONE markdown file of 656 lines - by the bands
+// that is 1 file but >400 lines, i.e. cap 3, exactly what the model chose
+// unaided - and cost $40.38 of the epic's $89.09. Its transcript says where
+// that went: the document was written and committed in 11 minutes, and 43 of
+// the sub's 55 minutes were the review loop, whose last two rounds were named
+// "Verify round-2 fixes" and "Verify round-3 fixes".
+//
+// The round ceiling is part of the same decision rather than a separate knob.
+// One reviewer with three rounds is the same loop at a slower rate: what ends a
+// document review is the reviewer having checked the document's claims, and
+// that is one pass.
+const docOnlyReviewRounds = 1
+
 // reviewerCap is how many subagents one round may spawn for a given production
 // diff. Never zero: a change with nothing but excluded files still gets one
 // reviewer, since "the diff is all lockfiles" is a claim worth checking rather
 // than assuming.
-func reviewerCap(files, lines int) int {
+func reviewerCap(files, lines int, docOnly bool) int {
+	if docOnly {
+		return 1
+	}
 	switch {
 	case files <= reviewSmallFiles && lines <= reviewSmallLines:
 		return 1
@@ -123,11 +159,28 @@ func reviewerCap(files, lines int) int {
 	}
 }
 
+// effectiveFixRounds is how many review rounds a change actually gets. It only
+// ever LOWERS the configured number: a project that has switched rounds off
+// entirely (0) keeps them off, and one that already allows a single round is
+// unchanged.
+func effectiveFixRounds(configured int, docOnly bool) int {
+	if docOnly && configured > docOnlyReviewRounds {
+		return docOnlyReviewRounds
+	}
+	return configured
+}
+
 // parseNumstat sums added+deleted lines over production files in the output of
 // `git diff --numstat`. Binary files report "-" for both counts and contribute
 // a file but no lines, which is right: a changed binary is a real change with
 // no reviewable text.
-func parseNumstat(out string) (files, lines int) {
+//
+// docOnly is reported over EVERY changed path, not just the production ones:
+// the exclusions exist to stop a test file inflating a size, while doc-only is
+// a claim about the whole change, and a change that touches a test file is not
+// a documentation change however much prose came with it.
+func parseNumstat(out string) (files, lines int, docOnly bool) {
+	changed, prose := 0, 0
 	for _, row := range strings.Split(out, "\n") {
 		cols := strings.Split(strings.TrimSpace(row), "\t")
 		if len(cols) < 3 {
@@ -140,6 +193,10 @@ func parseNumstat(out string) (files, lines int) {
 			name = name[i+4:]
 			name = strings.TrimSuffix(name, "}")
 		}
+		changed++
+		if isProseFile(name) {
+			prose++
+		}
 		if !isProductionFile(name) {
 			continue
 		}
@@ -148,7 +205,7 @@ func parseNumstat(out string) (files, lines int) {
 		deleted, _ := strconv.Atoi(cols[1])
 		lines += added + deleted
 	}
-	return files, lines
+	return files, lines, changed > 0 && prose == changed
 }
 
 // diffStats measures the worker's own changes: everything between the commit
@@ -161,18 +218,32 @@ func parseNumstat(out string) (files, lines int) {
 // the tree, not the directory, so a worker that spawns its reviewers before
 // committing would otherwise be sized as having changed nothing - and a cap of
 // 1 on a 40-file change is a worse failure than no cap at all.
-func diffStats(dir, baseSHA string) (files, lines int, ok bool) {
+func diffStats(dir, baseSHA string) diffSize {
 	if dir == "" || baseSHA == "" {
-		return 0, 0, false
+		return diffSize{}
 	}
 	c := exec.Command("git", "rev-parse", "--git-dir")
 	c.Dir = dir
 	if c.Run() != nil {
-		return 0, 0, false
+		return diffSize{}
 	}
-	files, lines = parseNumstat(gitDiffAll(dir, baseSHA, "--numstat"))
-	return files, lines, true
+	files, lines, docOnly := parseNumstat(gitDiffAll(dir, baseSHA, "--numstat"))
+	return diffSize{files: files, lines: lines, docOnly: docOnly, ok: true}
 }
+
+// diffSize is what pm knows about the change a spawn is being judged against.
+// Grouped rather than returned positionally because ok/docOnly are easy to
+// transpose at a call site and a silently inverted one would change the review
+// regime rather than fail.
+type diffSize struct {
+	files   int
+	lines   int
+	docOnly bool
+	ok      bool // false when there is no measurable diff; every cap that needs one stands down
+}
+
+// cap is how many reviewers this round may spawn.
+func (d diffSize) cap() int { return reviewerCap(d.files, d.lines, d.docOnly) }
 
 // spawnsThisRound counts the spawns already recorded in the round in progress.
 // A round is a cluster of spawns (see storage's reviewRoundGap): the worker
@@ -239,7 +310,12 @@ func roundIndex(spawns []storage.ReviewSpawn, now time.Time, gap time.Duration) 
 // no natural end - measured on epic orbit-106, where all three subs hit
 // the cap of 3 and every third round was named some variant of "final
 // verification review".
-func roundDenyMessage(cap int) string {
+func roundDenyMessage(cap int, docOnly bool) string {
+	if docOnly {
+		return "pm review cap: this change is documentation only, and pm allows it a single review round. " +
+			"A second pass over prose restates the first: act on what the review found, and record anything " +
+			"you could not settle in `unresolved` so a human sees it."
+	}
 	return "pm review cap: this change has already had its " + strconv.Itoa(cap) +
 		" review round(s). Another round is not the way to close what is still open: " +
 		"fix what the reviews found, and record anything you could not settle in `unresolved` " +
@@ -249,7 +325,14 @@ func roundDenyMessage(cap int) string {
 // capDenyMessage is what a refused spawn tells the worker. It names the number
 // and where it came from, because a bare refusal sends a model hunting for
 // another door - the lesson the hook guard's own deny message was built on.
-func capDenyMessage(cap, files, lines int) string {
+func capDenyMessage(cap, files, lines int, docOnly bool) string {
+	if docOnly {
+		return "pm review cap: this change is documentation only (" + strconv.Itoa(files) + " prose file(s), " +
+			strconv.Itoa(lines) + " changed line(s)), and pm allows ONE reviewer for a document however long it is - " +
+			"length is not risk in prose. The reviewer you already have is the review: it has been told to check the " +
+			"document's claims against the repo, which is the part that can actually be wrong. Wait for it, act on what " +
+			"it reports, and put anything unsettled in `unresolved`."
+	}
 	return "pm review cap: this round already spawned its " + strconv.Itoa(cap) +
 		" allowed subagent(s). pm sizes the review itself from the production diff (" +
 		strconv.Itoa(files) + " file(s), " + strconv.Itoa(lines) + " changed line(s)), " +
