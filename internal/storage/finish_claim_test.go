@@ -152,7 +152,7 @@ func TestRefreshFinishClaim(t *testing.T) {
 	// live on its new one - no sleeping, no wall-clock luck.
 	t.Run("refresh moves the stamp and keeps the claim alive past its original TTL", func(t *testing.T) {
 		dir := t.TempDir()
-		old := time.Now().Add(-9 * time.Minute).UTC().Format(claimTimeLayout)
+		old := time.Now().Add(-5 * time.Minute).UTC().Format(claimTimeLayout)
 		own := &FinishClaim{TrackerID: "proj-100", Host: hostname(), PID: os.Getpid(), Started: old, Refreshed: old}
 		seedClaim(t, dir, *own)
 
@@ -175,7 +175,7 @@ func TestRefreshFinishClaim(t *testing.T) {
 
 		orig := FinishClaimTTL
 		t.Cleanup(func() { FinishClaimTTL = orig })
-		FinishClaimTTL = 5 * time.Minute // the un-refreshed 9m-old stamp would be void
+		FinishClaimTTL = 2 * time.Minute // the un-refreshed 5m-old stamp would be void
 		if h := LiveFinishClaimHolder(dir, "proj-100"); h == nil {
 			t.Error("holder = nil - the refreshed claim must outlive its original stamp")
 		}
@@ -196,8 +196,8 @@ func TestRefreshFinishClaim(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected an error refreshing an expired claim")
 		}
-		if !strings.Contains(err.Error(), "expired") {
-			t.Errorf("error %q should say the claim expired", err)
+		if !strings.Contains(err.Error(), "TTL") {
+			t.Errorf("error %q should explain that the claim is past (or at) its TTL", err)
 		}
 		if after := readRaw(t, FinishClaimPath(dir, "proj-100")); after != before {
 			t.Errorf("claim file changed:\nbefore %s\nafter  %s", before, after)
@@ -205,6 +205,24 @@ func TestRefreshFinishClaim(t *testing.T) {
 		// And the way forward is a fresh claim, which is the atomic path.
 		if _, err := AcquireFinishClaim(dir, "proj-100", ""); err != nil {
 			t.Errorf("re-acquiring the lapsed claim: %v", err)
+		}
+	})
+
+	// The refusal starts one refresh tick BEFORE the TTL: this is
+	// check-then-write, so a claim that passes the check and lapses while the
+	// process is descheduled would rename over the rival that took it over.
+	t.Run("refusing a claim within one refresh tick of expiring", func(t *testing.T) {
+		dir := t.TempDir()
+		// Still live (LiveFinishClaimHolder says so), but inside the margin.
+		stamp := time.Now().Add(-FinishClaimTTL + FinishClaimRefreshInterval/2).UTC().Format(claimTimeLayout)
+		own := &FinishClaim{TrackerID: "proj-100", Host: hostname(), PID: os.Getpid(), Started: stamp, Refreshed: stamp}
+		seedClaim(t, dir, *own)
+		if LiveFinishClaimHolder(dir, "proj-100") == nil {
+			t.Fatal("fixture must still be live - the margin, not the TTL, is what this covers")
+		}
+
+		if err := RefreshFinishClaim(dir, "proj-100", own); err == nil {
+			t.Fatal("expected a refusal inside the refresh margin")
 		}
 	})
 
@@ -387,13 +405,44 @@ func TestStealExpiredClaimOnlyTakesVoidClaims(t *testing.T) {
 		path := FinishClaimPath(dir, "proj-100")
 		before := readRaw(t, path)
 
-		stealExpiredClaim(path)
+		if err := stealExpiredClaim(path); err != nil {
+			t.Fatalf("steal over a live claim must succeed by restoring it, got: %v", err)
+		}
 
 		if after := readRaw(t, path); after != before {
 			t.Errorf("live claim not restored:\nbefore %s\nafter  %s", before, after)
 		}
 		if h := LiveFinishClaimHolder(dir, "proj-100"); h == nil || h.Started != live.Started {
 			t.Errorf("holder = %+v, want the restored live claim", h)
+		}
+	})
+
+	// Reading the aside file can fail for reasons that say NOTHING about the
+	// holder (EACCES, EIO, a stale handle on the shared dir this feature is
+	// built for). The steal must not delete on that: what it moved aside may be
+	// a rival's live claim. A directory at the claim path is the portable way
+	// to make the read fail without a permission trick root would sail through.
+	t.Run("what it cannot read is put back, not deleted", func(t *testing.T) {
+		dir := t.TempDir()
+		path := FinishClaimPath(dir, "proj-100")
+		if err := os.MkdirAll(path, 0755); err != nil {
+			t.Fatalf("seed unreadable claim: %v", err)
+		}
+
+		err := stealExpiredClaim(path)
+		if err == nil {
+			t.Fatal("stealing something unreadable must report a failure, not proceed silently")
+		}
+		// A directory cannot be hard-linked back, so this fixture also covers
+		// the restore-failed branch: the file must SURVIVE under its scratch
+		// name, and the error must say where it went. Litter a human can put
+		// back beats a claim nobody can get back.
+		entries, rerr := os.ReadDir(executorRunDir(dir))
+		if rerr != nil || len(entries) != 1 {
+			t.Fatalf("the unreadable claim was destroyed: entries=%v err=%v", entries, rerr)
+		}
+		if !strings.Contains(err.Error(), entries[0].Name()) {
+			t.Errorf("error %q does not name where the claim was left (%s)", err, entries[0].Name())
 		}
 	})
 
@@ -406,7 +455,9 @@ func TestStealExpiredClaimOnlyTakesVoidClaims(t *testing.T) {
 		})
 		path := FinishClaimPath(dir, "proj-100")
 
-		stealExpiredClaim(path)
+		if err := stealExpiredClaim(path); err != nil {
+			t.Fatalf("steal of an expired claim: %v", err)
+		}
 
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("expired claim still present (stat err = %v)", err)

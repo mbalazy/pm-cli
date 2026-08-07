@@ -265,48 +265,84 @@ func AcquireFinishClaim(projectDir, trackerID, session string) (*FinishClaim, er
 		}
 		// Expired, or corrupt (a truncated file from a crashed process must not
 		// brick the run). Steal it: rename aside, verify, loop to re-claim.
-		stealExpiredClaim(path)
+		if err := stealExpiredClaim(path); err != nil {
+			return nil, err
+		}
 	}
 	return nil, fmt.Errorf("could not acquire finish claim at %s (takeover contention)", path)
 }
 
 // stealExpiredClaim moves the claim at path aside so the caller can re-claim,
-// and puts it BACK if what came aside turns out to be a live claim - i.e. if a
-// rival won this same takeover and linked its fresh claim in the window between
-// our expiry decision and our rename. Restoring goes through link+remove, never
-// rename: rename would silently overwrite a THIRD claim that landed in the
-// meantime, which is the same double-grant one step further out.
-func stealExpiredClaim(path string) {
+// and DELETES what it moved only once it has proved that file is void (expired
+// or unparseable). Everything else is put back, or - when it cannot be put back
+// - left on disk with an error, because the alternative is deleting a claim
+// somebody is holding.
+//
+// The verification is the whole point: the decision to steal is taken before
+// the rename, so by then the path may hold a rival's fresh claim (they won the
+// same takeover) or a file that has become unreadable. Round one of this code
+// deleted both, which grants one run to two acceptances.
+//
+// Restoring goes through link+remove, never rename: rename would silently
+// overwrite a THIRD claim that landed in the meantime, which is the same
+// double-grant one step further out. If the restoring link fails, the file
+// stays under its scratch name and the error names it - litter a human can put
+// back beats a claim nobody can get back.
+//
+// What this does NOT close: between the rename and the restore the path is
+// empty, so a third actor can claim the run in that window and the restore then
+// fails. The window is short and its outcome is now an error rather than a
+// silent double grant, but it is real.
+func stealExpiredClaim(path string) error {
 	steal := scratchPath(path, "steal")
 	if os.Rename(path, steal) != nil {
 		// A rival stole it first (ENOENT) - harmless, the next attempt sees
 		// their fresh claim.
-		return
+		return nil
 	}
 	stolen, err := readClaimFile(steal)
-	if err == nil && stolen != nil && !stolen.Expired(time.Now()) {
+	switch {
+	case err != nil && !IsCorruptFinishClaim(err):
+		// Could not READ what we moved aside - it may well be a live claim (see
+		// the same distinction in AcquireFinishClaim). Put it back if we can,
+		// and refuse either way rather than delete it.
 		if os.Link(steal, path) == nil {
 			_ = os.Remove(steal)
-			return
+			return fmt.Errorf("read finish claim at %s: %w", path, err)
 		}
+		return fmt.Errorf("read finish claim at %s: %w (it is now at %s - move it back)", path, err, steal)
+	case err == nil && stolen != nil && !stolen.Expired(time.Now()):
+		// A rival won this takeover and linked a fresh claim. Restore it; the
+		// next attempt reads it and reports busy.
+		if os.Link(steal, path) == nil {
+			_ = os.Remove(steal)
+			return nil
+		}
+		return fmt.Errorf("another acceptance claimed %s while we were taking it over, and its claim could not be "+
+			"restored - it is at %s, move it back", path, steal)
 	}
+	// Proved void: expired, unparseable, or gone.
 	_ = os.Remove(steal)
+	return nil
 }
 
-// RefreshFinishClaim moves own's `refreshed` stamp forward - keeping a claim
+// RefreshFinishClaim moves the claim's `refreshed` stamp forward - keeping it
 // alive past the point it would otherwise have expired - and updates own in
 // place so the caller's copy stays current. It refuses, rather than writing, in
 // three cases: the claim is gone, it is now somebody else's (a different
-// Host+Started), or it has ALREADY EXPIRED.
+// Host+Started), or it is expired OR WITHIN ONE REFRESH TICK of expiring.
 //
-// The expired case is the subtle one. Every other surface already reports an
+// The expiry case is the subtle one. Every other surface already reports an
 // expired claim as free - LiveFinishClaimHolder returns nil, `pm finish status`
 // prints "free", AcquireFinishClaim steals it - so refreshing one would revive
 // a claim a rival may already have taken over, leaving two acceptances each
-// convinced they hold the run. A holder that let its claim lapse (a laptop
-// asleep for an hour) has to re-Acquire, which is the atomic path and reports
-// the rival honestly. A live refresher ticks at FinishClaimRefreshInterval
-// against a TTL ten times longer and never reaches this case.
+// convinced they hold the run. The refusal starts one FinishClaimRefreshInterval
+// EARLY because this is check-then-write: a claim that passes the check and then
+// lapses while the process is descheduled (a loaded VPS, a wake from sleep, the
+// ssh hop) would have its rename land on the rival's fresh claim. One tick of
+// margin is the same margin the refresher already has - it ticks ten times per
+// TTL - so nothing legitimate reaches it. A holder that lapsed anyway has to
+// re-Acquire, which is the atomic path and reports the rival honestly.
 //
 // The write goes through a scratch file + rename, never in place: other
 // machines and processes read this file concurrently, would see the truncated
@@ -330,13 +366,18 @@ func RefreshFinishClaim(projectDir, trackerID string, own *FinishClaim) error {
 		return fmt.Errorf("refresh finish claim for %s: it is now held by %s (pid %d) since %s, not by us",
 			trackerID, current.Host, current.PID, current.Started)
 	}
-	if current.Expired(time.Now()) {
-		return fmt.Errorf("refresh finish claim for %s: it expired %s ago (no refresh for over %s) and reads as free "+
-			"to everyone else - take it again with a fresh claim instead of reviving this one",
+	if lapsing(current, time.Now()) {
+		return fmt.Errorf("refresh finish claim for %s: it was last refreshed %s ago, too close to the %s TTL to be "+
+			"refreshed safely (a rival may be taking it over right now) - take it again with a fresh claim instead",
 			trackerID, FinishClaimAge(current.Refreshed), FinishClaimTTL)
 	}
 
-	refreshed := *own
+	// The payload is the claim ON DISK with a new stamp, never the caller's
+	// struct: a refresher that rebuilt its claim from what `pm finish claim`
+	// printed carries only Host+Started (that is the whole identity), and
+	// writing that would wipe the pid, the session and the tracker id the busy
+	// message and `pm finish status` report.
+	refreshed := *current
 	refreshed.Refreshed = time.Now().UTC().Format(claimTimeLayout)
 	data, err := json.MarshalIndent(&refreshed, "", "  ")
 	if err != nil {
@@ -356,10 +397,28 @@ func RefreshFinishClaim(projectDir, trackerID string, own *FinishClaim) error {
 	return nil
 }
 
+// lapsing reports whether a claim is expired, or so close to expiring that a
+// refresh could not land before a rival started taking it over. See
+// RefreshFinishClaim for why the margin exists.
+func lapsing(c *FinishClaim, now time.Time) bool {
+	ts, err := time.Parse(time.RFC3339, c.Refreshed)
+	if err != nil {
+		return true
+	}
+	return now.Sub(ts) > FinishClaimTTL-FinishClaimRefreshInterval
+}
+
 // ReleaseFinishClaim removes the claim, but ONLY when it is still own's (same
 // Host+Started). A claim that has moved on to somebody else is left untouched
 // and reported as an error - releasing it would hand their run to a third
 // session. A claim that is already gone is a no-op (release is idempotent).
+//
+// The removal is NOT a plain unlink of the path. Between reading the claim and
+// deleting it, a rival can take over an expired claim and link its own fresh
+// one, and unlinking by path would then delete THEIRS - the double grant this
+// lock exists to prevent, arrived at from the other end. So the file is moved
+// aside first and only deleted once the copy in hand is confirmed to be ours;
+// anything else goes back where it came from.
 func ReleaseFinishClaim(projectDir, trackerID string, own *FinishClaim) error {
 	if own == nil {
 		return fmt.Errorf("release finish claim for %s: no claim to release", trackerID)
@@ -380,11 +439,29 @@ func ReleaseFinishClaim(projectDir, trackerID string, own *FinishClaim) error {
 		return fmt.Errorf("release finish claim for %s: it is now held by %s (pid %d) since %s, not by us",
 			trackerID, current.Host, current.PID, current.Started)
 	}
-	err = os.Remove(FinishClaimPath(projectDir, trackerID))
-	if os.IsNotExist(err) {
-		return nil
+
+	path := FinishClaimPath(projectDir, trackerID)
+	aside := scratchPath(path, "release")
+	if err := os.Rename(path, aside); err != nil {
+		if os.IsNotExist(err) {
+			return nil // released or taken over between the read and here
+		}
+		return err
 	}
-	return err
+	moved, rerr := readClaimFile(aside)
+	if rerr == nil && moved != nil && !sameFinishClaim(moved, own) {
+		// It changed hands in the window. Put it back and say so, rather than
+		// deleting a claim somebody else is holding.
+		if os.Link(aside, path) == nil {
+			_ = os.Remove(aside)
+			return fmt.Errorf("release finish claim for %s: it changed hands while we were releasing it "+
+				"(now %s, pid %d, since %s) - left it alone", trackerID, moved.Host, moved.PID, moved.Started)
+		}
+		return fmt.Errorf("release finish claim for %s: it changed hands while we were releasing it and could not "+
+			"be restored - it is at %s, move it back", trackerID, aside)
+	}
+	_ = os.Remove(aside)
+	return nil
 }
 
 // sameFinishClaim is the ownership test: Host+Started. The pid is deliberately

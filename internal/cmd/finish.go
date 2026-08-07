@@ -47,20 +47,15 @@ func newFinishCmd(store storage.TaskStore) *cobra.Command {
 	return cmd
 }
 
-// finishProjectDir resolves the project the same way the other executor-side
-// commands do (--project, else cwd detection) and returns its pm DATA dir - the
-// directory holding .executor/, where both the run-state and the claim live.
-func finishProjectDir(cmd *cobra.Command, store storage.TaskStore) (string, error) {
+// finishProjectSlug resolves the project the same way the other executor-side
+// commands do: --project, else cwd detection.
+func finishProjectSlug(cmd *cobra.Command, store storage.TaskStore) (string, error) {
 	flag, _ := cmd.Flags().GetString("project")
 	var args []string
 	if flag != "" {
 		args = []string{flag}
 	}
-	slug, err := resolveProjectSlugArg(store, args)
-	if err != nil {
-		return "", err
-	}
-	return store.ProjectDir(slug), nil
+	return resolveProjectSlugArg(store, args)
 }
 
 // finishTarget resolves the project dir AND validates the tracker id every
@@ -69,7 +64,7 @@ func finishProjectDir(cmd *cobra.Command, store storage.TaskStore) (string, erro
 // its own writers, but `pm finish status ../../x` should be refused rather than
 // quietly reading somewhere it has no business.
 func finishTarget(cmd *cobra.Command, store storage.TaskStore, args []string) (string, string, error) {
-	dir, err := finishProjectDir(cmd, store)
+	slug, err := finishProjectSlug(cmd, store)
 	if err != nil {
 		return "", "", err
 	}
@@ -77,7 +72,15 @@ func finishTarget(cmd *cobra.Command, store storage.TaskStore, args []string) (s
 	if err := storage.ValidateTaskID(tracker); err != nil {
 		return "", "", err
 	}
-	return dir, tracker, nil
+	// A claim on a tracker that does not exist protects nothing while reading
+	// as a success - and a mistyped id is the likeliest way two sessions each
+	// get a green light on the same actual run. Resolve it, exactly like every
+	// other id-taking surface in pm.
+	if _, err := store.FindTaskExact(slug, tracker); err != nil {
+		return "", "", fmt.Errorf("no task %s in project %s - a claim on a tracker that does not exist "+
+			"would protect nothing: %w", tracker, slug, err)
+	}
+	return store.ProjectDir(slug), tracker, nil
 }
 
 func newFinishClaimCmd(store storage.TaskStore) *cobra.Command {
@@ -122,13 +125,15 @@ func newFinishReleaseCmd(store storage.TaskStore) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "release <tracker>",
 		Short: "Release an acceptance claim you can identify as yours",
-		Long: "Releases the claim on <tracker> - but only one you can NAME as yours, with --started (the stamp " +
+		Long: "Releases the claim on <tracker> - but only one you can NAME, with --started (the stamp " +
 			"`pm finish claim` prints) or --session (the id you passed when claiming).\n\n" +
-			"Naming it is not ceremony. The claiming process has normally exited by the time anyone releases " +
-			"(`pm finish claim` returns immediately), so a release that simply lifted whatever claim it found " +
-			"would let a second session on the same machine delete a LIVE claim and then take the run - the exact " +
-			"collision this lock exists to prevent. Two Claude Code sessions on one machine is the ordinary case " +
-			"here, not an exotic one.\n\n" +
+			"What naming it buys, precisely: it stops an ACCIDENTAL release. The claiming process has normally " +
+			"exited by the time anyone releases (`pm finish claim` returns immediately), so a release that lifted " +
+			"whatever claim it found would let a second session on the same machine - the ordinary case, two CC " +
+			"sessions on one mac - delete a live claim it never took and then take the run. It is NOT " +
+			"authentication: `pm finish status` prints the stamp, so anyone determined to override a claim can. " +
+			"That is deliberate (a wedged acceptance has to be recoverable), and it is why an override is a " +
+			"separate, explicit act rather than the default.\n\n" +
 			"A claim that has already EXPIRED is cleared without an identifier: it reads as free to everyone " +
 			"anyway, so removing it takes nothing from anybody. A live claim you cannot identify is left alone - " +
 			"wait it out, since an unrefreshed claim expires on its own.\n\n" +
@@ -222,11 +227,17 @@ func newFinishStatusCmd(store storage.TaskStore) *cobra.Command {
 			out := cmd.OutOrStdout()
 			claim, err := storage.ReadFinishClaim(dir, tracker)
 			if err != nil {
-				// A corrupt claim reads as FREE everywhere else (a truncated file
-				// must not wall off a run), so it is reported as free here too -
-				// with the reason, since "free" alone would hide a real oddity.
-				fmt.Fprintf(out, "%s: free (the claim file is unreadable: %v)\n", tracker, err)
-				return nil
+				if storage.IsCorruptFinishClaim(err) {
+					// Garbage CONTENT reads as free everywhere else (a truncated
+					// file must not wall off a run), so report it as free here
+					// too - with the reason, since a bare "free" would hide a
+					// real oddity.
+					fmt.Fprintf(out, "%s: free (the claim file is unparseable: %v)\n", tracker, err)
+					return nil
+				}
+				// An I/O failure is NOT free: `pm finish claim` refuses on it, so
+				// status must not answer "go ahead" where claim will refuse.
+				return fmt.Errorf("cannot read the claim for %s: %w", tracker, err)
 			}
 			if claim == nil {
 				fmt.Fprintf(out, "%s: free (no claim)\n", tracker)
