@@ -35,6 +35,12 @@ build-pm-linux:
 # Matching on the full command line rather than `pgrep -x pm` is deliberate: the
 # pm-vps MCP bridge runs as a long-lived `pm mcp` and would otherwise read as a
 # live run whenever an acceptance session is open.
+#
+# It keeps NO backup of the replaced binary, deliberately. A backup is for
+# something you cannot recreate, and this binary is `git checkout <sha> && make
+# deploy-vps` away - twenty seconds. The version that was tried first copied the
+# outgoing binary aside, and deploying the same version twice promptly
+# overwrote that copy with an identical one, which is a way back to nowhere.
 # The build is inside the recipe, not a prerequisite: make runs prerequisites
 # first, so a refused deploy would still pay for a cross-compile it throws away.
 deploy-vps:
@@ -48,7 +54,7 @@ deploy-vps:
 	$(MAKE) build-pm-linux; \
 	echo "deploying $(VERSION) ($$(git rev-parse --short HEAD)) to $(VPS_HOST)"; \
 	scp -q bin/pm-linux $(VPS_HOST):$(VPS_BIN).new; \
-	ssh $(VPS_HOST) 'chmod +x $(VPS_BIN).new && { [ -f $(VPS_BIN) ] && cp -p $(VPS_BIN) $(VPS_BIN).bak || true; } && mv $(VPS_BIN).new $(VPS_BIN)'; \
+	ssh $(VPS_HOST) 'chmod +x $(VPS_BIN).new && mv $(VPS_BIN).new $(VPS_BIN)'; \
 	printf 'mac  '; "$(GOBIN_DIR)/pm" --version; \
 	printf 'vps  '; ssh $(VPS_HOST) '$(VPS_BIN) --version'
 
