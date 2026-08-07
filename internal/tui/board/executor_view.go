@@ -34,20 +34,14 @@ var (
 // without its own run, its parent tracker's run). Returns false when there is
 // no executor run to watch.
 //
-// The RUN opens by default and the acceptance only when there is no run at all
-// - never the other way round, even with both live: the run is where a worker
-// is writing code, and the acceptance is one W away.
+// WHICH of the task's two runs it opens is pickRunForTask's decision (live
+// first, the run winning a tie), so W and K always land on the same one. The
+// other is one W away, inside the view.
 func (m *Model) openExecutorView(t *storage.Task) bool {
 	if t == nil {
 		return false
 	}
-	st := m.runForTask(t)
-	kind := ""
-	if st != nil {
-		kind = st.Kind // "work" / "run-epic" - anything but the acceptance
-	} else if st = m.finishForTask(t); st != nil {
-		kind = storage.RunKindFinish
-	}
+	st, finish := m.pickRunForTask(t)
 	if st == nil {
 		return false
 	}
@@ -55,7 +49,7 @@ func (m *Model) openExecutorView(t *storage.Task) bool {
 	m.currentView = viewExecutor
 	m.executorRunTaskID = st.TaskID
 	m.executorRunProj = st.Project
-	m.executorRunKind = kind
+	m.executorWatchFinish = finish
 	m.executorFollow = true
 	m.executorSessionIdx = 0
 	m.executorViewport = viewport.New(m.width, executorBodyHeight(m.height))
@@ -103,15 +97,7 @@ func (m *Model) switchExecutorWorker(dir int) {
 
 // watchingFinish reports whether the agent-view is showing the ACCEPTANCE of
 // the run rather than the run itself.
-func (m Model) watchingFinish() bool { return m.executorRunKind == storage.RunKindFinish }
-
-// otherRunKind is the kind W switches to.
-func (m Model) otherRunKind() string {
-	if m.watchingFinish() {
-		return storage.RunKindEpic // any non-finish kind routes to the run's own file
-	}
-	return storage.RunKindFinish
-}
+func (m Model) watchingFinish() bool { return m.executorWatchFinish }
 
 // otherRunKindLabel names the counterpart for a toast/hint, in the words the
 // rest of pm uses for the two: a run, and the acceptance (odbiór) of one.
@@ -130,7 +116,7 @@ func (m Model) otherRunKindExists() bool {
 	if m.store == nil || m.executorRunTaskID == "" {
 		return false
 	}
-	_, err := readRunStateOfKind(m.store.ProjectDir(m.executorRunProj), m.executorRunTaskID, m.otherRunKind())
+	_, err := readRunStateFor(m.store.ProjectDir(m.executorRunProj), m.executorRunTaskID, !m.watchingFinish())
 	return err == nil
 }
 
@@ -148,7 +134,7 @@ func (m *Model) switchExecutorRunKind() {
 		m.toastExpiry = time.Now().Add(2 * time.Second)
 		return
 	}
-	m.executorRunKind = m.otherRunKind()
+	m.executorWatchFinish = !m.executorWatchFinish
 	// Re-derive everything the previous kind's state seeded: which transcripts
 	// are watchable, which one is in flight, and the scroll position.
 	m.executorSessionIdx = 0
@@ -186,7 +172,7 @@ func (m *Model) refreshExecutorView() {
 	// (batch-finish-auto accepts subs as they land), and a toggle hint that only
 	// reflected the moment of opening would hide it until the view was reopened.
 	m.executorHasOther = m.otherRunKindExists()
-	run, err := readRunStateOfKind(projDir, m.executorRunTaskID, m.executorRunKind)
+	run, err := readRunStateFor(projDir, m.executorRunTaskID, m.executorWatchFinish)
 	if err != nil {
 		m.executorRun = nil
 		m.executorSessions = nil
@@ -436,7 +422,9 @@ func (m Model) viewExecutor() string {
 // renderExecutorDashboard renders a run's live/last state for the task-detail
 // view: a status chip + per-sub progress (running sub marked), driven by the
 // run-state file (which persists after the run, so this doubles as the summary).
-func renderExecutorDashboard(run *storage.RunState, width int) string {
+// canSwitch says the task has BOTH a run and an acceptance, which is what makes
+// the W toggle worth mentioning.
+func renderExecutorDashboard(run *storage.RunState, width int, canSwitch bool) string {
 	if run == nil {
 		return ""
 	}
@@ -491,8 +479,13 @@ func renderExecutorDashboard(run *storage.RunState, width int) string {
 		}
 		b.WriteString("\n")
 	}
+	// The switch is advertised when this task HAS two runs, on both dashboards -
+	// not on the acceptance's alone. W opens whichever of the two is live, so
+	// which dashboard the reader is under says nothing about which transcript
+	// the first press lands on; that the second press switches is what is
+	// always true.
 	hint := "  press W to watch the live transcript"
-	if run.Kind == storage.RunKindFinish {
+	if canSwitch {
 		hint += " (W again switches run ↔ acceptance)"
 	}
 	b.WriteString(helpStyle.Render(hint))

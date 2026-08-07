@@ -478,19 +478,23 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t == nil {
 			break
 		}
-		st := m.killTargetForTask(t)
+		st, finish := m.pickRunForTask(t)
 		if st == nil || !st.IsLive() {
 			m.toastMsg = "no live executor run to stop"
 			m.toastExpiry = time.Now().Add(3 * time.Second)
 			break
 		}
-		if m.confirmAction == "kill-run" && m.confirmTaskID == st.TaskID {
+		// The confirmation is keyed on the run AND its kind: the two share a
+		// task id, so a run that ends between the two presses would otherwise
+		// turn a confirmation given for it into a kill of the acceptance.
+		if m.confirmAction == "kill-run" && m.confirmTaskID == st.TaskID && m.confirmRunFinish == finish {
 			m.confirmAction = ""
 			m.confirmTaskID = ""
 			return m, m.killRun(st)
 		}
 		m.confirmAction = "kill-run"
 		m.confirmTaskID = st.TaskID
+		m.confirmRunFinish = finish
 
 	case key.Matches(msg, common.Keys.Focus):
 		if t := m.selectedTask(); t != nil {

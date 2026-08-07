@@ -72,16 +72,17 @@ func (m Model) renderTaskDetail(t *storage.Task) string {
 		out.WriteString(renderSubtaskTable(kids, contentWidth, m.landing))
 		out.WriteString("\n")
 	}
-	// Executor run dashboard (live or last run), for a tracker or standalone task.
-	if run := m.runStates[t.Meta.ID]; run != nil {
-		out.WriteString(renderExecutorDashboard(run, contentWidth))
+	// Executor run dashboard (live or last run), for a tracker or standalone
+	// task - and, below it and never merged into it, the acceptance of that run:
+	// both can be live at once, and each has its own status, clock and verdict.
+	run, fin := m.runStates[t.Meta.ID], m.finishStates[t.Meta.ID]
+	both := run != nil && fin != nil
+	if run != nil {
+		out.WriteString(renderExecutorDashboard(run, contentWidth, both))
 		out.WriteString("\n\n")
 	}
-	// The acceptance of that run gets its OWN dashboard below, never a merged
-	// one: both can be live at once, and each has its own status, clock and
-	// verdict.
-	if fin := m.finishStates[t.Meta.ID]; fin != nil {
-		out.WriteString(renderExecutorDashboard(fin, contentWidth))
+	if fin != nil {
+		out.WriteString(renderExecutorDashboard(fin, contentWidth, both))
 		out.WriteString("\n\n")
 	}
 	out.WriteString(glamourRender(rest.String(), contentWidth))
@@ -265,7 +266,7 @@ func (m Model) viewDetail() string {
 			help = "press A again to archive  " + pct
 		}
 		if m.confirmAction == "kill-run" {
-			help = "press K again to stop the executor run  " + pct
+			help = "press K again to stop the " + confirmRunLabel(m.confirmRunFinish) + "  " + pct
 		}
 		sb.WriteString(helpStyle.Render(help))
 	}

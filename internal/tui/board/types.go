@@ -117,11 +117,14 @@ type execView struct {
 	executorRunTaskID string            // task/tracker id whose run we're watching
 	executorRunProj   string            // project slug of that run
 	executorRun       *storage.RunState // latest run-state for the header
-	// executorRunKind: which of the task's two run-states is on screen -
-	// storage.RunKindFinish for the acceptance, anything else for the run. The
-	// two share a task id, so this (not the id) is what decides which file the
-	// view re-reads on every tick; W toggles it.
-	executorRunKind string
+	// executorWatchFinish: which of the task's two run-states is on screen -
+	// the acceptance when set, the run otherwise. The two share a task id, so
+	// this (not the id) is what decides which file the view re-reads on every
+	// tick; W toggles it. A bool rather than a kind string on purpose: there is
+	// no kind to put in such a field for "the run" that is true of both `pm
+	// work` and `pm run-epic`, and a field holding a kind the run does not have
+	// is a trap for the next comparison somebody writes.
+	executorWatchFinish bool
 	// executorHasOther: the counterpart run-state exists on disk, so the W
 	// toggle has somewhere to go. Re-checked on refresh, since an acceptance
 	// routinely starts while its run is still being watched.
@@ -256,6 +259,12 @@ type Model struct {
 	// confirmation
 	confirmAction string // "" | "done" | "delete"
 	confirmTaskID string
+	// confirmRunFinish: for "kill-run", WHICH of the task's two runs the
+	// pending confirmation is for. The task id does not say - a run and its
+	// acceptance share it - and the two are routinely live together, so a run
+	// that ends between the two K presses would otherwise turn a confirmation
+	// given for the run into a kill of the acceptance.
+	confirmRunFinish bool
 
 	// archive
 	archiveCursor int

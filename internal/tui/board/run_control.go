@@ -67,27 +67,33 @@ func (m Model) finishForTask(t *storage.Task) *storage.RunState {
 	return nil
 }
 
-// killTargetForTask picks which run-state K acts on for task t. A run and its
-// acceptance can be live AT THE SAME TIME - that is the designed state, not an
-// exception - so liveness decides first and the RUN wins a tie: it is the one
-// spending a worker on code, and an acceptance outliving it is harmless (it
-// re-reads what landed), while the reverse is not.
+// pickRunForTask chooses which of task t's two run-states the board acts on -
+// for K, and for what W opens - and says WHICH it picked, since the two share a
+// task id and nothing downstream could tell them apart otherwise.
 //
-// This is why the agent-view can kill too: with both live, K here always means
-// the run, so stopping only the acceptance is done by opening it (W, then W to
-// switch) and pressing K on what is on screen.
-func (m Model) killTargetForTask(t *storage.Task) *storage.RunState {
+// A run and its acceptance can be live AT THE SAME TIME (that is the designed
+// state, not an exception), so LIVENESS decides first and the run wins a tie:
+// it is the one spending a worker on code, and an acceptance outliving it is
+// harmless while the reverse is not. Only when neither is live does it fall
+// back to the run's own record. Preferring the run unconditionally would be
+// wrong the other way round: run-states are never deleted, so the ordinary
+// morning state - last night's batch finished, its acceptance running now -
+// would put a dead run on screen and out of K's reach.
+//
+// This ordering is also why the agent-view can kill: with both live, K on a
+// card always means the run, so stopping only the acceptance is done by opening
+// it (W, then W to switch) and pressing K on what is on screen.
+func (m Model) pickRunForTask(t *storage.Task) (*storage.RunState, bool) {
 	run, fin := m.runForTask(t), m.finishForTask(t)
-	if run.IsLive() {
-		return run
+	switch {
+	case run.IsLive():
+		return run, false
+	case fin.IsLive():
+		return fin, true
+	case run != nil:
+		return run, false
 	}
-	if fin.IsLive() {
-		return fin
-	}
-	if run != nil {
-		return run
-	}
-	return fin
+	return fin, fin != nil
 }
 
 // execKillCheckMsg fires a short while after a kill so we can escalate to
@@ -108,14 +114,22 @@ type execKillCheckMsg struct {
 	kind string
 }
 
-// readRunStateOfKind re-reads the run-state of kind for taskID. The kind is
-// what decides the file (storage.runStatePath); reading the wrong one is not a
-// miss but a confusion, since the two files describe different live processes.
-func readRunStateOfKind(stateDir, taskID, kind string) (*storage.RunState, error) {
-	if kind == storage.RunKindFinish {
+// readRunStateFor re-reads one of a task's two run-states: the acceptance when
+// finish is set, the run otherwise. Reading the wrong one is not a miss but a
+// confusion, since the two files describe different live processes.
+func readRunStateFor(stateDir, taskID string, finish bool) (*storage.RunState, error) {
+	if finish {
 		return storage.ReadFinishRunState(stateDir, taskID)
 	}
 	return storage.ReadRunState(stateDir, taskID)
+}
+
+// readRunStateOfKind is readRunStateFor for the paths that carry a run's KIND
+// rather than a choice (the kill escalation message, killRun's own re-read).
+// Any kind but the acceptance's routes to the run's own file - the same rule
+// storage.runStatePath writes by.
+func readRunStateOfKind(stateDir, taskID, kind string) (*storage.RunState, error) {
+	return readRunStateFor(stateDir, taskID, kind == storage.RunKindFinish)
 }
 
 // killRun stops the executor run st: SIGTERM to its process group, then stamps
@@ -173,9 +187,18 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 	if inFlight == "" {
 		inFlight = st.TaskID // `pm work`: the task itself is the worker
 	}
+	// What a stopped worker's entry says it is. For an acceptance this is
+	// "failed", never its own "blocked" verdict: `blocked` in an acceptance's
+	// sub means "it looked at the work and refused it", and a run stopped by
+	// hand reached no verdict at all - `pm finish` records "failed" on exactly
+	// this branch (a worker that died without a verdict) for the same reason.
+	stoppedSub := "blocked"
+	if acceptance {
+		stoppedSub = storage.RunStatusFailed
+	}
 	for i := range st.Subs {
 		if st.Subs[i].ID == inFlight && (st.Subs[i].Status == storage.RunStatusRunning || st.Subs[i].Status == "pending") {
-			st.Subs[i].Status = "blocked"
+			st.Subs[i].Status = stoppedSub
 			if st.Subs[i].Note == "" {
 				st.Subs[i].Note = stopNote
 			}
@@ -227,8 +250,9 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 	// stays locked against the next acceptance for the rest of the TTL - and a
 	// claim naming a pid that is already gone is exactly what gets a lock file
 	// deleted by hand.
+	claimReleased := false
 	if acceptance {
-		releaseKilledFinishClaim(stateDir, taskID, pid)
+		claimReleased = releaseKilledFinishClaim(stateDir, taskID, st)
 	}
 
 	// Park the in-flight task on `waiting` so the board reflects the stop.
@@ -260,8 +284,16 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 		// run was live) - the old unconditional toast lied about the park.
 		m.showErrorToast(verb+taskID+", but failed to park "+inFlight, parkErr)
 	case acceptance:
-		// No park to report, and saying so would invent one.
-		m.toastMsg = verb + taskID + " (claim released)"
+		// No park to report, and saying so would invent one. The claim is
+		// reported only when it was actually released: a claim held by another
+		// host, or by an acceptance that took the run over, is left alone (see
+		// releaseKilledFinishClaim), and a toast that announced a release either
+		// way would be the same lie the park branch above was fixed for.
+		note := " (its claim was not ours to release)"
+		if claimReleased {
+			note = " (claim released)"
+		}
+		m.toastMsg = verb + taskID + note
 		m.toastExpiry = time.Now().Add(5 * time.Second)
 	default:
 		m.toastMsg = verb + taskID + " (parked " + inFlight + " on waiting)"
@@ -277,26 +309,50 @@ func (m *Model) killRun(st *storage.RunState) tea.Cmd {
 	})
 }
 
-// releaseKilledFinishClaim drops the acceptance claim held by the process this
-// kill just stopped, on its behalf.
+// releaseKilledFinishClaim drops the acceptance claim held by the run this kill
+// just stopped, on its behalf, and reports whether it actually did.
 //
-// The ownership test is deliberately narrower than `pm finish release`'s: the
-// claim must name THIS host AND the very pid that was signalled. A claim is
-// identified by Host+Started for storage's purposes, but here the question is
-// not "is this claim mine" - it is "is this claim the killed run's", and
-// anything else (a second acceptance that took the run over after this one
-// lapsed, a claim taken by hand) must be left exactly where it is. Failures are
-// silent for the same reason every other write in killRun is: this is a TUI,
-// and the claim expires on its own within the TTL regardless.
-func releaseKilledFinishClaim(stateDir, tracker string, pid int) {
+// The question here is not `pm finish release`'s ("is this claim mine") but "is
+// this claim THE KILLED RUN'S", and the identifier that answers it is the
+// SESSION: `pm finish` mints one id per run and stamps it on both artifacts -
+// into the claim it acquires and onto the run-state it writes - so a match is
+// proof, and the two are only ever written together. The pid deliberately is
+// not the test: pids get recycled, and this runs on the stale path too, where
+// the pid has just been shown NOT to belong to this run. A claim carrying no
+// session, or another host's, or a later acceptance's that took the run over,
+// is left exactly where it is; it expires on its own within the TTL.
+//
+// Failures are silent for the same reason every other write in killRun is: this
+// is a TUI, and bubbletea owns the screen. The BOOLEAN is what the caller says
+// out loud instead.
+func releaseKilledFinishClaim(stateDir, tracker string, st *storage.RunState) bool {
 	claim, err := storage.ReadFinishClaim(stateDir, tracker)
-	if err != nil || claim == nil {
-		return
+	if err != nil || claim == nil || claim.Session == "" {
+		return false
 	}
-	if claim.Host != storage.Hostname() || claim.PID != pid {
-		return
+	if claim.Host != storage.Hostname() || !runHasSession(st, claim.Session) {
+		return false
 	}
-	_ = storage.ReleaseFinishClaim(stateDir, tracker, claim)
+	return storage.ReleaseFinishClaim(stateDir, tracker, claim) == nil
+}
+
+// runHasSession reports whether session is one this run recorded. Both places
+// are checked because they have different lifetimes: CurrentSession is cleared
+// the moment the worker returns, while the sub's copy persists for the life of
+// the run-state.
+func runHasSession(st *storage.RunState, session string) bool {
+	if st == nil || session == "" {
+		return false
+	}
+	if st.CurrentSession == session {
+		return true
+	}
+	for _, s := range st.Subs {
+		if s.Session == session {
+			return true
+		}
+	}
+	return false
 }
 
 // runBadge returns a compact card badge for an executor run on taskID, or "".
@@ -329,4 +385,14 @@ func stateBadge(st *storage.RunState, live, stopped, failed string) string {
 		return failed
 	}
 	return ""
+}
+
+// confirmRunLabel names the run a pending kill confirmation targets. The board
+// and the detail view both ask "press K again to stop the ...", and with a run
+// and its acceptance one keystroke apart the sentence has to say which.
+func confirmRunLabel(finish bool) string {
+	if finish {
+		return "acceptance run"
+	}
+	return "executor run"
 }

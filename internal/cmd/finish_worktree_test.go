@@ -2,10 +2,8 @@ package cmd
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -59,21 +57,14 @@ func finishSlotFixture(t *testing.T, n int) (*storage.Store, *storage.Task, []st
 	return store, tracker, paths
 }
 
-// liveHolderPID starts a detached sleeper and returns its pid, so a slot lock
-// can name a holder that is genuinely alive AND is not this process:
-// LiveWorktreeHolder reads a lock held by os.Getpid() as free (the epic manager
-// re-enters its own slot per sub), so a test that locked with its own pid would
-// find every slot free and prove nothing.
+// liveHolderPID is a live pid that is NOT ours - the idiom work_worktree_test.go
+// already uses for the same reason: LiveWorktreeHolder reads a lock held by
+// os.Getpid() as free (the epic manager re-enters its own slot per sub), so a
+// test that locked with its own pid would find every slot free and prove
+// nothing. The test runner's parent is alive and older than any lock we write.
 func liveHolderPID(t *testing.T) int {
 	t.Helper()
-	c := exec.Command("sleep", "30")
-	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := c.Start(); err != nil {
-		t.Fatal(err)
-	}
-	go func() { _, _ = c.Process.Wait() }()
-	t.Cleanup(func() { _ = c.Process.Kill() })
-	return c.Process.Pid
+	return os.Getppid()
 }
 
 func finishSlotOpts(t *testing.T, additional bool, pin int) finishOptions {
@@ -318,6 +309,21 @@ func TestFinishDryRunPrintsTheSlotPool(t *testing.T) {
 	}
 	if !strings.Contains(plain, "run: DEFAULT (main checkout") {
 		t.Errorf("a run without --additional must say so:\n%s", plain)
+	}
+}
+
+// A --slot the run would refuse must be refused by the dry-run too: a dry-run
+// that reports readiness it never checked is the check people run instead of
+// the real thing.
+func TestFinishDryRunRefusesAnOutOfRangeSlotPin(t *testing.T) {
+	store, tracker, _ := finishSlotFixture(t, 2)
+	_, err := planFinish(store, tracker, "app", finishSlotOpts(t, true, 9))
+	if err == nil || !strings.Contains(err.Error(), "--slot 9 out of range") {
+		t.Fatalf("an out-of-range pin must be refused while planning, got: %v", err)
+	}
+	out, cerr := runFinishCmd(t, store, "app-9", "--project", "app", "--additional", "--slot", "9", "--dry-run")
+	if cerr == nil {
+		t.Fatalf("the dry-run must exit non-zero on a pin the run would refuse:\n%s", out)
 	}
 }
 

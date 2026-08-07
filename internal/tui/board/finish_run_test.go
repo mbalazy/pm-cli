@@ -87,12 +87,15 @@ func TestRunAndAcceptanceAreBothVisible(t *testing.T) {
 func TestKillRunOnAnAcceptanceReleasesTheClaimAndSparesTheRun(t *testing.T) {
 	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-9", Title: "Batch tracker", Status: storage.StatusDoing}})
 	stateDir := m.store.ProjectDir("p")
-	pid := liveRunPID(t)
-	run := liveRun(t, "p-9", pid)
+	// Two SEPARATE live processes: with one pid shared between them, "the run is
+	// spared" could not tell a kill that signalled only the acceptance from one
+	// that signalled both.
+	runPID, finPID := liveRunPID(t), liveRunPID(t)
+	run := liveRun(t, "p-9", runPID)
 	if err := storage.WriteRunState(stateDir, run); err != nil {
 		t.Fatal(err)
 	}
-	fin := liveFinish(t, "p-9", pid)
+	fin := liveFinish(t, "p-9", finPID)
 	if err := storage.WriteRunState(stateDir, fin); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +104,7 @@ func TestKillRunOnAnAcceptanceReleasesTheClaimAndSparesTheRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claim.PID = pid
+	claim.PID = finPID
 	writeClaimFixture(t, stateDir, claim)
 
 	cmd := m.killRun(fin)
@@ -112,6 +115,12 @@ func TestKillRunOnAnAcceptanceReleasesTheClaimAndSparesTheRun(t *testing.T) {
 	}
 	if got.Status != storage.RunStatusFailed || got.Kind != storage.RunKindFinish {
 		t.Errorf("the acceptance must be stamped failed in its OWN file: %+v", got)
+	}
+	// "blocked" is an acceptance VERDICT ("it looked and refused"); a run
+	// stopped by hand reached no verdict at all, so it is "failed" - the same
+	// word `pm finish` records for a worker that died without one.
+	if len(got.Subs) != 1 || got.Subs[0].Status != storage.RunStatusFailed {
+		t.Errorf("a stopped acceptance sub must be failed, not blocked: %+v", got.Subs)
 	}
 	kept, err := storage.ReadRunState(stateDir, "p-9")
 	if err != nil || kept.Kind != storage.RunKindEpic || kept.Status != storage.RunStatusRunning {
@@ -137,7 +146,7 @@ func TestKillRunOnAnAcceptanceReleasesTheClaimAndSparesTheRun(t *testing.T) {
 		t.Fatal("a signalled kill must schedule its escalation")
 	}
 	msg, ok := cmd().(execKillCheckMsg)
-	if !ok || msg.kind != storage.RunKindFinish || msg.pid != pid {
+	if !ok || msg.kind != storage.RunKindFinish || msg.pid != finPID {
 		t.Errorf("escalation msg = %+v (ok=%v), want the acceptance's kind and pid", msg, ok)
 	}
 }
@@ -193,7 +202,7 @@ func TestKillRunLeavesSomebodyElsesClaimAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claim.PID = fin.PID + 1 // a different acceptance, same machine
+	claim.PID = fin.PID // even the same pid must not be enough - the session is
 	writeClaimFixture(t, stateDir, claim)
 
 	m.killRun(fin)
@@ -201,6 +210,47 @@ func TestKillRunLeavesSomebodyElsesClaimAlone(t *testing.T) {
 	held, err := storage.ReadFinishClaim(stateDir, "p-9")
 	if err != nil || held == nil || held.Session != "somebody-else" {
 		t.Errorf("a claim this run never took must survive the kill: %+v err=%v", held, err)
+	}
+	// And the toast must not claim a release that never happened - the same
+	// lie the park branch was fixed for.
+	if strings.Contains(m.toastMsg, "(claim released)") {
+		t.Errorf("toastMsg = %q, want it to say the claim was not ours", m.toastMsg)
+	}
+	if !strings.Contains(m.toastMsg, "not ours to release") {
+		t.Errorf("toastMsg = %q, want it to name what did NOT happen", m.toastMsg)
+	}
+}
+
+// Run-states are never deleted, so the ordinary morning state is a FINISHED run
+// with a live acceptance beside it. W and K must both land on the acceptance
+// there - preferring the run unconditionally would put a dead transcript on
+// screen and leave the only live process unkillable from the board.
+func TestADeadRunDoesNotShadowALiveAcceptance(t *testing.T) {
+	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-9", Title: "Batch tracker", Status: storage.StatusDoing}})
+	stateDir := m.store.ProjectDir("p")
+	done := liveRun(t, "p-9", 999999999)
+	done.Status = storage.RunStatusDone
+	if err := storage.WriteRunState(stateDir, done); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.WriteRunState(stateDir, liveFinish(t, "p-9", liveRunPID(t))); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshRunStates()
+	task, err := m.store.FindTask("p", "p-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, finish := m.pickRunForTask(task)
+	if !finish || st == nil || st.Kind != storage.RunKindFinish {
+		t.Fatalf("the live acceptance must win over a finished run: %+v (finish=%v)", st, finish)
+	}
+	if !m.openExecutorView(task) {
+		t.Fatal("openExecutorView returned false")
+	}
+	if !m.watchingFinish() {
+		t.Error("W opened the finished run instead of the live acceptance")
 	}
 }
 
@@ -221,8 +271,8 @@ func TestKillTargetPrefersTheLiveRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := m.killTargetForTask(task); got == nil || got.Kind != storage.RunKindEpic {
-		t.Errorf("with both live, K must target the run: %+v", got)
+	if got, finish := m.pickRunForTask(task); got == nil || got.Kind != storage.RunKindEpic || finish {
+		t.Errorf("with both live, K must target the run: %+v (finish=%v)", got, finish)
 	}
 
 	// Run finished, acceptance still going: K now means the acceptance.
@@ -231,8 +281,8 @@ func TestKillTargetPrefersTheLiveRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.refreshRunStates()
-	if got := m.killTargetForTask(task); got == nil || got.Kind != storage.RunKindFinish {
-		t.Errorf("with only the acceptance live, K must target it: %+v", got)
+	if got, finish := m.pickRunForTask(task); got == nil || got.Kind != storage.RunKindFinish || !finish {
+		t.Errorf("with only the acceptance live, K must target it: %+v (finish=%v)", got, finish)
 	}
 }
 
@@ -308,16 +358,15 @@ func TestAgentViewSwitchRefusesWithoutACounterpart(t *testing.T) {
 		t.Fatal("openExecutorView must fall back to the acceptance")
 	}
 	if !m.watchingFinish() {
-		t.Fatalf("expected the acceptance to be on screen, kind = %q", m.executorRunKind)
+		t.Fatal("expected the acceptance to be on screen")
 	}
 	if m.executorHasOther {
 		t.Error("there is no run to switch to")
 	}
 
-	before := m.executorRunKind
 	m.switchExecutorRunKind()
-	if m.executorRunKind != before {
-		t.Errorf("the view switched to a run that does not exist: %q", m.executorRunKind)
+	if !m.watchingFinish() {
+		t.Error("the view switched to a run that does not exist")
 	}
 	if !strings.Contains(m.toastMsg, "no executor run recorded") {
 		t.Errorf("toastMsg = %q, want it to say there is nothing to switch to", m.toastMsg)
@@ -331,12 +380,12 @@ func TestAcceptanceKillConfirmDoesNotPromiseAPark(t *testing.T) {
 	m := newBoardModel(t)
 	m.executorViewport = viewport.New(80, 10)
 	m.executorRunTaskID = "p-9"
-	m.executorRunKind = storage.RunKindFinish
+	m.executorWatchFinish = true
 	m.confirmAction = "kill-run"
 	if got := m.viewExecutor(); !strings.Contains(got, "releases the acceptance claim") || strings.Contains(got, "parks the worker") {
 		t.Errorf("confirm footer must describe the acceptance's own effect:\n%s", got)
 	}
-	m.executorRunKind = storage.RunKindEpic
+	m.executorWatchFinish = false
 	if got := m.viewExecutor(); !strings.Contains(got, "parks the worker") {
 		t.Errorf("a run's confirm footer is unchanged:\n%s", got)
 	}

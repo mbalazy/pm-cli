@@ -229,6 +229,14 @@ func planFinish(store storage.TaskStore, tracker *storage.Task, slug string, opt
 	// halves hold in a slot too: the slot is claimed, seeded and locked, but
 	// never wiped or re-branched, because there is no branch of this run's to
 	// put on it.
+	//
+	// `executor.prepare` is NOT run either, unlike `pm work` and `pm run-epic`
+	// in a slot. That one is an open question rather than a settled decision:
+	// prepare exists to make dependency freshness structural for a run that is
+	// about to build, and an odbiór that needs the dev server may well want the
+	// same - but this sub's scope is the slot itself, and installing into a slot
+	// the acceptance did not create is a behaviour worth choosing deliberately
+	// rather than inheriting. Recorded in the sub's unresolved notes.
 	stateDir := store.ProjectDir(slug)
 	sessionID := storage.NewSessionID()
 	reportPath := storage.FinishReportPath(stateDir, tracker.Meta.ID)
@@ -247,6 +255,14 @@ func planFinish(store storage.TaskStore, tracker *storage.Task, slug string, opt
 		slots = exec.ResolveWorktrees(proj.Path)
 		if len(slots) == 0 {
 			return nil, errNoWorktreeSlots(slug)
+		}
+		// A pin out of range is decided HERE, not at claim time, so --dry-run
+		// reaches the same verdict the real run does. A dry-run that prints a
+		// confident plan for a slot the run will refuse is worse than no
+		// dry-run, because it is the check people run instead of the real thing
+		// (the lesson of pm-cli-90).
+		if err := checkSlotPin(opts.slotPin, len(slots)); err != nil {
+			return nil, err
 		}
 		workDir = slots[0].Path // provisional until a slot is claimed
 		env = slots[0].Env

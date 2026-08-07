@@ -221,7 +221,9 @@ func (m Model) viewBoard() string {
 		case "delete-selected":
 			prompt = fmt.Sprintf("  press x again to delete %d tasks", len(m.selected))
 		case "kill-run":
-			prompt = "  press K again to stop the executor run"
+			// Named for the run the pending K actually targets: with both live
+			// the two are one keystroke apart and otherwise indistinguishable.
+			prompt = "  press K again to stop the " + confirmRunLabel(m.confirmRunFinish)
 		}
 		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#FF0000", Dark: "#FF6666"}).Render(prompt))
 	}
