@@ -41,8 +41,8 @@ func TestGetExecutorMissingBlock(t *testing.T) {
 	if e.StartStatus != "todo" || e.WipStatus != "doing" || e.DoneStatus != "merged" {
 		t.Errorf("statuses = %q/%q/%q, want todo/doing/merged", e.StartStatus, e.WipStatus, e.DoneStatus)
 	}
-	if e.FixRounds != 3 {
-		t.Errorf("FixRounds = %d, want 3", e.FixRounds)
+	if e.FixRounds != 2 {
+		t.Errorf("FixRounds = %d, want 2", e.FixRounds)
 	}
 	// Every phase resolves to generic when no block exists.
 	for _, name := range ExecutorPhases {
@@ -197,8 +197,10 @@ executor:
 		if e.AdditionalWorktree {
 			t.Error("AdditionalWorktree = true, want false when unset")
 		}
-		if e.FixRounds != 3 {
-			t.Errorf("FixRounds = %d, want default 3", e.FixRounds)
+		// 2 since 0.38: all three subs of epic orbit-106 hit the old cap
+		// of 3 every time, and round 3 was a confirming pass, not a fix.
+		if e.FixRounds != 2 {
+			t.Errorf("FixRounds = %d, want default 2", e.FixRounds)
 		}
 		if e.DoneStatus != "merged" {
 			t.Errorf("DoneStatus = %q, want default merged", e.DoneStatus)
@@ -297,4 +299,33 @@ func TestExecutorLandingStatuses(t *testing.T) {
 			t.Errorf("LandingStatuses() = %v, want [pushed]", got)
 		}
 	})
+}
+
+func TestResolveReviewModel(t *testing.T) {
+	// The DEFAULT is the whole point, and gate G2 (pm-cli-96-6) is what decides
+	// it: a single sonnet reviewer holding the diff missed BOTH historical
+	// review-forced findings it was replayed against, while the same reviewer on
+	// opus reported both. The savings this ticket keeps are the reviewer COUNT,
+	// the round cap and the diff packet - not the model.
+	cases := []struct {
+		yaml string
+		want string
+	}{
+		{"name: X\n", DefaultReviewModel},
+		{"name: X\nexecutor:\n  enabled: true\n", DefaultReviewModel},
+		{"name: X\nexecutor:\n  review_model: haiku\n", "haiku"},
+		{"name: X\nexecutor:\n  review_model: '  opus  '\n", "opus"},
+		// The rollback for this one change, without touching the cap or the
+		// telemetry that shipped alongside it.
+		{"name: X\nexecutor:\n  review_model: inherit\n", ""},
+	}
+	for _, c := range cases {
+		var p Project
+		if err := yaml.Unmarshal([]byte(c.yaml), &p); err != nil {
+			t.Fatalf("%q: %v", c.yaml, err)
+		}
+		if got := p.GetExecutor().ResolveReviewModel(); got != c.want {
+			t.Errorf("%q: ResolveReviewModel() = %q, want %q", c.yaml, got, c.want)
+		}
+	}
 }

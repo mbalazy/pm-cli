@@ -764,11 +764,12 @@ func setSubSession(run *storage.RunState, id, session string) {
 
 // setSubStats records the worker envelope's effort stats on sub id. Called
 // under the run writer's lock.
-func setSubStats(run *storage.RunState, id string, turns int, cost float64) {
+func setSubStats(run *storage.RunState, id string, turns int, cost float64, review *storage.ReviewTelemetry) {
 	for i := range run.Subs {
 		if run.Subs[i].ID == id {
 			run.Subs[i].Turns = turns
 			run.Subs[i].CostUSD = cost
+			run.Subs[i].Review = review
 		}
 	}
 }
@@ -787,7 +788,7 @@ func journalSubs(outcomes []subOutcome, durations map[string]int, run *storage.R
 		out = append(out, storage.JournalSub{
 			ID: o.id, Result: o.result, Note: o.note, Branch: o.branch,
 			DurationS: durations[o.id], Session: sr.Session,
-			Turns: sr.Turns, CostUSD: sr.CostUSD,
+			Turns: sr.Turns, CostUSD: sr.CostUSD, Review: sr.Review,
 		})
 	}
 	return out

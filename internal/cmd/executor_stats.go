@@ -95,6 +95,17 @@ type journalStats struct {
 	SubDuration numStat
 	Turns       numStat
 	Cost        numStat
+	// Review-phase telemetry, over the subs that carry it. ReviewSubs is its own
+	// denominator on purpose: subs from before the telemetry existed report
+	// nothing, and averaging over all subs would quietly dilute the very number
+	// a retro is checking.
+	ReviewSubs   int
+	Spawns       numStat
+	Rounds       numStat
+	NestedSpawns int
+	DiffSpawns   int
+	DeniedSpawns int
+	ReviewModels map[string]int // model (or "inherit") -> subs that asked for it
 }
 
 // runKey identifies a run across its start/terminal lines.
@@ -323,6 +334,26 @@ func (s *journalStats) addSubs(subs []storage.JournalSub) {
 		s.SubDuration.add(float64(sub.DurationS))
 		s.Turns.add(float64(sub.Turns))
 		s.Cost.add(sub.CostUSD)
+		if r := sub.Review; r != nil {
+			s.ReviewSubs++
+			// addSample, not add: a sub that spawned zero reviewers is a real
+			// observation and must pull the average DOWN, which is the whole
+			// point of measuring. (add() skips zeros, which is right for
+			// turns/cost - there a zero means "not reported".)
+			s.Spawns.addSample(float64(r.Spawns))
+			s.Rounds.addSample(float64(r.Rounds))
+			s.NestedSpawns += r.Nested
+			s.DiffSpawns += r.WithDiff
+			s.DeniedSpawns += r.Denied
+			if s.ReviewModels == nil {
+				s.ReviewModels = map[string]int{}
+			}
+			models := r.Models
+			if models == "" {
+				models = "unknown"
+			}
+			s.ReviewModels[models]++
+		}
 	}
 }
 
@@ -458,7 +489,50 @@ func renderJournalStats(slug, path string, st journalStats) string {
 		st.Turns.Total, st.Turns.avg(), st.Turns.Samples)
 	fmt.Fprintf(&b, "  cost      $%.2f total, $%.2f avg (%d sub(s))\n",
 		st.Cost.Total, st.Cost.avg(), st.Cost.Samples)
+	renderReviewStats(&b, st)
 	return b.String()
+}
+
+// renderReviewStats prints the review-phase section. Omitted entirely when no
+// sub carries telemetry - on a journal written before it existed there is
+// nothing to say, and a block of zeros would read as "the review phase did
+// nothing" rather than "this was not measured".
+func renderReviewStats(b *strings.Builder, st journalStats) {
+	if st.ReviewSubs == 0 {
+		return
+	}
+	worked, _ := st.workerBacked()
+	fmt.Fprintf(b, "\n## Review phase (%d of %d worker-backed sub(s) measured)\n", st.ReviewSubs, worked)
+	fmt.Fprintf(b, "  spawns    %.0f total, %.1f avg per sub\n", st.Spawns.Total, st.Spawns.avg())
+	fmt.Fprintf(b, "  rounds    %.0f total, %.1f avg per sub\n", st.Rounds.Total, st.Rounds.avg())
+	if st.Spawns.Total > 0 {
+		// Both this and the model line below report what the WORKER asked for,
+		// not what pm delivered - pm attaches the diff to the rest and pins the
+		// model on all of them. Reporting pm's own substitutions would make this
+		// agree with pm by construction; what is worth measuring is how far the
+		// prompt rules are followed on their own.
+		fmt.Fprintf(b, "  with diff %d of %.0f spawn(s) arrived carrying a diff (pm attached one to the rest)\n",
+			st.DiffSpawns, st.Spawns.Total)
+	}
+	if st.DeniedSpawns > 0 {
+		// The only visible evidence that the cap did anything. Without it an
+		// enforced run and a well-behaved one look identical in the rollup.
+		fmt.Fprintf(b, "  refused   %d spawn(s) refused by the cap (these never ran)\n", st.DeniedSpawns)
+	}
+	if st.NestedSpawns > 0 {
+		// Called out rather than folded into the total: these are spawned from
+		// inside another subagent, so a cap that only watches the worker never
+		// sees them (orbit-106-3: one reviewer's own Explore subagent
+		// burned 6.1M tokens over 65 tool calls).
+		fmt.Fprintf(b, "  nested    %d spawn(s) issued from inside another subagent\n", st.NestedSpawns)
+	}
+	for _, m := range orderedKeys(st.ReviewModels, nil, false) {
+		label := m
+		if m == "inherit" {
+			label = "inherit (pm pinned)"
+		}
+		fmt.Fprintf(b, "  model     %-20s %d sub(s)  (asked for by the worker)\n", label, st.ReviewModels[m])
+	}
 }
 
 // fmtDuration renders seconds as a compact human duration (e.g. "1h04m", "7m12s").

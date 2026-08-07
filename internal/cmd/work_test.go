@@ -265,7 +265,7 @@ func TestBuildWorkerSystemPrompt(t *testing.T) {
 
 func TestBuildClaudeArgs(t *testing.T) {
 	t.Run("curated allowlist by default", func(t *testing.T) {
-		args := buildClaudeArgs("p", "sp", "sess-1", "opus", 100, false)
+		args := buildClaudeArgs("p", "sp", "sess-1", "opus", 100, false, guardOptions{})
 		joined := strings.Join(args, " ")
 		mustContain(t, joined, "--permission-mode acceptEdits")
 		mustContain(t, joined, "--allowedTools")
@@ -276,7 +276,7 @@ func TestBuildClaudeArgs(t *testing.T) {
 		}
 	})
 	t.Run("yolo bypasses permissions", func(t *testing.T) {
-		args := buildClaudeArgs("p", "sp", "sess-1", "opus", 100, true)
+		args := buildClaudeArgs("p", "sp", "sess-1", "opus", 100, true, guardOptions{})
 		joined := strings.Join(args, " ")
 		mustContain(t, joined, "--dangerously-skip-permissions")
 		if strings.Contains(joined, "acceptEdits") {

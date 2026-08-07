@@ -211,3 +211,16 @@ func quoteArgs(args []string) []string {
 	}
 	return out
 }
+
+// gitHeadSHA is the commit a worker is about to start from. Empty on any
+// failure - every caller treats that as "unknown" and degrades rather than
+// guessing.
+func gitHeadSHA(dir string) string {
+	c := exec.Command("git", "rev-parse", "HEAD")
+	c.Dir = dir
+	out, err := c.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}

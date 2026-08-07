@@ -138,7 +138,7 @@ func TestDraftExecutor(t *testing.T) {
 		if !e.Enabled || e.AdditionalWorktree {
 			t.Errorf("enabled/additional_worktree = %v/%v, want true/false", e.Enabled, e.AdditionalWorktree)
 		}
-		if e.FixRounds != 3 || e.DoneStatus != "merged" {
+		if e.FixRounds != 2 || e.DoneStatus != "merged" {
 			t.Errorf("defaults wrong: fix_rounds=%d done=%q", e.FixRounds, e.DoneStatus)
 		}
 		if len(e.Phases) != 0 {
@@ -217,7 +217,7 @@ func TestMarshalExecutorBlock(t *testing.T) {
 	out := marshalExecutorBlock(e)
 	mustContain(t, out, "executor:")
 	mustContain(t, out, "enabled: true")
-	mustContain(t, out, "fix_rounds: 3")
+	mustContain(t, out, "fix_rounds: 2")
 }
 
 func TestMergeExecutor(t *testing.T) {

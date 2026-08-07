@@ -3,8 +3,12 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mbalazy/pm/internal/storage"
 )
 
 func TestBashCommandBlocked(t *testing.T) {
@@ -118,7 +122,7 @@ func TestRunWorkerGuard(t *testing.T) {
 
 	t.Run("blocks with exit 2 and a reason", func(t *testing.T) {
 		var errOut bytes.Buffer
-		code := runWorkerGuard(strings.NewReader(payload("Bash", `git commit -m x --no-verify`)), &errOut)
+		code := runWorkerGuard(strings.NewReader(payload("Bash", `git commit -m x --no-verify`)), io.Discard, &errOut, guardOptions{})
 		if code != 2 {
 			t.Fatalf("exit code = %d, want 2 (the code Claude Code reads as a block)", code)
 		}
@@ -129,7 +133,7 @@ func TestRunWorkerGuard(t *testing.T) {
 
 	t.Run("passes ordinary commands", func(t *testing.T) {
 		var errOut bytes.Buffer
-		if code := runWorkerGuard(strings.NewReader(payload("Bash", `git commit -m x`)), &errOut); code != 0 {
+		if code := runWorkerGuard(strings.NewReader(payload("Bash", `git commit -m x`)), io.Discard, &errOut, guardOptions{}); code != 0 {
 			t.Fatalf("exit code = %d, want 0", code)
 		}
 		if errOut.Len() != 0 {
@@ -138,7 +142,7 @@ func TestRunWorkerGuard(t *testing.T) {
 	})
 
 	t.Run("ignores other tools", func(t *testing.T) {
-		if code := runWorkerGuard(strings.NewReader(payload("Read", `git commit --no-verify`)), &bytes.Buffer{}); code != 0 {
+		if code := runWorkerGuard(strings.NewReader(payload("Read", `git commit --no-verify`)), io.Discard, &bytes.Buffer{}, guardOptions{}); code != 0 {
 			t.Errorf("exit code = %d, want 0 - a command only counts as one on Bash", code)
 		}
 	})
@@ -148,7 +152,7 @@ func TestRunWorkerGuard(t *testing.T) {
 	// hook schema changed.
 	t.Run("fails open on junk", func(t *testing.T) {
 		for _, in := range []string{"", "not json", "{}", `{"tool_name":"Bash"}`} {
-			if code := runWorkerGuard(strings.NewReader(in), &bytes.Buffer{}); code != 0 {
+			if code := runWorkerGuard(strings.NewReader(in), io.Discard, &bytes.Buffer{}, guardOptions{}); code != 0 {
 				t.Errorf("input %q: exit code = %d, want 0", in, code)
 			}
 		}
@@ -176,7 +180,7 @@ func TestRunWorkerGuardFileWrites(t *testing.T) {
 	}
 	for _, c := range blocked {
 		var errOut bytes.Buffer
-		if code := runWorkerGuard(strings.NewReader(payload(c.tool, c.path)), &errOut); code != 2 {
+		if code := runWorkerGuard(strings.NewReader(payload(c.tool, c.path)), io.Discard, &errOut, guardOptions{}); code != 2 {
 			t.Errorf("%s: exit code = %d, want 2", c.name, code)
 		} else if !strings.Contains(errOut.String(), c.path) {
 			t.Errorf("%s: deny message must name the path, got %q", c.name, errOut.String())
@@ -194,14 +198,14 @@ func TestRunWorkerGuardFileWrites(t *testing.T) {
 	}
 	for _, c := range allowed {
 		var errOut bytes.Buffer
-		if code := runWorkerGuard(strings.NewReader(payload(c.tool, c.path)), &errOut); code != 0 {
+		if code := runWorkerGuard(strings.NewReader(payload(c.tool, c.path)), io.Discard, &errOut, guardOptions{}); code != 0 {
 			t.Errorf("%s: exit code = %d, want 0 (%s)", c.name, code, errOut.String())
 		}
 	}
 }
 
 func TestWorkerGuardSettingsIsValidAndAttached(t *testing.T) {
-	s := workerGuardSettings()
+	s := workerGuardSettings(guardOptions{telemetryPath: "/tmp/pm-telemetry.jsonl", diffBase: "abc123", reviewModel: "sonnet"})
 	if s == "" {
 		t.Fatal("guard settings must render (os.Executable resolves under go test)")
 	}
@@ -219,12 +223,12 @@ func TestWorkerGuardSettingsIsValidAndAttached(t *testing.T) {
 	if err := json.Unmarshal([]byte(s), &parsed); err != nil {
 		t.Fatalf("settings payload must be valid JSON: %v (%s)", err, s)
 	}
-	// Two entries on purpose: the Bash matcher is the one verified against a
-	// live claude and must keep its exact spelling; the write matcher is a
-	// separate entry so a build that matches tool names literally simply does
-	// not fire it instead of losing the Bash one too.
-	if len(parsed.Hooks.PreToolUse) != 2 {
-		t.Fatalf("expected a Bash and a write-tool PreToolUse matcher, got %s", s)
+	// Separate entries on purpose: the Bash matcher is the one verified against
+	// a live claude and must keep its exact spelling; the write and agent
+	// matchers are separate entries so a build that matches tool names literally
+	// simply does not fire them instead of losing the Bash one too.
+	if len(parsed.Hooks.PreToolUse) != 3 {
+		t.Fatalf("expected Bash, write-tool and agent PreToolUse matchers, got %s", s)
 	}
 	if parsed.Hooks.PreToolUse[0].Matcher != "Bash" {
 		t.Errorf("first matcher = %q, want the verified exact \"Bash\"", parsed.Hooks.PreToolUse[0].Matcher)
@@ -234,16 +238,29 @@ func TestWorkerGuardSettingsIsValidAndAttached(t *testing.T) {
 			t.Errorf("write matcher %q must name %s", parsed.Hooks.PreToolUse[1].Matcher, tool)
 		}
 	}
+	// Both spellings of the spawn tool: 2.1.224 sends "Agent" to the hook and
+	// calls the same call "Task" in the envelope's permission_denials.
+	for _, tool := range []string{"Agent", "Task"} {
+		if !strings.Contains(parsed.Hooks.PreToolUse[2].Matcher, tool) {
+			t.Errorf("agent matcher %q must name %s", parsed.Hooks.PreToolUse[2].Matcher, tool)
+		}
+	}
 	for i, m := range parsed.Hooks.PreToolUse {
-		if got := m.Hooks[0].Command; !strings.HasSuffix(got, " worker-guard") {
+		got := m.Hooks[0].Command
+		if !strings.Contains(got, " worker-guard") {
 			t.Errorf("matcher %d hook command = %q, want it to invoke pm worker-guard", i, got)
+		}
+		for _, arg := range []string{"--telemetry /tmp/pm-telemetry.jsonl", "--diff-base abc123"} {
+			if !strings.Contains(got, arg) {
+				t.Errorf("matcher %d hook command = %q, want %s baked in", i, got, arg)
+			}
 		}
 	}
 
 	// Both modes carry it: --yolo waives permission prompts, not the project's
 	// hooks.
 	for _, yolo := range []bool{false, true} {
-		args := strings.Join(buildClaudeArgs("p", "sp", "sess", "opus", 10, yolo), " ")
+		args := strings.Join(buildClaudeArgs("p", "sp", "sess", "opus", 10, yolo, guardOptions{telemetryPath: "/tmp/t.jsonl", diffBase: "abc123", reviewModel: "sonnet"}), " ")
 		if !strings.Contains(args, "--settings") || !strings.Contains(args, "worker-guard") {
 			t.Errorf("yolo=%v: worker argv must attach the guard, got %s", yolo, args)
 		}
@@ -256,5 +273,98 @@ func TestQuoteForShell(t *testing.T) {
 	}
 	if got := quoteForShell("/Users/a b/go/bin/pm"); got != `'/Users/a b/go/bin/pm'` {
 		t.Errorf("path with a space must be quoted, got %q", got)
+	}
+}
+
+// The payloads in this test are the SHAPES measured against a live claude
+// 2.1.224 on 2026-08-07 (pm-cli-96-1), not invented ones: a top-level Agent call
+// carries description/prompt/subagent_type/run_in_background and no agent_id,
+// while a call made from inside a subagent carries agent_id + agent_type.
+func TestWorkerGuardRecordsAgentSpawns(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "review.jsonl")
+
+	topLevel := `{
+	  "session_id": "dc1ae94b-acf8-40e6-89bf-a114c8b04af1",
+	  "hook_event_name": "PreToolUse",
+	  "tool_name": "Agent",
+	  "tool_input": {
+	    "description": "Review the diff",
+	    "prompt": "Review this change:\ndiff --git a/main.go b/main.go\n",
+	    "subagent_type": "Explore",
+	    "model": "opus",
+	    "run_in_background": false
+	  },
+	  "tool_use_id": "toolu_013QmYmQr9eFyXAB9tcYnHGw"
+	}`
+	// The older spelling of the same tool - both are live in one build.
+	legacyName := `{"tool_name":"Task","tool_input":{"prompt":"go look around","subagent_type":"general-purpose"}}`
+	nested := `{
+	  "agent_id": "a3115b1787a99ef82",
+	  "agent_type": "Explore",
+	  "tool_name": "Agent",
+	  "tool_input": {"prompt": "audit the containers", "subagent_type": "Explore"}
+	}`
+
+	// No --diff-base, so the cap cannot be sized and degrades to allowing every
+	// top-level spawn - what this case is about is what gets RECORDED.
+	for _, in := range []string{topLevel, legacyName} {
+		var errOut bytes.Buffer
+		if code := runWorkerGuard(strings.NewReader(in), io.Discard, &errOut, guardOptions{telemetryPath: path}); code != 0 {
+			t.Fatalf("an unsized cap must allow the spawn, got %d (%s)", code, errOut.String())
+		}
+	}
+	// A nested spawn is refused regardless: it is the case a cap on the worker
+	// cannot see, and no diff size makes it acceptable.
+	var nestedOut bytes.Buffer
+	if code := runWorkerGuard(strings.NewReader(nested), io.Discard, &nestedOut, guardOptions{telemetryPath: path}); code != 2 {
+		t.Fatalf("a nested spawn must be refused, got %d (%s)", code, nestedOut.String())
+	}
+
+	spawns, err := storage.ReadReviewSpawns(path)
+	if err != nil {
+		t.Fatalf("read telemetry: %v", err)
+	}
+	if len(spawns) != 3 {
+		t.Fatalf("got %d recorded spawns, want 3", len(spawns))
+	}
+	if spawns[0].Model != "opus" || spawns[0].SubagentType != "Explore" || !spawns[0].HasDiff {
+		t.Errorf("top-level spawn recorded wrong: %+v", spawns[0])
+	}
+	if spawns[0].Nested {
+		t.Error("a call with no agent_id is the worker's own, not nested")
+	}
+	if spawns[1].Model != "" || spawns[1].HasDiff {
+		t.Errorf("legacy-name spawn recorded wrong: %+v", spawns[1])
+	}
+	if !spawns[2].Nested || spawns[2].AgentType != "Explore" || !spawns[2].Denied {
+		t.Errorf("a call carrying agent_id must be recorded as nested AND denied: %+v", spawns[2])
+	}
+	if spawns[0].TS == "" {
+		t.Error("every spawn needs a timestamp - round clustering reads it")
+	}
+}
+
+// Telemetry is observability: a worker must never die because it could not be
+// written, and a guard with no telemetry path configured must behave exactly as
+// it did before telemetry existed.
+func TestWorkerGuardTelemetryIsBestEffort(t *testing.T) {
+	agent := `{"tool_name":"Agent","tool_input":{"prompt":"x","subagent_type":"Explore"}}`
+	for _, path := range []string{"", filepath.Join(t.TempDir(), "no", "such", "dir", "..", "\x00bad")} {
+		var errOut bytes.Buffer
+		if code := runWorkerGuard(strings.NewReader(agent), io.Discard, &errOut, guardOptions{telemetryPath: path}); code != 0 {
+			t.Errorf("path %q: got exit %d, want 0", path, code)
+		}
+	}
+}
+
+// The guard's original job must be untouched by the new branch: a hook-bypassing
+// commit is still blocked even when a telemetry path is configured.
+func TestWorkerGuardStillBlocksWithTelemetryConfigured(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "review.jsonl")
+	in := `{"tool_name":"Bash","tool_input":{"command":"git commit -m x --no-verify"}}`
+	var errOut bytes.Buffer
+	if code := runWorkerGuard(strings.NewReader(in), io.Discard, &errOut, guardOptions{telemetryPath: path}); code != 2 {
+		t.Errorf("got exit %d, want 2 (%s)", code, errOut.String())
 	}
 }
