@@ -1,6 +1,7 @@
 package board
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -30,14 +31,18 @@ func TestExecHeartbeatAge(t *testing.T) {
 func TestDashboardShowsHeartbeatOnlyWhileAWorkerRuns(t *testing.T) {
 	// A worker is in flight: a live pid, status running, session pinned.
 	//
-	// The pid is 1, not our own: liveness compares the holder's START TIME with
-	// the run's Started stamp (a pid that started after the stamp is a recycled
-	// number, not our manager), and a test binary is younger than the ten
-	// minutes this run claims to have been going. pid 1 is alive on every
-	// machine and older than any stamp a test can write.
+	// Liveness compares the holder's START TIME with the run's Started stamp (a
+	// pid that started after the stamp is a recycled number, not our manager),
+	// so the fixture must be a pid that demonstrably predates its own stamp.
+	// Our OWN pid with a stamp of now is the only pair that holds everywhere:
+	// pid 1 seemed older than any stamp a test could write, but on a CI runner
+	// the VM boots minutes before the job, so systemd started AFTER a stamp
+	// dated ten minutes ago and the run read as recycled (red on Linux, green
+	// on a mac whose launchd has been up for days). Started only feeds the
+	// elapsed clock here; the heartbeat age comes off Updated.
 	live := &storage.RunState{
-		TaskID: "p-1", Kind: "run-epic", Status: storage.RunStatusRunning, PID: 1,
-		Started:        time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339),
+		TaskID: "p-1", Kind: "run-epic", Status: storage.RunStatusRunning, PID: os.Getpid(),
+		Started:        time.Now().UTC().Format(time.RFC3339),
 		Updated:        time.Now().Add(-20 * time.Second).UTC().Format(time.RFC3339),
 		CurrentSub:     "p-1-1",
 		CurrentSession: "sess-abc",
