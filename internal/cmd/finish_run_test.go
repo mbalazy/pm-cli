@@ -479,21 +479,9 @@ func TestFinishRefusesContradictorySimFlags(t *testing.T) {
 	}
 }
 
-// --additional is refused rather than quietly running in the main checkout:
-// slot handling for the acceptance run is pm-cli-100-5's, and a silent
-// fallback would put an acceptance into the very checkout a slot exists to
-// keep it out of.
-func TestFinishAdditionalIsRefusedNotIgnored(t *testing.T) {
-	store, _, _ := finishRunFixture(t)
-	tracker, err := store.FindTask("app", "app-9")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = planFinish(store, tracker, "app", finishOptions{model: "opus", maxTurns: 10, additional: true})
-	if err == nil || !strings.Contains(err.Error(), "pm-cli-100-5") {
-		t.Fatalf("--additional must be refused with a pointer to where it lands, got: %v", err)
-	}
-}
+// --additional now claims a slot from the shared pool; its behaviour (claim,
+// env, refusals, and the wipe/re-branch it deliberately does NOT do) lives in
+// finish_worktree_test.go.
 
 // finishRunNote is the morning TODO line. It counts the subs that CARRY an open
 // claim, never every sub the acceptance looked at.

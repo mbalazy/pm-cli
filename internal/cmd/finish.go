@@ -32,11 +32,10 @@ import (
 
 func newFinishCmd(store storage.TaskStore) *cobra.Command {
 	var (
-		opts    finishOptions
-		noSim   bool
-		noYolo  bool
-		dryRun  bool
-		slotPin int
+		opts   finishOptions
+		noSim  bool
+		noYolo bool
+		dryRun bool
 	)
 
 	cmd := &cobra.Command{
@@ -71,7 +70,7 @@ func newFinishCmd(store storage.TaskStore) *cobra.Command {
 			opts.errOut = stderr
 			// Empty base: `pm finish` has no --base to warn about (the
 			// acceptance forks no branch of its own - it walks the subs').
-			warnInertFlags(stderr, "pm finish", opts.additional, slotPin, "")
+			warnInertFlags(stderr, "pm finish", opts.additional, opts.slotPin, "")
 
 			tracker, slug, err := resolveFinishTracker(cmd, store, args[0])
 			if err != nil {
@@ -110,8 +109,8 @@ func newFinishCmd(store storage.TaskStore) *cobra.Command {
 	cmd.Flags().StringVar(&opts.model, "model", "opus", "model for the acceptance worker (alias or full name)")
 	cmd.Flags().IntVar(&opts.maxTurns, "max-turns", finishMaxTurns, "max agent turns for the acceptance worker")
 	cmd.Flags().DurationVar(&opts.timeout, "timeout", finishTimeout, "max wall-clock time for the acceptance worker before it is killed")
-	cmd.Flags().BoolVar(&opts.additional, "additional", false, "run in an isolated 'additional' worktree slot instead of the main checkout")
-	cmd.Flags().IntVar(&slotPin, "slot", 0, "with --additional: pin a specific worktree slot (1-based); default 0 = first free slot")
+	cmd.Flags().BoolVar(&opts.additional, "additional", false, "run in an isolated 'additional' worktree slot (own dev-server port / simulator) instead of the main checkout; requires executor.worktrees (or legacy additional_worktree) in project.yaml")
+	cmd.Flags().IntVar(&opts.slotPin, "slot", 0, "with --additional: pin a specific worktree slot (1-based); default 0 = first free slot")
 	cmd.AddCommand(
 		newFinishClaimCmd(store),
 		newFinishReleaseCmd(store),
@@ -139,6 +138,7 @@ type finishOptions struct {
 	yolo       bool
 	timeout    time.Duration
 	additional bool
+	slotPin    int
 	// errOut: where this run's progress and warnings go (cmd.ErrOrStderr()).
 	// The zero value falls back to the process's own stderr, so a test building
 	// finishOptions by hand needs no wiring - same contract as workOptions.
@@ -166,7 +166,27 @@ type finishPlan struct {
 	sysPrompt  string
 	cmdArgs    []string
 	reportPath string
-	opts       finishOptions
+	// worktree/slots/env: the --additional pool, resolved but NOT claimed (the
+	// claim happens at run start, in executeFinish). workDir/env sit
+	// provisionally on slot 1 until then, exactly as workPlan's do.
+	worktree bool
+	slots    []storage.ResolvedWorktree
+	env      []string
+	// buildPrompt re-renders the prompt for a work dir: the prompt states the
+	// repo path, and the real slot is only known once claimed.
+	buildPrompt func(dir string) string
+	opts        finishOptions
+}
+
+// retarget points the plan at the slot the run actually claimed and re-renders
+// everything derived from the work dir. Without it an acceptance in slot N
+// would be told "Repo path: <slot 1>" and could follow that absolute path
+// straight out of its isolation - the same trap workPlan.retarget exists for.
+func (p *finishPlan) retarget(dir string, env []string) {
+	p.workDir = dir
+	p.env = env
+	p.prompt = p.buildPrompt(dir)
+	p.cmdArgs = buildClaudeArgsFor(finishClaudeRun(p.prompt, p.sysPrompt, p.sessionID, p.opts))
 }
 
 // resolveFinishTracker resolves the tracker to accept within the project the
@@ -195,31 +215,47 @@ func resolveFinishTracker(cmd *cobra.Command, store storage.TaskStore, query str
 // planFinish assembles everything an acceptance run needs, without touching the
 // claim, git, or a single token.
 func planFinish(store storage.TaskStore, tracker *storage.Task, slug string, opts finishOptions) (*finishPlan, error) {
-	proj, _, err := preflightProject(store, slug)
+	proj, exec, err := preflightProject(store, slug)
 	if err != nil {
 		return nil, err
 	}
-	if opts.additional {
-		// Refused, not silently ignored. Claiming a slot from the shared pool
-		// (and telling the board about it) is pm-cli-100-5's work, and a flag
-		// that quietly ran in the main checkout instead would put an acceptance
-		// into the very checkout a slot exists to keep it out of.
-		return nil, fmt.Errorf("--additional is not wired up for `pm finish` yet (worktree slots for the acceptance run land in pm-cli-100-5) - run without it to accept in the main checkout at %s", proj.Path)
-	}
 
-	// There is deliberately NO clean-working-tree precondition here, unlike
-	// `pm work` and `pm run-epic`. Those two check out a branch in a checkout
-	// they do not own, so uncommitted work would be switched out from under the
-	// user; an acceptance forks no branch of its own - `batch-finish-auto` puts
-	// each sub's branch in a worktree it creates itself - so the main checkout
-	// is only where the run STANDS. Requiring it clean would refuse a legitimate
-	// acceptance because of unrelated edits sitting in the user's tree.
+	// There is deliberately NO clean-working-tree precondition here, and no
+	// fresh branch either, unlike `pm work` and `pm run-epic`. Those two check
+	// out a branch in a checkout they do not own, so uncommitted work would be
+	// switched out from under the user; an acceptance forks no branch of its own
+	// - `batch-finish-auto` puts each sub's branch in a worktree it creates
+	// itself - so the checkout it stands in is only somewhere to stand. Both
+	// halves hold in a slot too: the slot is claimed, seeded and locked, but
+	// never wiped or re-branched, because there is no branch of this run's to
+	// put on it.
 	stateDir := store.ProjectDir(slug)
 	sessionID := storage.NewSessionID()
 	reportPath := storage.FinishReportPath(stateDir, tracker.Meta.ID)
-	workDir := proj.Path
 
-	prompt := buildFinishPrompt(tracker, proj, slug, workDir, reportPath, opts.sim)
+	// An isolated slot is opt-in per run via --additional, from the SAME pool
+	// `pm work` and `pm run-epic` draw on: that shared pool is the reason the
+	// acceptance became a pm run at all. An odbiór needs the simulator and the
+	// dev-server port, and the batch it is accepting may still be holding one,
+	// so both sides queue on one set of locks instead of two protocols that
+	// know nothing about each other. Resolution only - the claim is at run
+	// start (executeFinish), so --dry-run takes nothing away from a live run.
+	workDir := proj.Path
+	env := []string(nil)
+	var slots []storage.ResolvedWorktree
+	if opts.additional {
+		slots = exec.ResolveWorktrees(proj.Path)
+		if len(slots) == 0 {
+			return nil, errNoWorktreeSlots(slug)
+		}
+		workDir = slots[0].Path // provisional until a slot is claimed
+		env = slots[0].Env
+	}
+
+	buildPrompt := func(dir string) string {
+		return buildFinishPrompt(tracker, proj, slug, dir, reportPath, opts.sim)
+	}
+	prompt := buildPrompt(workDir)
 	sysPrompt := buildFinishSystemPrompt(opts.sim)
 
 	return &finishPlan{
@@ -227,7 +263,9 @@ func planFinish(store storage.TaskStore, tracker *storage.Task, slug string, opt
 		stateDir: stateDir, workDir: workDir, sessionID: sessionID,
 		prompt: prompt, sysPrompt: sysPrompt,
 		cmdArgs:    buildClaudeArgsFor(finishClaudeRun(prompt, sysPrompt, sessionID, opts)),
-		reportPath: reportPath, opts: opts,
+		reportPath: reportPath,
+		worktree:   opts.additional, slots: slots, env: env,
+		buildPrompt: buildPrompt, opts: opts,
 	}, nil
 }
 
@@ -284,6 +322,28 @@ func printFinishDryRun(out io.Writer, plan *finishPlan) {
 	fmt.Fprintf(out, "# pm finish (dry-run)\nproject: %s\ntracker: %s %s\ncwd: %s\n",
 		plan.slug, plan.tracker.Meta.ID, plan.tracker.Meta.Title, plan.workDir)
 	fmt.Fprintf(out, "sim: %s\n", finishSimLabel(plan.opts.sim))
+	if plan.worktree {
+		if plan.opts.slotPin > 0 {
+			fmt.Fprintf(out, "run: ADDITIONAL worktree - slot %d of %d, claimed at run time (lock: %s)\n",
+				plan.opts.slotPin, len(plan.slots), ".pm-executor.lock")
+		} else {
+			fmt.Fprintf(out, "run: ADDITIONAL worktree - first free of %d slot(s), claimed at run time (lock: %s)\n",
+				len(plan.slots), ".pm-executor.lock")
+		}
+		for i, s := range plan.slots {
+			fmt.Fprintf(out, "  slot %d: %s", i+1, s.Path)
+			if len(s.Env) > 0 {
+				fmt.Fprintf(out, "  (env: %s)", strings.Join(s.Env, " "))
+			}
+			fmt.Fprintln(out)
+		}
+		// Said out loud because it is the one place the acceptance departs from
+		// what --additional means for `pm work`, and a reader who assumes the
+		// worktree gets wiped would expect their sub branches to survive it.
+		fmt.Fprintln(out, "  (the slot is claimed and seeded, never wiped or re-branched: an acceptance forks no branch of its own)")
+	} else {
+		fmt.Fprintln(out, "run: DEFAULT (main checkout, no clean-tree requirement)")
+	}
 	fmt.Fprintf(out, "model: %s | max turns: %d | timeout: %s\n", plan.opts.model, plan.opts.maxTurns, plan.opts.timeout)
 	fmt.Fprintf(out, "permissions: %s\n", finishPermissionsLabel(plan.opts.yolo))
 	fmt.Fprintf(out, "report: %s\n", plan.reportPath)
@@ -344,6 +404,24 @@ func executeFinish(plan *finishPlan) (*finishResult, error) {
 	}()
 	defer startFinishClaimRefresh(errOut, plan.stateDir, tracker, claim, storage.FinishClaimRefreshInterval)()
 
+	// The worktree slot comes AFTER the acceptance claim and before anything is
+	// written: the claim is the cheaper refusal (a second acceptance of this run
+	// must cost nothing but the message), and a slot held while the claim was
+	// about to be refused would block a `pm work` for no reason. The release is
+	// deferred, so it runs on every exit path - and the board frees it on this
+	// process's behalf if it is killed before the defer can run.
+	if plan.worktree {
+		slot, release, err := acquireWorktreeSlot(plan.proj, plan.slug, plan.slots, plan.opts.slotPin, tracker, storage.RunKindFinish)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		// Re-render for the CLAIMED slot: the plan was built against the
+		// provisional slot 1, and the prompt names the repo path.
+		plan.retarget(slot.Path, slot.Env)
+		fmt.Fprintf(errOut, "pm finish: claimed worktree slot %s\n", slot.Path)
+	}
+
 	// Nothing here checks whether the run being accepted has FINISHED, and that
 	// is deliberate: `batch-finish-auto` is built to start before the run ends
 	// and accept each sub as it lands, so a live run and a live acceptance of it
@@ -398,8 +476,12 @@ func executeFinish(plan *finishPlan) (*finishResult, error) {
 
 	stopHeartbeat := runw.Heartbeat(workerHeartbeatInterval)
 	defer stopHeartbeat()
+	// plan.env is the claimed slot's env (executor.env overlaid by the slot's
+	// own): the port and simulator id the project's scripts read, which is what
+	// makes two acceptances - or an acceptance and a batch - able to run at once
+	// without fighting over one runtime. Empty in the main checkout.
 	res, sessionID, err := runHeadless(errOut, "pm finish", plan.workDir, plan.cmdArgs, plan.opts.timeout,
-		plan.proj.ResolveClaudeConfigDir(), nil, plan.sessionID,
+		plan.proj.ResolveClaudeConfigDir(), plan.env, plan.sessionID,
 		// The worker leads its own process group, so publishing its pgid is the
 		// only handle the board has on it when it must SIGKILL this manager -
 		// a signal this process cannot forward.
