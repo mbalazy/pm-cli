@@ -90,8 +90,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				return err
 			}
 			if dryRun {
-				printEpicDryRun(plan, opts)
-				return nil
+				return printEpicDryRun(plan, opts)
 			}
 			return executeEpic(store, plan, opts)
 		},
@@ -165,6 +164,11 @@ type epicPlan struct {
 	// choice (see resolveEpicDoneStatus). Empty in the normal case; printed by
 	// both --dry-run and the real run so the fallback is never silent.
 	doneStatusNote string
+	// doneStatusGate is non-nil when the resolved done status is not in the
+	// project's `statuses`, i.e. the run cannot start. Resolved here, in the
+	// side-effect-free half, precisely so --dry-run sees the same verdict the
+	// real run does instead of reporting a plan that dies on its first line.
+	doneStatusGate error
 	epicBranch     string
 	baseBranch     string
 	slots          []storage.ResolvedWorktree
@@ -225,7 +229,8 @@ func planEpic(store storage.TaskStore, args []string, opts epicOptions) (*epicPl
 		workDir = describeSlotPool(slots)
 	}
 
-	doneStatus, doneNote := resolveEpicDoneStatus(exc, independentMode, store.GetProjectStatuses(slug))
+	statuses := store.GetProjectStatuses(slug)
+	doneStatus, doneNote := resolveEpicDoneStatus(exc, independentMode, statuses)
 
 	return &epicPlan{
 		tracker:        tracker,
@@ -237,6 +242,7 @@ func planEpic(store storage.TaskStore, args []string, opts epicOptions) (*epicPl
 		startStatus:    storage.TaskStatus(exc.StartStatus),
 		doneStatus:     doneStatus,
 		doneStatusNote: doneNote,
+		doneStatusGate: epicDoneStatusGate(doneStatus, slug, statuses),
 		epicBranch:     "epic/" + tracker.Meta.ID,
 		baseBranch:     resolveWorktreeBase(opts.base, execBase, "main"),
 		slots:          slots,
@@ -273,9 +279,32 @@ func resolveEpicDoneStatus(exc storage.Executor, independent bool, allowed []sto
 		fallback, want, want)
 }
 
+// epicDoneStatusGate is the precondition that a verify-green sub has somewhere
+// legal to land. MoveTask validates statuses, so with an unlisted done status
+// every "mark merged" move would fail AFTER the work had already merged into
+// the integration branch - and the re-entrant done check would re-drive those
+// subs on the next run.
+//
+// It lives in its own function because BOTH the real run and --dry-run have to
+// apply it. It used to be inline in executeEpic only, which made --dry-run
+// print a confident plan ("done status: merged") for a run that died on its
+// first line. A dry-run that reports readiness it has not checked is worse than
+// no dry-run: it is the check people trust instead of running the real thing.
+func epicDoneStatusGate(doneStatus storage.TaskStatus, slug string, allowed []storage.TaskStatus) error {
+	if statusAllowed(doneStatus, allowed) {
+		return nil
+	}
+	return fmt.Errorf("done status %q is not in project %s statuses - add it to project.yaml (statuses: [todo, doing, %s, ...]) before running the epic", doneStatus, slug, doneStatus)
+}
+
 // printEpicDryRun renders the resolved plan (subs, branches, readiness) plus
 // the once-per-run commands the real run would execute.
-func printEpicDryRun(plan *epicPlan, opts epicOptions) {
+//
+// It prints the WHOLE plan before reporting a blocker, and then returns it as
+// an error: a dry-run should show everything it resolved (that is what it is
+// for), and it should also exit non-zero when it can already see the real run
+// will refuse to start.
+func printEpicDryRun(plan *epicPlan, opts epicOptions) error {
 	printEpicPlan(opts.stdout(), plan.tracker, plan.epicBranch, plan.baseBranch, plan.startStatus, plan.doneStatus,
 		plan.subs, opts.additional, plan.workDir, plan.independent)
 	if plan.doneStatusNote != "" {
@@ -289,6 +318,7 @@ func printEpicDryRun(plan *epicPlan, opts epicOptions) {
 	if bl := strings.TrimSpace(plan.exc.Baseline); bl != "" {
 		fmt.Fprintf(opts.stdout(), "\nbaseline (once per run, injected into every worker prompt): %s\n", bl)
 	}
+	return plan.doneStatusGate
 }
 
 // executeEpic is the manager loop proper: claim the worktree slot, set up the
@@ -300,13 +330,11 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	independentMode := plan.independent
 	errOut := opts.stderr()
 
-	// Hard gate, not a warning: MoveTask validates statuses, so with an
-	// unlisted done status every "mark merged" move would fail AFTER the
-	// work merged into the integration branch - and the re-entrant done
-	// check would re-drive those subs on the next run. Deliberately here and
-	// not in planEpic: --dry-run has always printed the plan regardless.
-	if !statusAllowed(doneStatus, store.GetProjectStatuses(slug)) {
-		return fmt.Errorf("done status %q is not in project %s statuses - add it to project.yaml (statuses: [todo, doing, %s, ...]) before running the epic", doneStatus, slug, doneStatus)
+	// Hard gate, not a warning (see epicDoneStatusGate). Resolved in planEpic
+	// so --dry-run reaches the same verdict; still enforced here, before any
+	// branch or status is touched.
+	if err := plan.doneStatusGate; err != nil {
+		return err
 	}
 	if plan.doneStatusNote != "" {
 		fmt.Fprintf(errOut, "pm run-epic: %s\n", plan.doneStatusNote)

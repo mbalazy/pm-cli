@@ -35,17 +35,81 @@ func formatChecks(checks []check) string {
 	return b.String()
 }
 
+// TestDoctorNoExecutorBlock: a bare project is the FRESH project, and doctor
+// used to stop at "no executor block" and call it healthy - while its default
+// `statuses` list holds neither landing status, so its first real `pm run-epic`
+// dies at the gate. The block warning alone does not say that.
 func TestDoctorNoExecutorBlock(t *testing.T) {
 	checks := runExecutorDoctor(&storage.Project{Name: "Bare", Path: t.TempDir()})
-	if len(checks) != 1 || checks[0].Level != levelWarn {
-		t.Fatalf("expected a single warning, got %s", formatChecks(checks))
+
+	if levelOf(t, checks, "no `executor` block") != levelWarn {
+		t.Error("a missing block is a completeness warning, not an error")
+	}
+	// DefaultStatuses is [todo doing waiting done] - no `merged`, no `pushed`.
+	for _, want := range []string{"merged", "pushed"} {
+		c := findCheck(checks, "landing status not in the project's statuses: "+want)
+		if c == nil {
+			t.Fatalf("a fresh project must be told %q is missing: %s", want, formatChecks(checks))
+		}
+		if c.Level != levelWarn {
+			t.Errorf("landing status %q: want WARN, got %s", want, c.Level.tag())
+		}
 	}
 	if failed(checks, false) {
 		t.Error("a missing block must not fail by default")
 	}
 	if !failed(checks, true) {
-		t.Error("--strict must fail on the warning")
+		t.Error("--strict must fail on the warnings")
 	}
+}
+
+// TestDoctorBaselineUnset: the missing baseline is the most expensive omission
+// the executor journal records (workers blame pre-existing breakage on their
+// own diff), and it was invisible - doctor reported 0 errors on a project that
+// had gone seven runs without one.
+func TestDoctorBaselineUnset(t *testing.T) {
+	t.Run("unset warns", func(t *testing.T) {
+		proj, _ := handoffProject(t, "# playbook\nmeasure-element.py, read-rn-logs.sh\n")
+		proj.Executor.Baseline = ""
+
+		checks := runExecutorDoctor(proj)
+		c := findCheck(checks, "`baseline` is unset")
+		if c == nil {
+			t.Fatalf("expected a baseline finding: %s", formatChecks(checks))
+		}
+		if c.Level != levelWarn {
+			t.Error("a run without a baseline still works (pre-0.25 behaviour), so WARN, not ERROR")
+		}
+		if failed(checks, false) {
+			t.Error("a warning must not fail the command by default")
+		}
+		// The bound verify command is the strongest evidence of what the
+		// baseline should be, so the hint names it instead of staying generic.
+		if !strings.Contains(c.Hint, "yarn validate") {
+			t.Errorf("hint should point at the configured verify cmd, got %q", c.Hint)
+		}
+	})
+
+	t.Run("unset with no verify binding still warns, generically", func(t *testing.T) {
+		proj, _ := handoffProject(t, "# playbook\nmeasure-element.py, read-rn-logs.sh\n")
+		proj.Executor.Baseline = ""
+		proj.Executor.Phases = nil
+
+		c := findCheck(runExecutorDoctor(proj), "`baseline` is unset")
+		if c == nil {
+			t.Fatal("the warning must not depend on a verify binding existing")
+		}
+		if !strings.Contains(c.Hint, "pm executor init") {
+			t.Errorf("with nothing to point at, the hint should name the tool that fills it, got %q", c.Hint)
+		}
+	})
+
+	t.Run("set says so", func(t *testing.T) {
+		proj, _ := handoffProject(t, "# playbook\nmeasure-element.py, read-rn-logs.sh\n")
+		if levelOf(t, runExecutorDoctor(proj), "baseline -> yarn validate") != levelOK {
+			t.Error("a configured baseline is a passing finding")
+		}
+	})
 }
 
 func TestDoctorMissingProjectPath(t *testing.T) {
