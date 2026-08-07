@@ -80,7 +80,10 @@ type RunState struct {
 // SubRun is the per-sub progress/outcome within a run.
 type SubRun struct {
 	ID string `json:"id"`
-	// pending | running | merged | pushed | verified | blocked | failed | conflict | skipped | manual.
+	// pending | running | merged | pushed | verified | blocked | failed |
+	// conflict | skipped | manual | aborted, plus done | partial for an
+	// acceptance run (RunKindFinish), whose one entry carries the verdict on
+	// the tracker it accepted.
 	// The three green words differ by what the RUN did with the work: merged
 	// into the epic branch, pushed to origin (independent), or verified only
 	// (standalone `pm work`, which ends in a draft PR).
@@ -134,6 +137,14 @@ func FinishRunPath(projectDir, taskID string) string {
 // acceptance run.
 func FinishRunLogPath(projectDir, taskID string) string {
 	return filepath.Join(executorRunDir(projectDir), taskID+finishRunInfix+".log")
+}
+
+// FinishReportPath is where an acceptance run's final markdown report is
+// written - the artifact a human reads in the morning, beside the run-state it
+// belongs to. Deliberately NOT a `.json`, so readRunStatesDir never has to
+// consider it at all.
+func FinishReportPath(projectDir, taskID string) string {
+	return filepath.Join(executorRunDir(projectDir), taskID+finishRunInfix+".md")
 }
 
 // runStatePath is the ONE place that decides which file a run-state belongs in.
