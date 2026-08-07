@@ -1,7 +1,6 @@
 package board
 
 import (
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -29,9 +28,15 @@ func TestExecHeartbeatAge(t *testing.T) {
 }
 
 func TestDashboardShowsHeartbeatOnlyWhileAWorkerRuns(t *testing.T) {
-	// A worker is in flight: own pid, status running, session pinned.
+	// A worker is in flight: a live pid, status running, session pinned.
+	//
+	// The pid is 1, not our own: liveness compares the holder's START TIME with
+	// the run's Started stamp (a pid that started after the stamp is a recycled
+	// number, not our manager), and a test binary is younger than the ten
+	// minutes this run claims to have been going. pid 1 is alive on every
+	// machine and older than any stamp a test can write.
 	live := &storage.RunState{
-		TaskID: "p-1", Kind: "run-epic", Status: storage.RunStatusRunning, PID: os.Getpid(),
+		TaskID: "p-1", Kind: "run-epic", Status: storage.RunStatusRunning, PID: 1,
 		Started:        time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339),
 		Updated:        time.Now().Add(-20 * time.Second).UTC().Format(time.RFC3339),
 		CurrentSub:     "p-1-1",

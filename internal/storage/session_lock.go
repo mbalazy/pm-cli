@@ -65,7 +65,7 @@ func LiveSessionHolder(projectDir string, slot int) *SessionLock {
 	if err != nil || lk == nil {
 		return nil
 	}
-	if !ProcessAlive(lk.PID) {
+	if !ProcessAliveSinceStamp(lk.PID, lk.Started) {
 		return nil
 	}
 	return lk

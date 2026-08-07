@@ -283,7 +283,7 @@ func LiveWorktreeHolder(worktreePath string) *WorktreeLock {
 	if err != nil || lk == nil {
 		return nil
 	}
-	if lk.PID == os.Getpid() || !ProcessAlive(lk.PID) {
+	if lk.PID == os.Getpid() || !ProcessAliveSinceStamp(lk.PID, lk.Started) {
 		return nil
 	}
 	return lk
@@ -364,7 +364,12 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 				}
 				return os.Rename(refresh, path)
 			}
-			if ProcessAlive(existing.PID) {
+			// Started is the second criterion: a holder pid that belongs to a
+			// process which started AFTER this lock was stamped is a recycled
+			// number, not our holder, and the lock is stale (see
+			// ProcessAliveSince). Without it a reboot-orphaned lock kept the
+			// slot busy until somebody deleted the file by hand.
+			if ProcessAliveSinceStamp(existing.PID, existing.Started) {
 				return &WorktreeBusyError{Holder: existing}
 			}
 		}

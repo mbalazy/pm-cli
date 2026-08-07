@@ -130,10 +130,11 @@ const liveWindow = 24 * time.Hour
 // {kind, taskID, pid} - a key two different runs can share once a pid is
 // recycled.
 //
-// alive reports whether a pid still belongs to a live process and now is the
-// reference time for liveWindow; both are parameters so tests can pin them
-// (production passes storage.ProcessAlive and time.Now()).
-func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool, now time.Time) journalStats {
+// alive reports whether a pid still belongs to the process that was running at
+// the given time, and now is the reference time for liveWindow; both are
+// parameters so tests can pin them (production passes storage.ProcessAliveSince
+// and time.Now()).
+func aggregateJournal(entries []storage.JournalEntry, alive func(int, time.Time) bool, now time.Time) journalStats {
 	st := journalStats{
 		Entries:    len(entries),
 		Kinds:      make(map[string]*kindStats),
@@ -237,15 +238,16 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool, now 
 
 	// Whatever is still open never got a terminal line. A live holder pid on a
 	// RECENT start means the run is in flight right now (stats is routinely run
-	// mid-epic); anything else is the documented crash. Same signal-0 liveness
-	// check the TUI uses, bounded by liveWindow so a recycled pid on an ancient
-	// entry cannot masquerade as a live run.
+	// mid-epic); anything else is the documented crash. Same liveness check the
+	// TUI uses - including its second criterion, the start line's own stamp, so
+	// a pid recycled since that line was written reads as the crash it is. The
+	// liveWindow bound stays as the backstop for the platforms that cannot
+	// report a process start time.
 	for key, n := range open {
 		if n == 0 {
 			continue // fully paired run - the counter is just a leftover map key
 		}
 		stamps := startTS[key]
-		live := key.pid > 0 && alive != nil && alive(key.pid)
 		k := st.kind(key.kind)
 		// Classify each open start SEPARATELY. A pid maps to at most one live
 		// process, so even when the pid is alive only the NEWEST still-open
@@ -256,7 +258,7 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool, now 
 			if i < len(stamps) {
 				ts = stamps[i] // oldest first
 			}
-			if live && i == n-1 && recent(ts, now) {
+			if i == n-1 && recent(ts, now) && aliveSince(alive, key.pid, ts) {
 				st.Running++
 				k.Statuses[runStatusRunning]++
 			} else {
@@ -266,6 +268,22 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int) bool, now 
 		}
 	}
 	return st
+}
+
+// aliveSince asks the liveness predicate about a holder pid, handing it the
+// start line's own stamp as the reference: the run was demonstrably alive when
+// that line was written, so a process now bearing the pid but younger than the
+// line is a recycled number and the run is a crash. An unparseable stamp passes
+// the zero time, which degrades to bare pid liveness (see ProcessAliveSince).
+func aliveSince(alive func(int, time.Time) bool, pid int, stamp string) bool {
+	if pid <= 0 || alive == nil {
+		return false
+	}
+	ts, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		return alive(pid, time.Time{})
+	}
+	return alive(pid, ts)
 }
 
 // recent reports whether an RFC3339 stamp is within liveWindow of now. A
@@ -487,7 +505,7 @@ func newExecutorStatsCmd(store storage.TaskStore) *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "no executor runs recorded yet for %s (%s)\n", slug, path)
 				return nil
 			}
-			stats := aggregateJournal(entries, storage.ProcessAlive, time.Now())
+			stats := aggregateJournal(entries, storage.ProcessAliveSince, time.Now())
 			fmt.Fprint(cmd.OutOrStdout(), renderJournalStats(slug, path, stats))
 			return nil
 		},

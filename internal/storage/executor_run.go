@@ -258,12 +258,14 @@ func ReadRunStates(projectDir string) map[string]*RunState {
 
 // IsLive reports whether the run is marked running AND its process is still
 // alive. A crashed executor leaves status=running with a dead PID; this lets the
-// TUI distinguish "running" from "stopped (stale)".
+// TUI distinguish "running" from "stopped (stale)". The run's own Started stamp
+// is the second criterion, so a run-state left behind by a crash stops reading
+// as live the moment its pid is handed to somebody else.
 func (st *RunState) IsLive() bool {
 	if st == nil || st.Status != RunStatusRunning || st.PID <= 0 {
 		return false
 	}
-	return ProcessAlive(st.PID)
+	return ProcessAliveSinceStamp(st.PID, st.Started)
 }
 
 // Kill signals the run's whole process group, falling back to the bare pid, AND
@@ -291,18 +293,6 @@ func (st *RunState) Kill(sig syscall.Signal) error {
 		return nil
 	}
 	return syscall.Kill(st.PID, sig)
-}
-
-// ProcessAlive reports whether pid refers to a live process (Unix: signal 0).
-func ProcessAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return p.Signal(syscall.Signal(0)) == nil
 }
 
 // NewSessionID returns a random UUIDv4 used to pin a worker's session id up
