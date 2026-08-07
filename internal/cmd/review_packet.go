@@ -38,6 +38,29 @@ const reviewPacketHeader = "\n\n---\n## The change under review (attached by pm,
 	"You have it already: do not go looking for it. Read a file only when the diff genuinely does not tell you enough, " +
 	"and judge the change on what is here plus the criteria you were given.\n\n"
 
+// reviewDocPacketHeader replaces the header above when nothing but prose
+// changed. The generic brief is a category error on a document: it sends an
+// adversarial reviewer looking for correctness bugs, unhandled cases and style
+// violations in text that has none of those, and what it finds instead is
+// wording to argue about. What CAN be wrong in a document is what it claims
+// about the code - and checking that is a bounded job that ends.
+//
+// This is the half of the doc-only regime that makes the single reviewer worth
+// having rather than merely cheap. The reviewer keeps Read/Grep/Glob (only Bash
+// went in 0.38.0), so it can resolve every path and symbol the document cites.
+const reviewDocPacketHeader = "\n\n---\n## The document under review (attached by pm, not by the agent that spawned you)\n\n" +
+	"This change is documentation only - no code changed - so pm has given you the document's full diff and a " +
+	"narrower job than a code review. Review it as a DOCUMENT:\n\n" +
+	"- Every factual claim it makes about this codebase has to hold. Resolve the paths, symbols, commands and line " +
+	"references it cites, and report each one that does not exist or does not say what the document says it does.\n" +
+	"- Report steps a reader could not actually follow: a script, file or command that is not there, or state the " +
+	"document never establishes before relying on it.\n" +
+	"- Report content copied from somewhere that already owns it (a skill, a README, another document), where a " +
+	"reference would stay correct and a copy will not.\n" +
+	"- Do NOT review wording, tone, structure or formatting, and do not propose rewrites.\n\n" +
+	"pm allows ONE reviewer and ONE round for a documentation change, so this is the review: report what you " +
+	"actually verified, and say plainly what you did not get to.\n\n"
+
 const reviewPacketTruncNote = "\n\n(The full diff exceeded the size pm will put in a prompt. Above is the file-by-file summary " +
 	"followed by the largest changed files in full. The files not shown in full are named in the summary - read those from " +
 	"the working tree if a finding depends on them.)\n"
@@ -169,5 +192,22 @@ func buildReviewPacket(dir, baseSHA string) string {
 	if strings.TrimSpace(body) == "" {
 		return ""
 	}
-	return reviewPacketHeader + "```diff\n" + body + "\n```\n"
+	header := reviewPacketHeader
+	if docOnlyDiff(dir, baseSHA) {
+		header = reviewDocPacketHeader
+	}
+	return header + "```diff\n" + body + "\n```\n"
+}
+
+// docOnlyDiff reports whether every changed file is prose. It re-measures
+// rather than taking the answer from the caller that already knows: the two
+// call sites are a refusal and a rewrite, they run at different moments of the
+// hook, and threading one boolean through the rewrite path to save a numstat
+// that costs milliseconds would trade a real coupling for nothing.
+func docOnlyDiff(dir, baseSHA string) bool {
+	if dir == "" || baseSHA == "" {
+		return false
+	}
+	_, _, docOnly := parseNumstat(gitDiffAll(dir, baseSHA, "--numstat"))
+	return docOnly
 }

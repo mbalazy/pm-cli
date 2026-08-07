@@ -249,7 +249,14 @@ func judgeAgentSpawn(opts guardOptions, ev hookEvent, now time.Time) string {
 		_ = storage.AppendReviewSpawn(opts.telemetryPath, rec)
 		return nestedDenyMessage
 	}
-	files, lines, sized := diffStats(guardDir(ev), opts.diffBase)
+	size := diffStats(guardDir(ev), opts.diffBase)
+	// A doc-only change lowers the round ceiling as well as the reviewer count,
+	// and both halves depend on the diff being measurable at all - an
+	// unestablishable diff leaves the project's own configured number standing.
+	rounds := opts.fixRounds
+	if size.ok {
+		rounds = effectiveFixRounds(opts.fixRounds, size.docOnly)
+	}
 
 	deny := ""
 	_ = storage.WithReviewTelemetryLock(opts.telemetryPath, func() error {
@@ -260,11 +267,11 @@ func judgeAgentSpawn(opts guardOptions, ev hookEvent, now time.Time) string {
 			// worker to add a reviewer to a round it may not open would send it
 			// straight back here.
 			switch {
-			case opts.fixRounds > 0 && roundIndex(spawns, now, storage.ReviewRoundGap) > opts.fixRounds:
-				deny = roundDenyMessage(opts.fixRounds)
+			case rounds > 0 && roundIndex(spawns, now, storage.ReviewRoundGap) > rounds:
+				deny = roundDenyMessage(rounds, size.ok && size.docOnly)
 				rec.Denied = true
-			case sized && spawnsThisRound(spawns, now, storage.ReviewRoundGap) >= reviewerCap(files, lines):
-				deny = capDenyMessage(reviewerCap(files, lines), files, lines)
+			case size.ok && spawnsThisRound(spawns, now, storage.ReviewRoundGap) >= size.cap():
+				deny = capDenyMessage(size.cap(), size.files, size.lines, size.docOnly)
 				rec.Denied = true
 			}
 		}
