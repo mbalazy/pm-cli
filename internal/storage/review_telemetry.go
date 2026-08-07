@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -36,16 +37,24 @@ type ReviewSpawn struct {
 	// burned 6.1M tokens over 65 tool calls.
 	Nested    bool   `json:"nested,omitempty"`
 	AgentType string `json:"agent_type,omitempty"` // spawning agent's type, nested spawns only
+	// Denied marks a spawn the guard REFUSED. It is recorded anyway, and kept
+	// out of every other count: it never ran, so it must not consume the round's
+	// budget or show up as review that happened. A refusal is the single most
+	// interesting line this file can carry - it is the evidence the cap did
+	// something - so dropping it would make an enforced run look like one where
+	// the worker simply behaved.
+	Denied bool `json:"denied,omitempty"`
 }
 
 // ReviewTelemetry is the per-sub rollup stored on SubRun and in the journal.
 // A pointer field on both, so entries written before this existed stay nil and
 // omitempty keeps them byte-identical rather than gaining empty keys.
 type ReviewTelemetry struct {
-	Spawns   int `json:"spawns"`              // total subagent spawns observed
-	Rounds   int `json:"rounds,omitempty"`    // derived: clusters of spawns (see reviewRoundGap)
+	Spawns   int `json:"spawns"`              // subagent spawns that actually ran
+	Rounds   int `json:"rounds,omitempty"`    // derived: clusters of spawns (see ReviewRoundGap)
 	Nested   int `json:"nested,omitempty"`    // of Spawns, how many came from inside another subagent
 	WithDiff int `json:"with_diff,omitempty"` // of Spawns, how many were handed the diff
+	Denied   int `json:"denied,omitempty"`    // spawns the cap refused - these never ran
 	// Models lists the distinct models the spawns asked for, comma-joined and
 	// sorted; "inherit" stands for a spawn that named no model (the caller-side
 	// model wins over an agent definition's, so "inherit" and an explicit name
@@ -53,14 +62,14 @@ type ReviewTelemetry struct {
 	Models string `json:"models,omitempty"`
 }
 
-// reviewRoundGap separates one review round from the next. Measured 2026-08-07
+// ReviewRoundGap separates one review round from the next. Measured 2026-08-07
 // against a live claude 2.1.224: subagents spawned in parallel within ONE
 // assistant turn arrive 0.6-0.9s apart, while a new round costs a full reviewer
 // run - the reviewers in epic orbit-106 made 13-75 tool calls each, i.e.
 // minutes. Nothing in the hook payload groups a turn's tool calls together
 // (session_id and prompt_id are shared by the whole user turn AND by the
 // subagents' own calls), so the gap is the available signal.
-const reviewRoundGap = 30 * time.Second
+const ReviewRoundGap = 30 * time.Second
 
 // ReviewTelemetryPath is where the hook writes a worker's spawns. Keyed by the
 // worker's session id, which pm mints and pins with `claude --session-id`, so
@@ -92,6 +101,38 @@ func AppendReviewSpawn(path string, s ReviewSpawn) error {
 	defer f.Close()
 	_, err = f.Write(append(b, '\n'))
 	return err
+}
+
+// WithReviewTelemetryLock runs fn holding an exclusive flock on the telemetry
+// file, so a read-decide-append cycle in one hook process cannot interleave with
+// another's. The hook processes for a turn's parallel spawns are separate
+// processes, and the decision they make (is this spawn within the round's cap?)
+// reads what the others have written.
+//
+// In practice the observed spacing between parallel spawns is 0.6-0.9s against a
+// hook that runs in milliseconds, so the window is tiny - but the cost of the
+// race is letting a spawn past a cap that exists precisely to be unarguable, and
+// a flock is the same mechanism LockProject already uses.
+//
+// Degrades to running fn unlocked if the lock cannot be taken: a worker must
+// never stall because a lock file could not be opened.
+func WithReviewTelemetryLock(path string, fn func() error) error {
+	if path == "" {
+		return fn()
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fn()
+	}
+	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return fn()
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fn()
+	}
+	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+	return fn()
 }
 
 // ReadReviewSpawns reads a telemetry file, skipping corrupt lines like
@@ -133,13 +174,19 @@ func ReadReviewSpawns(path string) ([]ReviewSpawn, error) {
 // reviewer is already running, so counting it would inflate the round count with
 // something that is not a review->fix round at all.
 func AggregateReviewSpawns(spawns []ReviewSpawn) *ReviewTelemetry {
-	t := &ReviewTelemetry{Spawns: len(spawns)}
+	t := &ReviewTelemetry{}
 	if len(spawns) == 0 {
 		return t
 	}
 	models := map[string]bool{}
 	var topTimes []time.Time
 	for _, s := range spawns {
+		// A refused spawn never ran: it counts as a refusal and nothing else.
+		if s.Denied {
+			t.Denied++
+			continue
+		}
+		t.Spawns++
 		if s.Nested {
 			t.Nested++
 		}
@@ -172,7 +219,7 @@ func AggregateReviewSpawns(spawns []ReviewSpawn) *ReviewTelemetry {
 	if len(topTimes) > 0 {
 		t.Rounds = 1
 		for i := 1; i < len(topTimes); i++ {
-			if topTimes[i].Sub(topTimes[i-1]) > reviewRoundGap {
+			if topTimes[i].Sub(topTimes[i-1]) > ReviewRoundGap {
 				t.Rounds++
 			}
 		}
@@ -223,5 +270,6 @@ func CollectReviewTelemetry(projectDir, sessionID string) *ReviewTelemetry {
 		return nil
 	}
 	_ = os.Remove(path)
+	_ = os.Remove(path + ".lock")
 	return AggregateReviewSpawns(spawns)
 }

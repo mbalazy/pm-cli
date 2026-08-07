@@ -104,6 +104,7 @@ type journalStats struct {
 	Rounds       numStat
 	NestedSpawns int
 	DiffSpawns   int
+	DeniedSpawns int
 	ReviewModels map[string]int // model (or "inherit") -> subs that asked for it
 }
 
@@ -343,6 +344,7 @@ func (s *journalStats) addSubs(subs []storage.JournalSub) {
 			s.Rounds.addSample(float64(r.Rounds))
 			s.NestedSpawns += r.Nested
 			s.DiffSpawns += r.WithDiff
+			s.DeniedSpawns += r.Denied
 			if s.ReviewModels == nil {
 				s.ReviewModels = map[string]int{}
 			}
@@ -505,6 +507,11 @@ func renderReviewStats(b *strings.Builder, st journalStats) {
 	fmt.Fprintf(b, "  rounds    %.0f total, %.1f avg per sub\n", st.Rounds.Total, st.Rounds.avg())
 	if st.Spawns.Total > 0 {
 		fmt.Fprintf(b, "  with diff %d of %.0f spawn(s) were handed the diff\n", st.DiffSpawns, st.Spawns.Total)
+	}
+	if st.DeniedSpawns > 0 {
+		// The only visible evidence that the cap did anything. Without it an
+		// enforced run and a well-behaved one look identical in the rollup.
+		fmt.Fprintf(b, "  refused   %d spawn(s) refused by the cap (these never ran)\n", st.DeniedSpawns)
 	}
 	if st.NestedSpawns > 0 {
 		// Called out rather than folded into the total: these are spawned from

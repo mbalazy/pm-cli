@@ -469,6 +469,11 @@ type workPlan struct {
 	// starts and two concurrent workers never share a file. Lives in the pm data
 	// dir next to the run-state, NOT in the git repo.
 	telemetryPath string
+	// diffBase is the commit the worker starts from, pinned right before it
+	// spawns. The guard hook sizes the reviewer cap against the diff since this
+	// sha - exact, unlike a branch name (which drifts as the worker commits) or
+	// a merge-base against a trunk whose name a hook cannot know.
+	diffBase string
 }
 
 // warnInertFlags surfaces flag combinations that silently do nothing. A
@@ -594,7 +599,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 	prompt := buildPrompt(workDir)
 	sysPrompt := buildWorkerSystemPrompt(exec, opts.standalone, opts.independent)
 	telemetryPath := storage.ReviewTelemetryPath(store.ProjectDir(task.Project), sessionID)
-	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo, telemetryPath)
+	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo, telemetryPath, "")
 
 	// Standalone only: the epic manager runs prepare ITSELF, once per run,
 	// right after claiming the slot - not per sub (5 subs must not mean 5
@@ -628,7 +633,7 @@ func (p *workPlan) retarget(dir string, env []string) {
 	p.workDir = dir
 	p.env = env
 	p.prompt = p.buildPrompt(dir)
-	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.maxTurns, p.opts.yolo, p.telemetryPath)
+	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.maxTurns, p.opts.yolo, p.telemetryPath, p.diffBase)
 }
 
 // workerHeartbeatInterval is how often a live worker's run-state is re-stamped.
@@ -690,7 +695,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		fmt.Fprintf(opts.stderr(), "pm work: baseline in %s: %s\n", dir, plan.baselineCmd)
 		if section := captureBaseline(opts.stderr(), dir, plan.baselineCmd); section != "" {
 			plan.prompt += "\n" + section
-			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.telemetryPath)
+			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.telemetryPath, plan.diffBase)
 			baselineUsed = plan.baselineCmd
 		}
 	}
@@ -771,6 +776,14 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// spawned nobody leaves an empty file rather than no file - see
 	// storage.InitReviewTelemetry.
 	storage.InitReviewTelemetry(plan.telemetryPath)
+	// Pin the commit the worker starts from. Everything after this is the
+	// worker's own diff, which is what the guard sizes the reviewer cap against.
+	// Best-effort: without it the cap degrades to allow-everything, exactly as
+	// before the cap existed.
+	if sha := gitHeadSHA(dir); sha != "" && sha != plan.diffBase {
+		plan.diffBase = sha
+		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.telemetryPath, plan.diffBase)
+	}
 	stopHeartbeat := hbw.Heartbeat(workerHeartbeatInterval)
 	// Stopping is idempotent, so the defer only matters if runWorker panics -
 	// without it a panic would leave a goroutine stamping "running" forever.
@@ -872,7 +885,7 @@ func modeLabel(standalone bool) string {
 }
 
 // buildClaudeArgs assembles the `claude -p` argv for a worker run.
-func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, yolo bool, telemetryPath string) []string {
+func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, yolo bool, telemetryPath, diffBase string) []string {
 	args := []string{
 		"-p", prompt,
 		"--append-system-prompt", sysPrompt,
@@ -892,7 +905,7 @@ func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, y
 	// Claude Code materializes this inline JSON into /tmp/claude-settings-<uuid>.json
 	// and does not remove it, so a machine that has run N workers carries N of
 	// these ~110-byte files. Harmless, but do not go hunting for what wrote them.
-	if guard := workerGuardSettings(telemetryPath); guard != "" {
+	if guard := workerGuardSettings(telemetryPath, diffBase); guard != "" {
 		args = append(args, "--settings", guard)
 	}
 	if yolo {

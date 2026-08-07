@@ -8,6 +8,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/spf13/cobra"
@@ -159,6 +160,7 @@ func guardWriteDenyMessage(p string) string {
 type hookEvent struct {
 	ToolName  string `json:"tool_name"`
 	SessionID string `json:"session_id"`
+	Cwd       string `json:"cwd"`
 	AgentID   string `json:"agent_id"`
 	AgentType string `json:"agent_type"`
 	ToolInput struct {
@@ -192,20 +194,71 @@ func promptCarriesDiff(prompt string) bool {
 	return false
 }
 
-// recordReviewSpawn writes one telemetry line for a subagent spawn. Best-effort
-// by design: this is observability, and a worker must never die because a
-// telemetry file could not be written.
-func recordReviewSpawn(telemetryPath string, ev hookEvent) {
-	if telemetryPath == "" {
-		return
-	}
-	_ = storage.AppendReviewSpawn(telemetryPath, storage.ReviewSpawn{
+// spawnRecord is the telemetry line for one observed spawn.
+func spawnRecord(ev hookEvent, now time.Time) storage.ReviewSpawn {
+	return storage.ReviewSpawn{
+		// Stamped with the instant the decision is made, not left to the append
+		// to fill in, so the time a spawn is JUDGED against and the time it is
+		// RECORDED at can never disagree.
+		TS:           now.Format(time.RFC3339Nano),
 		Model:        ev.ToolInput.Model,
 		SubagentType: ev.ToolInput.SubagentType,
 		HasDiff:      promptCarriesDiff(ev.ToolInput.Prompt),
 		Nested:       ev.AgentID != "",
 		AgentType:    ev.AgentType,
+	}
+}
+
+// judgeAgentSpawn decides what happens to a subagent spawn: it is recorded
+// either way, and refused when it would exceed the round's cap. Returns the
+// deny reason, or "" to allow.
+//
+// The recording is deliberately unconditional. A refused spawn is the single
+// most interesting event this telemetry can capture - it is the evidence that
+// the cap is doing something - and dropping it would leave the run looking like
+// one where the worker simply behaved.
+//
+// Degrades to allow-and-record on anything it cannot establish: no telemetry
+// path, no diff base, a git command that fails. A cap that guesses would refuse
+// legitimate work on a repo shape nobody anticipated, and the failure it is
+// guarding against costs tokens, not correctness.
+func judgeAgentSpawn(telemetryPath, diffBase string, ev hookEvent, now time.Time) string {
+	rec := spawnRecord(ev, now)
+	if telemetryPath == "" {
+		if rec.Nested {
+			return nestedDenyMessage
+		}
+		return ""
+	}
+	if rec.Nested {
+		rec.Denied = true
+		_ = storage.AppendReviewSpawn(telemetryPath, rec)
+		return nestedDenyMessage
+	}
+	dir := ev.Cwd
+	if dir == "" {
+		dir, _ = os.Getwd()
+	}
+	files, lines, ok := diffStats(dir, diffBase)
+	if !ok {
+		_ = storage.AppendReviewSpawn(telemetryPath, rec)
+		return ""
+	}
+	cap := reviewerCap(files, lines)
+
+	deny := ""
+	_ = storage.WithReviewTelemetryLock(telemetryPath, func() error {
+		spawns, err := storage.ReadReviewSpawns(telemetryPath)
+		if err == nil && spawnsThisRound(spawns, now, storage.ReviewRoundGap) >= cap {
+			deny = capDenyMessage(cap, files, lines)
+			rec.Denied = true
+		}
+		// Recorded inside the lock, so a concurrent hook deciding the same round
+		// sees this spawn - and sees whether it was allowed.
+		_ = storage.AppendReviewSpawn(telemetryPath, rec)
+		return nil
 	})
+	return deny
 }
 
 // runWorkerGuard implements the hook: exit 2 (with the reason on stderr) blocks
@@ -215,7 +268,7 @@ func recordReviewSpawn(telemetryPath string, ev hookEvent) {
 // 0. A guard that fails closed would break every worker on the machine the first
 // time the payload shape changes, and it is not the last line of defence: the
 // disallow list and the prompt rule cover the same ground.
-func runWorkerGuard(in io.Reader, errOut io.Writer, telemetryPath string) int {
+func runWorkerGuard(in io.Reader, errOut io.Writer, telemetryPath, diffBase string) int {
 	data, err := io.ReadAll(io.LimitReader(in, 1<<20))
 	if err != nil || len(data) == 0 {
 		return 0
@@ -236,15 +289,16 @@ func runWorkerGuard(in io.Reader, errOut io.Writer, telemetryPath string) int {
 			return 2
 		}
 	case agentToolNames[ev.ToolName]:
-		// Observation only for now - the spawn is always allowed. Enforcing a
-		// cap here is a separate change with its own probe.
-		recordReviewSpawn(telemetryPath, ev)
+		if reason := judgeAgentSpawn(telemetryPath, diffBase, ev, time.Now()); reason != "" {
+			fmt.Fprintln(errOut, reason)
+			return 2
+		}
 	}
 	return 0
 }
 
 func newWorkerGuardCmd() *cobra.Command {
-	var telemetry string
+	var telemetry, diffBase string
 	c := &cobra.Command{
 		Use:    "worker-guard",
 		Short:  "PreToolUse hook for headless workers (internal)",
@@ -252,20 +306,21 @@ func newWorkerGuardCmd() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if code := runWorkerGuard(cmd.InOrStdin(), cmd.ErrOrStderr(), telemetry); code != 0 {
+			if code := runWorkerGuard(cmd.InOrStdin(), cmd.ErrOrStderr(), telemetry, diffBase); code != 0 {
 				os.Exit(code)
 			}
 			return nil
 		},
 	}
 	c.Flags().StringVar(&telemetry, "telemetry", "", "path to the review telemetry JSONL for this worker")
+	c.Flags().StringVar(&diffBase, "diff-base", "", "commit the worker started from; the reviewer cap is sized against the diff since it")
 	return c
 }
 
 // workerGuardSettings renders the --settings payload that attaches the guard to a
 // worker, or "" when pm cannot resolve its own binary (the guard is then simply
 // absent - the disallow list and prompt rule still stand).
-func workerGuardSettings(telemetryPath string) string {
+func workerGuardSettings(telemetryPath, diffBase string) string {
 	exe, err := os.Executable()
 	if err != nil || exe == "" {
 		return ""
@@ -281,6 +336,9 @@ func workerGuardSettings(telemetryPath string) string {
 	cmdLine := quoteForShell(exe) + " worker-guard"
 	if telemetryPath != "" {
 		cmdLine += " --telemetry " + quoteForShell(telemetryPath)
+	}
+	if diffBase != "" {
+		cmdLine += " --diff-base " + quoteForShell(diffBase)
 	}
 	hook := []hookCmd{{Type: "command", Command: cmdLine}}
 	// Two entries, not one alternation: the "Bash" matcher is the one verified
