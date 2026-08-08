@@ -94,6 +94,15 @@ type SubRun struct {
 	// Worker run stats from the claude envelope (0 for skips/manual).
 	Turns   int     `json:"turns,omitempty"`
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// VisualClaimsOpen is set only on an acceptance run (RunKindFinish): the
+	// number of that run's claims which could only be settled by looking at a
+	// screen, and therefore were not - a detached acceptance never touches the
+	// runtime. It is carried as a NUMBER rather than left inside the sub's Note
+	// prose because the runs list sums it across rows (see AcceptCell): a
+	// human-readable sentence is not an API, and re-parsing our own formatting
+	// would make the two drift the first time the wording changed.
+	// An acceptance run-state written before this field existed reports 0.
+	VisualClaimsOpen int `json:"visual_claims_open,omitempty"`
 	// Review is what the worker's review phase actually did - spawns, rounds and
 	// model, collected by the worker guard hook. Nil when nothing was observed
 	// (a skip, a sub that spawned nothing, or a run from before this existed).

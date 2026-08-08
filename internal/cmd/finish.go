@@ -561,6 +561,9 @@ func executeFinish(plan *finishPlan) (*finishResult, error) {
 			st.Subs[0].Note = finishRunNote(res, note)
 			st.Subs[0].Turns = res.Turns
 			st.Subs[0].CostUSD = res.CostUSD
+			// The same total the note spells out, as a number the runs list can
+			// sum without reading prose.
+			st.Subs[0].VisualClaimsOpen, _ = visualClaimsOpen(res)
 		}
 	})
 	journalEnd(storage.RunStatusDone, "", storage.JournalSub{
@@ -599,22 +602,31 @@ func finishBusyHint(err error) error {
 // acceptance never looks at a screen, so an accepted batch can still leave a
 // morning's worth of checking, and a note reading only "done" would hide it.
 func finishRunNote(res *finishResult, summary string) string {
-	open, subs := 0, 0
+	open, subs := visualClaimsOpen(res)
+	if open == 0 {
+		return summary
+	}
+	return strings.TrimSpace(fmt.Sprintf("%s [%d visual claim(s) still open across %d sub(s)]", summary, open, subs))
+}
+
+// visualClaimsOpen totals the acceptance's unsettled visual claims: how many,
+// and over how many subs. The count of SUBS is taken over the subs that
+// actually carry an open claim, NOT over every sub the acceptance looked at -
+// the number goes into a morning TODO list, and "across 5 subs" when the work
+// sits in one sends a human to the wrong four.
+//
+// One function for both consumers - the journal/board note and the number the
+// runs list sums (storage.SubRun.VisualClaimsOpen) - so the prose and the field
+// can never report different totals for one run.
+func visualClaimsOpen(res *finishResult) (open, subs int) {
 	for _, s := range res.Subs {
 		if s.VisualClaimsOpen <= 0 {
 			continue
 		}
 		open += s.VisualClaimsOpen
-		// Counted over the subs that actually carry an open claim, NOT over
-		// every sub the acceptance looked at: this line is the morning TODO
-		// list, and "across 5 subs" when the work sits in one sends a human to
-		// the wrong four.
 		subs++
 	}
-	if open == 0 {
-		return summary
-	}
-	return strings.TrimSpace(fmt.Sprintf("%s [%d visual claim(s) still open across %d sub(s)]", summary, open, subs))
+	return open, subs
 }
 
 // writeFinishReport saves the acceptance's markdown report. An empty report
