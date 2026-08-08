@@ -317,7 +317,7 @@ func (m Model) viewClaudeMenu() string {
 	} else if m.launchAgent == launchAgentExecutor {
 		titleText = "Run task (pm work)"
 		if m.executorIsTracker {
-			titleText = "Run epic (pm run-epic)"
+			titleText = "Run " + trackerRunNoun(m.menuTask()) + " (pm run-epic)"
 		}
 	} else if m.launchAgent != launchAgentCodex && m.resumeOnly {
 		sid := m.resumeSessionID

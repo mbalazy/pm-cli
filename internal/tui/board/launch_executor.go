@@ -60,6 +60,39 @@ func finishPMArgs(t *storage.Task, additional bool) []string {
 	return args
 }
 
+// liveRunForLaunch returns the warning to show when a launch of this kind would
+// land on top of one already in flight for t, or "" when the coast is clear.
+// The two kinds are asked about SEPARATELY, never as "is anything running":
+// a run and its acceptance are routinely live together by design, so warning
+// about the run when the user pressed [a] would be an alarm about the normal
+// state - and the two occupy different files, so neither disturbs the other.
+func (m Model) liveRunForLaunch(t *storage.Task, isFinish bool) string {
+	if isFinish {
+		if m.finishStates[t.Meta.ID].IsLive() {
+			return "⚠ an acceptance of this tracker is already running (W to watch, K to stop); the new one will refuse on the claim"
+		}
+		return ""
+	}
+	if m.runStates[t.Meta.ID].IsLive() {
+		return "⚠ a run of this task is already in flight (W to watch, K to stop); nothing stops two managers from working the same branch"
+	}
+	return ""
+}
+
+// openRunLog opens a detached run's log. Fresh launches TRUNCATE, which is what
+// makes the log the record of one run rather than of every run this task ever
+// had. When a run of the same kind is already live, though, that same truncate
+// empties the log the live process is writing - and it holds its own fd, so it
+// keeps writing at its old offset and leaves a file that begins with a hole.
+// There the log is opened for APPEND instead: two runs interleaving in one file
+// is confusing, a live run's record being blanked is lost.
+func openRunLog(path string, live bool) (*os.File, error) {
+	if live {
+		return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	}
+	return os.Create(path)
+}
+
 // pmShellCommand renders `cd <dir> && pm <args...>` with each token shell-quoted.
 func pmShellCommand(dir string, args []string) string {
 	parts := []string{"pm"}
@@ -145,6 +178,21 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// A run of the same kind may already be in flight for this task. That is
+	// WARNED about, not blocked: the board's run-state maps are up to a tick
+	// old, so a block here would be a race deciding whether a launch happens at
+	// all, and the authority on a second acceptance is the claim in the pm
+	// process (a second `pm finish` refuses on it and costs nothing but a
+	// message). What the warning cannot leave to chance is the LOG: the second
+	// launch writes to the same path, so the truncation below would empty the
+	// live run's log under it - see appendLog.
+	warn := ""
+	if !dryRun {
+		if live := m.liveRunForLaunch(t, isFinish); live != "" {
+			warn = live
+		}
+	}
+
 	switch kind {
 	case "bg", "finish":
 		// Detached background run, output to a log file, observable natively in
@@ -166,7 +214,7 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 			m.toastExpiry = time.Now().Add(15 * time.Second)
 			return m, nil
 		}
-		logf, err := os.Create(logPath)
+		logf, err := openRunLog(logPath, warn != "")
 		if err != nil {
 			m.toastMsg = "executor: cannot open log: " + err.Error()
 			m.toastExpiry = time.Now().Add(15 * time.Second)
@@ -200,6 +248,13 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 		m.refreshRunStates()
 		m.toastMsg = fmt.Sprintf("Started %s %s in background (▶ on the board)", args[0], t.Meta.ID)
 		m.toastExpiry = time.Now().Add(4 * time.Second)
+		if warn != "" {
+			// The warning outlives the "started" note it is appended to: the
+			// launch succeeding is the unsurprising half, and 4 seconds is not
+			// long enough to read why the run that follows may refuse.
+			m.toastMsg = warn + " - " + m.toastMsg
+			m.toastExpiry = time.Now().Add(15 * time.Second)
+		}
 		return m, nil
 
 	case "here":
@@ -230,6 +285,10 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 		} else {
 			m.toastMsg = tmuxLaunchToast("Launched "+args[0]+" in tmux", winName, sess)
 			m.toastExpiry = time.Now().Add(3 * time.Second)
+			if warn != "" {
+				m.toastMsg = warn + " - " + m.toastMsg
+				m.toastExpiry = time.Now().Add(15 * time.Second)
+			}
 		}
 	}
 

@@ -29,6 +29,13 @@ func (m Model) renderTaskDetail(t *storage.Task) string {
 	if p := m.taskParent(t); p != nil {
 		fmt.Fprintf(&head, "\n**Parent:** %s `#%s` %s  _(press p)_\n", statusGlyph(p.Meta.Status), p.Meta.ID, p.Meta.Title)
 	}
+	// Tracker only: the two fields that decide what X actually launches. Both
+	// are rendered even when unset, spelled as the behaviour their empty value
+	// means - an omitted line would read as "not applicable" for a field that
+	// is very much in force.
+	if isTracker := len(m.taskChildren(t)) > 0; isTracker {
+		fmt.Fprintf(&head, "\n**Epic mode:** %s | **Finish:** %s\n", epicModeLabel(t.Meta.EpicMode), finishModeLabel(t.Meta.FinishMode))
+	}
 
 	// Rest: branch, links, tags, sessions, ac, brief, body (rendered via glamour).
 	var rest strings.Builder
@@ -69,7 +76,7 @@ func (m Model) renderTaskDetail(t *storage.Task) string {
 	out.WriteString(glamourRender(head.String(), contentWidth))
 	// Subtask table (tracker -> children): real bordered rows, press p to pick.
 	if kids := m.taskChildren(t); len(kids) > 0 {
-		out.WriteString(renderSubtaskTable(kids, contentWidth, m.landing))
+		out.WriteString(renderSubtaskTable(kids, contentWidth, m.landing, t))
 		out.WriteString("\n")
 	}
 	// Executor run dashboard (live or last run), for a tracker or standalone
@@ -146,11 +153,58 @@ func glamourRender(md string, contentWidth int) string {
 	return out
 }
 
+// epicModeLabel / finishModeLabel spell a tracker's two executor modes for the
+// detail head. Empty is a legal value of both and means something specific
+// (integration mode; no chained acceptance), so it is named rather than shown
+// as a blank - and the raw frontmatter word is kept alongside the plain one,
+// since that is what a `pm_update_task` call has to pass back.
+func epicModeLabel(mode string) string {
+	if mode == storage.EpicModeIndependent {
+		return "batch (independent)"
+	}
+	return "epic (integration)"
+}
+
+func finishModeLabel(mode string) string {
+	if mode == storage.FinishModeAuto {
+		return "auto (runs after the epic)"
+	}
+	return "off (launch with X→a)"
+}
+
+// subtaskHint is the key legend beside the Subtasks header. Naming the run key
+// here is the point: X is the ONE key for all three executor launches, and
+// which of them the menu offers is decided by the task, never by the key - so
+// the legend has to say which one THIS tracker would get. `X: run batch` vs
+// `X: run epic` follows epic_mode (the only thing that picks INDEPENDENT vs
+// integration mode, since the board passes no --independent flag), and the
+// acceptance is spelled `X→a` because it is a menu item under X rather than a
+// key of its own.
+//
+// Below narrowHintWidth the legend degrades to the keys alone: the header is
+// one line above a table already clamped to that width, and a wrapped legend
+// pushes the table down for something the full form only spells out.
+func subtaskHint(parent *storage.Task, width int) string {
+	run := "X: run epic"
+	if parent != nil && parent.Meta.EpicMode == storage.EpicModeIndependent {
+		run = "X: run batch"
+	}
+	if width < narrowHintWidth {
+		return "(p: pick · " + run + ")"
+	}
+	return "(p: pick & open · " + run + " · X→a: accept)"
+}
+
+// narrowHintWidth is where subtaskHint drops to its short form: the full legend
+// plus the widest "Subtasks (N/M)" prefix it sits beside.
+const narrowHintWidth = 76
+
 // renderSubtaskTable renders a tracker's children as a bordered table with a
 // horizontal rule between every row and titles wrapped to at most two lines.
 // landing = the project's executor landing statuses; a child sitting on one of
-// them counts towards the header's N/M, same rule as the card badge.
-func renderSubtaskTable(kids []*storage.Task, width int, landing []storage.TaskStatus) string {
+// them counts towards the header's N/M, same rule as the card badge. parent is
+// the tracker itself, for the key legend (its epic_mode names the run).
+func renderSubtaskTable(kids []*storage.Task, width int, landing []storage.TaskStatus, parent *storage.Task) string {
 	done := 0
 	for _, k := range kids {
 		if k.Meta.Status == storage.StatusDone || slices.Contains(landing, k.Meta.Status) {
@@ -158,7 +212,7 @@ func renderSubtaskTable(kids []*storage.Task, width int, landing []storage.TaskS
 		}
 	}
 	header := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render(fmt.Sprintf("Subtasks (%d/%d)  ", done, len(kids))) +
-		helpStyle.Render("(press p to pick & open)")
+		helpStyle.Render(subtaskHint(parent, width))
 
 	titleW := width - 30
 	if titleW < 18 {
@@ -252,7 +306,14 @@ func (m Model) viewDetail() string {
 		sb.WriteString(helpStyle.Render(fmt.Sprintf("/%s %s  n/N: next/prev  esc: clear  %s", m.detailSearchQuery, matchInfo, pct)))
 	} else {
 		pct := fmt.Sprintf("%3.f%%", m.detailViewport.ScrollPercent()*100)
-		help := "o/q: back  e: edit  r: refresh  m/w/d/A: move/wait/done/archive  y/Y: yank  L: links  s: sessions  " + pct
+		// The executor keys (c/X/W/K) all work in this view - updateDetail
+		// dispatches every one of them - and until now none was named here, so
+		// from the detail view X was reachable only by already knowing it. The
+		// bar has a finite width, so `s: sessions` gave up its place: it is the
+		// one entry whose subject the head already shows (a **Sessions:** count
+		// is rendered above whenever there are any), while a launch has no
+		// other trace in this view at all.
+		help := "o/q: back  e: edit  r: refresh  m/w/d/A: move/wait/done/archive  c: claude  X/W/K: exec run/watch/stop  y/Y: yank  L: links  " + pct
 		if m.currentView == viewProjectInfo {
 			help = "o/esc/q: back  ↑/↓/j/k scroll  c: claude  y/Y: yank  L: links  " + pct
 		}
