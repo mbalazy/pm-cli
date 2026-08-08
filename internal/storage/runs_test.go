@@ -200,6 +200,59 @@ func TestRunCellSkippedSubsCountOnlyWhenTheyLanded(t *testing.T) {
 	}
 }
 
+// An `aborted` sub hit an account wall and was MOVED BACK to its ready status
+// for a re-run to pick up - it never ran, so it is not progress either.
+func TestRunCellAbortedSubIsNotProgress(t *testing.T) {
+	store := runsStore(t)
+	runsTask(t, store, "alpha", TaskMeta{ID: "alpha-1", Title: "walled", Status: StatusDoing, Created: "2026-08-01", Updated: "2026-08-01"})
+	for _, child := range []struct {
+		id     string
+		status TaskStatus
+	}{{"alpha-1-1", StatusMerged}, {"alpha-1-2", StatusTodo}} {
+		runsTask(t, store, "alpha", TaskMeta{
+			ID: child.id, Title: child.id, Status: child.status,
+			Created: "2026-08-01", Updated: "2026-08-01", Parent: "alpha-1",
+		})
+	}
+	if err := WriteRunState(store.ProjectDir("alpha"), &RunState{
+		TaskID: "alpha-1", Project: "alpha", Kind: RunKindEpic, Status: RunStatusFailed,
+		PID: os.Getpid(), Started: "2026-08-01T10:00:00Z",
+		Subs: []SubRun{{ID: "alpha-1-1", Status: "merged"}, {ID: "alpha-1-2", Status: subStatusAborted}},
+	}); err != nil {
+		t.Fatalf("write run state: %v", err)
+	}
+
+	rows, err := LocalRunRows(store, []string{"alpha"})
+	if err != nil {
+		t.Fatalf("LocalRunRows: %v", err)
+	}
+	if got := rowFor(rows, "alpha-1").Run.String(); got != "failed 1/2" {
+		t.Errorf("RUN = %q, want %q - the aborted sub was returned to its ready status", got, "failed 1/2")
+	}
+}
+
+// A run-state that exists but carries no status word still has to say
+// something: "-" is how "no acceptance at all" is spelled, and "no run" is
+// spelled prepped.
+func TestRunCellEmptyStatusIsNotAnEmptyCell(t *testing.T) {
+	store := runsStore(t)
+	runsTracker(t, store, "alpha", "alpha-1", "truncated state", "2026-08-01")
+	if err := WriteRunState(store.ProjectDir("alpha"), &RunState{
+		TaskID: "alpha-1", Project: "alpha", Kind: RunKindEpic,
+		Subs: []SubRun{{ID: "alpha-1-1", Status: "merged"}},
+	}); err != nil {
+		t.Fatalf("write run state: %v", err)
+	}
+
+	rows, err := LocalRunRows(store, []string{"alpha"})
+	if err != nil {
+		t.Fatalf("LocalRunRows: %v", err)
+	}
+	if got := rowFor(rows, "alpha-1").Run.String(); got == "-" || got == "" {
+		t.Errorf("RUN = %q for a run-state with no status - a run exists, so the cell must not read as none", got)
+	}
+}
+
 // A failed sub IS settled: the run is finished with it, and counting only the
 // green ones would leave a parked batch reading as still in flight.
 func TestRunCellCountsFailedSubsAsSettled(t *testing.T) {
@@ -267,6 +320,11 @@ func TestAcceptCellReportsTheVerdictNotJustTheReturn(t *testing.T) {
 		{"partial", "partial"},
 		{"blocked", "blocked"},
 		{"", "done"}, // nothing recorded on the sub: fall back to the run status
+		// The verdict comes out of a language model's structured output and
+		// nothing normalises it on the way in, so a word outside the contract
+		// must not become a state in the JSON the board is built on.
+		{"needs a human", "done"},
+		{"Done", "done"},
 	} {
 		t.Run("verdict "+tc.verdict, func(t *testing.T) {
 			store := runsStore(t)
@@ -353,8 +411,10 @@ func TestLocalRunRowsAcceptanceStale(t *testing.T) {
 	}
 }
 
-// The visual-claim total is a SUM across the acceptance's subs, not the first
-// one it happens to find.
+// The visual-claim total is a SUM across the acceptance's subs. `pm finish`
+// writes ONE sub carrying an already-summed total today, so this is the
+// defensive half of the contract: it holds whether the total arrives on one
+// entry or spread over several.
 func TestAcceptCellSumsVisualClaims(t *testing.T) {
 	store := runsStore(t)
 	runsTracker(t, store, "alpha", "alpha-1", "many subs", "2026-08-01")

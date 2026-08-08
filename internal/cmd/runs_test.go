@@ -434,6 +434,34 @@ func TestRunsProjectFilterAppliesToRemoteRows(t *testing.T) {
 	}
 }
 
+// A remote whose answer is complete but which leaves a descendant holding the
+// output pipe: Wait unblocks on WaitDelay with exec.ErrWaitDelay, and that is
+// success-with-leftovers, not an unreachable machine. Throwing the answer away
+// there would drop rows that had already arrived.
+func TestRunsRemoteLeftoverDescendantStillCounts(t *testing.T) {
+	store := runsFixture(t)
+	writeStoreConfig(t, store, configWithRemote)
+	remote := `{"rows":[{"project":"orbit","tracker":"atlas-9","title":"VPS batch",` +
+		`"updated":"2026-08-07T10:00:00Z","run":{"state":"done","done":1,"total":1}}]}`
+	// The answer is printed and ssh exits 0, but a background child keeps the
+	// inherited stdout open past the exit.
+	fakeSSH(t, "echo '"+remote+"'\nsleep 20 &\nexit 0\n")
+	oldWait, oldTimeout := procWaitDelay, remoteRunsTimeout
+	procWaitDelay, remoteRunsTimeout = 300*time.Millisecond, 10*time.Second
+	defer func() { procWaitDelay, remoteRunsTimeout = oldWait, oldTimeout }()
+
+	out, err := runRunsCmd(t, store)
+	if err != nil {
+		t.Fatalf("pm runs: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "atlas-9") {
+		t.Errorf("a complete answer was discarded over a leftover descendant:\n%s", out)
+	}
+	if strings.Contains(out, "unreachable") {
+		t.Errorf("the machine answered in full and must not be called unreachable:\n%s", out)
+	}
+}
+
 // A remote that accepts the connection and then says nothing must not hang the
 // listing: ConnectTimeout does not cover it, remoteRunsTimeout does.
 func TestRunsRemoteHangIsANote(t *testing.T) {

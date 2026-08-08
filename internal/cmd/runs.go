@@ -55,8 +55,11 @@ func newRunsCmd(store storage.TaskStore) *cobra.Command {
 		Long: "Lists every tracker with the state of its run and of its acceptance (odbiór), across all " +
 			"projects and - unless --local is given - across the remote runners in the global config " +
 			"(`pm config show`).\n\n" +
-			"RUN is prepped (nothing has run it) | running N/M | done N/M | failed | stale (marked running, " +
-			"but its process is gone). ACCEPTANCE is - | running (host, age) | done | failed | stale, plus the " +
+			"RUN is prepped (nothing has run it) | running N/M | done N/M | failed N/M | stale N/M (marked " +
+			"running, but its process is gone). N counts the subs the run is finished with: a sub skipped on " +
+			"an unmet dependency, held at a manual gate or dropped by an aborted run is NOT counted, and M " +
+			"follows the tracker, so a tracker that gained subs after its run does not read as complete.\n\n" +
+			"ACCEPTANCE is - | running (host, age) | done | partial | blocked | failed | stale, plus the " +
 			"number of visual claims still open: a detached acceptance never touches the runtime, so those " +
 			"checks are waiting for a human even when the acceptance says done.\n\n" +
 			"A remote runner that cannot be reached, or whose pm is too old to know this command, costs ONE " +
@@ -106,7 +109,12 @@ func newRunsCmd(store storage.TaskStore) *cobra.Command {
 
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Emit JSON ({\"rows\": [...]}) instead of a table")
 	cmd.Flags().BoolVar(&local, "local", false, "This machine only - do not contact any remote runner")
-	cmd.Flags().StringVarP(&project, "project", "p", "", "Only this project")
+	// The name is resolved against THIS machine's projects (and the resolved slug
+	// is what narrows the remote rows too), so a project that exists only on a
+	// remote runner cannot be named here - say so rather than let it look like
+	// the remote had nothing to report.
+	cmd.Flags().StringVarP(&project, "project", "p", "",
+		"Only this project (resolved against local projects - a remote-only project cannot be named)")
 	cmd.Flags().StringVar(&remote, "remote", "", "Only this remote runner (by name), instead of all of them")
 
 	return cmd
@@ -219,7 +227,12 @@ func fetchRemoteRuns(ctx context.Context, r storage.Remote) ([]storage.RunRow, e
 	var stdout, stderr bytes.Buffer
 	c.Stdout = &stdout
 	c.Stderr = &stderr
-	if err := c.Run(); err != nil {
+	// exec.ErrWaitDelay is NOT a failure: it means the process exited fine but
+	// something it left behind still held the output pipe, so Wait had to unblock
+	// us (groupCmd's WaitDelay). The answer is already in the buffer - throwing it
+	// away over a leftover descendant would report an unreachable machine that
+	// answered in full. captureBaseline treats the same error the same way.
+	if err := c.Run(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("unreachable: no answer within %s", remoteRunsTimeout)
 		}
@@ -229,9 +242,11 @@ func fetchRemoteRuns(ctx context.Context, r storage.Remote) ([]storage.RunRow, e
 		// and its pm failed, which is what a pm too old to have this command
 		// looks like: cobra prints "unknown command" to stderr and exits 1.
 		// Calling that "unreachable" would send a user to check the network for
-		// a version mismatch.
+		// a version mismatch. A NEGATIVE code is neither: the ssh here was
+		// signalled (exit status -1), which is a local event, not a remote
+		// verdict.
 		var ee *exec.ExitError
-		if errors.As(err, &ee) && ee.ExitCode() != 255 {
+		if errors.As(err, &ee) && ee.ExitCode() >= 0 && ee.ExitCode() != 255 {
 			return nil, fmt.Errorf("remote pm failed (%v) - too old for `runs`?%s",
 				err, detail(stderr.String()+"\n"+stdout.String()))
 		}
@@ -301,8 +316,9 @@ func writeRunsTable(w io.Writer, rows []storage.RunRow) error {
 		}
 		if row.Note != "" {
 			// A placeholder row for a machine that did not answer: the note
-			// takes the title's place and there is nothing to say about a run.
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", project, "-", row.Note, "-", "-")
+			// takes the title's place - truncated like a title, or one long ssh
+			// message would widen the TITLE column for every other row.
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", project, "-", truncateRunes(row.Note, noteWidth), "-", "-")
 			continue
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
@@ -311,12 +327,22 @@ func writeRunsTable(w io.Writer, rows []storage.RunRow) error {
 	return tw.Flush()
 }
 
+// Column budgets for the table. A note gets a wider one than a title on
+// purpose: it is the reason a whole machine is missing from the listing, and
+// cutting an ssh message at a title's width would hide the diagnosis. Both are
+// bounded, because tabwriter sizes every row's column to the longest cell in it.
+const (
+	titleWidth = 40
+	noteWidth  = 100
+)
+
 // truncateTitle keeps the table readable when a tracker title is a sentence.
 // The full title stays in --json.
-func truncateTitle(title string) string {
-	const max = 40
-	if r := []rune(title); len(r) > max {
+func truncateTitle(title string) string { return truncateRunes(title, titleWidth) }
+
+func truncateRunes(s string, max int) string {
+	if r := []rune(s); len(r) > max {
 		return string(r[:max-1]) + "…"
 	}
-	return title
+	return s
 }

@@ -36,9 +36,14 @@ const (
 // reason it does in the RUN column: an acceptance killed with SIGKILL leaves
 // `status: running` behind forever, and rendering that as "running" would
 // promise a run that is not there.
+// AcceptCellPartial and AcceptCellBlocked are the acceptance's OWN verdict
+// words (its result contract is done | partial | blocked), reported here rather
+// than mapped onto a run status - see acceptVerdict.
 const (
 	AcceptCellRunning = "running"
 	AcceptCellDone    = "done"
+	AcceptCellPartial = "partial"
+	AcceptCellBlocked = "blocked"
 	AcceptCellFailed  = "failed"
 	AcceptCellStale   = RunCellStale
 )
@@ -163,14 +168,16 @@ func LocalRunRows(store TaskStore, projects []string) ([]RunRow, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", slug, err)
 		}
-		trackers, _ := BuildTrackers(tasks, store.GetLandingStatuses(slug)...)
+		// Read once and reused: GetLandingStatuses re-reads project.yaml on every
+		// call, and both consumers below want the same answer.
+		landing := store.GetLandingStatuses(slug)
+		trackers, _ := BuildTrackers(tasks, landing...)
 		if len(trackers) == 0 {
 			continue
 		}
-		landing := store.GetLandingStatuses(slug)
 		byID := make(map[string]*Task, len(tasks))
 		// landed answers "has this sub's own task actually finished", which is
-		// what tells a run's three kinds of `skipped` apart (see subSettled).
+		// what tells the run's un-run outcomes from its landed ones (subSettled).
 		landed := make(map[string]bool, len(tasks))
 		for _, t := range tasks {
 			byID[t.Meta.ID] = t
@@ -219,6 +226,7 @@ const (
 	subStatusPending = "pending"
 	subStatusSkipped = "skipped"
 	subStatusManual  = "manual"
+	subStatusAborted = "aborted"
 )
 
 // runCell derives the RUN column from the run-state.
@@ -260,28 +268,36 @@ func runCell(tr Tracker, st *RunState, landed map[string]bool) RunCell {
 		cell.State = RunCellDone
 	default:
 		// A run-state whose status word nothing in pm writes: report it rather
-		// than mapping it onto one of ours.
+		// than mapping it onto one of ours. An EMPTY one still has to say
+		// something - a truncated or hand-edited file is not the same as having
+		// no run, and RunCell.String renders the empty state as "-", which is
+		// how "no acceptance" is spelled.
 		cell.State = st.Status
+		if cell.State == "" {
+			cell.State = "unknown"
+		}
 	}
 	return cell
 }
 
 // subSettled reports whether the run reached an outcome for this sub.
 //
-// `skipped` and `manual` are the two words that cannot be judged from the run
-// alone, because the manager writes each of them for opposite situations:
+// `skipped`, `manual` and `aborted` cannot be judged from the run alone, because
+// the manager writes each of them for situations that mean opposite things:
 // `skipped` means "already landed before this run" (progress), but ALSO "its
 // depends_on is unmet", "not ready" and "never started - the run aborted"
-// (nothing), and `manual` is a permanent human gate pm never runs at all. The
-// sub's OWN task status settles it: a sub that landed is at a terminal status,
-// and one waiting for a dependency or a human is not. Counting all of them
-// would let a batch that landed 2 of 8 and parked six on a failed dependency
-// print "done 8/8" - the single most misleading thing this screen could say.
+// (nothing); `manual` is a permanent human gate pm never runs at all; and
+// `aborted` is a sub that hit an account wall and was MOVED BACK to its ready
+// status for a re-run to pick up. The sub's OWN task status settles all three: a
+// sub that landed sits on a terminal status, and one waiting for a dependency, a
+// human or a fresh quota does not. Counting them regardless would let a batch
+// that landed 2 of 8 and parked six on a failed dependency print "done 8/8" -
+// the single most misleading thing this screen could say.
 func subSettled(s SubRun, landed map[string]bool) bool {
 	switch s.Status {
 	case "", subStatusPending, RunStatusRunning:
 		return false
-	case subStatusSkipped, subStatusManual:
+	case subStatusSkipped, subStatusManual, subStatusAborted:
 		return landed[s.ID]
 	default:
 		return true
@@ -347,18 +363,26 @@ func acceptCell(dir, trackerID string, st *RunState) AcceptCell {
 // the acceptance's result contract - lives on its single sub. Without reading it
 // an acceptance that reported `blocked`, i.e. "I could not accept this batch",
 // would render in this column as a plain "done", which is the opposite of what
-// happened. The word is passed through rather than mapped onto one of the run
-// statuses: the acceptance's vocabulary is its own, and translating `partial`
-// into either `done` or `failed` would lose the only thing it says.
+// happened. Subs[0] is the right place to look because `pm finish` seeds exactly
+// one sub for the tracker it is accepting (the claim count is summed over Subs
+// anyway, so a future multi-sub shape would still total correctly).
+//
+// Only the three CONTRACTED words are promoted. Unlike the RUN column, whose
+// status words all come from pm's own constants, this one is written from a
+// language model's structured output, and nothing between the envelope and the
+// run-state normalises it (see parseFinishResult / scanFinishStructuredOutput).
+// A worker answering "Done" or "needs a human" must not end up defining a state
+// in the JSON contract the board is built on; the raw word survives in the
+// run-state and in the acceptance report, where it belongs.
 func acceptVerdict(st *RunState) string {
 	if len(st.Subs) == 0 {
 		return ""
 	}
 	switch v := st.Subs[0].Status; v {
-	case "", RunStatusRunning:
-		return ""
-	default:
+	case AcceptCellDone, AcceptCellPartial, AcceptCellBlocked:
 		return v
+	default:
+		return ""
 	}
 }
 
