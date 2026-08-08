@@ -196,6 +196,12 @@ Drives a tracker's subtasks sequentially (by `order`) in one of two modes:
 - `mode: manual` - a permanent human gate: the manager never touches the sub; you do it by hand and move it to done yourself.
 - `model: sonnet` - per-sub model override, so trivial subs run cheap while investigation subs stay on the strong model.
 
+### `pm finish [tracker]` - the acceptance (odbiór) as a run
+
+The third run kind: a headless worker that invokes the global `batch-finish-auto` skill to accept a finished batch - walk the sub branches, verify, push fixes, write a report. Yolo by default (the guard hook still rides along), `--sim` only for attended runs - anything detached keeps its hands off shared runtime. Every acceptance starts by CLAIMING the run (`pm finish claim|release|status <tracker>`): a TTL lock stored beside the run's own state, so two acceptance sessions can never take the same run - even across machines. Its state, log and report live in `<tracker>.finish.json` / `.finish.log` / `.finish.md`, never overwriting the run's files.
+
+Set `finish_mode: auto` on a tracker (or pass `--then-finish`) and `pm run-epic` chains the acceptance itself when the run completes - detached, best-effort, same machine only. `pm runs` (and the board's `R` view) shows every tracker's run and acceptance across all projects, including remote runners registered in the global `~/.claude/pm/config.yaml` (`pm config show`), with the count of unresolved visual claims per acceptance - the morning TODO list.
+
 ### Verification baseline - the "new failures only" verdict
 
 If `executor.baseline` is set (typically the project's full verification command), it is captured **once per run** on the branch the work forks from and injected into every worker prompt. Green baseline: any failure the worker sees is new. Red baseline: the listed failures are pre-existing, out of scope, and **must not demote the verdict** - the worker records them once as `PRE-EXISTING:` and moves on. This kills the two classic failure modes of agents in imperfect repos: blaming inherited breakage on themselves, and burning turns re-diagnosing it in every sub.
@@ -248,7 +254,10 @@ pm executor stats [project]   # journal rollup
 | `pm reorder <parent> <child>...` | renumber children 10, 20, 30... in the given sequence |
 | `pm context [project]` | print the session-start rollup (same data as MCP `pm_context`) |
 | `pm work [project] <task>` | run one task through a headless worker |
-| `pm run-epic [project] <tracker>` | drive a whole epic |
+| `pm run-epic [project] <tracker>` | drive a whole epic (`--then-finish` chains the acceptance) |
+| `pm finish [tracker]` | run the acceptance (odbiór); `claim`/`release`/`status` manage the lock |
+| `pm runs` | table of every run + acceptance, all projects, local + remote |
+| `pm config show` | print the global config (remote-runner registry) |
 | `pm executor init/show/doctor/stats` | executor profile management |
 | `pm mcp` | run the stdio MCP server |
 | `pm docs claude` / `pm docs authoring` | print the embedded agent guide / task-authoring rules |
