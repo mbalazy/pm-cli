@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -227,8 +229,8 @@ func TestWorkerGuardSettingsIsValidAndAttached(t *testing.T) {
 	// a live claude and must keep its exact spelling; the write and agent
 	// matchers are separate entries so a build that matches tool names literally
 	// simply does not fire them instead of losing the Bash one too.
-	if len(parsed.Hooks.PreToolUse) != 3 {
-		t.Fatalf("expected Bash, write-tool and agent PreToolUse matchers, got %s", s)
+	if len(parsed.Hooks.PreToolUse) != 4 {
+		t.Fatalf("expected Bash, write-tool, agent and exploration PreToolUse matchers, got %s", s)
 	}
 	if parsed.Hooks.PreToolUse[0].Matcher != "Bash" {
 		t.Errorf("first matcher = %q, want the verified exact \"Bash\"", parsed.Hooks.PreToolUse[0].Matcher)
@@ -243,6 +245,12 @@ func TestWorkerGuardSettingsIsValidAndAttached(t *testing.T) {
 	for _, tool := range []string{"Agent", "Task"} {
 		if !strings.Contains(parsed.Hooks.PreToolUse[2].Matcher, tool) {
 			t.Errorf("agent matcher %q must name %s", parsed.Hooks.PreToolUse[2].Matcher, tool)
+		}
+	}
+	// The exploration tools the per-agent budget meters.
+	for _, tool := range []string{"Read", "Grep", "Glob"} {
+		if !strings.Contains(parsed.Hooks.PreToolUse[3].Matcher, tool) {
+			t.Errorf("exploration matcher %q must name %s", parsed.Hooks.PreToolUse[3].Matcher, tool)
 		}
 	}
 	for i, m := range parsed.Hooks.PreToolUse {
@@ -356,6 +364,130 @@ func TestWorkerGuardTelemetryIsBestEffort(t *testing.T) {
 			t.Errorf("path %q: got exit %d, want 0", path, code)
 		}
 	}
+}
+
+// The per-agent exploration budget: a subagent's Read/Grep/Glob calls are
+// counted per agent_id and refused past the budget, so a runaway reviewer is
+// trimmed without touching the worker's own calls or any other agent's budget.
+func TestAgentToolBudget(t *testing.T) {
+	payload := func(tool, agentID string) string {
+		m := map[string]any{"tool_name": tool, "tool_input": map[string]string{"file_path": "internal/cmd/work.go"}}
+		if agentID != "" {
+			m["agent_id"] = agentID
+		}
+		b, _ := json.Marshal(m)
+		return string(b)
+	}
+	shrinkBudget := func(t *testing.T, n int) {
+		t.Helper()
+		old := reviewerToolBudget
+		reviewerToolBudget = n
+		t.Cleanup(func() { reviewerToolBudget = old })
+	}
+
+	t.Run("counts per agent_id, denies past the budget", func(t *testing.T) {
+		shrinkBudget(t, 2)
+		path := filepath.Join(t.TempDir(), "review.jsonl")
+		opts := guardOptions{telemetryPath: path}
+		for i := 0; i < 2; i++ {
+			var errOut bytes.Buffer
+			if code := runWorkerGuard(strings.NewReader(payload("Read", "agent-a")), io.Discard, &errOut, opts); code != 0 {
+				t.Fatalf("call %d within budget: exit %d (%s)", i, code, errOut.String())
+			}
+		}
+		var errOut bytes.Buffer
+		if code := runWorkerGuard(strings.NewReader(payload("Grep", "agent-a")), io.Discard, &errOut, opts); code != 2 {
+			t.Fatalf("call past the budget: exit %d, want 2", code)
+		}
+		if !strings.Contains(errOut.String(), "exploration budget") || !strings.Contains(errOut.String(), "finalize your report") {
+			t.Errorf("deny message must name the budget and the legitimate move, got %q", errOut.String())
+		}
+		// A second agent has its OWN budget - the counter is per agent_id, not
+		// per session or per file.
+		if code := runWorkerGuard(strings.NewReader(payload("Read", "agent-b")), io.Discard, &bytes.Buffer{}, opts); code != 0 {
+			t.Error("agent-b must not inherit agent-a's spent budget")
+		}
+		// Denied calls are recorded as evidence but never consume budget:
+		// agent-a's next call is still denied (not double-counted into a bigger
+		// number), and the file carries the denial.
+		calls, err := storage.ReadAgentToolCalls(storage.AgentCallsPath(path))
+		if err != nil {
+			t.Fatalf("read calls: %v", err)
+		}
+		if got := storage.CountAgentToolCalls(calls, "agent-a"); got != 2 {
+			t.Errorf("agent-a used budget = %d, want 2 (denied calls do not count)", got)
+		}
+		denied := 0
+		for _, c := range calls {
+			if c.Denied {
+				denied++
+			}
+		}
+		if denied != 1 {
+			t.Errorf("denied calls recorded = %d, want 1", denied)
+		}
+	})
+
+	t.Run("the worker's own calls are never metered", func(t *testing.T) {
+		shrinkBudget(t, 1)
+		path := filepath.Join(t.TempDir(), "review.jsonl")
+		for i := 0; i < 5; i++ {
+			if code := runWorkerGuard(strings.NewReader(payload("Read", "")), io.Discard, &bytes.Buffer{}, guardOptions{telemetryPath: path}); code != 0 {
+				t.Fatalf("worker-level Read %d: exit %d, want 0", i, code)
+			}
+		}
+		if calls, _ := storage.ReadAgentToolCalls(storage.AgentCallsPath(path)); len(calls) != 0 {
+			t.Errorf("worker-level calls must not be recorded, got %d", len(calls))
+		}
+	})
+
+	t.Run("fails open without a telemetry path or on an unreadable state file", func(t *testing.T) {
+		shrinkBudget(t, 0)
+		// Budget disabled entirely.
+		if code := runWorkerGuard(strings.NewReader(payload("Read", "agent-a")), io.Discard, &bytes.Buffer{}, guardOptions{}); code != 0 {
+			t.Error("no telemetry path must mean no budget")
+		}
+		shrinkBudget(t, 1)
+		if code := runWorkerGuard(strings.NewReader(payload("Read", "agent-a")), io.Discard, &bytes.Buffer{}, guardOptions{}); code != 0 {
+			t.Error("no telemetry path must mean no budget even with one configured")
+		}
+		// The calls path resolves to a DIRECTORY: reading it errors, and the
+		// budget must allow rather than block on state it cannot establish.
+		dir := t.TempDir()
+		path := filepath.Join(dir, "review.jsonl")
+		if err := os.MkdirAll(storage.AgentCallsPath(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if code := runWorkerGuard(strings.NewReader(payload("Read", "agent-a")), io.Discard, &bytes.Buffer{}, guardOptions{telemetryPath: path}); code != 0 {
+			t.Error("an unreadable calls file must fail open")
+		}
+	})
+
+	t.Run("parallel agents cannot leak past their budgets", func(t *testing.T) {
+		shrinkBudget(t, 5)
+		path := filepath.Join(t.TempDir(), "review.jsonl")
+		opts := guardOptions{telemetryPath: path}
+		var wg sync.WaitGroup
+		for _, agent := range []string{"agent-a", "agent-b"} {
+			for i := 0; i < 12; i++ {
+				wg.Add(1)
+				go func(agent string) {
+					defer wg.Done()
+					runWorkerGuard(strings.NewReader(payload("Read", agent)), io.Discard, &bytes.Buffer{}, opts)
+				}(agent)
+			}
+		}
+		wg.Wait()
+		calls, err := storage.ReadAgentToolCalls(storage.AgentCallsPath(path))
+		if err != nil {
+			t.Fatalf("read calls: %v", err)
+		}
+		for _, agent := range []string{"agent-a", "agent-b"} {
+			if got := storage.CountAgentToolCalls(calls, agent); got > 5 {
+				t.Errorf("%s ran %d calls, budget is 5 - the lock leaked", agent, got)
+			}
+		}
+	})
 }
 
 // The guard's original job must be untouched by the new branch: a hook-bypassing
