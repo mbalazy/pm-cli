@@ -98,9 +98,10 @@ var genericSubagentTypes = map[string]bool{
 // the raw tool input in place and reporting whether anything changed.
 //
 // The raw map matters: the input carries fields pm has no opinion about
-// (`description`, `run_in_background`, and whatever a later build adds), and
-// updatedInput REPLACES the whole input - rebuilding it from pm's own struct
-// would silently drop them.
+// (`description`, and whatever a later build adds - `run_in_background` used to
+// be one of them until forceSyncSpawn below grew an opinion), and updatedInput
+// REPLACES the whole input - rebuilding it from pm's own struct would silently
+// drop them.
 //
 // Two rules, and the split between them is the AC of this change:
 //   - a spawn with no type at all becomes a reviewer. This is a safety net, not
