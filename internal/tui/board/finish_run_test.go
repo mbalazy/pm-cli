@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mbalazy/pm/internal/storage"
 )
 
@@ -388,6 +389,59 @@ func TestAcceptanceKillConfirmDoesNotPromiseAPark(t *testing.T) {
 	m.executorWatchFinish = false
 	if got := m.viewExecutor(); !strings.Contains(got, "parks the worker") {
 		t.Errorf("a run's confirm footer is unchanged:\n%s", got)
+	}
+}
+
+// A confirmation is given for ONE of the two runs. Inside the agent-view they
+// are a single W apart and share a task id, so an armed K must not be spent on
+// whatever the view switched to in between.
+func TestAgentViewKillConfirmDoesNotCarryAcrossTheSwitch(t *testing.T) {
+	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-9", Title: "Batch tracker", Status: storage.StatusDoing}})
+	stateDir := m.store.ProjectDir("p")
+	pid := liveRunPID(t)
+	for _, st := range []*storage.RunState{liveRun(t, "p-9", pid), liveFinish(t, "p-9", pid)} {
+		if err := storage.WriteRunState(stateDir, st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.refreshRunStates()
+	task, err := m.store.FindTask("p", "p-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.openExecutorView(task) {
+		t.Fatal("openExecutorView returned false with two run-states on disk")
+	}
+
+	// Arm K on the run...
+	km := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}}
+	// updateExecutorView has a value receiver, so the updated model comes back in
+	// the message rather than through m.
+	press := func() { next, _ := m.updateExecutorView(km); v := next.(Model); m = &v }
+	press()
+	if m.confirmAction != "kill-run" || m.confirmRunFinish {
+		t.Fatalf("K on the run must arm a confirmation for the RUN: %q finish=%v", m.confirmAction, m.confirmRunFinish)
+	}
+
+	// ...switch to the acceptance, which drops the confirmation it was not given
+	// for rather than leaving a prompt that describes the wrong action...
+	m.switchExecutorRunKind()
+	if m.confirmAction != "" {
+		t.Errorf("the switch must clear the pending confirmation, got %q", m.confirmAction)
+	}
+
+	// ...so the next K only re-arms, this time for the acceptance. Nothing was
+	// killed: the acceptance's run-state is untouched on disk.
+	press()
+	if m.confirmAction != "kill-run" || !m.confirmRunFinish {
+		t.Fatalf("K after the switch must arm for the ACCEPTANCE: %q finish=%v", m.confirmAction, m.confirmRunFinish)
+	}
+	fin, err := storage.ReadFinishRunState(stateDir, "p-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fin.Status != storage.RunStatusRunning {
+		t.Errorf("the acceptance was killed on a confirmation given for the run: status = %q", fin.Status)
 	}
 }
 

@@ -135,6 +135,14 @@ func (m *Model) switchExecutorRunKind() {
 		return
 	}
 	m.executorWatchFinish = !m.executorWatchFinish
+	// A kill armed against what WAS on screen does not carry over to what is on
+	// screen now. The keying in the K branch already refuses to act on it, but a
+	// confirmation prompt left standing would describe the new run's effect over
+	// the old run's confirmation - so drop it rather than explain it.
+	if m.confirmAction == "kill-run" {
+		m.confirmAction = ""
+		m.confirmTaskID = ""
+	}
 	// Re-derive everything the previous kind's state seeded: which transcripts
 	// are watchable, which one is in flight, and the scroll position.
 	m.executorSessionIdx = 0
@@ -265,7 +273,11 @@ func (m Model) updateExecutorView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toastExpiry = time.Now().Add(2 * time.Second)
 			return m, nil
 		}
-		if m.confirmAction == "kill-run" && m.confirmTaskID == st.TaskID {
+		// Keyed on the kind as well as the id - see the same branch in update.go,
+		// and here the two are one W apart: arming K on the run, pressing W, then
+		// pressing K again would otherwise kill the acceptance on a confirmation
+		// that was never given for it.
+		if m.confirmAction == "kill-run" && m.confirmTaskID == st.TaskID && m.confirmRunFinish == m.watchingFinish() {
 			m.confirmAction = ""
 			m.confirmTaskID = ""
 			cmd := m.killRun(st)
@@ -274,6 +286,7 @@ func (m Model) updateExecutorView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.confirmAction = "kill-run"
 		m.confirmTaskID = st.TaskID
+		m.confirmRunFinish = m.watchingFinish()
 		return m, nil
 
 	case key.Matches(msg, common.Keys.WatchExecutor):
