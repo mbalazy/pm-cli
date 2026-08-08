@@ -56,7 +56,7 @@ func TestRenderExecutorProfile(t *testing.T) {
 		// phases: the one bound, and a generic
 		"verify     cmd:   yarn validate",
 		"implement  generic (built-in)",
-		// resolved slots with merged env - the whole point: the odbiór reads
+		// resolved slots with merged env - the whole point: the acceptance reads
 		// runtime identifiers from here instead of a doc that drifts
 		"slot 1",
 		"SIM_UDID=2CE98C80-9633",
@@ -65,7 +65,7 @@ func TestRenderExecutorProfile(t *testing.T) {
 		"SIM_UDID=C0F4EFDF-BE65",
 		"Reference repos (READ-ONLY)",
 		"backend",
-		"## Handoff (odbiór)",
+		"## Handoff (acceptance)",
 		"evidence-playbook.md  [ok]",
 		"runtime skill: /simulator-verify",
 		"measure-element.py",

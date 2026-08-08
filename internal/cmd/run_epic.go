@@ -120,7 +120,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 	// the tracker: passed = this run decides (in BOTH directions, so
 	// --then-finish=false suppresses a tracker's `finish_mode: auto`), omitted =
 	// the tracker's finish_mode decides.
-	cmd.Flags().BoolVar(&thenFinish, "then-finish", false, "when the run is over, spawn a detached `pm finish <tracker>` odbiór on this machine (overrides the tracker's finish_mode; --then-finish=false suppresses it)")
+	cmd.Flags().BoolVar(&thenFinish, "then-finish", false, "when the run is over, spawn a detached `pm finish <tracker>` acceptance on this machine (overrides the tracker's finish_mode; --then-finish=false suppresses it)")
 
 	return cmd
 }
@@ -193,7 +193,7 @@ type epicPlan struct {
 	// side-effect-free half, precisely so --dry-run sees the same verdict the
 	// real run does instead of reporting a plan that dies on its first line.
 	doneStatusGate error
-	// autoFinish: this run chains the odbiór on the way out (see chainFinish).
+	// autoFinish: this run chains the acceptance on the way out (see chainFinish).
 	// Resolved here, in the side-effect-free half, so --dry-run says whether an
 	// acceptance will start - the one thing about the chain worth knowing before
 	// launching a run overnight.
@@ -289,7 +289,7 @@ func planEpic(store storage.TaskStore, args []string, opts epicOptions) (*epicPl
 	}, nil
 }
 
-// resolveAutoFinish decides whether this run chains its own odbiór: the
+// resolveAutoFinish decides whether this run chains its own acceptance: the
 // --then-finish flag when it was passed (either way - it is the run's decision
 // then, so it can suppress a tracker's `auto` as well as add one), otherwise the
 // tracker's finish_mode, where "" and "off" are the same answer.
@@ -390,7 +390,7 @@ func printEpicDryRun(plan *epicPlan, opts epicOptions) error {
 	if bl := strings.TrimSpace(plan.exc.Baseline); bl != "" {
 		fmt.Fprintf(opts.stdout(), "\nbaseline (once per run, injected into every worker prompt): %s\n", bl)
 	}
-	fmt.Fprintf(opts.stdout(), "\nodbiór after the run: %s\n", describeAutoFinish(plan, opts))
+	fmt.Fprintf(opts.stdout(), "\nacceptance after the run: %s\n", describeAutoFinish(plan, opts))
 	return plan.doneStatusGate
 }
 
@@ -666,7 +666,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		// and the acceptance would spend a fresh worker walking into the same
 		// wall. Say so - silence here would read as "the chain is broken".
 		if abortReason != "" {
-			fmt.Fprintf(errOut, "pm run-epic: not chaining the odbiór of %s - the run aborted (%s); re-run it, then accept with `pm finish %s`\n",
+			fmt.Fprintf(errOut, "pm run-epic: not chaining the acceptance of %s - the run aborted (%s); re-run it, then accept with `pm finish %s`\n",
 				tracker.Meta.ID, abortReason, tracker.Meta.ID)
 			return
 		}
@@ -674,11 +674,11 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		// never restores the base - integration mode does, below). The
 		// acceptance then walks every sub's branch, and `git worktree add`
 		// refuses a branch that is already checked out somewhere in the repo -
-		// so without this the last sub of every batch is the one sub the odbiór
+		// so without this the last sub of every batch is the one sub the acceptance
 		// cannot open. Best-effort and chain-only: a run nobody chains keeps
 		// exactly the branch it kept before.
 		if independentMode {
-			logIfErr(errOut, "restore "+baseBranch+" before the odbiór", gitEnsureBranch(workDir, baseBranch, ""))
+			logIfErr(errOut, "restore "+baseBranch+" before the acceptance", gitEnsureBranch(workDir, baseBranch, ""))
 		}
 		chainFinish(errOut, stateDir, slug, tracker.Meta.ID, workDir)
 	}

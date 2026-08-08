@@ -16,7 +16,7 @@ func newExecutorShowCmd(store storage.TaskStore) *cobra.Command {
 		Long: "Prints the executor profile as RESOLVED, not as written: worktree slot paths expanded and " +
 			"their env merged (executor-level overlaid by per-slot), context repos, phase bindings, and the " +
 			"handoff contract with the runtime skill's scripts derived from disk.\n\n" +
-			"This is the single call an odbiór (acceptance) session makes instead of hardcoding a playbook " +
+			"This is the single call an acceptance session makes instead of hardcoding a playbook " +
 			"path or copying simulator UDIDs and ports out of project.yaml by hand.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -134,7 +134,7 @@ func renderExecutorProfile(slug string, proj *storage.Project) string {
 		}
 	}
 
-	b.WriteString("\n## Handoff (odbiór)\n")
+	b.WriteString("\n## Handoff (acceptance)\n")
 	b.WriteString(renderHandoff(e.ResolveHandoff(proj.Path)))
 
 	if e.Notes != "" {
@@ -146,7 +146,7 @@ func renderExecutorProfile(slug string, proj *storage.Project) string {
 func renderHandoff(h storage.ResolvedHandoff) string {
 	var b strings.Builder
 	if !h.Declared {
-		b.WriteString("  (no handoff block - an odbiór session has no declared playbook or\n")
+		b.WriteString("  (no handoff block - an acceptance session has no declared playbook or\n")
 		b.WriteString("   runtime skill here and will have to guess. See `pm executor doctor`.)\n")
 		return b.String()
 	}

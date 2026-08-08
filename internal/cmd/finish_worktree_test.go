@@ -11,7 +11,7 @@ import (
 )
 
 // The acceptance draws its worktree slot from the SAME pool `pm work` and
-// `pm run-epic` draw on - that shared pool is why the odbiór became a pm run at
+// `pm run-epic` draw on - that shared pool is why the acceptance became a pm run at
 // all (it needs the simulator and the dev-server port the batch may still be
 // holding). These tests cover the claim, the refusals, and the two things the
 // acceptance deliberately does NOT do to a slot.

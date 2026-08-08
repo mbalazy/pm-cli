@@ -260,7 +260,7 @@ func checkHandoff(e storage.Executor, projPath string) []check {
 	h := e.ResolveHandoff(projPath)
 	if !h.Declared {
 		return []check{{levelWarn,
-			"no `executor.handoff` block - the odbiór has no declared playbook or runtime skill",
+			"no `executor.handoff` block - the acceptance has no declared playbook or runtime skill",
 			"add handoff.playbook + handoff.runtime_skill so an acceptance session can ask pm instead of guessing"}}
 	}
 
@@ -268,7 +268,7 @@ func checkHandoff(e storage.Executor, projPath string) []check {
 	switch {
 	case h.PlaybookPath == "":
 		out = append(out, check{levelWarn, "handoff.playbook is unset",
-			"without it the odbiór skill has no map from evidence category to a real command here"})
+			"without it the acceptance skill has no map from evidence category to a real command here"})
 	case !h.PlaybookExists:
 		out = append(out, check{levelError, "handoff.playbook does not exist: " + h.PlaybookPath,
 			"create it or fix the path"})
@@ -326,7 +326,7 @@ func checkPlaybookTODOs(path, playbook string) []check {
 
 // checkScriptsMentioned warns about a runtime-skill script the playbook never
 // names. This is the exact gap that produced this feature: the scripts exist,
-// the playbook does not mention them, so an odbiór session redoes their work by
+// the playbook does not mention them, so an acceptance session redoes their work by
 // hand. Heuristic on purpose - a playbook may describe a technique without
 // naming the file, hence WARN, never ERROR.
 func checkScriptsMentioned(h storage.ResolvedHandoff, playbook string) []check {
@@ -344,7 +344,7 @@ func checkScriptsMentioned(h storage.ResolvedHandoff, playbook string) []check {
 
 // checkRuntimeDrift warns when the playbook hardcodes a runtime identifier that
 // pm already resolves from the worktree slots (a simulator id, a Metro port).
-// The copy is correct exactly until a slot changes, and then it sends an odbiór
+// The copy is correct exactly until a slot changes, and then it sends an acceptance
 // at a device that no longer exists.
 //
 // Matching is on the VERBATIM value, never on the key or a pattern, which keeps

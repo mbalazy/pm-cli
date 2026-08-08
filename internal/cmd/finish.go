@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// `pm finish` is the odbiór (acceptance) surface of an executor run - the THIRD
+// `pm finish` is the acceptance surface of an executor run - the THIRD
 // kind of pm run, alongside `pm work` (implement one task) and `pm run-epic`
 // (drive an epic).
 //
@@ -26,7 +26,7 @@ import (
 // other executor run gets: the claim, a run-state with a heartbeat, the guard
 // hook, the executor journal, and a report artifact on disk.
 //
-// What the worker is TOLD is short - see finish_prompt.go for why (the odbiór
+// What the worker is TOLD is short - see finish_prompt.go for why (the acceptance
 // procedure is the `batch-finish-auto` skill's, and a headless worker can
 // invoke it).
 
@@ -40,7 +40,7 @@ func newFinishCmd(store storage.TaskStore) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "finish [tracker]",
-		Short: "Odbiór (acceptance) of an executor run - spawn an acceptance worker, claimed so two sessions never take the same run",
+		Short: "Acceptance of an executor run - spawn an acceptance worker, claimed so two sessions never take the same run",
 		Long: "Accepts an executor run: spawns a headless acceptance worker that runs the `batch-finish-auto` " +
 			"skill for <tracker>, and wraps it in the executor harness (claim, run-state, guard hook, journal, " +
 			"report). Without a tracker it prints this help; the `claim`/`release`/`status` subcommands operate " +
@@ -233,7 +233,7 @@ func planFinish(store storage.TaskStore, tracker *storage.Task, slug string, opt
 	// `executor.prepare` is NOT run either, unlike `pm work` and `pm run-epic`
 	// in a slot. That one is an open question rather than a settled decision:
 	// prepare exists to make dependency freshness structural for a run that is
-	// about to build, and an odbiór that needs the dev server may well want the
+	// about to build, and an acceptance that needs the dev server may well want the
 	// same - but this sub's scope is the slot itself, and installing into a slot
 	// the acceptance did not create is a behaviour worth choosing deliberately
 	// rather than inheriting. Recorded in the sub's unresolved notes.
@@ -243,7 +243,7 @@ func planFinish(store storage.TaskStore, tracker *storage.Task, slug string, opt
 
 	// An isolated slot is opt-in per run via --additional, from the SAME pool
 	// `pm work` and `pm run-epic` draw on: that shared pool is the reason the
-	// acceptance became a pm run at all. An odbiór needs the simulator and the
+	// acceptance became a pm run at all. An acceptance needs the simulator and the
 	// dev-server port, and the batch it is accepting may still be holding one,
 	// so both sides queue on one set of locks instead of two protocols that
 	// know nothing about each other. Resolution only - the claim is at run
@@ -326,12 +326,12 @@ func finishClaudeRun(prompt, sysPrompt, sessionID string, opts finishOptions) cl
 // move is invoking the Skill tool, and `Skill` is not on the worker's list - so
 // under the worker's allowlist a headless acceptance would be refused on turn
 // one (there is nobody to approve a prompt in `claude -p`) and return blocked
-// having done nothing at all. `pm` itself is on it because the odbiór records
+// having done nothing at all. `pm` itself is on it because the acceptance records
 // its verdicts through pm, and `ssh` because discovery reaches the remote
 // runner that way.
 //
 // This list is still narrower than the procedure needs, and that is the point
-// of --no-yolo being the kill switch rather than the default: an odbiór walks
+// of --no-yolo being the kill switch rather than the default: an acceptance walks
 // sub branches, worktrees and project runtime scripts, so a curated list will
 // block it somewhere. The default is yolo for exactly that reason, and the
 // worker guard hook rides along in both modes.
@@ -375,7 +375,7 @@ func printFinishDryRun(out io.Writer, plan *finishPlan) {
 
 func finishPermissionsLabel(yolo bool) string {
 	if yolo {
-		return "--dangerously-skip-permissions (default: the odbiór procedure is broad by nature; the pm worker-guard hook still rides along)"
+		return "--dangerously-skip-permissions (default: the acceptance procedure is broad by nature; the pm worker-guard hook still rides along)"
 	}
 	return "curated worker allowlist (--no-yolo)"
 }

@@ -167,7 +167,7 @@ func TestDoctorDeadContextRepoIsError(t *testing.T) {
 }
 
 // The gap that produced this feature: scripts ship with the runtime skill, the
-// playbook never names them, so an odbiór redoes their work by hand.
+// playbook never names them, so an acceptance redoes their work by hand.
 func TestDoctorUnmentionedScriptIsWarning(t *testing.T) {
 	proj, _ := handoffProject(t, "# playbook\nonly read-rn-logs.sh is described here\n")
 	checks := runExecutorDoctor(proj)

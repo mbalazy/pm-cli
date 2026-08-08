@@ -49,7 +49,7 @@ const (
 )
 
 // RunRow is one tracker's line in the runs list: what the run did, and what its
-// acceptance (odbiór) did.
+// acceptance did.
 type RunRow struct {
 	// Remote is the name of the machine this row came from, empty for a local
 	// row. Kept separate from Project (rather than pre-joined into
@@ -102,7 +102,7 @@ func (c RunCell) String() string {
 	}
 }
 
-// AcceptCell is the ACCEPTANCE column: the state of the odbiór of this run.
+// AcceptCell is the ACCEPTANCE column: the state of the acceptance of this run.
 type AcceptCell struct {
 	State string `json:"state,omitempty"`
 	// Host is the machine holding the acceptance claim, when one is live. It is

@@ -734,7 +734,7 @@ func TestE2EEpicModeAndModel(t *testing.T) {
 }
 
 // TestE2EFinishMode drives the real handlers for the tracker's finish_mode -
-// the field that decides whether `pm run-epic` chains its own odbiór. Same
+// the field that decides whether `pm run-epic` chains its own acceptance. Same
 // contract as epic_mode: set at add, tri-state at update, returned by get,
 // invalid values refused before anything is written.
 func TestE2EFinishMode(t *testing.T) {
@@ -787,7 +787,7 @@ func TestE2EFinishMode(t *testing.T) {
 
 		// omit = unchanged. This is the case that actually bites: an unrelated
 		// brief update silently turning the chain off would only be noticed the
-		// morning the odbiór did not happen.
+		// morning the acceptance did not happen.
 		if _, isErr := call(t, sess, "pm_update_task", map[string]any{
 			"project": "test", "task_id": added.ID, "brief": "still chaining",
 		}); isErr {

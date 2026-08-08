@@ -11,7 +11,7 @@ import (
 	"github.com/mbalazy/pm/internal/storage"
 )
 
-// Auto-chain: `pm run-epic` spawning the odbiór of its own run on the way out.
+// Auto-chain: `pm run-epic` spawning the acceptance of its own run on the way out.
 //
 // There is no daemon and no watcher behind this, deliberately. The manager
 // process lives for the whole run and is therefore the one thing in the system
@@ -51,21 +51,21 @@ func chainFinish(errOut io.Writer, stateDir, slug, trackerID, workDir string) bo
 	// line, no error - the acceptance is already happening, which is the outcome
 	// the chain wanted.
 	if holder := storage.LiveFinishClaimHolder(stateDir, trackerID); holder != nil {
-		fmt.Fprintf(errOut, "pm run-epic: not chaining the odbiór of %s - it is already claimed by %s (pid %d) since %s\n",
+		fmt.Fprintf(errOut, "pm run-epic: not chaining the acceptance of %s - it is already claimed by %s (pid %d) since %s\n",
 			trackerID, holder.Host, holder.PID, holder.Started)
 		return false
 	}
 
 	exe, err := finishChainExecutable()
 	if err != nil {
-		fmt.Fprintf(errOut, "pm run-epic: not chaining the odbiór of %s - cannot resolve the pm binary: %v (the run itself is unaffected - accept it by hand with `pm finish %s`)\n",
+		fmt.Fprintf(errOut, "pm run-epic: not chaining the acceptance of %s - cannot resolve the pm binary: %v (the run itself is unaffected - accept it by hand with `pm finish %s`)\n",
 			trackerID, err, trackerID)
 		return false
 	}
 
 	logPath := storage.FinishRunLogPath(stateDir, trackerID)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
-		fmt.Fprintf(errOut, "pm run-epic: not chaining the odbiór of %s - cannot create %s: %v (the run itself is unaffected - accept it by hand with `pm finish %s`)\n",
+		fmt.Fprintf(errOut, "pm run-epic: not chaining the acceptance of %s - cannot create %s: %v (the run itself is unaffected - accept it by hand with `pm finish %s`)\n",
 			trackerID, filepath.Dir(logPath), err, trackerID)
 		return false
 	}
@@ -78,7 +78,7 @@ func chainFinish(errOut io.Writer, stateDir, slug, trackerID, workDir string) bo
 	tmpLog := fmt.Sprintf("%s.tmp.%d", logPath, os.Getpid())
 	logf, err := os.Create(tmpLog)
 	if err != nil {
-		fmt.Fprintf(errOut, "pm run-epic: not chaining the odbiór of %s - cannot open the acceptance log %s: %v (the run itself is unaffected - accept it by hand with `pm finish %s`)\n",
+		fmt.Fprintf(errOut, "pm run-epic: not chaining the acceptance of %s - cannot open the acceptance log %s: %v (the run itself is unaffected - accept it by hand with `pm finish %s`)\n",
 			trackerID, logPath, err, trackerID)
 		return false
 	}
@@ -109,7 +109,7 @@ func chainFinish(errOut io.Writer, stateDir, slug, trackerID, workDir string) bo
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := c.Start(); err != nil {
 		_ = os.Remove(tmpLog)
-		fmt.Fprintf(errOut, "pm run-epic: could not start the odbiór of %s: %v (the run itself is unaffected - accept it by hand with `pm finish %s`)\n",
+		fmt.Fprintf(errOut, "pm run-epic: could not start the acceptance of %s: %v (the run itself is unaffected - accept it by hand with `pm finish %s`)\n",
 			trackerID, err, trackerID)
 		return false
 	}
@@ -117,11 +117,11 @@ func chainFinish(errOut io.Writer, stateDir, slug, trackerID, workDir string) bo
 		// The acceptance is already running and writing through its fd; only
 		// the file's NAME failed to land, so say where its output actually is
 		// rather than pretending the chain did not happen.
-		fmt.Fprintf(errOut, "pm run-epic: chained the odbiór of %s (pid %d), but its log stayed at %s: %v\n",
+		fmt.Fprintf(errOut, "pm run-epic: chained the acceptance of %s (pid %d), but its log stayed at %s: %v\n",
 			trackerID, c.Process.Pid, tmpLog, err)
 		return true
 	}
-	fmt.Fprintf(errOut, "pm run-epic: chained the odbiór of %s - detached `pm finish` (pid %d), log: %s\n",
+	fmt.Fprintf(errOut, "pm run-epic: chained the acceptance of %s - detached `pm finish` (pid %d), log: %s\n",
 		trackerID, c.Process.Pid, logPath)
 	return true
 }

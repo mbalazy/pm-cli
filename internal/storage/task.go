@@ -93,7 +93,7 @@ type TaskMeta struct {
 	// human finishes each task on its own branch later.
 	EpicMode string `yaml:"epic_mode,omitempty"`
 	// FinishMode (meaningful on a PARENT tracker only, like EpicMode) decides
-	// whether `pm run-epic` chains the odbiór (acceptance) itself: "auto" spawns
+	// whether `pm run-epic` chains the acceptance itself: "auto" spawns
 	// a detached `pm finish <tracker>` when the run is over, so a batch launched
 	// at night is already accepted by morning. "" (default) and "off" both mean
 	// no chaining - the acceptance stays a human's call.

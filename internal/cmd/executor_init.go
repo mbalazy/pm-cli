@@ -158,7 +158,7 @@ func draftExecutor(projectPath string) (*storage.Executor, []string) {
 		}
 	}
 
-	// The odbiór half of the profile. The playbook path is set unconditionally
+	// The acceptance half of the profile. The playbook path is set unconditionally
 	// (its evidence map and verification command are worth having even when no
 	// runtime skill exists) and `init` scaffolds the file, so a declared path is
 	// never a dangling one - `pm executor doctor` treats that as a hard error.
@@ -330,7 +330,7 @@ func commandNames(dir string) []string {
 
 // runtimeSkillTiers ranks the name segments that mark a skill as the project's
 // RUNTIME verification skill: the one that drives a real simulator, device or
-// browser, and therefore the one an odbiór (acceptance) session has to read in
+// browser, and therefore the one an acceptance session has to read in
 // full rather than by its one-line description.
 //
 // Tiers rather than a flat list, because the signals are not equally strong.

@@ -196,7 +196,7 @@ Drives a tracker's subtasks sequentially (by `order`) in one of two modes:
 - `mode: manual` - a permanent human gate: the manager never touches the sub; you do it by hand and move it to done yourself.
 - `model: sonnet` - per-sub model override, so trivial subs run cheap while investigation subs stay on the strong model.
 
-### `pm finish [tracker]` - the acceptance (odbiór) as a run
+### `pm finish [tracker]` - the acceptance as a run
 
 The third run kind: a headless worker that invokes the global `batch-finish-auto` skill to accept a finished batch - walk the sub branches, verify, push fixes, write a report. Yolo by default (the guard hook still rides along), `--sim` only for attended runs - anything detached keeps its hands off shared runtime. Every acceptance starts by CLAIMING the run (`pm finish claim|release|status <tracker>`): a TTL lock stored beside the run's own state, so two acceptance sessions can never take the same run - even across machines. Its state, log and report live in `<tracker>.finish.json` / `.finish.log` / `.finish.md`, never overwriting the run's files.
 
@@ -255,7 +255,7 @@ pm executor stats [project]   # journal rollup
 | `pm context [project]` | print the session-start rollup (same data as MCP `pm_context`) |
 | `pm work [project] <task>` | run one task through a headless worker |
 | `pm run-epic [project] <tracker>` | drive a whole epic (`--then-finish` chains the acceptance) |
-| `pm finish [tracker]` | run the acceptance (odbiór); `claim`/`release`/`status` manage the lock |
+| `pm finish [tracker]` | run the acceptance; `claim`/`release`/`status` manage the lock |
 | `pm runs` | table of every run + acceptance, all projects, local + remote |
 | `pm config show` | print the global config (remote-runner registry) |
 | `pm executor init/show/doctor/stats` | executor profile management |

@@ -58,7 +58,7 @@ func waitForFile(t *testing.T, path string) string {
 // the design is `--then-finish=false over a tracker's auto`: the flag overrides
 // in BOTH directions, so a run launched by hand can suppress a chain the
 // tracker asks for - otherwise there would be no way to run an epic without its
-// odbiór short of editing the task.
+// acceptance short of editing the task.
 func TestResolveAutoFinish(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -122,7 +122,7 @@ func TestChainFinishSpawnsDetachedAcceptance(t *testing.T) {
 	if len(leftovers) > 0 {
 		t.Errorf("the acceptance log scratch file was left behind: %v", leftovers)
 	}
-	if !strings.Contains(errOut.String(), "chained the odbiór of proj-1") {
+	if !strings.Contains(errOut.String(), "chained the acceptance of proj-1") {
 		t.Errorf("the chain must announce itself on stderr:\n%s", errOut.String())
 	}
 	if !strings.Contains(errOut.String(), logPath) {
@@ -224,7 +224,7 @@ func TestChainFinishSurvivesAFailedSpawn(t *testing.T) {
 			t.Error("chainFinish must report no acceptance was started")
 		}
 		out := errOut.String()
-		if !strings.Contains(out, "could not start the odbiór of proj-1") {
+		if !strings.Contains(out, "could not start the acceptance of proj-1") {
 			t.Errorf("stderr must name the failure:\n%s", out)
 		}
 		// The message has to leave the human a way forward, since nothing else
@@ -248,10 +248,10 @@ func setTrackerFinishMode(t *testing.T, store *storage.Store, mode string) {
 	}
 }
 
-// TestExecuteEpicChainsTheOdbior drives the whole manager loop and asserts the
+// TestExecuteEpicChainsTheAcceptance drives the whole manager loop and asserts the
 // chain fires (or does not) off the tracker's finish_mode - the end-to-end path
 // the feature exists for: launch a batch at night, find it accepted.
-func TestExecuteEpicChainsTheOdbior(t *testing.T) {
+func TestExecuteEpicChainsTheAcceptance(t *testing.T) {
 	t.Run("finish_mode auto chains after the run", func(t *testing.T) {
 		fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\necho '"+envelope("merged", "all green")+"'")
 		store, _ := epicRunFixture(t)
@@ -264,7 +264,7 @@ func TestExecuteEpicChainsTheOdbior(t *testing.T) {
 		if !strings.Contains(log, "argv: finish app-1 --project app --no-sim") {
 			t.Errorf("the chained acceptance got the wrong argv:\n%s", log)
 		}
-		if !strings.Contains(stderr, "chained the odbiór of app-1") {
+		if !strings.Contains(stderr, "chained the acceptance of app-1") {
 			t.Errorf("the run must announce the chain:\n%s", stderr)
 		}
 	})
@@ -283,8 +283,8 @@ func TestExecuteEpicChainsTheOdbior(t *testing.T) {
 		if _, err := os.Stat(storage.FinishRunLogPath(store.ProjectDir("app"), "app-1")); !os.IsNotExist(err) {
 			t.Errorf("finish_mode off must not start an acceptance (stat err = %v)", err)
 		}
-		if strings.Contains(stderr, "odbiór") {
-			t.Errorf("a run that chains nothing should not mention the odbiór at all:\n%s", stderr)
+		if strings.Contains(stderr, "acceptance") {
+			t.Errorf("a run that chains nothing should not mention the acceptance at all:\n%s", stderr)
 		}
 	})
 
@@ -300,7 +300,7 @@ func TestExecuteEpicChainsTheOdbior(t *testing.T) {
 		// assertions below IS the "the run still succeeds" assertion.
 		_, stderr := runEpic(t, store, epicOptions{noPR: true})
 
-		if !strings.Contains(stderr, "could not start the odbiór of app-1") {
+		if !strings.Contains(stderr, "could not start the acceptance of app-1") {
 			t.Errorf("the failed chain must be reported on stderr:\n%s", stderr)
 		}
 		sub, _ := store.FindTask("app", "app-1-1")
@@ -326,15 +326,15 @@ func TestExecuteEpicChainsTheOdbior(t *testing.T) {
 		if _, err := os.Stat(storage.FinishRunLogPath(store.ProjectDir("app"), "app-1")); !os.IsNotExist(err) {
 			t.Errorf("an aborted run must not start an acceptance (stat err = %v)", err)
 		}
-		if !strings.Contains(stderr, "not chaining the odbiór of app-1 - the run aborted") {
+		if !strings.Contains(stderr, "not chaining the acceptance of app-1 - the run aborted") {
 			t.Errorf("the skipped chain must say why, or it reads as a broken auto-chain:\n%s", stderr)
 		}
 	})
 
-	t.Run("independent mode leaves the base branch checked out for the odbiór", func(t *testing.T) {
+	t.Run("independent mode leaves the base branch checked out for the acceptance", func(t *testing.T) {
 		// `git worktree add` refuses a branch that is checked out somewhere in
 		// the repo, and the acceptance opens one per sub - so a run that ended
-		// sitting on the last sub's branch would hand the odbiór the one sub it
+		// sitting on the last sub's branch would hand the acceptance the one sub it
 		// cannot process.
 		fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\necho '"+envelope("merged", "all green")+"'")
 		store, repo := epicRunFixture(t)
@@ -345,7 +345,7 @@ func TestExecuteEpicChainsTheOdbior(t *testing.T) {
 
 		waitForFile(t, storage.FinishRunLogPath(store.ProjectDir("app"), "app-1"))
 		if head := gitHeadBranch(t, repo); head != "main" {
-			t.Errorf("the chained odbiór must find the base branch checked out, HEAD is %q", head)
+			t.Errorf("the chained acceptance must find the base branch checked out, HEAD is %q", head)
 		}
 	})
 
@@ -360,7 +360,7 @@ func TestExecuteEpicChainsTheOdbior(t *testing.T) {
 		if !strings.Contains(log, "argv: finish app-1") {
 			t.Errorf("--then-finish must chain the acceptance:\n%s", log)
 		}
-		if !strings.Contains(stderr, "chained the odbiór of app-1") {
+		if !strings.Contains(stderr, "chained the acceptance of app-1") {
 			t.Errorf("the run must announce the chain:\n%s", stderr)
 		}
 	})
@@ -391,11 +391,11 @@ func TestPlanEpicRejectsAnInvalidFinishMode(t *testing.T) {
 	}
 }
 
-// TestPrintEpicDryRunStatesTheOdbior: the spec asked --dry-run to say whether
-// an odbiór starts, and that is a property of the OUTPUT, not of the string
+// TestPrintEpicDryRunStatesTheAcceptance: the spec asked --dry-run to say whether
+// an acceptance starts, and that is a property of the OUTPUT, not of the string
 // builder below - without this, deleting the line from printEpicDryRun leaves
 // the suite green.
-func TestPrintEpicDryRunStatesTheOdbior(t *testing.T) {
+func TestPrintEpicDryRunStatesTheAcceptance(t *testing.T) {
 	store, _ := epicRunFixture(t)
 
 	render := func(t *testing.T, opts epicOptions) string {
@@ -412,20 +412,20 @@ func TestPrintEpicDryRunStatesTheOdbior(t *testing.T) {
 		return out.String()
 	}
 
-	if got := render(t, epicOptions{}); !strings.Contains(got, "odbiór after the run: NO") {
-		t.Errorf("a dry-run must state that no odbiór will start:\n%s", got)
+	if got := render(t, epicOptions{}); !strings.Contains(got, "acceptance after the run: NO") {
+		t.Errorf("a dry-run must state that no acceptance will start:\n%s", got)
 	}
 	setTrackerFinishMode(t, store, storage.FinishModeAuto)
 	got := render(t, epicOptions{})
-	if !strings.Contains(got, "odbiór after the run: YES") {
-		t.Errorf("a dry-run must state that an odbiór will start:\n%s", got)
+	if !strings.Contains(got, "acceptance after the run: YES") {
+		t.Errorf("a dry-run must state that an acceptance will start:\n%s", got)
 	}
 	if !strings.Contains(got, "pm finish app-1") {
 		t.Errorf("the dry-run line must name the acceptance it is talking about:\n%s", got)
 	}
 }
 
-// TestDescribeAutoFinishNamesTheSource: --dry-run has to answer "will an odbiór
+// TestDescribeAutoFinishNamesTheSource: --dry-run has to answer "will an acceptance
 // start", and a plan that said only YES/NO would leave the reader guessing
 // which of the two inputs to change.
 func TestDescribeAutoFinishNamesTheSource(t *testing.T) {

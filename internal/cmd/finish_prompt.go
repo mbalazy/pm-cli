@@ -9,7 +9,7 @@ import (
 
 // The acceptance run's contract with its worker, and nothing else.
 //
-// The PROCEDURE of an odbiór - discovering the run, verifying every ASSUMPTION
+// The PROCEDURE of an acceptance - discovering the run, verifying every ASSUMPTION
 // the batch's workers recorded, fixing the refuted ones, working the TODO
 // handoff, prepping each per-task PR - lives in the global `batch-finish-auto`
 // skill and its sibling `batch-finish`, some 630 lines across two SKILL.md
@@ -93,7 +93,7 @@ const (
 func buildFinishPrompt(tracker *storage.Task, proj *storage.Project, slug, workDir, reportPath string, sim bool) string {
 	var sb strings.Builder
 
-	fmt.Fprintf(&sb, "# Acceptance (odbiór) of run #%s %s\n", tracker.Meta.ID, tracker.Meta.Title)
+	fmt.Fprintf(&sb, "# Acceptance of run #%s %s\n", tracker.Meta.ID, tracker.Meta.Title)
 	fmt.Fprintf(&sb, "Project: %s", slug)
 	if proj.Stack != "" {
 		fmt.Fprintf(&sb, " | Stack: %s", proj.Stack)
@@ -126,14 +126,14 @@ func buildFinishPrompt(tracker *storage.Task, proj *storage.Project, slug, workD
 func buildFinishSystemPrompt(sim bool) string {
 	var sb strings.Builder
 
-	sb.WriteString("You are an autonomous ACCEPTANCE (odbiór) run spawned by pm - the third kind of pm run, " +
+	sb.WriteString("You are an autonomous ACCEPTANCE run spawned by pm - the third kind of pm run, " +
 		"alongside `pm work` (implement one task) and `pm run-epic` (drive an epic). You run headless in a fresh, " +
 		"isolated process; when you finish you return a single JSON result and exit.\n\n")
 
 	sb.WriteString("## The procedure is the skill's\n")
 	sb.WriteString("The `batch-finish-auto` skill holds the whole acceptance procedure. Read it and follow it. " +
 		"Nothing below overrides it; the rules here are the ones pm owns because they are about the RUN, not " +
-		"about how an odbiór is done.\n\n")
+		"about how an acceptance is done.\n\n")
 
 	sb.WriteString("## Hard rules\n")
 	sb.WriteString("- Do NOT move any task to a done/closed status. Acceptance does not close tasks - that is a " +

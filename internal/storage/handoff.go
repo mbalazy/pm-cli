@@ -7,32 +7,32 @@ import (
 	"strings"
 )
 
-// Handoff is the per-project ODBIÓR (acceptance) contract: the counterpart of
+// Handoff is the per-project ACCEPTANCE contract: the counterpart of
 // the phase bindings, but for the pass that happens AFTER a run, by a human or
 // a CC session rather than by pm.
 //
-// pm can now spawn the odbiór (`pm finish`, and `pm run-epic` chains it when
+// pm can now spawn the acceptance (`pm finish`, and `pm run-epic` chains it when
 // the tracker says `finish_mode: auto`), but it still does not inject the
 // PROCEDURE the way work_prompt.go does for a worker: the acceptance prompt
 // tells a headless session to invoke the batch-finish skill, and the procedure
 // stays in that skill. What pm CAN do is turn a file convention
-// into a resolvable contract: the odbiór skill asks pm where the playbook and
+// into a resolvable contract: the acceptance skill asks pm where the playbook and
 // the runtime skill are instead of hardcoding a path.
 //
 // Deliberately minimal. Config states WHAT exists and WHERE it lives; the
 // playbook states WHAT each tool is for and WHEN to reach for it. Process rules
 // (escalation, "observe, don't reason") read identically in every project and
-// belong in the global odbiór skill, not here - and anything pm can DERIVE
+// belong in the global acceptance skill, not here - and anything pm can DERIVE
 // (the runtime skill's scripts) is derived, never copied into config, since
 // duplicated project knowledge drifting out of sync is the very problem this
 // block exists to remove.
 type Handoff struct {
-	// Playbook is the project's evidence playbook, mapping the odbiór skill's
+	// Playbook is the project's evidence playbook, mapping the acceptance skill's
 	// generic evidence categories to real commands here. Relative paths resolve
 	// against the repo dir; "~" is expanded.
 	Playbook string `yaml:"playbook,omitempty"`
 	// RuntimeSkill names the project-local skill that drives the real runtime
-	// (simulator, device, browser) - the one an odbiór needs in full, not by its
+	// (simulator, device, browser) - the one an acceptance needs in full, not by its
 	// one-line description. Bare name, with or without a leading "/".
 	RuntimeSkill string `yaml:"runtime_skill,omitempty"`
 }
@@ -91,7 +91,7 @@ func (e Executor) ResolveHandoff(projPath string) ResolvedHandoff {
 }
 
 // skillScripts returns the skill's scripts/ dir and the sorted names of the
-// files in it. These are the concrete diagnostic tools an odbiór session should
+// files in it. These are the concrete diagnostic tools an acceptance session should
 // know exist - pm derives them so no config or playbook has to list them.
 func skillScripts(skillDir string) (string, []string) {
 	dir := filepath.Join(skillDir, "scripts")

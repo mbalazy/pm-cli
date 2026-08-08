@@ -278,7 +278,7 @@ func TestFinishDryRunClaimsNothing(t *testing.T) {
 	}
 	// The permissions line is the only place the --sim/--no-yolo wiring becomes
 	// visible without spending a token, so it is where an inverted flag is
-	// caught: yolo is the DEFAULT (a curated allowlist blocks an odbiór at 3am).
+	// caught: yolo is the DEFAULT (a curated allowlist blocks an acceptance at 3am).
 	if !strings.Contains(out, "--dangerously-skip-permissions") {
 		t.Errorf("the default must be yolo:\n%s", out)
 	}
@@ -312,7 +312,7 @@ func TestFinishClaudeArgs(t *testing.T) {
 		args := buildClaudeArgsFor(finishClaudeRun("p", "sp", "sess", base))
 		joined := strings.Join(args, " ")
 		if !strings.Contains(joined, "--dangerously-skip-permissions") {
-			t.Error("the acceptance run is yolo by default: the odbiór procedure is broad and a curated allowlist blocks it at 3am")
+			t.Error("the acceptance run is yolo by default: the acceptance procedure is broad and a curated allowlist blocks it at 3am")
 		}
 		if !strings.Contains(joined, "--settings") || !strings.Contains(joined, "worker-guard") {
 			t.Error("the guard hook rides along in yolo too - it is what protects .git and the hooks")
@@ -350,7 +350,7 @@ func TestFinishClaudeArgs(t *testing.T) {
 			t.Error("--no-yolo must still allow the Skill tool, or the acceptance cannot start at all")
 		}
 		if !strings.Contains(joined, "Bash(pm:*)") {
-			t.Error("the odbiór records its verdicts through pm - the allowlist must reach it")
+			t.Error("the acceptance records its verdicts through pm - the allowlist must reach it")
 		}
 	})
 }
@@ -449,7 +449,7 @@ func TestAggregateJournalCountsFinishRuns(t *testing.T) {
 func TestFinishPromptPointsAtTheSkillAndTheSimMode(t *testing.T) {
 	store, plan, _ := finishRunFixture(t)
 
-	// The prompt must POINT at the skill, never restate it: the odbiór
+	// The prompt must POINT at the skill, never restate it: the acceptance
 	// procedure is ~630 lines across two SKILL.md files, and a copy here is a
 	// second copy to drift.
 	if !strings.Contains(plan.prompt, "batch-finish-auto") || !strings.Contains(plan.prompt, "--no-sim") {

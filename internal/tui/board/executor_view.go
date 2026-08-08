@@ -100,7 +100,7 @@ func (m *Model) switchExecutorWorker(dir int) {
 func (m Model) watchingFinish() bool { return m.executorWatchFinish }
 
 // otherRunKindLabel names the counterpart for a toast/hint, in the words the
-// rest of pm uses for the two: a run, and the acceptance (odbiór) of one.
+// rest of pm uses for the two: a run, and the acceptance of one.
 func (m Model) otherRunKindLabel() string {
 	if m.watchingFinish() {
 		return "the executor run"
@@ -361,7 +361,7 @@ func (m Model) viewExecutor() string {
 
 	label := "Executor"
 	if m.watchingFinish() {
-		// Named for what it is, not for the command: this is the odbiór, and a
+		// Named for what it is, not for the command: this is the acceptance, and a
 		// header reading "Executor" over it would make the two runs of one
 		// tracker indistinguishable at a glance - which is the whole reason they
 		// are separate states.

@@ -142,7 +142,7 @@ func (m Model) viewBoard() string {
 			}
 			badge := badges[tasks[j].Meta.ID]
 			// Run and acceptance badge side by side, never one instead of the
-			// other: a tracker whose batch is still running while its odbiór has
+			// other: a tracker whose batch is still running while its acceptance has
 			// already started carries both, and that is the state worth seeing.
 			for _, rb := range []string{m.runBadge(tasks[j].Meta.ID), m.finishBadge(tasks[j].Meta.ID)} {
 				if rb == "" {

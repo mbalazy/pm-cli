@@ -93,7 +93,7 @@ func TestKillRunJournalsSubsAndDuration(t *testing.T) {
 }
 
 // TestKillRunParkFailureShowsErrorToast covers the out-of-AC finding from the
-// 67-3 odbiór: MoveTask can legally fail (e.g. the task file was deleted
+// 67-3 acceptance: MoveTask can legally fail (e.g. the task file was deleted
 // while the run was live) since 67-3's resurrection-hole fix - the toast must
 // not unconditionally claim the in-flight task was parked on waiting.
 func TestKillRunParkFailureShowsErrorToast(t *testing.T) {

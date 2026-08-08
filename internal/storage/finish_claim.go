@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Odbiór (acceptance) claim: the lock that stops two acceptance sessions from
+// Acceptance claim: the lock that stops two acceptance sessions from
 // taking the same executor run.
 //
 // WHERE IT LIVES. Next to the run's own run-state, in

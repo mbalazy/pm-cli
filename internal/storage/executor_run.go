@@ -135,7 +135,7 @@ func ExecutorLogPath(projectDir, taskID string) string {
 // tasks existing in one project at once does not, and nothing here prevents it.
 const finishRunInfix = ".finish"
 
-// FinishRunPath is the run-state JSON path for the acceptance (odbiór) of the
+// FinishRunPath is the run-state JSON path for the acceptance of the
 // run on taskID. Separate from ExecutorRunPath because the two runs share a
 // task id and would otherwise be one file.
 func FinishRunPath(projectDir, taskID string) string {

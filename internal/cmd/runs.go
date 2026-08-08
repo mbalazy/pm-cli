@@ -52,7 +52,7 @@ func newRunsCmd(store storage.TaskStore) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "runs",
 		Short: "List executor runs and acceptances (one row per tracker, all projects, local + remote)",
-		Long: "Lists every tracker with the state of its run and of its acceptance (odbiór), across all " +
+		Long: "Lists every tracker with the state of its run and of its acceptance, across all " +
 			"projects and - unless --local is given - across the remote runners in the global config " +
 			"(`pm config show`).\n\n" +
 			"RUN is prepped (nothing has run it) | running N/M | done N/M | failed N/M | stale N/M (marked " +

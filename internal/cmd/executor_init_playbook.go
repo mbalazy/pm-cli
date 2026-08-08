@@ -76,8 +76,8 @@ func playbookSkeleton(slug string, e *storage.Executor, h storage.ResolvedHandof
 
 	fmt.Fprintf(&b, "# Evidence playbook - %s\n\n", slug)
 	b.WriteString(`Scaffolded by ` + "`pm executor init`" + `. It maps the generic evidence categories an
-odbiór (acceptance) session works with onto the real commands of THIS project.
-The generic process lives in the global odbiór skill; this file only says which
+acceptance session works with onto the real commands of THIS project.
+The generic process lives in the global acceptance skill; this file only says which
 tools realize each category here, and when to reach for them.
 
 Read the companion facts with ` + "`pm executor show " + slug + "`" + ` - it prints the worktree
@@ -116,7 +116,7 @@ any of them survive.
 		}
 		b.WriteString("\n\n**Read that SKILL.md in full**, not its one-line description - the how-to\n(flags, worked examples, failure modes) is in its own sections and does not get\nsummarized here.\n\n")
 	} else {
-		b.WriteString(playbookTODO + " no runtime skill is declared. Name the skill that drives the real\nruntime (simulator, device, browser) and set `executor.handoff.runtime_skill`\nto it, so an odbiór session can ask pm instead of guessing.\n\n")
+		b.WriteString(playbookTODO + " no runtime skill is declared. Name the skill that drives the real\nruntime (simulator, device, browser) and set `executor.handoff.runtime_skill`\nto it, so an acceptance session can ask pm instead of guessing.\n\n")
 	}
 	b.WriteString("- **Which runtime to trust:** " + playbookTODO + " the primary one, and how to tell what\n  state it is in (which branch is it serving? who owns its port?).\n")
 	b.WriteString("- **Secondary runtime:** the worktree slots. Get each slot's device id and\n  port from `pm executor show " + slug + "`.\n")

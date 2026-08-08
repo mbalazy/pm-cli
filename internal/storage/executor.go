@@ -85,7 +85,7 @@ type Executor struct {
 	// endpoint's real shape). Listed in the worker prompt as read-only reference
 	// repos; pm itself never touches them.
 	ContextRepos map[string]string `yaml:"context_repos,omitempty"`
-	// Handoff is the ODBIÓR (acceptance) contract: where the evidence playbook
+	// Handoff is the ACCEPTANCE contract: where the evidence playbook
 	// and the runtime-driving skill live. Unlike every other field here it is
 	// consumed AFTER a run - by a human, a CC session (`pm executor show`), or
 	// the acceptance worker `pm finish` spawns - rather than by a worker
