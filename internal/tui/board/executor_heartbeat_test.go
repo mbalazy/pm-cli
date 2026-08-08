@@ -48,7 +48,7 @@ func TestDashboardShowsHeartbeatOnlyWhileAWorkerRuns(t *testing.T) {
 		CurrentSession: "sess-abc",
 		Subs:           []storage.SubRun{{ID: "p-1-1", Status: storage.RunStatusRunning}},
 	}
-	if out := stripANSI(renderExecutorDashboard(live, 100)); !strings.Contains(out, "♥ 20s ago") {
+	if out := stripANSI(renderExecutorDashboard(live, 100, false)); !strings.Contains(out, "♥ 20s ago") {
 		t.Errorf("a run with a worker in flight should show the heartbeat age\n---\n%s", out)
 	}
 
@@ -58,7 +58,7 @@ func TestDashboardShowsHeartbeatOnlyWhileAWorkerRuns(t *testing.T) {
 	noWorker := *live
 	noWorker.CurrentSub = ""
 	noWorker.CurrentSession = ""
-	if out := stripANSI(renderExecutorDashboard(&noWorker, 100)); strings.Contains(out, "♥") {
+	if out := stripANSI(renderExecutorDashboard(&noWorker, 100, false)); strings.Contains(out, "♥") {
 		t.Errorf("no worker in flight -> no heartbeat age\n---\n%s", out)
 	}
 
@@ -66,7 +66,7 @@ func TestDashboardShowsHeartbeatOnlyWhileAWorkerRuns(t *testing.T) {
 	// age would read as a run that just beat.
 	done := *live
 	done.Status = storage.RunStatusDone
-	if out := stripANSI(renderExecutorDashboard(&done, 100)); strings.Contains(out, "♥") {
+	if out := stripANSI(renderExecutorDashboard(&done, 100, false)); strings.Contains(out, "♥") {
 		t.Errorf("finished run must not show a heartbeat\n---\n%s", out)
 	}
 }

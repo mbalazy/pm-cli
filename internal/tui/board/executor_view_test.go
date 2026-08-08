@@ -243,13 +243,13 @@ func TestRenderExecutorDashboard(t *testing.T) {
 			{ID: "p-1-2", Status: "blocked", Note: "needs backend field"},
 		},
 	}
-	out := stripANSI(renderExecutorDashboard(run, 100))
+	out := stripANSI(renderExecutorDashboard(run, 100, false))
 	for _, want := range []string{"Executor run", "✓ done", "p-1-1", "merged", "p-1-2", "blocked", "needs backend field", "press W to watch"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("dashboard missing %q\n---\n%s", want, out)
 		}
 	}
-	if renderExecutorDashboard(nil, 100) != "" {
+	if renderExecutorDashboard(nil, 100, false) != "" {
 		t.Error("nil run should render empty")
 	}
 }

@@ -247,19 +247,21 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, common.Keys.KillRun):
 		if t != nil {
-			st := m.runForTask(t)
+			st, finish := m.pickRunForTask(t)
 			if st == nil || !st.IsLive() {
 				m.toastMsg = "no live executor run to stop"
 				m.toastExpiry = time.Now().Add(3 * time.Second)
 				break
 			}
-			if m.confirmAction == "kill-run" && m.confirmTaskID == st.TaskID {
+			// Keyed on the kind too - see the same branch in update.go.
+			if m.confirmAction == "kill-run" && m.confirmTaskID == st.TaskID && m.confirmRunFinish == finish {
 				m.confirmAction = ""
 				m.confirmTaskID = ""
 				return m, m.killRun(st)
 			}
 			m.confirmAction = "kill-run"
 			m.confirmTaskID = st.TaskID
+			m.confirmRunFinish = finish
 		}
 
 	case msg.String() == "s":

@@ -11,8 +11,11 @@ import (
 // the phase bindings, but for the pass that happens AFTER a run, by a human or
 // a CC session rather than by pm.
 //
-// Because pm never spawns the odbiór, it cannot inject a prompt the way
-// work_prompt.go does for a worker. What it CAN do is turn a file convention
+// pm can now spawn the odbiór (`pm finish`, and `pm run-epic` chains it when
+// the tracker says `finish_mode: auto`), but it still does not inject the
+// PROCEDURE the way work_prompt.go does for a worker: the acceptance prompt
+// tells a headless session to invoke the batch-finish skill, and the procedure
+// stays in that skill. What pm CAN do is turn a file convention
 // into a resolvable contract: the odbiór skill asks pm where the playbook and
 // the runtime skill are instead of hardcoding a path.
 //

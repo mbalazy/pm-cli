@@ -33,7 +33,9 @@ const (
 // `pm work`; one per sub for `pm run-epic`).
 type JournalSub struct {
 	ID string `json:"id"`
-	// merged | pushed | verified | blocked | failed | conflict | skipped | manual.
+	// merged | pushed | verified | blocked | failed | conflict | skipped |
+	// manual | aborted, plus an acceptance run's own verdicts done | partial
+	// (kind "finish" has one entry, for the tracker it accepted).
 	// Lines written before 0.34.0 say "merged" for every green outcome,
 	// including batch subs nothing was ever merged for - they are never
 	// rewritten, so a consumer reading old history must keep that in mind.
@@ -55,7 +57,7 @@ type JournalSub struct {
 type JournalEntry struct {
 	Event   string `json:"event"` // start | end | killed
 	TS      string `json:"ts"`    // RFC3339, stamped by AppendJournal if empty
-	Kind    string `json:"kind"`  // "work" | "run-epic"
+	Kind    string `json:"kind"`  // "work" | "run-epic" | "finish" (an acceptance run)
 	Project string `json:"project"`
 	TaskID  string `json:"task_id"` // task (work) or tracker (run-epic) id
 	// RunID ties every line of ONE physical run together (see NewRunID). All

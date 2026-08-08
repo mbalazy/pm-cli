@@ -64,6 +64,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 		additional  bool
 		slotPin     int
 		independent bool
+		thenFinish  bool
 	)
 
 	cmd := &cobra.Command{
@@ -86,6 +87,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 				model: model, maxTurns: maxTurns, yolo: yolo, timeout: timeout,
 				base: base, noPR: noPR, allowDirty: allowDirty,
 				additional: additional, slotPin: slotPin, independent: independent,
+				thenFinish: thenFinish, thenFinishSet: cmd.Flags().Changed("then-finish"),
 				out: cmd.OutOrStdout(), errOut: cmd.ErrOrStderr(),
 			}
 			// --base is NOT inert here (it is the integration branch's fork point
@@ -114,6 +116,11 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 	cmd.Flags().BoolVar(&additional, "additional", false, "run the whole epic in an isolated 'additional' worktree slot instead of the main checkout; requires executor.worktrees (or legacy additional_worktree) in project.yaml")
 	cmd.Flags().IntVar(&slotPin, "slot", 0, "with --additional: pin a specific worktree slot (1-based); default 0 = first free slot")
 	cmd.Flags().BoolVar(&independent, "independent", false, "batch mode for unrelated subs: each on its own branch off the base, pushed, never merged (also enabled by `epic_mode: independent` on the tracker)")
+	// Tri-state on purpose, like every other run flag that shadows a field on
+	// the tracker: passed = this run decides (in BOTH directions, so
+	// --then-finish=false suppresses a tracker's `finish_mode: auto`), omitted =
+	// the tracker's finish_mode decides.
+	cmd.Flags().BoolVar(&thenFinish, "then-finish", false, "when the run is over, spawn a detached `pm finish <tracker>` odbiór on this machine (overrides the tracker's finish_mode; --then-finish=false suppresses it)")
 
 	return cmd
 }
@@ -132,8 +139,13 @@ type epicOptions struct {
 	additional  bool
 	slotPin     int
 	independent bool
-	out         io.Writer
-	errOut      io.Writer
+	// thenFinish + thenFinishSet are the --then-finish flag's tri-state: only
+	// when Set does thenFinish beat the tracker's finish_mode (see
+	// resolveAutoFinish).
+	thenFinish    bool
+	thenFinishSet bool
+	out           io.Writer
+	errOut        io.Writer
 }
 
 // stdout/stderr resolve the run's writers, defaulting to the process streams -
@@ -176,9 +188,14 @@ type epicPlan struct {
 	// side-effect-free half, precisely so --dry-run sees the same verdict the
 	// real run does instead of reporting a plan that dies on its first line.
 	doneStatusGate error
-	epicBranch     string
-	baseBranch     string
-	slots          []storage.ResolvedWorktree
+	// autoFinish: this run chains the odbiór on the way out (see chainFinish).
+	// Resolved here, in the side-effect-free half, so --dry-run says whether an
+	// acceptance will start - the one thing about the chain worth knowing before
+	// launching a run overnight.
+	autoFinish bool
+	epicBranch string
+	baseBranch string
+	slots      []storage.ResolvedWorktree
 	// workDir is where the run will happen - the main checkout, or (additional
 	// mode) a PROVISIONAL description of the slot pool for the dry-run display;
 	// the real slot is claimed in executeEpic.
@@ -220,6 +237,14 @@ func planEpic(store storage.TaskStore, args []string, opts epicOptions) (*epicPl
 	}
 	independentMode := opts.independent || tracker.Meta.EpicMode == storage.EpicModeIndependent
 
+	// finish_mode is validated here for the same reason epic_mode is: a value
+	// writeTask would reject can still reach a run through a hand-edited task
+	// file, and a run that silently ignores an unreadable gate is worse than one
+	// that names it.
+	if err := storage.ValidateFinishMode(tracker.Meta.FinishMode); err != nil {
+		return nil, fmt.Errorf("tracker %s: %w", tracker.Meta.ID, err)
+	}
+
 	// Base precedence for the integration branch: --base > (only with
 	// --additional) executor.base_branch > "main". In default mode base_branch
 	// is not consulted, so behaviour matches pre-worktree run-epic.
@@ -250,11 +275,23 @@ func planEpic(store storage.TaskStore, args []string, opts epicOptions) (*epicPl
 		doneStatus:     doneStatus,
 		doneStatusNote: doneNote,
 		doneStatusGate: epicDoneStatusGate(doneStatus, slug, statuses),
+		autoFinish:     resolveAutoFinish(opts, tracker.Meta.FinishMode),
 		epicBranch:     "epic/" + tracker.Meta.ID,
 		baseBranch:     resolveWorktreeBase(opts.base, execBase, "main"),
 		slots:          slots,
 		workDir:        workDir,
 	}, nil
+}
+
+// resolveAutoFinish decides whether this run chains its own odbiór: the
+// --then-finish flag when it was passed (either way - it is the run's decision
+// then, so it can suppress a tracker's `auto` as well as add one), otherwise the
+// tracker's finish_mode, where "" and "off" are the same answer.
+func resolveAutoFinish(opts epicOptions, finishMode string) bool {
+	if opts.thenFinishSet {
+		return opts.thenFinish
+	}
+	return finishMode == storage.FinishModeAuto
 }
 
 // abortSkips accounts for the subs an aborted run never reached. Without them
@@ -347,6 +384,7 @@ func printEpicDryRun(plan *epicPlan, opts epicOptions) error {
 	if bl := strings.TrimSpace(plan.exc.Baseline); bl != "" {
 		fmt.Fprintf(opts.stdout(), "\nbaseline (once per run, injected into every worker prompt): %s\n", bl)
 	}
+	fmt.Fprintf(opts.stdout(), "\nodbiór after the run: %s\n", describeAutoFinish(plan, opts))
 	return plan.doneStatusGate
 }
 
@@ -483,7 +521,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		TaskID:   tracker.Meta.ID,
 		RunID:    runID,
 		Project:  slug,
-		Kind:     "run-epic",
+		Kind:     storage.RunKindEpic,
 		Status:   storage.RunStatusRunning,
 		PID:      os.Getpid(),
 		RepoPath: workDir,
@@ -609,9 +647,40 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		Subs: jSubs,
 	})
 
+	// The chain runs LAST, after the summary and (integration mode) the epic PR,
+	// so the acceptance starts against a run that is completely finished on
+	// disk. Nothing below it can fail the run: chainFinish returns instead of
+	// erroring, always.
+	maybeChainFinish := func() {
+		if !plan.autoFinish {
+			return
+		}
+		// An aborted run is the one case where a chain would be actively wrong:
+		// an account wall stopped the subs, so most of the batch was never run,
+		// and the acceptance would spend a fresh worker walking into the same
+		// wall. Say so - silence here would read as "the chain is broken".
+		if abortReason != "" {
+			fmt.Fprintf(errOut, "pm run-epic: not chaining the odbiór of %s - the run aborted (%s); re-run it, then accept with `pm finish %s`\n",
+				tracker.Meta.ID, abortReason, tracker.Meta.ID)
+			return
+		}
+		// Independent mode ends with the LAST sub's own branch checked out (it
+		// never restores the base - integration mode does, below). The
+		// acceptance then walks every sub's branch, and `git worktree add`
+		// refuses a branch that is already checked out somewhere in the repo -
+		// so without this the last sub of every batch is the one sub the odbiór
+		// cannot open. Best-effort and chain-only: a run nobody chains keeps
+		// exactly the branch it kept before.
+		if independentMode {
+			logIfErr(errOut, "restore "+baseBranch+" before the odbiór", gitEnsureBranch(workDir, baseBranch, ""))
+		}
+		chainFinish(errOut, stateDir, slug, tracker.Meta.ID, workDir)
+	}
+
 	if independentMode {
 		printEpicSummary(opts.stdout(), tracker, "independent, off "+baseBranch, outcomes)
 		fmt.Fprintf(errOut, "\nEach sub lives on its own branch (pushed to origin when it carried commits). Finish + verify every task by hand, then open per-task PRs - nothing was merged anywhere.\n")
+		maybeChainFinish()
 		return nil
 	}
 
@@ -627,6 +696,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		openEpicPR(errOut, workDir, epicBranch, baseBranch, tracker)
 	}
 	fmt.Fprintf(errOut, "\nThe epic->%s PR and closing %s stay human-gated - review the integration branch when convenient.\n", baseBranch, tracker.Meta.ID)
+	maybeChainFinish()
 	return nil
 }
 
@@ -952,6 +1022,25 @@ func describeSlotPool(slots []storage.ResolvedWorktree) string {
 		paths = append(paths, s.Path)
 	}
 	return "first free of: " + strings.Join(paths, " | ")
+}
+
+// describeAutoFinish renders the chain decision for --dry-run, naming WHERE the
+// decision came from: a run whose tracker says `auto` and one told
+// --then-finish look identical at run time and are not the same thing to fix
+// when the acceptance turns out to be unwanted.
+func describeAutoFinish(plan *epicPlan, opts epicOptions) string {
+	src := "tracker finish_mode"
+	if plan.tracker.Meta.FinishMode == "" {
+		src = "tracker finish_mode unset (= off)"
+	}
+	if opts.thenFinishSet {
+		src = "--then-finish"
+	}
+	if !plan.autoFinish {
+		return "NO (" + src + ") - accept it by hand with `pm finish " + plan.tracker.Meta.ID + "`"
+	}
+	return "YES (" + src + ") - a detached `pm finish " + plan.tracker.Meta.ID +
+		"` starts on THIS machine when the run ends, unless the acceptance claim is already held"
 }
 
 func printEpicPlan(w io.Writer, tracker *storage.Task, epicBranch, base string, startStatus, doneStatus storage.TaskStatus, subs []*storage.Task, additional bool, workDir string, independent bool) {

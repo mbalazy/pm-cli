@@ -65,21 +65,35 @@ const transcriptScanCap = 8 << 20
 // calls the tool more than once, and the final call is the one the harness would
 // have reported.
 func lastStructuredOutput(configDir, dir, sessionID string) (*workerResult, string) {
+	var found *workerResult
+	path := scanTranscripts(configDir, dir, sessionID, func(r io.Reader) bool {
+		found = scanStructuredOutput(r)
+		return found != nil
+	})
+	return found, path
+}
+
+// scanTranscripts offers each candidate transcript for sessionID to scan,
+// stopping at the first one scan reports a find in, and returns the path that
+// produced it ("" when none did). Shared by every reader of a worker's own
+// transcript - the structured-result recovery here and the acceptance run's -
+// so a new place a transcript can live is added once, in transcriptCandidates.
+func scanTranscripts(configDir, dir, sessionID string, scan func(io.Reader) bool) string {
 	if sessionID == "" || dir == "" {
-		return nil, ""
+		return ""
 	}
 	for _, path := range transcriptCandidates(configDir, dir, sessionID) {
 		f, err := os.Open(path)
 		if err != nil {
 			continue
 		}
-		res := scanStructuredOutput(f)
+		found := scan(f)
 		f.Close()
-		if res != nil {
-			return res, path
+		if found {
+			return path
 		}
 	}
-	return nil, ""
+	return ""
 }
 
 // transcriptCandidates lists the paths a worker transcript can live at: the
@@ -110,12 +124,36 @@ func transcriptCandidates(configDir, dir, sessionID string) []string {
 }
 
 // scanStructuredOutput returns the last decodable StructuredOutput tool input in
-// a transcript stream, or nil. A record that fails to parse is skipped: a
-// transcript is append-only and can be truncated mid-write by a killed worker.
+// a transcript stream, or nil.
 func scanStructuredOutput(r io.Reader) *workerResult {
+	var found *workerResult
+	eachStructuredOutput(r, func(raw json.RawMessage) {
+		var res workerResult
+		if json.Unmarshal(raw, &res) != nil {
+			return
+		}
+		// A call with no status carries no verdict - the schema requires one,
+		// so an empty one means this is not the result the harness wanted.
+		if strings.TrimSpace(res.Status) == "" {
+			return
+		}
+		found = &res
+	})
+	return found
+}
+
+// eachStructuredOutput offers the raw input of every StructuredOutput tool call
+// in a transcript stream to accept, in file order, so the caller's LAST
+// accepted one wins. A record that fails to parse is skipped: a transcript is
+// append-only and can be truncated mid-write by a killed worker.
+//
+// Raw rather than typed, because the two result contracts pm parses out of a
+// transcript (the worker's and the acceptance's) decode the same bytes into
+// different structs, and each has to reject an input it cannot use without the
+// other's earlier, usable calls disappearing with it.
+func eachStructuredOutput(r io.Reader, accept func(json.RawMessage)) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), transcriptScanCap)
-	var found *workerResult
 	for sc.Scan() {
 		line := sc.Bytes()
 		if !strings.Contains(string(line), "StructuredOutput") {
@@ -138,17 +176,7 @@ func scanStructuredOutput(r io.Reader) *workerResult {
 			if c.Type != "tool_use" || c.Name != "StructuredOutput" || len(c.Input) == 0 {
 				continue
 			}
-			var res workerResult
-			if json.Unmarshal(c.Input, &res) != nil {
-				continue
-			}
-			// A call with no status carries no verdict - the schema requires one,
-			// so an empty one means this is not the result the harness wanted.
-			if strings.TrimSpace(res.Status) == "" {
-				continue
-			}
-			found = &res
+			accept(c.Input)
 		}
 	}
-	return found
 }

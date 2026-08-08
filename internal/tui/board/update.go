@@ -28,6 +28,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailViewport.Height = msg.Height - 2
 		m.executorViewport.Width = msg.Width
 		m.executorViewport.Height = executorBodyHeight(msg.Height)
+		// The Runs view scrolls on the terminal height, so a resize can leave its
+		// cursor off-screen until the next keypress.
+		m.fixRunsCursor()
 		return m, nil
 
 	case tickMsg:
@@ -48,11 +51,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentView == viewExecutor {
 			m.refreshExecutorView()
 		}
+		// Only while the Runs view is open: unlike refreshRunStates above, this
+		// reads EVERY project's tasks and run-states, which the board itself has no
+		// use for (see refreshRunsView). Remote rows are NOT re-fetched on a tick -
+		// that is `f`.
+		if m.currentView == viewRuns {
+			m.refreshRunsView()
+		}
 		// Live-refresh the task-detail view while a run for it is active: reload
 		// tasks (so the subtask table + parent rollup reflect fresh sub statuses)
 		// and re-render the dashboard, preserving scroll.
 		if m.currentView == viewDetail && m.detailTask != nil {
-			if run := m.runStates[m.detailTask.Meta.ID]; run != nil && run.IsLive() {
+			// Either dashboard being live is reason enough to re-render: an
+			// acceptance can be the only thing still moving on a finished run.
+			if m.runStates[m.detailTask.Meta.ID].IsLive() || m.finishStates[m.detailTask.Meta.ID].IsLive() {
 				m.reload()
 				if rt, err := m.store.FindTask(m.detailTask.Project, m.detailTask.Meta.ID); err == nil {
 					m.detailTask = rt
@@ -79,10 +91,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// means no proof, which means no signal. Errors are dropped: the process
 		// may legitimately have exited in the gap (the next refreshRunStates
 		// reflects reality), and this is a TUI so stderr is unusable.
-		if st, err := storage.ReadRunState(m.store.ProjectDir(msg.project), msg.taskID); err == nil && st.PID == msg.pid {
+		if st, err := readRunStateOfKind(m.store.ProjectDir(msg.project), msg.taskID, msg.kind); err == nil && st.PID == msg.pid {
 			_ = st.Kill(syscall.SIGKILL)
 		}
 		m.refreshRunStates()
+		return m, nil
+
+	case runsRemoteMsg:
+		m.applyRemoteRuns(msg)
+		// See reloadMsg below: the tick loop is already running, don't fan it out.
 		return m, nil
 
 	case reloadMsg:
@@ -138,6 +155,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.currentView == viewFocus {
 			return m.updateFocus(msg)
+		}
+		if m.currentView == viewRuns {
+			return m.updateRuns(msg)
 		}
 		if m.adding {
 			return m.updateAdd(msg)
@@ -476,19 +496,23 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t == nil {
 			break
 		}
-		st := m.runForTask(t)
+		st, finish := m.pickRunForTask(t)
 		if st == nil || !st.IsLive() {
 			m.toastMsg = "no live executor run to stop"
 			m.toastExpiry = time.Now().Add(3 * time.Second)
 			break
 		}
-		if m.confirmAction == "kill-run" && m.confirmTaskID == st.TaskID {
+		// The confirmation is keyed on the run AND its kind: the two share a
+		// task id, so a run that ends between the two presses would otherwise
+		// turn a confirmation given for it into a kill of the acceptance.
+		if m.confirmAction == "kill-run" && m.confirmTaskID == st.TaskID && m.confirmRunFinish == finish {
 			m.confirmAction = ""
 			m.confirmTaskID = ""
 			return m, m.killRun(st)
 		}
 		m.confirmAction = "kill-run"
 		m.confirmTaskID = st.TaskID
+		m.confirmRunFinish = finish
 
 	case key.Matches(msg, common.Keys.Focus):
 		if t := m.selectedTask(); t != nil {
@@ -512,6 +536,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, common.Keys.FocusView):
 		m.currentView = viewFocus
 		m.focusCursor = 0
+
+	case key.Matches(msg, common.Keys.RunsView):
+		m.openRunsView()
 
 	case key.Matches(msg, common.Keys.Help):
 		m.showHelp = true

@@ -87,8 +87,9 @@ type Executor struct {
 	ContextRepos map[string]string `yaml:"context_repos,omitempty"`
 	// Handoff is the ODBIÓR (acceptance) contract: where the evidence playbook
 	// and the runtime-driving skill live. Unlike every other field here it is
-	// consumed AFTER a run, by a human or a CC session (`pm executor show`),
-	// not by a worker prompt - pm never spawns the odbiór. See handoff.go.
+	// consumed AFTER a run - by a human, a CC session (`pm executor show`), or
+	// the acceptance worker `pm finish` spawns - rather than by a worker
+	// prompt. See handoff.go.
 	Handoff     Handoff `yaml:"handoff,omitempty"`
 	StartStatus string  `yaml:"start_status,omitempty"` // sub status meaning "ready to pick up"
 	WipStatus   string  `yaml:"wip_status,omitempty"`
