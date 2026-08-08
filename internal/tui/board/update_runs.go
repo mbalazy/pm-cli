@@ -1,12 +1,14 @@
 package board
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -77,7 +79,13 @@ func (m Model) updateRuns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case msg.String() == "f":
-		return m, m.startRemoteRunsFetch()
+		// The call is a STATEMENT, not an operand of the return: it takes a
+		// pointer to this copy of m and sets runsFetching, and Go orders only the
+		// calls in an expression - where the bare `m` operand is evaluated
+		// relative to them is unspecified. Sequenced this way the "fetching…"
+		// state cannot be dropped by a legal reordering.
+		cmd := m.startRemoteRunsFetch()
+		return m, cmd
 
 	case msg.String() == "r":
 		m.refreshRunsView()
@@ -118,6 +126,12 @@ func (m *Model) openRunsRow() {
 		m.toastExpiry = time.Now().Add(3 * time.Second)
 		return
 	}
+	// The tab list is re-read FIRST. m.projects is filled at startup and by the
+	// board's own `r`, never by reload() - while the rows under this cursor come
+	// off disk on every tick. So a project created since the board started is on
+	// screen here and absent from the slice, and resolving against the stale copy
+	// would answer "archived?" about a project that is neither archived nor gone.
+	m.refreshProjects()
 	// On the ALL tab every project is already loaded, so there is nothing to
 	// switch and no reason to pay for a reload.
 	if m.activeProject != 0 && m.projects[m.activeProject] != row.Project {
@@ -128,15 +142,28 @@ func (m *Model) openRunsRow() {
 				break
 			}
 		}
-		if idx < 0 {
-			// An archived project still has run-states and tasks on disk, but no
-			// tab to switch to - say which project rather than open an empty view.
+		switch {
+		case idx < 0:
+			// The project has no tab even after the refresh: archived, or removed
+			// under the board. Its run-states are still on disk, but there is
+			// nothing to switch to - say which project rather than open an empty view.
 			m.toastMsg = "project " + row.Project + " is not on this board (archived?)"
 			m.toastExpiry = time.Now().Add(4 * time.Second)
 			return
+		case m.hiddenProjects[row.Project]:
+			// A hidden project is IN m.projects but has no tab (renderTabs marks
+			// the active one among the VISIBLE projects only), so selecting it by
+			// index would leave the board showing its tasks with no tab lit and no
+			// way to tell which project that is. ALL is always visible and its
+			// run-state refresh covers every project - which is all this path
+			// needs - so descend through it rather than silently un-hiding a
+			// project the user chose to hide.
+			m.activeProject = 0
+			m.reload()
+		default:
+			m.activeProject = idx
+			m.reload()
 		}
-		m.activeProject = idx
-		m.reload()
 	}
 	// The maps are what pickRunForTask reads, and the tab may have just changed.
 	m.refreshRunStates()
@@ -168,6 +195,10 @@ var runsRemoteFetch = execRemoteRunRows
 // The child caps each remote at its own 20s, so this is the backstop for a
 // registry that has grown, not the per-machine deadline.
 var runsRemoteTimeout = 2 * time.Minute
+
+// runsFetchWaitDelay bounds how long Wait may block AFTER the deadline has
+// killed the child, on behalf of descendants still holding its output pipe.
+const runsFetchWaitDelay = 5 * time.Second
 
 // startRemoteRunsFetch kicks off the remote fetch and returns the tea.Cmd that
 // delivers it. Asynchronous by construction: a fetch is seconds of ssh, and the
@@ -231,9 +262,10 @@ func (m *Model) applyRemoteRuns(msg runsRemoteMsg) {
 // local rows are DISCARDED here: they would be a second, staler copy of rows
 // this process already has.
 //
-// The binary is os.Executable(), never a bare "pm" from PATH: the board and its
-// child must be the same pm, or a stale binary earlier in PATH would answer for
-// a feature this build has and it does not.
+// The binary is os.Executable(): the board and its child must be the same pm,
+// or a stale binary earlier in PATH would answer for a feature this build has
+// and it does not. PATH is consulted only as a last resort, when this process
+// cannot name its own executable at all.
 func execRemoteRunRows() ([]storage.RunRow, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -245,21 +277,46 @@ func execRemoteRunRows() ([]storage.RunRow, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), runsRemoteTimeout)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, exe, "runs", "--json").Output()
-	if err != nil {
+	// Its OWN process group, with a Cancel that signals the group and a
+	// WaitDelay behind it. The deadline alone is not enough: default
+	// cancellation kills only the pm we spawned, and the ssh processes IT
+	// spawned inherit the stdout pipe - so Wait blocks for as long as the hung
+	// connection lasts, well past runsRemoteTimeout. That is not merely a slow
+	// fetch: this runs on a tea.Cmd goroutine, so a Wait that never returns
+	// means runsRemoteMsg never arrives and runsFetching stays true for the rest
+	// of the session, with every later `f` answering "already fetching".
+	// internal/cmd's groupCmd closes the same gap for the ssh child itself; it
+	// cannot be reused here, since internal/cmd imports this package.
+	c := exec.CommandContext(ctx, exe, "runs", "--json")
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error {
+		if p := c.Process; p != nil && p.Pid > 0 {
+			// Negative pid = the whole group. Never 0 or less: that is OUR group.
+			_ = syscall.Kill(-p.Pid, syscall.SIGKILL)
+		}
+		return nil // let Wait report the process's own error, not this one
+	}
+	c.WaitDelay = runsFetchWaitDelay
+	var stdout, stderr bytes.Buffer
+	c.Stdout, c.Stderr = &stdout, &stderr
+
+	// exec.ErrWaitDelay is NOT a failure - it means the child exited fine but
+	// something it left behind still held the output pipe, so Wait unblocked us.
+	// The answer is already in the buffer; discarding it would report a fetch
+	// that in fact succeeded. Same rule as internal/cmd's fetchRemoteRuns.
+	if err := c.Run(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("no answer within %s", runsRemoteTimeout)
 		}
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			return nil, fmt.Errorf("%v: %s", err, firstLine(string(ee.Stderr)))
+		if s := firstLine(stderr.String()); s != "" {
+			return nil, fmt.Errorf("%v: %s", err, s)
 		}
 		return nil, err
 	}
 	var payload struct {
 		Rows []storage.RunRow `json:"rows"`
 	}
-	if err := json.Unmarshal(out, &payload); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 		return nil, fmt.Errorf("`pm runs --json` answered with something unparsable: %w", err)
 	}
 	var remote []storage.RunRow

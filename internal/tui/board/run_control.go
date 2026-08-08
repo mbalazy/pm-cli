@@ -55,6 +55,12 @@ func (m *Model) refreshRunsView() {
 	// index: rows are ordered by activity, so a run that ticks over while the
 	// user is reading reorders them under a plain index and Enter would then open
 	// a different tracker than the one highlighted.
+	//
+	// The one case this cannot cover is the anchored row DISAPPEARING (its
+	// project archived, a tracker losing its last child, a re-fetch returning
+	// fewer remote rows): there is no identity left to follow, so the cursor
+	// keeps its position, fixRunsCursor clamps it, and the selection does move.
+	// That is the whole of the exposure - not drift on every refresh.
 	want := ""
 	if r := m.selectedRunRow(); r != nil {
 		want = runRowKey(*r)

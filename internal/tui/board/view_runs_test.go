@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mattn/go-runewidth"
 )
 
 // The Runs view: the screen pm did not have - every tracker's run and its
@@ -497,5 +498,116 @@ func TestRunsCursorFollowsTheRowAcrossRefreshes(t *testing.T) {
 	}
 	if m.runsCursor == before && len(m.runsRows) > 1 {
 		t.Logf("index unchanged (%d) - the rows happened not to move", before)
+	}
+}
+
+// runsProjectWithRun creates a project with a tracker and a finished run WITHOUT
+// touching m.projects - the state the board is in whenever a project is created
+// (by another session, or over MCP) after it started.
+func runsProjectWithRun(t *testing.T, m *Model, project, tracker string) {
+	t.Helper()
+	if err := m.store.CreateProject(project, &storage.Project{Name: project}); err != nil {
+		t.Fatal(err)
+	}
+	runsTracker(t, m, project, tracker, 1)
+	if err := storage.WriteRunState(m.store.ProjectDir(project), &storage.RunState{
+		TaskID: tracker, Project: project, Kind: storage.RunKindEpic, Status: storage.RunStatusDone,
+		Started: time.Now().UTC().Format(time.RFC3339),
+		Subs:    []storage.SubRun{{ID: tracker + "-1", Status: "merged"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshRunsView()
+}
+
+// cursorOnTracker puts the Runs cursor on the row for tracker.
+func cursorOnTracker(t *testing.T, m *Model, tracker string) {
+	t.Helper()
+	for i, r := range m.runsRows {
+		if r.Tracker == tracker {
+			m.runsCursor = i
+			return
+		}
+	}
+	t.Fatalf("no row for tracker %q in %d rows", tracker, len(m.runsRows))
+}
+
+// The rows come off disk on every tick; the tab list does not (it is filled at
+// startup and by the board's own `r`, never by reload). So a project created
+// after the board started is ON SCREEN here while absent from m.projects, and
+// resolving the row against the stale slice reported it as archived.
+func TestRunsViewOpensAProjectCreatedAfterTheBoardStarted(t *testing.T) {
+	m := newRunsModel(t)
+	runsProjectWithRun(t, m, "q", "q-4")
+	for _, p := range m.projects {
+		if p == "q" {
+			t.Fatal("precondition: q must NOT be in the stale tab list yet")
+		}
+	}
+
+	cursorOnTracker(t, m, "q-4")
+	m.openRunsRow()
+
+	if m.currentView != viewExecutor {
+		t.Fatalf("the agent-view did not open (toast %q) - q is neither archived nor gone", m.toastMsg)
+	}
+	if got := m.projects[m.activeProject]; got != "q" {
+		t.Errorf("active project = %q, want q", got)
+	}
+}
+
+// A hidden project IS in m.projects but has no tab: renderTabs marks the active
+// project among the VISIBLE ones only. Selecting it by index would show its
+// tasks with no tab lit, leaving no way to tell which project the board is on.
+// ALL is always visible and its run-state refresh covers every project.
+func TestRunsViewHiddenProjectRowDescendsThroughTheAllTab(t *testing.T) {
+	m := newRunsModel(t)
+	runsProjectWithRun(t, m, "q", "q-4")
+	m.refreshProjects()
+	m.hiddenProjects = map[string]bool{"q": true}
+
+	cursorOnTracker(t, m, "q-4")
+	m.openRunsRow()
+
+	if m.currentView != viewExecutor {
+		t.Fatalf("the agent-view did not open (toast %q)", m.toastMsg)
+	}
+	if m.activeProject != 0 {
+		t.Errorf("active project = %q, want the ALL tab - a hidden project has no tab to light up",
+			m.projects[m.activeProject])
+	}
+	active := m.projects[m.activeProject]
+	visible := false
+	for _, p := range m.visibleProjects() {
+		if p == active {
+			visible = true
+		}
+	}
+	if !visible {
+		t.Errorf("the board is left on %q, which renders no tab as active", active)
+	}
+}
+
+// Every line must fit m.width. Overflow does not break the height contract (the
+// renderer clips it), it silently loses the line's tail - and the footer is
+// where the way OUT of this view is written.
+func TestViewRunsFitsTheWidth(t *testing.T) {
+	for _, width := range []int{30, 45, 60, 80, 120} {
+		t.Run(fmt.Sprintf("w%d", width), func(t *testing.T) {
+			for _, empty := range []bool{false, true} {
+				m := newRunsModel(t)
+				if empty {
+					m.runsRows = nil
+				}
+				m.width, m.height = width, 24
+				for i, line := range strings.Split(m.viewRuns(), "\n") {
+					plain := stripANSI(line)
+					if got := runewidth.StringWidth(plain); got > width {
+						t.Errorf("empty=%v line %d is %d cells wide, want <= %d: %q",
+							empty, i, got, width, plain)
+					}
+				}
+			}
+		})
 	}
 }

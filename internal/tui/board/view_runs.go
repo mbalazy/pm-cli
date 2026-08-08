@@ -60,8 +60,12 @@ func (m Model) viewRuns() string {
 		m.runsHeaderLine(widths),
 	}
 	lines = append(lines, m.runsBodyLines(widths, budget)...)
-	footer := helpStyle.Render(
-		"↑/↓ navigate · enter agent-view · f fetch remote · r refresh · esc back")
+	// Truncated BEFORE styling, like every other line here: cutting afterwards
+	// slices an ANSI sequence. Without the clamp a narrow terminal drops the tail
+	// of the key list with nothing to say it did - and the footer is where the
+	// way out of this view is written.
+	footer := helpStyle.Render(truncateWidth(
+		"↑/↓ navigate · enter agent-view · f fetch remote · r refresh · esc back", m.width))
 	lines = append(lines, footer)
 
 	// Exactness, enforced rather than assumed. Overshoot is only possible in a
@@ -88,8 +92,9 @@ func (m Model) runsBodyLines(w runsWidths, budget int) []string {
 
 	if len(m.runsRows) == 0 {
 		body = append(body,
-			helpStyle.Render("  No trackers found."),
-			helpStyle.Render("  A row appears once a project has a tracker (a task with subtasks)."),
+			helpStyle.Render(truncateWidth("  No trackers found.", m.width)),
+			helpStyle.Render(truncateWidth(
+				"  A row appears once a project has a tracker (a task with subtasks).", m.width)),
 		)
 		return pad()
 	}
