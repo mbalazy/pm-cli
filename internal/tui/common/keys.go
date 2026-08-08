@@ -47,6 +47,7 @@ type KeyMap struct {
 	ProjectPicker key.Binding
 	Focus         key.Binding
 	FocusView     key.Binding
+	RunsView      key.Binding
 }
 
 var Keys = KeyMap{
@@ -94,4 +95,5 @@ var Keys = KeyMap{
 	ProjectPicker: key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "project picker")),
 	Focus:         key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "focus")),
 	FocusView:     key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "focus view")),
+	RunsView:      key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "runs view")),
 }

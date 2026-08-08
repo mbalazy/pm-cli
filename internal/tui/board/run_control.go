@@ -37,6 +37,116 @@ func (m *Model) refreshRunStates() {
 	m.finishStates = finish
 }
 
+// refreshRunsView reloads the Runs view's LOCAL rows and merges in whatever the
+// last remote fetch returned.
+//
+// SEPARATE from refreshRunStates on purpose. That one follows the board's tab
+// and runs on every tick for every project shown; this one reads EVERY project's
+// tasks and run-states, which at ten projects is work the board has no use for
+// 30 times a minute. So it is called when the Runs view opens, on `r`, and on
+// ticks only while the view is open - the same "gather while it is on screen"
+// rule executorSlotStatuses follows for the launch menu.
+//
+// The counting is storage.LocalRunRows', never re-derived here: `pm runs` and
+// this screen must not be able to report different numbers for the same tracker
+// (the disagreement BuildTrackers was written to end).
+func (m *Model) refreshRunsView() {
+	// The cursor is re-anchored on the SELECTED ROW's identity, not kept as an
+	// index: rows are ordered by activity, so a run that ticks over while the
+	// user is reading reorders them under a plain index and Enter would then open
+	// a different tracker than the one highlighted.
+	want := ""
+	if r := m.selectedRunRow(); r != nil {
+		want = runRowKey(*r)
+	}
+
+	rows, err := storage.LocalRunRows(m.store, nil)
+	if err != nil {
+		// A broken local store, not an unreachable machine - say so and keep the
+		// rows already on screen rather than blanking the view.
+		m.showErrorToast("failed to load runs", err)
+		return
+	}
+	rows = append(rows, m.runsRemoteRows...)
+	storage.SortRunRows(rows)
+	m.runsRows = rows
+
+	if want != "" {
+		for i, r := range rows {
+			if runRowKey(r) == want {
+				m.runsCursor = i
+				break
+			}
+		}
+	}
+	m.fixRunsCursor()
+}
+
+// runRowKey identifies a row across refreshes: the machine, the project and the
+// tracker. A placeholder row for an unreachable remote carries no tracker, so
+// its key is the remote's alone - which is right, there is one such row per
+// machine.
+func runRowKey(r storage.RunRow) string {
+	return r.Remote + "/" + r.Project + "/" + r.Tracker
+}
+
+// selectedRunRow returns the row under the Runs cursor, or nil when there are
+// none. A COPY: rows are rebuilt wholesale on every refresh, so a pointer into
+// the slice would outlive the row it names.
+func (m Model) selectedRunRow() *storage.RunRow {
+	if len(m.runsRows) == 0 {
+		return nil
+	}
+	idx := m.runsCursor
+	if idx >= len(m.runsRows) {
+		idx = len(m.runsRows) - 1
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	row := m.runsRows[idx]
+	return &row
+}
+
+// fixRunsCursor clamps the cursor to the current rows and re-scrolls so it stays
+// visible - the Runs view's counterpart of fixCursors + fixScrollOffsets.
+func (m *Model) fixRunsCursor() {
+	if len(m.runsRows) == 0 {
+		m.runsCursor, m.runsScroll = 0, 0
+		return
+	}
+	if m.runsCursor >= len(m.runsRows) {
+		m.runsCursor = len(m.runsRows) - 1
+	}
+	if m.runsCursor < 0 {
+		m.runsCursor = 0
+	}
+	budget := m.runsRowBudget()
+	if len(m.runsRows) <= budget {
+		m.runsScroll = 0
+		return
+	}
+	// Scrolled on the CONSERVATIVE window: both "N more" indicators eat into the
+	// budget, and a cursor one line out of view is a worse bug than a row of
+	// slack at the bottom.
+	win := budget - 2
+	if win < 1 {
+		win = 1
+	}
+	if m.runsCursor < m.runsScroll {
+		m.runsScroll = m.runsCursor
+	}
+	if m.runsCursor >= m.runsScroll+win {
+		m.runsScroll = m.runsCursor - win + 1
+	}
+	if maxScroll := len(m.runsRows) - 1; m.runsScroll > maxScroll {
+		m.runsScroll = maxScroll
+	}
+	if m.runsScroll < 0 {
+		m.runsScroll = 0
+	}
+}
+
 // runForTask returns the executor run-state to act on for task t: its own run,
 // else its parent tracker's run. nil when there is none.
 func (m Model) runForTask(t *storage.Task) *storage.RunState {

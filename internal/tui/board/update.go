@@ -28,6 +28,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailViewport.Height = msg.Height - 2
 		m.executorViewport.Width = msg.Width
 		m.executorViewport.Height = executorBodyHeight(msg.Height)
+		// The Runs view scrolls on the terminal height, so a resize can leave its
+		// cursor off-screen until the next keypress.
+		m.fixRunsCursor()
 		return m, nil
 
 	case tickMsg:
@@ -47,6 +50,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.currentView == viewExecutor {
 			m.refreshExecutorView()
+		}
+		// Only while the Runs view is open: unlike refreshRunStates above, this
+		// reads EVERY project's tasks and run-states, which the board itself has no
+		// use for (see refreshRunsView). Remote rows are NOT re-fetched on a tick -
+		// that is `f`.
+		if m.currentView == viewRuns {
+			m.refreshRunsView()
 		}
 		// Live-refresh the task-detail view while a run for it is active: reload
 		// tasks (so the subtask table + parent rollup reflect fresh sub statuses)
@@ -85,6 +95,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			_ = st.Kill(syscall.SIGKILL)
 		}
 		m.refreshRunStates()
+		return m, nil
+
+	case runsRemoteMsg:
+		m.applyRemoteRuns(msg)
+		// See reloadMsg below: the tick loop is already running, don't fan it out.
 		return m, nil
 
 	case reloadMsg:
@@ -140,6 +155,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.currentView == viewFocus {
 			return m.updateFocus(msg)
+		}
+		if m.currentView == viewRuns {
+			return m.updateRuns(msg)
 		}
 		if m.adding {
 			return m.updateAdd(msg)
@@ -518,6 +536,9 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, common.Keys.FocusView):
 		m.currentView = viewFocus
 		m.focusCursor = 0
+
+	case key.Matches(msg, common.Keys.RunsView):
+		m.openRunsView()
 
 	case key.Matches(msg, common.Keys.Help):
 		m.showHelp = true
