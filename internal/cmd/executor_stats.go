@@ -105,6 +105,8 @@ type journalStats struct {
 	NestedSpawns int
 	DiffSpawns   int
 	DeniedSpawns int
+	ToolCalls    int            // exploration calls (Read/Grep/Glob) made by subagents
+	ToolDenied   int            // of those attempts, how many the per-agent budget refused
 	ReviewModels map[string]int // model (or "inherit") -> subs that asked for it
 }
 
@@ -345,6 +347,8 @@ func (s *journalStats) addSubs(subs []storage.JournalSub) {
 			s.NestedSpawns += r.Nested
 			s.DiffSpawns += r.WithDiff
 			s.DeniedSpawns += r.Denied
+			s.ToolCalls += r.ToolCalls
+			s.ToolDenied += r.ToolDenied
 			if s.ReviewModels == nil {
 				s.ReviewModels = map[string]int{}
 			}
@@ -525,6 +529,12 @@ func renderReviewStats(b *strings.Builder, st journalStats) {
 		// sees them (orbit-106-3: one reviewer's own Explore subagent
 		// burned 6.1M tokens over 65 tool calls).
 		fmt.Fprintf(b, "  nested    %d spawn(s) issued from inside another subagent\n", st.NestedSpawns)
+	}
+	if st.ToolCalls > 0 || st.ToolDenied > 0 {
+		// The budget's own evidence line: without the refusal count an enforced
+		// run and a well-behaved one look identical in the rollup.
+		fmt.Fprintf(b, "  agent I/O %d exploration call(s) by subagents, %d refused by the per-agent budget\n",
+			st.ToolCalls, st.ToolDenied)
 	}
 	for _, m := range orderedKeys(st.ReviewModels, nil, false) {
 		label := m

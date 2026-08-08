@@ -321,6 +321,11 @@ func TestFinishClaudeArgs(t *testing.T) {
 		if strings.Contains(joined, "--telemetry") || strings.Contains(joined, "--diff-base") || strings.Contains(joined, "--fix-rounds") {
 			t.Error("a review cap sized from a diff would kill the acceptance on its second sub - the guard must carry none of it")
 		}
+		// The acceptance drives pm through user-scope MCP (the batch-finish
+		// skills call pm_get_task etc.), so the worker's MCP cut must not apply.
+		if strings.Contains(joined, "--strict-mcp-config") {
+			t.Error("the acceptance run must keep user-scope MCP - --strict-mcp-config would silently break the batch-finish skills")
+		}
 	})
 
 	t.Run("--no-yolo falls back to the curated lists", func(t *testing.T) {

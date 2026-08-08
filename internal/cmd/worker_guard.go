@@ -195,6 +195,60 @@ func promptCarriesDiff(prompt string) bool {
 	return false
 }
 
+// budgetedToolNames are the exploration tools a subagent's per-agent budget
+// meters. A closed list on purpose: StructuredOutput and the report itself must
+// never be blocked - a reviewer over budget still has to be able to hand in
+// what it has.
+var budgetedToolNames = map[string]bool{"Read": true, "Grep": true, "Glob": true}
+
+// reviewerToolBudget is how many exploration calls one subagent may make before
+// further Read/Grep/Glob are refused. From run pm-cli-100's data: the typical
+// reviewer finished in 8-13 turns while the runaways pulled 33+ tool calls /
+// $3+ each with the same diff packet in hand - the budget trims that tail
+// without removing a reviewer or a round. A var, not a flag or a project.yaml
+// knob (the value is compiled into the hook; tests shrink it in-process).
+var reviewerToolBudget = 25
+
+// toolBudgetDenyMessage names the legitimate move, like every other refusal in
+// this file: finish the report, don't hunt for the next door.
+func toolBudgetDenyMessage(budget int) string {
+	return fmt.Sprintf("pm worker-guard: blocked - this subagent has used its exploration budget (%d Read/Grep/Glob calls). "+
+		"The full diff was attached to your prompt; finalize your report with what you have already established. "+
+		"A claim you could not verify within the budget belongs in the report, marked unverified - not in another round of reading.", budget)
+}
+
+// judgeAgentToolCall meters exploration calls made from INSIDE a subagent.
+// Worker-level calls (no agent_id) pass untouched - the budget exists for the
+// runaway reviewer tail, not for the worker doing its job. Fail-open like the
+// rest of the guard: no telemetry path (the counter's home) or an unreadable
+// calls file means no budget, because what this guards costs tokens, not
+// correctness.
+func judgeAgentToolCall(opts guardOptions, ev hookEvent, now time.Time) string {
+	if ev.AgentID == "" || opts.telemetryPath == "" || reviewerToolBudget <= 0 {
+		return ""
+	}
+	callsPath := storage.AgentCallsPath(opts.telemetryPath)
+	rec := storage.AgentToolCall{
+		TS:      now.Format(time.RFC3339Nano),
+		AgentID: ev.AgentID,
+		Tool:    ev.ToolName,
+	}
+	deny := ""
+	// Same read-decide-append cycle under the same flock discipline as the spawn
+	// cap: parallel reviewers are parallel hook processes, and the count each one
+	// judges against must include what the others just wrote.
+	_ = storage.WithReviewTelemetryLock(callsPath, func() error {
+		calls, err := storage.ReadAgentToolCalls(callsPath)
+		if err == nil && storage.CountAgentToolCalls(calls, ev.AgentID) >= reviewerToolBudget {
+			deny = toolBudgetDenyMessage(reviewerToolBudget)
+			rec.Denied = true
+		}
+		_ = storage.AppendAgentToolCall(callsPath, rec)
+		return nil
+	})
+	return deny
+}
+
 // guardDir is the repo the hook is judging. Claude Code sends the worker's cwd
 // in the payload; the process cwd is the fallback, and it is the same directory
 // in practice - the hook runs as a child of the worker.
@@ -358,6 +412,11 @@ func runWorkerGuard(in io.Reader, out, errOut io.Writer, opts guardOptions) int 
 			fmt.Fprintln(errOut, guardWriteDenyMessage(ev.ToolInput.FilePath))
 			return 2
 		}
+	case budgetedToolNames[ev.ToolName]:
+		if reason := judgeAgentToolCall(opts, ev, time.Now()); reason != "" {
+			fmt.Fprintln(errOut, reason)
+			return 2
+		}
 	case agentToolNames[ev.ToolName]:
 		if reason := judgeAgentSpawn(opts, ev, time.Now()); reason != "" {
 			fmt.Fprintln(errOut, reason)
@@ -451,12 +510,20 @@ func workerGuardSettings(opts guardOptions) string {
 	// 2026-08-07 on claude 2.1.224 via this exact --settings path, with the
 	// repo's own settings.json removed: the matcher fires and the payload
 	// carries subagent_type/model/prompt.
+	//
+	// The fourth entry meters the exploration tools for the per-agent budget
+	// (judgeAgentToolCall). Its own entry for the same reason as the write
+	// matcher: if a build matches tool names literally, it simply never fires
+	// and the budget degrades to absent - the verified Bash spelling is never
+	// put at risk. Worker-level calls pass through it untouched (no agent_id),
+	// costing one hook exec per Read.
 	payload := map[string]any{
 		"hooks": map[string]any{
 			"PreToolUse": []matcher{
 				{Matcher: "Bash", Hooks: hook},
 				{Matcher: "Write|Edit|MultiEdit|NotebookEdit", Hooks: hook},
 				{Matcher: "Agent|Task", Hooks: hook},
+				{Matcher: "Read|Grep|Glob", Hooks: hook},
 			},
 		},
 	}

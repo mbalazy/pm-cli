@@ -261,6 +261,9 @@ func finishClaudeRun(prompt, sysPrompt, sessionID string, opts finishOptions) cl
 		allowedTools:    finishAllowedTools,
 		disallowedTools: workerDisallowedTools,
 		guard:           guardOptions{},
+		// The acceptance procedure lives in the batch-finish skills, which drive
+		// pm through user-scope MCP - so the MCP cut workers get does not apply.
+		userMCP: true,
 	}
 }
 

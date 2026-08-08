@@ -163,3 +163,52 @@ func TestCollectReviewTelemetryDistinguishesUnmeasuredFromZero(t *testing.T) {
 		t.Error("an unresolvable path must degrade to nil, never panic")
 	}
 }
+
+// The sidecar calls file rides along with the spawn telemetry: its counts fold
+// into the rollup and collect removes it, so .executor does not accumulate one
+// stray file per session.
+func TestCollectReviewTelemetryFoldsAgentCalls(t *testing.T) {
+	dir := t.TempDir()
+	path := ReviewTelemetryPath(dir, "sess-calls")
+	InitReviewTelemetry(path)
+	callsPath := AgentCallsPath(path)
+	for _, c := range []AgentToolCall{
+		{AgentID: "a", Tool: "Read"},
+		{AgentID: "a", Tool: "Grep"},
+		{AgentID: "b", Tool: "Glob"},
+		{AgentID: "a", Tool: "Read", Denied: true},
+	} {
+		if err := AppendAgentToolCall(callsPath, c); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	got := CollectReviewTelemetry(dir, "sess-calls")
+	if got == nil {
+		t.Fatal("telemetry file exists - must not read as unmeasured")
+	}
+	if got.ToolCalls != 3 || got.ToolDenied != 1 {
+		t.Errorf("ToolCalls=%d ToolDenied=%d, want 3 and 1", got.ToolCalls, got.ToolDenied)
+	}
+	if _, err := os.Stat(callsPath); !os.IsNotExist(err) {
+		t.Error("collect must remove the calls sidecar too")
+	}
+}
+
+func TestCountAgentToolCalls(t *testing.T) {
+	calls := []AgentToolCall{
+		{AgentID: "a", Tool: "Read"},
+		{AgentID: "b", Tool: "Read"},
+		{AgentID: "a", Tool: "Grep", Denied: true},
+		{AgentID: "a", Tool: "Glob"},
+	}
+	if got := CountAgentToolCalls(calls, "a"); got != 2 {
+		t.Errorf("agent a = %d, want 2 (denied calls never consume budget)", got)
+	}
+	if got := CountAgentToolCalls(calls, "b"); got != 1 {
+		t.Errorf("agent b = %d, want 1", got)
+	}
+	if got := CountAgentToolCalls(nil, "a"); got != 0 {
+		t.Errorf("empty set = %d, want 0", got)
+	}
+}

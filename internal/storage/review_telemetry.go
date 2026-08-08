@@ -46,6 +46,84 @@ type ReviewSpawn struct {
 	Denied bool `json:"denied,omitempty"`
 }
 
+// AgentToolCall is one exploration tool call (Read/Grep/Glob) made from INSIDE
+// a subagent - one line of the sidecar calls JSONL. Kept in its OWN file, never
+// mixed into the spawns file: any JSON object unmarshals into ReviewSpawn (all
+// fields optional), so a foreign line there would silently count as a spawn.
+type AgentToolCall struct {
+	TS      string `json:"ts"` // RFC3339Nano
+	AgentID string `json:"agent_id"`
+	Tool    string `json:"tool"`
+	// Denied marks a call the per-agent budget refused. Recorded anyway - a
+	// refusal is the evidence the budget did something - and kept out of the
+	// used-budget count, since it never ran.
+	Denied bool `json:"denied,omitempty"`
+}
+
+// AgentCallsPath derives the sidecar calls file from the spawn-telemetry path.
+func AgentCallsPath(telemetryPath string) string {
+	return strings.TrimSuffix(telemetryPath, ".jsonl") + ".calls.jsonl"
+}
+
+// AppendAgentToolCall appends one call record - same single O_APPEND write
+// assumption as AppendReviewSpawn (concurrent hook processes).
+func AppendAgentToolCall(path string, c AgentToolCall) error {
+	if c.TS == "" {
+		c.TS = time.Now().Format(time.RFC3339Nano)
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(append(b, '\n'))
+	return err
+}
+
+// ReadAgentToolCalls reads a calls file, skipping corrupt lines; a missing file
+// means no subagent made an exploration call, which is not an error.
+func ReadAgentToolCalls(path string) ([]AgentToolCall, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []AgentToolCall
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var c AgentToolCall
+		if json.Unmarshal([]byte(line), &c) != nil {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// CountAgentToolCalls counts the calls that actually RAN for one agent - the
+// number the budget is judged against. Denied calls are evidence, not usage.
+func CountAgentToolCalls(calls []AgentToolCall, agentID string) int {
+	n := 0
+	for _, c := range calls {
+		if !c.Denied && c.AgentID == agentID {
+			n++
+		}
+	}
+	return n
+}
+
 // ReviewTelemetry is the per-sub rollup stored on SubRun and in the journal.
 // A pointer field on both, so entries written before this existed stay nil and
 // omitempty keeps them byte-identical rather than gaining empty keys.
@@ -55,6 +133,13 @@ type ReviewTelemetry struct {
 	Nested   int `json:"nested,omitempty"`    // of Spawns, how many came from inside another subagent
 	WithDiff int `json:"with_diff,omitempty"` // of Spawns, how many were handed the diff
 	Denied   int `json:"denied,omitempty"`    // spawns the cap refused - these never ran
+	// ToolCalls / ToolDenied measure the subagents' exploration appetite: how
+	// many Read/Grep/Glob calls their agents made, and how many the per-agent
+	// budget refused. What the budget saves is the runaway tail (measured on run
+	// pm-cli-100: 2 of 8 reviewers pulled 33+ calls / $3+ where the typical one
+	// needed 8-13 turns), so the refusal count is the line a retro looks for.
+	ToolCalls  int `json:"tool_calls,omitempty"`
+	ToolDenied int `json:"tool_denied,omitempty"`
 	// Models lists the distinct models the spawns asked for, comma-joined and
 	// sorted; "inherit" stands for a spawn that named no model (the caller-side
 	// model wins over an agent definition's, so "inherit" and an explicit name
@@ -269,7 +354,20 @@ func CollectReviewTelemetry(projectDir, sessionID string) *ReviewTelemetry {
 	if err != nil {
 		return nil
 	}
+	t := AggregateReviewSpawns(spawns)
+	callsPath := AgentCallsPath(path)
+	if calls, err := ReadAgentToolCalls(callsPath); err == nil {
+		for _, c := range calls {
+			if c.Denied {
+				t.ToolDenied++
+			} else {
+				t.ToolCalls++
+			}
+		}
+	}
 	_ = os.Remove(path)
 	_ = os.Remove(path + ".lock")
-	return AggregateReviewSpawns(spawns)
+	_ = os.Remove(callsPath)
+	_ = os.Remove(callsPath + ".lock")
+	return t
 }

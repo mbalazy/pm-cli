@@ -36,7 +36,9 @@ const reviewPacketBudget = 48_000
 const reviewPacketHeader = "\n\n---\n## The change under review (attached by pm, not by the agent that spawned you)\n\n" +
 	"This is the complete diff of the work being reviewed, tests included, measured from the commit the run started at. " +
 	"You have it already: do not go looking for it. Read a file only when the diff genuinely does not tell you enough, " +
-	"and judge the change on what is here plus the criteria you were given.\n\n"
+	"and judge the change on what is here plus the criteria you were given. When you do read, read big files in slices, " +
+	"never end-to-end: Grep for the symbol, then Read the surrounding range with offset/limit - a whole file over ~600 " +
+	"lines rides in your context for every turn that follows and is billed again each time.\n\n"
 
 // reviewDocPacketHeader replaces the header above when nothing but prose
 // changed. The generic brief is a category error on a document: it sends an
@@ -58,6 +60,9 @@ const reviewDocPacketHeader = "\n\n---\n## The document under review (attached b
 	"- Report content copied from somewhere that already owns it (a skill, a README, another document), where a " +
 	"reference would stay correct and a copy will not.\n" +
 	"- Do NOT review wording, tone, structure or formatting, and do not propose rewrites.\n\n" +
+	"Resolve citations in slices, not by whole-file reads: Grep for the cited symbol or path, then Read the " +
+	"surrounding range with offset/limit - a whole file over ~600 lines rides in your context for every turn that " +
+	"follows and is billed again each time.\n\n" +
 	"pm allows ONE reviewer and ONE round for a documentation change, so this is the review: report what you " +
 	"actually verified, and say plainly what you did not get to.\n\n"
 
