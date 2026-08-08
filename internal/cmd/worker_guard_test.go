@@ -282,6 +282,9 @@ func TestQuoteForShell(t *testing.T) {
 	if got := quoteForShell("/Users/a b/go/bin/pm"); got != `'/Users/a b/go/bin/pm'` {
 		t.Errorf("path with a space must be quoted, got %q", got)
 	}
+	if got := quoteForShell(`/tmp/we"ird/pm`); got != `'/tmp/we"ird/pm'` {
+		t.Errorf("path with a double quote must be quoted, got %q", got)
+	}
 }
 
 // The payloads in this test are the SHAPES measured against a live claude
