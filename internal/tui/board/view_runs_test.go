@@ -556,6 +556,32 @@ func TestRunsViewOpensAProjectCreatedAfterTheBoardStarted(t *testing.T) {
 	}
 }
 
+// Re-reading the tab list has a cost of its own: refreshProjects rewrites
+// m.projects (and can clamp activeProject), while m.tasks/statuses/cursors are
+// rebuilt only by reload() - and the board has no periodic reload to repair them
+// afterwards. A project whose slug sorts BEFORE the active tab's is inserted
+// ahead of it, so the tab keeps its index and silently comes to name someone
+// else; without a reload the board then shows the old project's cards under the
+// new project's tab for the rest of the session.
+func TestRunsViewReloadsWhenTheRefreshShiftsTheActiveTab(t *testing.T) {
+	m := newRunsModel(t) // projects ["all", "p"], active tab = p
+	runsProjectWithRun(t, m, "aaa", "aaa-4")
+
+	cursorOnTracker(t, m, "aaa-4")
+	m.openRunsRow()
+
+	active := m.projects[m.activeProject]
+	if active != "aaa" {
+		t.Fatalf("active project = %q, want aaa", active)
+	}
+	for _, task := range m.tasks {
+		if !strings.HasPrefix(task.Meta.ID, "aaa") {
+			t.Fatalf("the %q tab still shows %s - the tab moved and its contents were not rebuilt",
+				active, task.Meta.ID)
+		}
+	}
+}
+
 // A hidden project IS in m.projects but has no tab: renderTabs marks the active
 // project among the VISIBLE ones only. Selecting it by index would show its
 // tasks with no tab lit, leaving no way to tell which project the board is on.
@@ -576,21 +602,22 @@ func TestRunsViewHiddenProjectRowDescendsThroughTheAllTab(t *testing.T) {
 		t.Errorf("active project = %q, want the ALL tab - a hidden project has no tab to light up",
 			m.projects[m.activeProject])
 	}
-	active := m.projects[m.activeProject]
-	visible := false
-	for _, p := range m.visibleProjects() {
-		if p == active {
-			visible = true
-		}
-	}
-	if !visible {
-		t.Errorf("the board is left on %q, which renders no tab as active", active)
+	// The failure this really guards: a board sitting on a project with NO tab
+	// marked active, so nothing on screen says which project the cards belong to.
+	// Asserted through renderTabs (which brackets the active tab) rather than
+	// through visibleProjects, where "all" would make the check vacuous.
+	if tabs := stripANSI(m.renderTabs(false)); !strings.Contains(tabs, "[") {
+		t.Errorf("no tab renders as active: %q", tabs)
 	}
 }
 
-// Every line must fit m.width. Overflow does not break the height contract (the
-// renderer clips it), it silently loses the line's tail - and the footer is
-// where the way OUT of this view is written.
+// Every line this view RENDERS ITSELF must fit m.width. Overflow does not break
+// the height contract (the renderer clips it), it silently loses the line's tail
+// - and the footer is where the way OUT of this view is written.
+//
+// Scope, deliberately: no toast is set, so this covers the view's own chrome and
+// rows. A toast is drawn by the shared applyToast, which overwrites line 0 with
+// its own width and overflows in every view alike - not this view's to fix.
 func TestViewRunsFitsTheWidth(t *testing.T) {
 	for _, width := range []int{30, 45, 60, 80, 120} {
 		t.Run(fmt.Sprintf("w%d", width), func(t *testing.T) {

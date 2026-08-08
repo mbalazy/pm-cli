@@ -131,9 +131,25 @@ func (m *Model) openRunsRow() {
 	// off disk on every tick. So a project created since the board started is on
 	// screen here and absent from the slice, and resolving against the stale copy
 	// would answer "archived?" about a project that is neither archived nor gone.
+	//
+	// What the ACTIVE TAB names is remembered across that refresh. refreshProjects
+	// rewrites the slice and can clamp activeProject, but only reload() rebuilds
+	// m.tasks/statuses/landing/cursors/counts - and the board has no periodic
+	// reload to repair them afterwards (the tick deliberately refreshes run-states
+	// only). A tab that comes out of the refresh naming a DIFFERENT project than
+	// it named going in must therefore be reloaded, even when the row needs no
+	// switch at all: a project inserted before it shifts every later index, and an
+	// archived one can clamp it to ALL.
+	prevActive := ""
+	if m.activeProject >= 0 && m.activeProject < len(m.projects) {
+		prevActive = m.projects[m.activeProject]
+	}
 	m.refreshProjects()
+	staleTab := m.activeProject >= len(m.projects) || m.projects[m.activeProject] != prevActive
+
 	// On the ALL tab every project is already loaded, so there is nothing to
 	// switch and no reason to pay for a reload.
+	target := m.activeProject
 	if m.activeProject != 0 && m.projects[m.activeProject] != row.Project {
 		idx := -1
 		for i, p := range m.projects {
@@ -147,6 +163,9 @@ func (m *Model) openRunsRow() {
 			// The project has no tab even after the refresh: archived, or removed
 			// under the board. Its run-states are still on disk, but there is
 			// nothing to switch to - say which project rather than open an empty view.
+			if staleTab {
+				m.reload()
+			}
 			m.toastMsg = "project " + row.Project + " is not on this board (archived?)"
 			m.toastExpiry = time.Now().Add(4 * time.Second)
 			return
@@ -158,12 +177,14 @@ func (m *Model) openRunsRow() {
 			// run-state refresh covers every project - which is all this path
 			// needs - so descend through it rather than silently un-hiding a
 			// project the user chose to hide.
-			m.activeProject = 0
-			m.reload()
+			target = 0
 		default:
-			m.activeProject = idx
-			m.reload()
+			target = idx
 		}
+	}
+	if target != m.activeProject || staleTab {
+		m.activeProject = target
+		m.reload()
 	}
 	// The maps are what pickRunForTask reads, and the tab may have just changed.
 	m.refreshRunStates()
@@ -278,15 +299,19 @@ func execRemoteRunRows() ([]storage.RunRow, error) {
 	defer cancel()
 
 	// Its OWN process group, with a Cancel that signals the group and a
-	// WaitDelay behind it. The deadline alone is not enough: default
-	// cancellation kills only the pm we spawned, and the ssh processes IT
-	// spawned inherit the stdout pipe - so Wait blocks for as long as the hung
-	// connection lasts, well past runsRemoteTimeout. That is not merely a slow
-	// fetch: this runs on a tea.Cmd goroutine, so a Wait that never returns
-	// means runsRemoteMsg never arrives and runsFetching stays true for the rest
-	// of the session, with every later `f` answering "already fetching".
-	// internal/cmd's groupCmd closes the same gap for the ssh child itself; it
-	// cannot be reused here, since internal/cmd imports this package.
+	// WaitDelay behind it - a BOUND ON WAIT, not a fix for a reachable hang.
+	// What makes the difference matter: this runs on a tea.Cmd goroutine, so a
+	// Wait that never returns means runsRemoteMsg never arrives and runsFetching
+	// stays true for the rest of the session, every later `f` answering "already
+	// fetching". Today nothing can produce that - the child buffers each ssh into
+	// a pipe of its own (internal/cmd's fetchRemoteRuns gives it bytes.Buffers),
+	// so no grandchild ever holds the write end of OUR pipe and the deadline's
+	// kill of the direct child is enough to unblock Wait. The bound is here so
+	// that stops being something this file has to keep being true about a command
+	// in another package. Note its reach: internal/cmd's groupCmd puts each ssh in
+	// a group of its own, so this signal covers the child and anything that stayed
+	// with it, never those. groupCmd itself cannot be reused - internal/cmd
+	// imports this package.
 	c := exec.CommandContext(ctx, exe, "runs", "--json")
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	c.Cancel = func() error {
@@ -304,14 +329,24 @@ func execRemoteRunRows() ([]storage.RunRow, error) {
 	// something it left behind still held the output pipe, so Wait unblocked us.
 	// The answer is already in the buffer; discarding it would report a fetch
 	// that in fact succeeded. Same rule as internal/cmd's fetchRemoteRuns.
-	if err := c.Run(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
+	runErr := c.Run()
+	if ctx.Err() != nil || errors.Is(runErr, exec.ErrWaitDelay) {
+		// Wait came back on a deadline or a WaitDelay, which is exactly the case
+		// where the group can still have members. runGroupCmd's own follow-up, and
+		// the half a bound without it leaves out: unblocking ourselves is not the
+		// same as leaving nothing behind.
+		if p := c.Process; p != nil && p.Pid > 0 {
+			_ = syscall.Kill(-p.Pid, syscall.SIGKILL)
+		}
+	}
+	if runErr != nil && !errors.Is(runErr, exec.ErrWaitDelay) {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("no answer within %s", runsRemoteTimeout)
 		}
 		if s := firstLine(stderr.String()); s != "" {
-			return nil, fmt.Errorf("%v: %s", err, s)
+			return nil, fmt.Errorf("%v: %s", runErr, s)
 		}
-		return nil, err
+		return nil, runErr
 	}
 	var payload struct {
 		Rows []storage.RunRow `json:"rows"`
