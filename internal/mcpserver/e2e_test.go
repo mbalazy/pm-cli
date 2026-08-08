@@ -564,10 +564,11 @@ func TestE2EContextBodyCapped(t *testing.T) {
 // surface model + epic_mode (and the pre-existing mode) so a prep skill can
 // see what it wrote.
 type execFields struct {
-	ID       string `json:"id"`
-	Mode     string `json:"mode"`
-	Model    string `json:"model"`
-	EpicMode string `json:"epic_mode"`
+	ID         string `json:"id"`
+	Mode       string `json:"mode"`
+	Model      string `json:"model"`
+	EpicMode   string `json:"epic_mode"`
+	FinishMode string `json:"finish_mode"`
 }
 
 func getExecFields(t *testing.T, sess *mcp.ClientSession, id string) execFields {
@@ -725,6 +726,144 @@ func TestE2EEpicModeAndModel(t *testing.T) {
 		}
 		if reloaded.Meta.EpicMode != "" {
 			t.Errorf("on-disk epic_mode = %q, want empty (write must not go through)", reloaded.Meta.EpicMode)
+		}
+		if reloaded.Meta.Title != before.Meta.Title {
+			t.Errorf("co-passed title was persisted by a rejected update: %q -> %q", before.Meta.Title, reloaded.Meta.Title)
+		}
+	})
+}
+
+// TestE2EFinishMode drives the real handlers for the tracker's finish_mode -
+// the field that decides whether `pm run-epic` chains its own odbiór. Same
+// contract as epic_mode: set at add, tri-state at update, returned by get,
+// invalid values refused before anything is written.
+func TestE2EFinishMode(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	t.Run("add sets finish_mode, get returns it", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_add_task", map[string]any{
+			"project": "test", "title": "Nightly batch", "finish_mode": storage.FinishModeAuto,
+		})
+		if isErr {
+			t.Fatalf("add_task error: %s", text)
+		}
+		var added execFields
+		mustUnmarshal(t, text, &added)
+		if added.FinishMode != storage.FinishModeAuto {
+			t.Errorf("add result finish_mode = %q, want %q", added.FinishMode, storage.FinishModeAuto)
+		}
+		onDisk, err := store.FindTask("test", added.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if onDisk.Meta.FinishMode != storage.FinishModeAuto {
+			t.Errorf("on-disk finish_mode = %q, want %q", onDisk.Meta.FinishMode, storage.FinishModeAuto)
+		}
+		if got := getExecFields(t, sess, added.ID); got.FinishMode != storage.FinishModeAuto {
+			t.Errorf("get finish_mode = %q, want %q", got.FinishMode, storage.FinishModeAuto)
+		}
+	})
+
+	t.Run("update sets, keeps on omit, clears on empty string", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_add_task", map[string]any{"project": "test", "title": "Plain batch"})
+		if isErr {
+			t.Fatalf("add_task error: %s", text)
+		}
+		var added execFields
+		mustUnmarshal(t, text, &added)
+		if added.FinishMode != "" {
+			t.Fatalf("fresh task finish_mode = %q, want empty", added.FinishMode)
+		}
+
+		if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": added.ID, "finish_mode": storage.FinishModeAuto,
+		}); isErr {
+			t.Fatal("update_task error")
+		}
+		if got := getExecFields(t, sess, added.ID); got.FinishMode != storage.FinishModeAuto {
+			t.Fatalf("after set, finish_mode = %q", got.FinishMode)
+		}
+
+		// omit = unchanged. This is the case that actually bites: an unrelated
+		// brief update silently turning the chain off would only be noticed the
+		// morning the odbiór did not happen.
+		if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": added.ID, "brief": "still chaining",
+		}); isErr {
+			t.Fatal("update_task error")
+		}
+		if got := getExecFields(t, sess, added.ID); got.FinishMode != storage.FinishModeAuto {
+			t.Fatalf("omitted finish_mode must be kept, got %q", got.FinishMode)
+		}
+
+		// explicit "off" is a value of its own, not a clear
+		if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": added.ID, "finish_mode": storage.FinishModeOff,
+		}); isErr {
+			t.Fatal("update_task error")
+		}
+		if got := getExecFields(t, sess, added.ID); got.FinishMode != storage.FinishModeOff {
+			t.Fatalf("after off, finish_mode = %q", got.FinishMode)
+		}
+
+		// empty string = clear
+		if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": added.ID, "finish_mode": "",
+		}); isErr {
+			t.Fatal("update_task error")
+		}
+		if got := getExecFields(t, sess, added.ID); got.FinishMode != "" {
+			t.Fatalf("empty finish_mode must clear, got %q", got.FinishMode)
+		}
+	})
+
+	t.Run("invalid finish_mode rejected on add, no phantom task", func(t *testing.T) {
+		before, err := store.GetTasks("test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, isErr := call(t, sess, "pm_add_task", map[string]any{
+			"project": "test", "title": "Bad batch", "finish_mode": "AUTO",
+		})
+		if !isErr {
+			t.Fatalf("invalid finish_mode must be a tool error, got: %s", text)
+		}
+		// ValidateFinishMode's own wording, for the same reason the epic_mode
+		// test pins it: a bare "finish_mode" would also match an SDK decode error.
+		if !strings.Contains(text, "invalid finish_mode") {
+			t.Errorf("error must come from ValidateFinishMode, got: %s", text)
+		}
+		after, err := store.GetTasks("test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(after) != len(before) {
+			t.Errorf("rejected add must not create a task (%d -> %d)", len(before), len(after))
+		}
+	})
+
+	t.Run("invalid finish_mode rejected on update, whole call rolls back", func(t *testing.T) {
+		before, err := store.FindTask("test", "t-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, isErr := call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": "t-1",
+			"finish_mode": "nightly", "title": "should not be written",
+		})
+		if !isErr {
+			t.Fatalf("invalid finish_mode must be a tool error, got: %s", text)
+		}
+		if !strings.Contains(text, "invalid finish_mode") {
+			t.Errorf("error must come from ValidateFinishMode, got: %s", text)
+		}
+		reloaded, err := store.FindTask("test", "t-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reloaded.Meta.FinishMode != "" {
+			t.Errorf("on-disk finish_mode = %q, want empty (write must not go through)", reloaded.Meta.FinishMode)
 		}
 		if reloaded.Meta.Title != before.Meta.Title {
 			t.Errorf("co-passed title was persisted by a rejected update: %q -> %q", before.Meta.Title, reloaded.Meta.Title)

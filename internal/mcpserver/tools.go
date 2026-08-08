@@ -37,24 +37,25 @@ type contextInput struct {
 }
 
 type addTaskInput struct {
-	Project   string            `json:"project" jsonschema:"Project slug or prefix"`
-	Title     string            `json:"title" jsonschema:"Task title"`
-	Status    string            `json:"status,omitempty" jsonschema:"Initial status (default: first project status)"`
-	Branch    string            `json:"branch,omitempty" jsonschema:"Git branch name"`
-	Parent    string            `json:"parent,omitempty" jsonschema:"Parent task ID for subtasks (e.g. atlas-39). Makes this a child of a tracker task."`
-	Order     int               `json:"order,omitempty" jsonschema:"Sort order within a column / parent rollup (lower runs first; convention: 10, 20, 30...). 0 = unset (sorts before ordered siblings, then by ID). Used by pm run-epic for sub execution order."`
-	DependsOn []string          `json:"depends_on,omitempty" jsonschema:"Sub IDs this subtask depends on (e.g. atlas-39-2). pm run-epic skips this sub (no worker spawned) until every listed dep is merged/done, then a re-run picks it up. Empty = runs by Order."`
-	Mode      string            `json:"mode,omitempty" jsonschema:"Execution mode for a subtask under pm run-epic. 'auto' (default, empty) runs autonomously via a headless worker. 'manual' marks it human-only: pm run-epic skips it entirely (no worker spawned, status untouched) as a PERMANENT gate on every run until you do the work and move it to the done status yourself. Use for subs needing interactive/visual work (simulator verification, design/visual checks)."`
-	Model     string            `json:"model,omitempty" jsonschema:"Worker model override for this sub under pm run-epic / pm work (claude alias or full name, e.g. 'sonnet'). Empty = inherit the run-level model. Put trivial subs (copy/color/one-prop tweaks) on a cheaper model; leave investigation subs on the default."`
-	EpicMode  string            `json:"epic_mode,omitempty" jsonschema:"How pm run-epic drives this PARENT tracker's subs. Empty (default) = integration mode: subs branch off and merge back into a shared epic/<tracker> branch, ending in one epic PR. 'independent' = batch mode for UNRELATED tasks: each sub gets its own branch off the base, is pushed when it carries commits, and nothing is merged (no integration branch, no epic PR). Meaningful on a tracker only."`
-	Tags      []string          `json:"tags,omitempty" jsonschema:"Tags"`
-	Links     map[string]string `json:"links,omitempty" jsonschema:"Links as key=url pairs (e.g. azure, pr, slack)"`
-	Body      string            `json:"body,omitempty" jsonschema:"Markdown body content. This is the append-only Log zone (session history)."`
-	Spec      string            `json:"spec,omitempty" jsonschema:"Initial Spec block (current-truth zone): what we're building, current decisions, still-open questions. Wrapped in spec markers at the top of the body; the body field becomes the append-only Log below it."`
-	ID        string            `json:"id,omitempty" jsonschema:"Task ID (auto-generated if omitted; when parent is set, auto-numbers as <parent>-<n>)"`
-	Brief     string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
-	AC        string            `json:"ac,omitempty" jsonschema:"Acceptance criteria (overwrites previous)"`
-	Sessions  []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to attach"`
+	Project    string            `json:"project" jsonschema:"Project slug or prefix"`
+	Title      string            `json:"title" jsonschema:"Task title"`
+	Status     string            `json:"status,omitempty" jsonschema:"Initial status (default: first project status)"`
+	Branch     string            `json:"branch,omitempty" jsonschema:"Git branch name"`
+	Parent     string            `json:"parent,omitempty" jsonschema:"Parent task ID for subtasks (e.g. atlas-39). Makes this a child of a tracker task."`
+	Order      int               `json:"order,omitempty" jsonschema:"Sort order within a column / parent rollup (lower runs first; convention: 10, 20, 30...). 0 = unset (sorts before ordered siblings, then by ID). Used by pm run-epic for sub execution order."`
+	DependsOn  []string          `json:"depends_on,omitempty" jsonschema:"Sub IDs this subtask depends on (e.g. atlas-39-2). pm run-epic skips this sub (no worker spawned) until every listed dep is merged/done, then a re-run picks it up. Empty = runs by Order."`
+	Mode       string            `json:"mode,omitempty" jsonschema:"Execution mode for a subtask under pm run-epic. 'auto' (default, empty) runs autonomously via a headless worker. 'manual' marks it human-only: pm run-epic skips it entirely (no worker spawned, status untouched) as a PERMANENT gate on every run until you do the work and move it to the done status yourself. Use for subs needing interactive/visual work (simulator verification, design/visual checks)."`
+	Model      string            `json:"model,omitempty" jsonschema:"Worker model override for this sub under pm run-epic / pm work (claude alias or full name, e.g. 'sonnet'). Empty = inherit the run-level model. Put trivial subs (copy/color/one-prop tweaks) on a cheaper model; leave investigation subs on the default."`
+	EpicMode   string            `json:"epic_mode,omitempty" jsonschema:"How pm run-epic drives this PARENT tracker's subs. Empty (default) = integration mode: subs branch off and merge back into a shared epic/<tracker> branch, ending in one epic PR. 'independent' = batch mode for UNRELATED tasks: each sub gets its own branch off the base, is pushed when it carries commits, and nothing is merged (no integration branch, no epic PR). Meaningful on a tracker only."`
+	FinishMode string            `json:"finish_mode,omitempty" jsonschema:"Whether pm run-epic chains the odbiór (acceptance) of this PARENT tracker itself. 'auto' = when the run is over, spawn a detached pm finish <tracker> (same machine only), so a batch launched at night is accepted by morning. 'off' or empty (default) = no chaining. Meaningful on a tracker only."`
+	Tags       []string          `json:"tags,omitempty" jsonschema:"Tags"`
+	Links      map[string]string `json:"links,omitempty" jsonschema:"Links as key=url pairs (e.g. azure, pr, slack)"`
+	Body       string            `json:"body,omitempty" jsonschema:"Markdown body content. This is the append-only Log zone (session history)."`
+	Spec       string            `json:"spec,omitempty" jsonschema:"Initial Spec block (current-truth zone): what we're building, current decisions, still-open questions. Wrapped in spec markers at the top of the body; the body field becomes the append-only Log below it."`
+	ID         string            `json:"id,omitempty" jsonschema:"Task ID (auto-generated if omitted; when parent is set, auto-numbers as <parent>-<n>)"`
+	Brief      string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
+	AC         string            `json:"ac,omitempty" jsonschema:"Acceptance criteria (overwrites previous)"`
+	Sessions   []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to attach"`
 }
 
 type updateTaskInput struct {
@@ -69,6 +70,7 @@ type updateTaskInput struct {
 	Mode       *string           `json:"mode,omitempty" jsonschema:"Set the execution mode for pm run-epic. 'auto' runs the sub autonomously via a headless worker; 'manual' makes pm run-epic skip this sub (no worker spawned, status untouched) as a permanent gate until you do the work and move it to the done status yourself. Omit to keep current."`
 	Model      *string           `json:"model,omitempty" jsonschema:"Set the worker model override for pm run-epic / pm work (claude alias or full name, e.g. 'sonnet'). Empty string clears it (inherit run-level model). Omit to keep current."`
 	EpicMode   *string           `json:"epic_mode,omitempty" jsonschema:"Set how pm run-epic drives this PARENT tracker's subs. 'independent' = batch mode for UNRELATED tasks (each sub on its own branch off the base, pushed, nothing merged, no epic PR). Empty string clears it back to integration mode (shared epic/<tracker> branch, one epic PR). Omit to keep current."`
+	FinishMode *string           `json:"finish_mode,omitempty" jsonschema:"Set whether pm run-epic chains the odbiór (acceptance) of this PARENT tracker itself. 'auto' = spawn a detached pm finish <tracker> when the run is over (same machine only). 'off' disables it; an empty string clears the field, which also means off. Omit to keep current."`
 	Tags       []string          `json:"tags,omitempty" jsonschema:"Replace tags (omit to keep current)"`
 	Links      map[string]string `json:"links,omitempty" jsonschema:"Links to merge (existing links are preserved)"`
 	BodyAppend string            `json:"body_append,omitempty" jsonschema:"Append to the Log zone of the body (append-only session history; never replaces existing content)"`
@@ -144,13 +146,14 @@ type listTasksResult struct {
 
 type taskDetail struct {
 	taskSummary
-	Created   string   `json:"created"`
-	Body      string   `json:"body,omitempty"`
-	Sessions  []string `json:"sessions,omitempty"`
-	DependsOn []string `json:"depends_on,omitempty"`
-	Mode      string   `json:"mode,omitempty"`
-	Model     string   `json:"model,omitempty"`
-	EpicMode  string   `json:"epic_mode,omitempty"`
+	Created    string   `json:"created"`
+	Body       string   `json:"body,omitempty"`
+	Sessions   []string `json:"sessions,omitempty"`
+	DependsOn  []string `json:"depends_on,omitempty"`
+	Mode       string   `json:"mode,omitempty"`
+	Model      string   `json:"model,omitempty"`
+	EpicMode   string   `json:"epic_mode,omitempty"`
+	FinishMode string   `json:"finish_mode,omitempty"`
 }
 
 func toSummary(t *storage.Task) taskSummary {
@@ -225,6 +228,7 @@ func toDetail(t *storage.Task) taskDetail {
 		Mode:        t.Meta.Mode,
 		Model:       t.Meta.Model,
 		EpicMode:    t.Meta.EpicMode,
+		FinishMode:  t.Meta.FinishMode,
 	}
 }
 
@@ -474,6 +478,13 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			return r, nil, nil
 		}
 
+		// finish_mode: same load-bearing pre-check as epic_mode above, for the
+		// same O_EXCL reason - not a nicer error message.
+		if err := storage.ValidateFinishMode(in.FinishMode); err != nil {
+			r, _ := toolError(err.Error())
+			return r, nil, nil
+		}
+
 		t.Meta.Branch = in.Branch
 		t.Meta.Parent = in.Parent
 		t.Meta.Order = in.Order
@@ -481,6 +492,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		t.Meta.Mode = in.Mode
 		t.Meta.Model = in.Model
 		t.Meta.EpicMode = in.EpicMode
+		t.Meta.FinishMode = in.FinishMode
 		t.Meta.Tags = in.Tags
 		if len(in.Links) > 0 {
 			t.Meta.Links = in.Links
@@ -568,6 +580,13 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 				return r, nil, nil
 			}
 			task.Meta.EpicMode = *in.EpicMode
+		}
+		if in.FinishMode != nil {
+			if err := storage.ValidateFinishMode(*in.FinishMode); err != nil {
+				r, _ := toolError(err.Error())
+				return r, nil, nil
+			}
+			task.Meta.FinishMode = *in.FinishMode
 		}
 		if in.Tags != nil {
 			task.Meta.Tags = in.Tags

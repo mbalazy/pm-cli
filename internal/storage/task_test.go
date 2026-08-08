@@ -86,6 +86,72 @@ func TestValidateEpicMode(t *testing.T) {
 	}
 }
 
+func TestValidateFinishMode(t *testing.T) {
+	// "" is a third spelling of "off" and MUST stay legal: every tracker
+	// written before the field existed carries it.
+	for _, ok := range []string{"", FinishModeAuto, FinishModeOff} {
+		if err := ValidateFinishMode(ok); err != nil {
+			t.Errorf("ValidateFinishMode(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"Auto", "AUTO", "Off", "on", "true", "finish", " auto", "auto "} {
+		if err := ValidateFinishMode(bad); err == nil {
+			t.Errorf("ValidateFinishMode(%q) = nil, want error (case-sensitive lowercase only)", bad)
+		}
+	}
+}
+
+// TestWriteTaskRejectsInvalidFinishMode is TestWriteTaskRejectsInvalidEpicMode's
+// sibling, and exists for the same reason: the gate has to sit in writeTask so
+// EVERY writer is covered, and a rejected write must leave no file behind - a
+// 0-byte task file would make the retry fail as "already exists" (pm-cli-41).
+func TestWriteTaskRejectsInvalidFinishMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "t-1-tracker.md")
+
+	newTask := func(finishMode string) *Task {
+		return &Task{
+			Meta:     TaskMeta{ID: "t-1", Title: "Tracker", Status: StatusTodo, FinishMode: finishMode},
+			FilePath: path,
+			Project:  "test",
+		}
+	}
+
+	if err := WriteTask(newTask("Auto")); err == nil {
+		t.Fatal("expected write to reject invalid finish_mode")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("rejected write must not create the file")
+	}
+
+	for _, ok := range []string{"", FinishModeOff, FinishModeAuto} {
+		if err := WriteTask(newTask(ok)); err != nil {
+			t.Errorf("WriteTask with finish_mode %q: %v", ok, err)
+		}
+	}
+	reloaded, err := ReadTask(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Meta.FinishMode != FinishModeAuto {
+		t.Errorf("finish_mode = %q, want %q", reloaded.Meta.FinishMode, FinishModeAuto)
+	}
+
+	// A rejected write over an EXISTING task must leave the good one on disk:
+	// writeTask validates before it marshals anything, so the previous content
+	// stands.
+	if err := WriteTask(newTask("nightly")); err == nil {
+		t.Fatal("expected write to reject invalid finish_mode")
+	}
+	again, err := ReadTask(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Meta.FinishMode != FinishModeAuto {
+		t.Errorf("a rejected write clobbered the stored task: finish_mode = %q", again.Meta.FinishMode)
+	}
+}
+
 // TestWriteTaskRejectsInvalidEpicMode pins the storage-level gate: epic_mode is
 // checked in writeTask exactly like mode, so every writer (MCP, CLI, TUI,
 // executor) is covered - not just the MCP handlers. Without it a hand-edited

@@ -92,6 +92,12 @@ type TaskMeta struct {
 	// commits, and nothing is merged - no integration branch, no epic PR; a
 	// human finishes each task on its own branch later.
 	EpicMode string `yaml:"epic_mode,omitempty"`
+	// FinishMode (meaningful on a PARENT tracker only, like EpicMode) decides
+	// whether `pm run-epic` chains the odbiór (acceptance) itself: "auto" spawns
+	// a detached `pm finish <tracker>` when the run is over, so a batch launched
+	// at night is already accepted by morning. "" (default) and "off" both mean
+	// no chaining - the acceptance stays a human's call.
+	FinishMode string `yaml:"finish_mode,omitempty"`
 }
 
 // EpicModeIndependent is the epic_mode value that switches `pm run-epic` to
@@ -106,6 +112,24 @@ func ValidateEpicMode(m string) error {
 		return nil
 	}
 	return fmt.Errorf("invalid epic_mode %q (valid: independent, or empty for integration mode)", m)
+}
+
+// FinishMode values for a tracker's finish_mode field. Empty is a third legal
+// spelling of FinishModeOff and is the default, so every tracker written before
+// this field existed keeps its old behaviour (no chained acceptance).
+const (
+	FinishModeAuto = "auto"
+	FinishModeOff  = "off"
+)
+
+// ValidateFinishMode checks a tracker's finish_mode field. Empty means "off"
+// (default, backward compatible).
+func ValidateFinishMode(m string) error {
+	switch m {
+	case "", FinishModeAuto, FinishModeOff:
+		return nil
+	}
+	return fmt.Errorf("invalid finish_mode %q (valid: auto, off, or empty for off)", m)
 }
 
 // ValidateMode checks a task's mode field. Empty means "auto" (default,
@@ -263,6 +287,9 @@ func writeTask(t *Task) error {
 		return err
 	}
 	if err := ValidateEpicMode(t.Meta.EpicMode); err != nil {
+		return err
+	}
+	if err := ValidateFinishMode(t.Meta.FinishMode); err != nil {
 		return err
 	}
 	metaBytes, err := yaml.Marshal(t.Meta)
