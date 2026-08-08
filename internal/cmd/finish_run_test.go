@@ -122,6 +122,11 @@ func TestExecuteFinishGreenPathRecordsEverything(t *testing.T) {
 	if len(run.Subs) != 1 || !strings.Contains(run.Subs[0].Note, "2 visual claim(s) still open across 1 sub(s)") {
 		t.Errorf("the open visual claims must reach the run-state note, counted over the subs that have them: %+v", run.Subs)
 	}
+	// And as a NUMBER beside the note: the runs list sums it across trackers, and
+	// re-parsing that sentence would break the first time its wording changed.
+	if len(run.Subs) != 1 || run.Subs[0].VisualClaimsOpen != 2 {
+		t.Errorf("the acceptance sub must carry the open visual claims as a number: %+v", run.Subs)
+	}
 
 	kept, err := storage.ReadRunState(dir, "app-9")
 	if err != nil || kept.Kind != storage.RunKindEpic || kept.PID != 4711 {

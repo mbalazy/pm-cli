@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -195,7 +194,15 @@ func fetchRemoteRuns(ctx context.Context, r storage.Remote) ([]storage.RunRow, e
 		"-o", "BatchMode=yes",
 		r.SSH, r.PM, "runs", "--json", "--local",
 	}
-	c := exec.CommandContext(ctx, "ssh", args...)
+	// groupCmd, not exec.CommandContext, for the reason its own comment gives: on
+	// the deadline the default cancellation reaches only the process pm spawned,
+	// and ssh's own children would keep the inherited output pipe open long past
+	// it - so Wait would block for as long as the hung connection lasts, which is
+	// the failure the deadline exists to bound. Its WaitDelay closes the same gap
+	// from the other side. runGroupCmd is deliberately NOT used: its terminal
+	// signal forwarding and pgid publishing serve a worker pm must keep reachable,
+	// and this is a short read nobody kills a run over.
+	c := groupCmd(ctx, "ssh", args...)
 	var stdout, stderr bytes.Buffer
 	c.Stdout = &stdout
 	c.Stderr = &stderr
