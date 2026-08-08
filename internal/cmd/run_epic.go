@@ -664,6 +664,16 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 				tracker.Meta.ID, abortReason, tracker.Meta.ID)
 			return
 		}
+		// Independent mode ends with the LAST sub's own branch checked out (it
+		// never restores the base - integration mode does, below). The
+		// acceptance then walks every sub's branch, and `git worktree add`
+		// refuses a branch that is already checked out somewhere in the repo -
+		// so without this the last sub of every batch is the one sub the odbiór
+		// cannot open. Best-effort and chain-only: a run nobody chains keeps
+		// exactly the branch it kept before.
+		if independentMode {
+			logIfErr(errOut, "restore "+baseBranch+" before the odbiór", gitEnsureBranch(workDir, baseBranch, ""))
+		}
 		chainFinish(errOut, stateDir, slug, tracker.Meta.ID, workDir)
 	}
 

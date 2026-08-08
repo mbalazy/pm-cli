@@ -58,18 +58,28 @@ func chainFinish(errOut io.Writer, stateDir, slug, trackerID, workDir string) bo
 
 	exe, err := finishChainExecutable()
 	if err != nil {
-		fmt.Fprintf(errOut, "pm run-epic: not chaining the odbiór of %s - cannot resolve the pm binary: %v\n", trackerID, err)
+		fmt.Fprintf(errOut, "pm run-epic: not chaining the odbiór of %s - cannot resolve the pm binary: %v (the run itself is unaffected - accept it by hand with `pm finish %s`)\n",
+			trackerID, err, trackerID)
 		return false
 	}
 
 	logPath := storage.FinishRunLogPath(stateDir, trackerID)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
-		fmt.Fprintf(errOut, "pm run-epic: not chaining the odbiór of %s - cannot create %s: %v\n", trackerID, filepath.Dir(logPath), err)
+		fmt.Fprintf(errOut, "pm run-epic: not chaining the odbiór of %s - cannot create %s: %v (the run itself is unaffected - accept it by hand with `pm finish %s`)\n",
+			trackerID, filepath.Dir(logPath), err, trackerID)
 		return false
 	}
-	logf, err := os.Create(logPath)
+	// tmp+rename, NOT a straight os.Create on logPath: the spawn is allowed to
+	// fail, and truncating the log first would destroy the PREVIOUS
+	// acceptance's log on the way to failing - leaving a 0-byte file where the
+	// run-state's LogPath points, which reads as "the acceptance ran and said
+	// nothing". The child keeps writing through its fd after the rename (the
+	// same reasoning writeFinishReport uses for the report).
+	tmpLog := fmt.Sprintf("%s.tmp.%d", logPath, os.Getpid())
+	logf, err := os.Create(tmpLog)
 	if err != nil {
-		fmt.Fprintf(errOut, "pm run-epic: not chaining the odbiór of %s - cannot open the acceptance log %s: %v\n", trackerID, logPath, err)
+		fmt.Fprintf(errOut, "pm run-epic: not chaining the odbiór of %s - cannot open the acceptance log %s: %v (the run itself is unaffected - accept it by hand with `pm finish %s`)\n",
+			trackerID, logPath, err, trackerID)
 		return false
 	}
 	defer logf.Close() // the child keeps its own dup'd fd
@@ -77,9 +87,18 @@ func chainFinish(errOut io.Writer, stateDir, slug, trackerID, workDir string) bo
 	// --no-sim is passed explicitly even though it is the default: anything
 	// running detached keeps its hands off a shared runtime, and saying so in
 	// the argv is what makes that visible in the log and in `ps`.
-	// --project is passed rather than relying on cwd detection, so the chained
-	// run resolves the same project this one ran, whatever workDir turns out to
-	// be (a claimed worktree slot is not the path in project.yaml).
+	//
+	// --project rather than cwd detection, because cwd is NOT how the
+	// acceptance finds its repo: planFinish resolves its own work dir from
+	// project.yaml (finish.go), so c.Dir below only sets the chained pm
+	// process's own cwd - it does not put the acceptance worker anywhere.
+	//
+	// --additional/--slot are deliberately NOT propagated, and this is the
+	// trap to know about before "fixing" that: executeEpic's slot lock is
+	// released the moment it returns, seconds after this spawn, so an
+	// acceptance handed the manager's slot would be running in a worktree that
+	// the next `pm work --additional` may claim and gitCleanWorktree out from
+	// under it. An acceptance that needs a slot has to claim its own.
 	c := exec.Command(exe, "finish", trackerID, "--project", slug, "--no-sim")
 	c.Dir = workDir
 	c.Stdout = logf
@@ -89,9 +108,18 @@ func chainFinish(errOut io.Writer, stateDir, slug, trackerID, workDir string) bo
 	// launched from.
 	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := c.Start(); err != nil {
+		_ = os.Remove(tmpLog)
 		fmt.Fprintf(errOut, "pm run-epic: could not start the odbiór of %s: %v (the run itself is unaffected - accept it by hand with `pm finish %s`)\n",
 			trackerID, err, trackerID)
 		return false
+	}
+	if err := os.Rename(tmpLog, logPath); err != nil {
+		// The acceptance is already running and writing through its fd; only
+		// the file's NAME failed to land, so say where its output actually is
+		// rather than pretending the chain did not happen.
+		fmt.Fprintf(errOut, "pm run-epic: chained the odbiór of %s (pid %d), but its log stayed at %s: %v\n",
+			trackerID, c.Process.Pid, tmpLog, err)
+		return true
 	}
 	fmt.Fprintf(errOut, "pm run-epic: chained the odbiór of %s - detached `pm finish` (pid %d), log: %s\n",
 		trackerID, c.Process.Pid, logPath)

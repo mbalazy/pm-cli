@@ -44,7 +44,7 @@ Always add tests when implementing new features or fixing bugs. Conventions:
 
 ## Key patterns
 
-- **Frontmatter tasks**: `.md` file with YAML frontmatter (id, title, status, created, updated, links, branch, parent, tags, brief, ac, order, sessions, depends_on, mode, model, epic_mode) + markdown body
+- **Frontmatter tasks**: `.md` file with YAML frontmatter (id, title, status, created, updated, links, branch, parent, tags, brief, ac, order, sessions, depends_on, mode, model, epic_mode, finish_mode) + markdown body
 - **Parent/subtask rollup**: `parent` in frontmatter makes a task a child of a tracker (derived: a task is a tracker iff another task names it as parent). `storage.BuildTrackers` generates the rollup used by `pm_context`/`pm context` - never hand-maintain status tables in the parent body. Lifecycle `todo → doing → merged|pushed → done`; children sort by `storage.LessByOrder` (shared with the board columns and the TUI tracker list); set `order` via MCP, `pm add --order`, or `pm reorder`. (history: docs/design-log.md)
 - **Brief field**: `brief` in frontmatter stores short session context ("where we left off"). Overwrites on each update (not append). Preserved on all status transitions (including done/archived - useful for summaries/reverts). Returned by `pm_context` for doing tasks.
 - **AC field**: `ac` in frontmatter stores acceptance criteria. Overwrites on each update (same as brief). Preserved on all status transitions. Returned in `pm_context` and `pm_list_tasks` summaries. When executing a task, constrain work to AC - don't add unrequested features or deviate from stated criteria.

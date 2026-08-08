@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,17 +92,24 @@ func TestChainFinishSpawnsDetachedAcceptance(t *testing.T) {
 	if !strings.Contains(log, "argv: finish proj-1 --project "+slug+" --no-sim") {
 		t.Errorf("argv is wrong (project must be explicit, sim must be off):\n%s", log)
 	}
-	// The acceptance runs in the repo the manager ran in - in a claimed
-	// worktree slot that is NOT the path in project.yaml, which is why workDir
-	// is passed through rather than re-resolved.
-	// Either spelling of the same directory: on macOS the temp dir is reached
-	// through a symlink, and `pwd` in the child reports the logical path.
+	// The chained pm process gets a defined cwd rather than inheriting whatever
+	// the manager was launched from. Note what this does NOT buy: `pm finish`
+	// resolves its own work dir from project.yaml, so cwd does not decide where
+	// the acceptance WORKER runs, and --project above means it does not decide
+	// the project either. Either spelling of the directory counts - on macOS
+	// the temp dir is reached through a symlink and `pwd` reports the logical
+	// path.
 	resolvedWorkDir, err := filepath.EvalSymlinks(workDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(log, "cwd: "+workDir+"\n") && !strings.Contains(log, "cwd: "+resolvedWorkDir+"\n") {
-		t.Errorf("the acceptance must run in the manager's work dir (%s):\n%s", workDir, log)
+		t.Errorf("the chained pm must run with the manager's work dir as cwd (%s):\n%s", workDir, log)
+	}
+	// No scratch file survives a successful chain.
+	leftovers, _ := filepath.Glob(logPath + ".tmp.*")
+	if len(leftovers) > 0 {
+		t.Errorf("the acceptance log scratch file was left behind: %v", leftovers)
 	}
 	if !strings.Contains(errOut.String(), "chained the odbiór of proj-1") {
 		t.Errorf("the chain must announce itself on stderr:\n%s", errOut.String())
@@ -122,8 +130,7 @@ func TestChainFinishSkipsWhenClaimHeld(t *testing.T) {
 	if _, err := storage.AcquireFinishClaim(stateDir, "proj-1", "sess-other"); err != nil {
 		t.Fatalf("seed the claim: %v", err)
 	}
-	marker := filepath.Join(t.TempDir(), "spawned")
-	fakePM(t, "touch "+marker)
+	fakePM(t, `echo "argv: $@"`)
 
 	var errOut strings.Builder
 	if chainFinish(&errOut, stateDir, slug, "proj-1", t.TempDir()) {
@@ -132,10 +139,44 @@ func TestChainFinishSkipsWhenClaimHeld(t *testing.T) {
 	if !strings.Contains(errOut.String(), "already claimed by") {
 		t.Errorf("the skip must say WHY, got:\n%s", errOut.String())
 	}
-	// Give a wrongly-spawned child a moment to exist before declaring it absent.
-	time.Sleep(200 * time.Millisecond)
-	if _, err := os.Stat(marker); err == nil {
-		t.Error("a held claim must spawn nothing at all")
+	// Deterministic, unlike waiting to see whether a child appears: the log is
+	// created SYNCHRONOUSLY before the spawn, so its absence proves the claim
+	// check returned before anything was started - and it also proves the
+	// running acceptance's own log was not truncated on the way past.
+	if _, err := os.Stat(storage.FinishRunLogPath(stateDir, "proj-1")); !os.IsNotExist(err) {
+		t.Errorf("a held claim must not even open the acceptance log (stat err = %v)", err)
+	}
+}
+
+// TestChainFinishKeepsThePreviousLogOnAFailedSpawn: the log path is where the
+// run-state points, so truncating it on the way to a failed spawn would replace
+// the last real acceptance's output with an empty file - which reads as "the
+// acceptance ran and said nothing", the one thing it must not say.
+func TestChainFinishKeepsThePreviousLogOnAFailedSpawn(t *testing.T) {
+	store, slug := tempStore(t)
+	stateDir := store.ProjectDir(slug)
+	logPath := storage.FinishRunLogPath(stateDir, "proj-1")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(logPath, []byte("the previous acceptance said this\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := finishChainExecutable
+	finishChainExecutable = func() (string, error) { return filepath.Join(t.TempDir(), "nope"), nil }
+	t.Cleanup(func() { finishChainExecutable = orig })
+
+	var errOut strings.Builder
+	if chainFinish(&errOut, stateDir, slug, "proj-1", t.TempDir()) {
+		t.Fatal("the spawn must have failed")
+	}
+	kept, err := os.ReadFile(logPath)
+	if err != nil || !strings.Contains(string(kept), "the previous acceptance said this") {
+		t.Errorf("a failed spawn destroyed the previous acceptance log: %q (err %v)", string(kept), err)
+	}
+	if leftovers, _ := filepath.Glob(logPath + ".tmp.*"); len(leftovers) > 0 {
+		t.Errorf("a failed spawn left its scratch file behind: %v", leftovers)
 	}
 }
 
@@ -221,17 +262,79 @@ func TestExecuteEpicChainsTheOdbior(t *testing.T) {
 		fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\necho '"+envelope("merged", "all green")+"'")
 		store, _ := epicRunFixture(t)
 		setTrackerFinishMode(t, store, storage.FinishModeOff)
-		marker := filepath.Join(t.TempDir(), "spawned")
-		fakePM(t, "touch "+marker)
+		fakePM(t, `echo "argv: $@"`)
 
 		_, stderr := runEpic(t, store, epicOptions{noPR: true})
 
-		time.Sleep(200 * time.Millisecond)
-		if _, err := os.Stat(marker); err == nil {
-			t.Error("finish_mode off must not start an acceptance")
+		// The log is opened synchronously inside chainFinish, so its absence is
+		// proof the chain was never entered - no sleeping on a child that may
+		// or may not have got as far as running.
+		if _, err := os.Stat(storage.FinishRunLogPath(store.ProjectDir("app"), "app-1")); !os.IsNotExist(err) {
+			t.Errorf("finish_mode off must not start an acceptance (stat err = %v)", err)
 		}
 		if strings.Contains(stderr, "odbiór") {
 			t.Errorf("a run that chains nothing should not mention the odbiór at all:\n%s", stderr)
+		}
+	})
+
+	t.Run("a failed spawn does not fail the run", func(t *testing.T) {
+		fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\necho '"+envelope("merged", "all green")+"'")
+		store, _ := epicRunFixture(t)
+		setTrackerFinishMode(t, store, storage.FinishModeAuto)
+		orig := finishChainExecutable
+		finishChainExecutable = func() (string, error) { return filepath.Join(t.TempDir(), "nope"), nil }
+		t.Cleanup(func() { finishChainExecutable = orig })
+
+		// runEpic t.Fatals on an error from executeEpic, so reaching the
+		// assertions below IS the "the run still succeeds" assertion.
+		_, stderr := runEpic(t, store, epicOptions{noPR: true})
+
+		if !strings.Contains(stderr, "could not start the odbiór of app-1") {
+			t.Errorf("the failed chain must be reported on stderr:\n%s", stderr)
+		}
+		sub, _ := store.FindTask("app", "app-1-1")
+		if sub.Meta.Status != storage.StatusDone {
+			t.Errorf("the run's own result must be untouched by the failed chain, sub is %q", sub.Meta.Status)
+		}
+	})
+
+	t.Run("an aborted run chains nothing", func(t *testing.T) {
+		// An account wall: the manager stops, most subs never ran, so an
+		// acceptance would walk a batch that does not exist yet - and spend a
+		// fresh worker on the same wall doing it.
+		fakeClaude(t, "echo 'Credit balance is too low' >&2\nexit 1")
+		store, _ := epicRunFixture(t)
+		setTrackerFinishMode(t, store, storage.FinishModeAuto)
+		fakePM(t, `echo "argv: $@"`)
+
+		_, stderr := runEpic(t, store, epicOptions{noPR: true})
+
+		if !strings.Contains(stderr, "ABORTING the run") {
+			t.Fatalf("the fixture must actually abort for this test to mean anything:\n%s", stderr)
+		}
+		if _, err := os.Stat(storage.FinishRunLogPath(store.ProjectDir("app"), "app-1")); !os.IsNotExist(err) {
+			t.Errorf("an aborted run must not start an acceptance (stat err = %v)", err)
+		}
+		if !strings.Contains(stderr, "not chaining the odbiór of app-1 - the run aborted") {
+			t.Errorf("the skipped chain must say why, or it reads as a broken auto-chain:\n%s", stderr)
+		}
+	})
+
+	t.Run("independent mode leaves the base branch checked out for the odbiór", func(t *testing.T) {
+		// `git worktree add` refuses a branch that is checked out somewhere in
+		// the repo, and the acceptance opens one per sub - so a run that ended
+		// sitting on the last sub's branch would hand the odbiór the one sub it
+		// cannot process.
+		fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\necho '"+envelope("merged", "all green")+"'")
+		store, repo := epicRunFixture(t)
+		setTrackerFinishMode(t, store, storage.FinishModeAuto)
+		fakePM(t, `echo "argv: $@"`)
+
+		runEpic(t, store, epicOptions{independent: true})
+
+		waitForFile(t, storage.FinishRunLogPath(store.ProjectDir("app"), "app-1"))
+		if head := gitHeadBranch(t, repo); head != "main" {
+			t.Errorf("the chained odbiór must find the base branch checked out, HEAD is %q", head)
 		}
 	})
 
@@ -274,6 +377,40 @@ func TestPlanEpicRejectsAnInvalidFinishMode(t *testing.T) {
 	_, err = planEpic(store, []string{"app", "app-1"}, epicOptions{})
 	if err == nil || !strings.Contains(err.Error(), "invalid finish_mode") {
 		t.Fatalf("planEpic err = %v, want an invalid finish_mode refusal", err)
+	}
+}
+
+// TestPrintEpicDryRunStatesTheOdbior: the spec asked --dry-run to say whether
+// an odbiór starts, and that is a property of the OUTPUT, not of the string
+// builder below - without this, deleting the line from printEpicDryRun leaves
+// the suite green.
+func TestPrintEpicDryRunStatesTheOdbior(t *testing.T) {
+	store, _ := epicRunFixture(t)
+
+	render := func(t *testing.T, opts epicOptions) string {
+		t.Helper()
+		var out strings.Builder
+		opts.out, opts.errOut = &out, io.Discard
+		plan, err := planEpic(store, []string{"app", "app-1"}, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := printEpicDryRun(plan, opts); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+
+	if got := render(t, epicOptions{}); !strings.Contains(got, "odbiór after the run: NO") {
+		t.Errorf("a dry-run must state that no odbiór will start:\n%s", got)
+	}
+	setTrackerFinishMode(t, store, storage.FinishModeAuto)
+	got := render(t, epicOptions{})
+	if !strings.Contains(got, "odbiór after the run: YES") {
+		t.Errorf("a dry-run must state that an odbiór will start:\n%s", got)
+	}
+	if !strings.Contains(got, "pm finish app-1") {
+		t.Errorf("the dry-run line must name the acceptance it is talking about:\n%s", got)
 	}
 }
 
