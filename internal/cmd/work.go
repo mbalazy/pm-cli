@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -603,7 +604,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		reviewModel:   exec.ResolveReviewModel(),
 		fixRounds:     exec.FixRounds,
 	}
-	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo, guard)
+	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo, guard, workDir, false)
 
 	// Standalone only: the epic manager runs prepare ITSELF, once per run,
 	// right after claiming the slot - not per sub (5 subs must not mean 5
@@ -637,7 +638,7 @@ func (p *workPlan) retarget(dir string, env []string) {
 	p.workDir = dir
 	p.env = env
 	p.prompt = p.buildPrompt(dir)
-	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.maxTurns, p.opts.yolo, p.guard)
+	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.maxTurns, p.opts.yolo, p.guard, dir, false)
 }
 
 // workerHeartbeatInterval is how often a live worker's run-state is re-stamped.
@@ -699,7 +700,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		fmt.Fprintf(opts.stderr(), "pm work: baseline in %s: %s\n", dir, plan.baselineCmd)
 		if section := captureBaseline(opts.stderr(), dir, plan.baselineCmd); section != "" {
 			plan.prompt += "\n" + section
-			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.guard)
+			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.guard, dir, false)
 			baselineUsed = plan.baselineCmd
 		}
 	}
@@ -786,7 +787,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// before the cap existed.
 	if sha := gitHeadSHA(dir); sha != "" && sha != plan.guard.diffBase {
 		plan.guard.diffBase = sha
-		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.guard)
+		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.guard, dir, false)
 	}
 	stopHeartbeat := hbw.Heartbeat(workerHeartbeatInterval)
 	// Stopping is idempotent, so the defer only matters if runWorker panics -
@@ -888,8 +889,11 @@ func modeLabel(standalone bool) string {
 	return "epic"
 }
 
-// buildClaudeArgs assembles the `claude -p` argv for a worker run.
-func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, yolo bool, guard guardOptions) []string {
+// buildClaudeArgs assembles the `claude -p` argv for a worker run. workDir is
+// the repo the worker runs in (its .mcp.json, when present, is the one MCP
+// config a worker keeps); userMCP restores the user's MCP servers for a future
+// spawn kind that genuinely needs them - workers never do.
+func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, yolo bool, guard guardOptions, workDir string, userMCP bool) []string {
 	args := []string{
 		"-p", prompt,
 		"--append-system-prompt", sysPrompt,
@@ -900,6 +904,24 @@ func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, y
 	}
 	if sessionID != "" {
 		args = append(args, "--session-id", sessionID)
+	}
+	// MCP scope: without this a headless worker inherits the USER's whole MCP
+	// menu - measured on run pm-cli-100 as ~180 deferred tool names plus their
+	// servers' instructions in EVERY turn, of which the four workers called
+	// exactly zero. --strict-mcp-config drops every MCP config except those
+	// passed via --mcp-config, so the project's own .mcp.json (checked into the
+	// repo, and possibly load-bearing for its workers) is passed back in when
+	// it exists. Skills are a separate mechanism and are untouched (measured
+	// 2026-08-08 on claude 2.1.226: 78 skills listed before AND after, MCP
+	// tools 180 -> 0, turn-1 context 70,270 -> 65,017 tokens) - pm finish's
+	// reliance on global skills survives this flag.
+	if !userMCP {
+		args = append(args, "--strict-mcp-config")
+		if workDir != "" {
+			if mcp := filepath.Join(workDir, ".mcp.json"); fileExists(mcp) {
+				args = append(args, "--mcp-config", mcp)
+			}
+		}
 	}
 	// The hook guard rides along in BOTH modes: --yolo waives permission prompts,
 	// not the project's right to have its commits pass its own hooks. --settings
