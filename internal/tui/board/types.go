@@ -113,15 +113,27 @@ type detailState struct {
 // execView is the executor agent-view (18-7): the live transcript of the
 // running worker, plus which run/session it is showing.
 type execView struct {
-	executorViewport   viewport.Model
-	executorRunTaskID  string            // task/tracker id whose run we're watching
-	executorRunProj    string            // project slug of that run
-	executorRun        *storage.RunState // latest run-state for the header
-	executorSessions   []execSession     // sub entries that have a worker session, in order
-	executorSessionIdx int               // which session is shown
-	executorFollow     bool              // auto-scroll to the latest activity
-	executorVerbose    bool              // full conversation (untruncated) vs compact feed
-	executorPrevView   view              // where to return on esc (kept separate from previousView)
+	executorViewport  viewport.Model
+	executorRunTaskID string            // task/tracker id whose run we're watching
+	executorRunProj   string            // project slug of that run
+	executorRun       *storage.RunState // latest run-state for the header
+	// executorWatchFinish: which of the task's two run-states is on screen -
+	// the acceptance when set, the run otherwise. The two share a task id, so
+	// this (not the id) is what decides which file the view re-reads on every
+	// tick; W toggles it. A bool rather than a kind string on purpose: there is
+	// no kind to put in such a field for "the run" that is true of both `pm
+	// work` and `pm run-epic`, and a field holding a kind the run does not have
+	// is a trap for the next comparison somebody writes.
+	executorWatchFinish bool
+	// executorHasOther: the counterpart run-state exists on disk, so the W
+	// toggle has somewhere to go. Re-checked on refresh, since an acceptance
+	// routinely starts while its run is still being watched.
+	executorHasOther   bool
+	executorSessions   []execSession // sub entries that have a worker session, in order
+	executorSessionIdx int           // which session is shown
+	executorFollow     bool          // auto-scroll to the latest activity
+	executorVerbose    bool          // full conversation (untruncated) vs compact feed
+	executorPrevView   view          // where to return on esc (kept separate from previousView)
 	// transcriptCaches: one incremental decode cache per transcript path, so
 	// re-rendering on tick only re-reads/re-parses appended bytes (never a full
 	// re-decode of an unchanged or already-seen prefix). Keyed by path rather
@@ -247,6 +259,12 @@ type Model struct {
 	// confirmation
 	confirmAction string // "" | "done" | "delete"
 	confirmTaskID string
+	// confirmRunFinish: for "kill-run", WHICH of the task's two runs the
+	// pending confirmation is for. The task id does not say - a run and its
+	// acceptance share it - and the two are routinely live together, so a run
+	// that ends between the two K presses would otherwise turn a confirmation
+	// given for the run into a kill of the acceptance.
+	confirmRunFinish bool
 
 	// archive
 	archiveCursor int
@@ -279,6 +297,17 @@ type Model struct {
 	// executor run-states (live background runs), keyed by task/tracker id;
 	// refreshed on tick from <project>/.executor/*.json
 	runStates map[string]*storage.RunState
+
+	// finishStates: acceptance (`pm finish`) run-states, keyed by the id of the
+	// tracker each one accepts - refreshed from the same dir on the same tick.
+	//
+	// A SECOND map, never merged into runStates: the two share a key (the
+	// tracker's id), so one map would have them evict each other whichever way
+	// the directory happened to sort - exactly the collision pm-cli-100-2 split
+	// apart on disk. And they are genuinely concurrent, not alternatives:
+	// `batch-finish-auto` is built to start before the run it accepts has
+	// finished, accepting each sub as it lands.
+	finishStates map[string]*storage.RunState
 
 	startupDuration time.Duration
 

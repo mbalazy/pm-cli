@@ -52,6 +52,18 @@ func prepareWorktree(proj *storage.Project, workDir, taskID, kind string) (func(
 	return func() { _ = storage.ReleaseWorktreeLock(workDir, pid) }, nil
 }
 
+// checkSlotPin validates a --slot pin against the pool SIZE - the half of the
+// claim that is a pure read, so a planner can reach the same verdict the claim
+// would without taking anything. Kept as one wording so a dry-run and the run
+// it predicts cannot disagree; whether the pinned slot is BUSY is a different
+// question, answerable only at claim time.
+func checkSlotPin(pin, slots int) error {
+	if pin > slots {
+		return fmt.Errorf("--slot %d out of range - project has %d worktree slot(s)", pin, slots)
+	}
+	return nil
+}
+
 // acquireWorktreeSlot claims one slot from the resolved worktree pool for
 // (taskID, kind): with pin=0 the first slot whose lock is free (or stale) wins;
 // pin=N (1-based) targets exactly that slot and fails fast when it is busy.
@@ -66,8 +78,8 @@ func acquireWorktreeSlot(proj *storage.Project, slug string, slots []storage.Res
 		return storage.ResolvedWorktree{}, nil, errNoWorktreeSlots(slug)
 	}
 	if pin > 0 {
-		if pin > len(slots) {
-			return storage.ResolvedWorktree{}, nil, fmt.Errorf("--slot %d out of range - project has %d worktree slot(s)", pin, len(slots))
+		if err := checkSlotPin(pin, len(slots)); err != nil {
+			return storage.ResolvedWorktree{}, nil, err
 		}
 		slot := slots[pin-1]
 		if holder := storage.LiveWorktreeHolder(slot.Path); holder != nil {
