@@ -392,17 +392,32 @@ func TestAcceptanceKillConfirmDoesNotPromiseAPark(t *testing.T) {
 	}
 }
 
+// pressKey sends one key through a view's update func and returns the model that
+// came back - the update funcs take a value receiver, so the new state arrives
+// in the message rather than through the pointer.
+func pressKey(t *testing.T, m *Model, r rune, up func(Model, tea.KeyMsg) (tea.Model, tea.Cmd)) *Model {
+	t.Helper()
+	next, _ := up(*m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	v := next.(Model)
+	return &v
+}
+
 // A confirmation is given for ONE of the two runs. Inside the agent-view they
-// are a single W apart and share a task id, so an armed K must not be spent on
-// whatever the view switched to in between.
+// are a single W apart and share a task id, so an armed K must never be spent on
+// whatever the view switched to in between. Driven through the KEYS, because
+// which of the two mechanisms disarms it - this view's blanket "any key but K
+// cancels", or the kind-keyed check in the K branch - is the thing under test.
 func TestAgentViewKillConfirmDoesNotCarryAcrossTheSwitch(t *testing.T) {
 	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-9", Title: "Batch tracker", Status: storage.StatusDoing}})
 	stateDir := m.store.ProjectDir("p")
-	pid := liveRunPID(t)
-	for _, st := range []*storage.RunState{liveRun(t, "p-9", pid), liveFinish(t, "p-9", pid)} {
-		if err := storage.WriteRunState(stateDir, st); err != nil {
-			t.Fatal(err)
-		}
+	// Two separate live processes, as in the kill tests above: with one pid
+	// shared, a regression would signal the group both states name and the
+	// failure could not say which run was killed.
+	if err := storage.WriteRunState(stateDir, liveRun(t, "p-9", liveRunPID(t))); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.WriteRunState(stateDir, liveFinish(t, "p-9", liveRunPID(t))); err != nil {
+		t.Fatal(err)
 	}
 	m.refreshRunStates()
 	task, err := m.store.FindTask("p", "p-9")
@@ -414,25 +429,24 @@ func TestAgentViewKillConfirmDoesNotCarryAcrossTheSwitch(t *testing.T) {
 	}
 
 	// Arm K on the run...
-	km := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}}
-	// updateExecutorView has a value receiver, so the updated model comes back in
-	// the message rather than through m.
-	press := func() { next, _ := m.updateExecutorView(km); v := next.(Model); m = &v }
-	press()
+	m = pressKey(t, m, 'K', Model.updateExecutorView)
 	if m.confirmAction != "kill-run" || m.confirmRunFinish {
 		t.Fatalf("K on the run must arm a confirmation for the RUN: %q finish=%v", m.confirmAction, m.confirmRunFinish)
 	}
 
-	// ...switch to the acceptance, which drops the confirmation it was not given
-	// for rather than leaving a prompt that describes the wrong action...
-	m.switchExecutorRunKind()
+	// ...press W to switch to the acceptance. W is not K, so the view's blanket
+	// cancel drops the confirmation before the switch even runs.
+	m = pressKey(t, m, 'W', Model.updateExecutorView)
+	if !m.watchingFinish() {
+		t.Fatal("W did not switch the view to the acceptance")
+	}
 	if m.confirmAction != "" {
-		t.Errorf("the switch must clear the pending confirmation, got %q", m.confirmAction)
+		t.Errorf("switching away must leave no armed kill, got %q", m.confirmAction)
 	}
 
-	// ...so the next K only re-arms, this time for the acceptance. Nothing was
-	// killed: the acceptance's run-state is untouched on disk.
-	press()
+	// ...so the next K only re-arms, this time for the acceptance, and the
+	// acceptance's run-state is untouched on disk.
+	m = pressKey(t, m, 'K', Model.updateExecutorView)
 	if m.confirmAction != "kill-run" || !m.confirmRunFinish {
 		t.Fatalf("K after the switch must arm for the ACCEPTANCE: %q finish=%v", m.confirmAction, m.confirmRunFinish)
 	}
@@ -442,6 +456,65 @@ func TestAgentViewKillConfirmDoesNotCarryAcrossTheSwitch(t *testing.T) {
 	}
 	if fin.Status != storage.RunStatusRunning {
 		t.Errorf("the acceptance was killed on a confirmation given for the run: status = %q", fin.Status)
+	}
+}
+
+// The route that actually reaches the kind-keyed check: the DETAIL view has no
+// blanket cancel, so a K armed there survives the trip into the agent-view. Arm
+// it against the run, let the run finish, and W then opens the acceptance -
+// where a single K would otherwise stop it on a confirmation given for
+// something else.
+func TestKillConfirmArmedInDetailDoesNotKillTheAcceptance(t *testing.T) {
+	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-9", Title: "Batch tracker", Status: storage.StatusDoing}})
+	stateDir := m.store.ProjectDir("p")
+	run := liveRun(t, "p-9", liveRunPID(t))
+	if err := storage.WriteRunState(stateDir, run); err != nil {
+		t.Fatal(err)
+	}
+	fin := liveFinish(t, "p-9", liveRunPID(t))
+	if err := storage.WriteRunState(stateDir, fin); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshRunStates()
+	task, err := m.store.FindTask("p", "p-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.currentView = viewDetail
+	m.detailTask = task
+
+	// K in the detail view arms against the RUN: it is live, and a live run wins
+	// the tie with a live acceptance.
+	m = pressKey(t, m, 'K', Model.updateDetail)
+	if m.confirmAction != "kill-run" || m.confirmRunFinish {
+		t.Fatalf("K in the detail view must arm for the RUN: %q finish=%v", m.confirmAction, m.confirmRunFinish)
+	}
+
+	// The run ends while the confirmation stands, so the acceptance is now the
+	// only live thing on this tracker - and what W opens.
+	run.Status = storage.RunStatusDone
+	if err := storage.WriteRunState(stateDir, run); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshRunStates()
+	if !m.openExecutorView(task) || !m.watchingFinish() {
+		t.Fatalf("W must open the acceptance once the run is done (finish=%v)", m.watchingFinish())
+	}
+	if m.confirmAction != "kill-run" {
+		t.Fatal("nothing on this route disarms the confirmation - the test would prove nothing")
+	}
+
+	// One K here must RE-ARM, not fire.
+	m = pressKey(t, m, 'K', Model.updateExecutorView)
+	if !m.confirmRunFinish {
+		t.Errorf("K must re-arm against the acceptance, got finish=%v", m.confirmRunFinish)
+	}
+	got, err := storage.ReadFinishRunState(stateDir, "p-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != storage.RunStatusRunning {
+		t.Errorf("the acceptance was stopped on a confirmation armed against the run: status = %q", got.Status)
 	}
 }
 

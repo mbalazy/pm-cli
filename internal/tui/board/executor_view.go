@@ -135,14 +135,11 @@ func (m *Model) switchExecutorRunKind() {
 		return
 	}
 	m.executorWatchFinish = !m.executorWatchFinish
-	// A kill armed against what WAS on screen does not carry over to what is on
-	// screen now. The keying in the K branch already refuses to act on it, but a
-	// confirmation prompt left standing would describe the new run's effect over
-	// the old run's confirmation - so drop it rather than explain it.
-	if m.confirmAction == "kill-run" {
-		m.confirmAction = ""
-		m.confirmTaskID = ""
-	}
+	// Nothing is done about a pending kill confirmation HERE: the only way in is
+	// the W key, and updateExecutorView cancels a pending kill on every key but
+	// K before dispatching. Clearing it again would be a second owner of one
+	// piece of state, and the sort of dead branch a later reader trusts.
+	//
 	// Re-derive everything the previous kind's state seeded: which transcripts
 	// are watchable, which one is in flight, and the scroll position.
 	m.executorSessionIdx = 0
