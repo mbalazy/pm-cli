@@ -56,6 +56,18 @@ func (m Model) menuTask() *storage.Task {
 	return m.selectedTask()
 }
 
+// trackerRunNoun is what one `pm run-epic` of this tracker is CALLED: an epic
+// when its subs merge into one integration branch, a batch when they each stand
+// alone (epic_mode: independent). One helper for the menu title and the item
+// labels, so a tracker cannot be a batch in one line of the overlay and an epic
+// in the next.
+func trackerRunNoun(t *storage.Task) string {
+	if t != nil && t.Meta.EpicMode == storage.EpicModeIndependent {
+		return "batch"
+	}
+	return "epic"
+}
+
 func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 	inTmux := os.Getenv("TMUX") != ""
 	m.claudeMenuItems = nil
@@ -95,9 +107,15 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 		runLabel := "Run task here (pm work)"
 		tmuxLabel := "Run task in tmux (pm work)"
 		if m.executorIsTracker {
-			bgLabel = "Run epic in background (watch in pm)"
-			runLabel = "Run epic here (pm run-epic)"
-			tmuxLabel = "Run epic in tmux (pm run-epic)"
+			// "epic" vs "batch" follows epic_mode, the ONLY thing that decides
+			// integration from independent (the board passes no --independent
+			// flag - the tracker declares it). The command is `pm run-epic`
+			// either way and the label says so, since that is what a user
+			// reproducing this launch by hand has to type.
+			noun := trackerRunNoun(t)
+			bgLabel = "Run " + noun + " in background (watch in pm)"
+			runLabel = "Run " + noun + " here (pm run-epic)"
+			tmuxLabel = "Run " + noun + " in tmux (pm run-epic)"
 		}
 		// Background is the default: non-blocking, observable natively in pm.
 		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{bgLabel, "bg", "b"})
