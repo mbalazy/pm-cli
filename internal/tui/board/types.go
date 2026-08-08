@@ -191,6 +191,11 @@ type launchMenu struct {
 	// legacy additional_worktree pair).
 	claudeMenuAdditional    bool
 	executorAdditionalAvail bool
+	// claudeMenuThenFinish = user asked THIS epic launch to chain a detached
+	// acceptance (`--then-finish`) when the run ends. Tracker-only (the flag
+	// exists only on `pm run-epic`); off = the flag is simply not passed, so
+	// the tracker's own finish_mode keeps deciding (tri-state, run_epic.go).
+	claudeMenuThenFinish bool
 	// executorSlots = the project's worktree slot pool with live lock holders,
 	// gathered when the executor launch menu opens (fresh at decision time) and
 	// rendered under the # toggle so the user sees which slot a launch would get.

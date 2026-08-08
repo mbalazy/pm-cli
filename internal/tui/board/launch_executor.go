@@ -17,7 +17,7 @@ import (
 // executorPMArgs builds the `pm` argv for the executor launch: `work` for a leaf
 // task, `run-epic` for a tracker, plus optional --yolo / --dry-run. Pure so it
 // can be unit-tested without spawning a process.
-func executorPMArgs(t *storage.Task, isTracker, yolo, dryRun, additional bool) []string {
+func executorPMArgs(t *storage.Task, isTracker, yolo, dryRun, additional, thenFinish bool) []string {
 	// The subcommand name doubles as the run-state's Kind (see the seed below),
 	// and Kind now decides which FILE the run-state lives in - so these are the
 	// storage constants rather than two literals that merely look the same.
@@ -32,8 +32,30 @@ func executorPMArgs(t *storage.Task, isTracker, yolo, dryRun, additional bool) [
 	if additional {
 		args = append(args, "--additional")
 	}
+	// --then-finish exists only on `pm run-epic`; appending it to `pm work`
+	// would be a flag-parse error, so the tracker check lives here rather than
+	// trusting the caller's toggle state.
+	if thenFinish && isTracker {
+		args = append(args, "--then-finish")
+	}
 	if dryRun {
 		args = append(args, "--dry-run")
+	}
+	return args
+}
+
+// finishPMArgs builds the `pm` argv for launching a tracker's acceptance from
+// the board. Mirrors chainFinish's spawn (run_epic_finish.go): --project
+// because `pm finish` takes only the tracker positionally, and --no-sim
+// explicitly even though it is the default - a board launch is detached, and a
+// detached acceptance keeps its hands off a shared runtime; saying so in the
+// argv makes that visible in the log and in `ps`. No --yolo handling: the
+// acceptance is yolo by default (the menu's ! toggle does not apply). Pure for
+// the same unit-test reason as executorPMArgs.
+func finishPMArgs(t *storage.Task, additional bool) []string {
+	args := []string{storage.RunKindFinish, t.Meta.ID, "--project", t.Project, "--no-sim"}
+	if additional {
+		args = append(args, "--additional")
 	}
 	return args
 }
@@ -98,18 +120,25 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 
 	isTracker := len(m.taskChildren(t)) > 0
 	dryRun := kind == "dry-run"
+	isFinish := kind == "finish"
 	// The additional-worktree choice is per launch and only valid when the project
 	// has it configured (executorAdditionalAvail, set while building the menu).
 	additional := m.claudeMenuAdditional && m.executorAdditionalAvail
-	args := executorPMArgs(t, isTracker, m.claudeMenuSkipPerms, dryRun, additional)
+	args := executorPMArgs(t, isTracker, m.claudeMenuSkipPerms, dryRun, additional, m.claudeMenuThenFinish)
+	if isFinish {
+		args = finishPMArgs(t, additional)
+	}
 	winName := "pm:" + args[0] + ":" + t.Meta.ID
 
 	// Real runs (here/tmux) require a git repo; a clean tree is only required in
 	// DEFAULT mode (the executor runs in the main checkout, old behaviour). With
 	// --additional the work is isolated in the worktree, so the main checkout may
-	// be dirty. Dry-run is side-effect-free.
+	// be dirty. Dry-run is side-effect-free. An acceptance never needs a clean
+	// tree either: it forks no branch of its own (it walks the subs' branches),
+	// and the epic it accepts may well have left the checkout mid-state -
+	// chainFinish spawns it with no preflight at all for the same reason.
 	if !dryRun {
-		if reason := boardGitPreflight(projDir, !additional); reason != "" {
+		if reason := boardGitPreflight(projDir, !additional && !isFinish); reason != "" {
 			m.toastMsg = "executor: " + reason
 			m.toastExpiry = time.Now().Add(15 * time.Second)
 			return m, nil
@@ -117,13 +146,21 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 	}
 
 	switch kind {
-	case "bg":
+	case "bg", "finish":
 		// Detached background run, output to a log file, observable natively in
 		// pm (run-state + agent-view). Does not take over the terminal or need tmux.
 		// Run-state + log live in the pm data dir (where the board reads them);
 		// the worker still runs in the git repo (c.Dir = projDir).
 		stateDir := m.store.ProjectDir(t.Project)
 		logPath := storage.ExecutorLogPath(stateDir, t.Meta.ID)
+		if isFinish {
+			// The acceptance's artifacts are SIBLINGS of the tracker's run, not
+			// replacements: ExecutorLogPath here would overwrite the log of the
+			// very run being accepted. The run-state seed below routes itself
+			// (WriteRunState picks the .finish.json path off Kind == args[0] ==
+			// storage.RunKindFinish).
+			logPath = storage.FinishRunLogPath(stateDir, t.Meta.ID)
+		}
 		if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 			m.toastMsg = "executor: " + err.Error()
 			m.toastExpiry = time.Now().Add(15 * time.Second)

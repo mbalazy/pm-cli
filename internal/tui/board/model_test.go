@@ -1362,24 +1362,51 @@ func TestFindSessionDirGlobal(t *testing.T) {
 func TestExecutorPMArgs(t *testing.T) {
 	task := &storage.Task{Meta: storage.TaskMeta{ID: "atlas-64-3"}, Project: "atlas"}
 	tests := []struct {
-		name                                string
-		isTracker, yolo, dryRun, additional bool
-		want                                []string
+		name                                            string
+		isTracker, yolo, dryRun, additional, thenFinish bool
+		want                                            []string
 	}{
-		{"leaf task default", false, false, false, false, []string{"work", "atlas", "atlas-64-3"}},
-		{"tracker default", true, false, false, false, []string{"run-epic", "atlas", "atlas-64-3"}},
-		{"leaf yolo", false, true, false, false, []string{"work", "atlas", "atlas-64-3", "--yolo"}},
-		{"leaf dry-run", false, false, true, false, []string{"work", "atlas", "atlas-64-3", "--dry-run"}},
-		{"leaf additional", false, false, false, true, []string{"work", "atlas", "atlas-64-3", "--additional"}},
-		{"tracker additional", true, false, false, true, []string{"run-epic", "atlas", "atlas-64-3", "--additional"}},
-		{"leaf yolo additional dry-run", false, true, true, true, []string{"work", "atlas", "atlas-64-3", "--yolo", "--additional", "--dry-run"}},
-		{"tracker yolo dry-run", true, true, true, false, []string{"run-epic", "atlas", "atlas-64-3", "--yolo", "--dry-run"}},
+		{"leaf task default", false, false, false, false, false, []string{"work", "atlas", "atlas-64-3"}},
+		{"tracker default", true, false, false, false, false, []string{"run-epic", "atlas", "atlas-64-3"}},
+		{"leaf yolo", false, true, false, false, false, []string{"work", "atlas", "atlas-64-3", "--yolo"}},
+		{"leaf dry-run", false, false, true, false, false, []string{"work", "atlas", "atlas-64-3", "--dry-run"}},
+		{"leaf additional", false, false, false, true, false, []string{"work", "atlas", "atlas-64-3", "--additional"}},
+		{"tracker additional", true, false, false, true, false, []string{"run-epic", "atlas", "atlas-64-3", "--additional"}},
+		{"leaf yolo additional dry-run", false, true, true, true, false, []string{"work", "atlas", "atlas-64-3", "--yolo", "--additional", "--dry-run"}},
+		{"tracker yolo dry-run", true, true, true, false, false, []string{"run-epic", "atlas", "atlas-64-3", "--yolo", "--dry-run"}},
+		{"tracker then-finish", true, false, false, false, true, []string{"run-epic", "atlas", "atlas-64-3", "--then-finish"}},
+		{"tracker then-finish dry-run", true, false, true, false, true, []string{"run-epic", "atlas", "atlas-64-3", "--then-finish", "--dry-run"}},
+		// `pm work` has no --then-finish flag: a stale toggle must never leak
+		// into a leaf launch (the guard lives in executorPMArgs itself).
+		{"leaf ignores then-finish", false, false, false, false, true, []string{"work", "atlas", "atlas-64-3"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := executorPMArgs(task, tt.isTracker, tt.yolo, tt.dryRun, tt.additional)
+			got := executorPMArgs(task, tt.isTracker, tt.yolo, tt.dryRun, tt.additional, tt.thenFinish)
 			if strings.Join(got, " ") != strings.Join(tt.want, " ") {
 				t.Errorf("executorPMArgs = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFinishPMArgs(t *testing.T) {
+	tracker := &storage.Task{Meta: storage.TaskMeta{ID: "atlas-100"}, Project: "atlas"}
+	tests := []struct {
+		name       string
+		additional bool
+		want       []string
+	}{
+		// Mirrors chainFinish's spawn: --project (finish takes only the tracker
+		// positionally) and an explicit --no-sim (detached = hands off the sim).
+		{"default", false, []string{"finish", "atlas-100", "--project", "atlas", "--no-sim"}},
+		{"additional worktree", true, []string{"finish", "atlas-100", "--project", "atlas", "--no-sim", "--additional"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := finishPMArgs(tracker, tt.additional)
+			if strings.Join(got, " ") != strings.Join(tt.want, " ") {
+				t.Errorf("finishPMArgs = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -1529,7 +1556,7 @@ func TestOpenExecutorMenu(t *testing.T) {
 		}
 	})
 
-	t.Run("tracker with tmux -> run-epic, bg+here+tmux+dry-run, default bg", func(t *testing.T) {
+	t.Run("tracker with tmux -> run-epic, bg+here+tmux+finish+dry-run, default bg", func(t *testing.T) {
 		os.Setenv("TMUX", "/tmp/tmux-1000/default,1,0")
 		defer os.Unsetenv("TMUX")
 		m := Model{tasks: []*storage.Task{parent, child}}
@@ -1537,8 +1564,8 @@ func TestOpenExecutorMenu(t *testing.T) {
 		if !m.executorIsTracker {
 			t.Error("parent with a child must be flagged as tracker")
 		}
-		if got := kinds(m.claudeMenuItems); strings.Join(got, ",") != "bg,here,tmux,dry-run" {
-			t.Errorf("items = %v, want [bg here tmux dry-run]", got)
+		if got := kinds(m.claudeMenuItems); strings.Join(got, ",") != "bg,here,tmux,finish,dry-run" {
+			t.Errorf("items = %v, want [bg here tmux finish dry-run]", got)
 		}
 		if m.claudeMenuItems[m.claudeMenuCursor].kind != "bg" {
 			t.Errorf("default cursor at %q, want bg", m.claudeMenuItems[m.claudeMenuCursor].kind)

@@ -20,6 +20,7 @@ func (m *Model) openClaudeMenu(t *storage.Task) {
 	// choice into a launch the user never opted into from this menu.
 	m.claudeMenuAdditional = false
 	m.executorAdditionalAvail = false
+	m.claudeMenuThenFinish = false
 	m.rebuildClaudeMenuItems(t)
 	m.claudeMenu = true
 }
@@ -36,6 +37,7 @@ func (m *Model) openExecutorMenu(t *storage.Task) {
 	m.claudeMenuSkipPerms = false
 	m.launchAgent = launchAgentExecutor
 	m.claudeMenuAdditional = false
+	m.claudeMenuThenFinish = false
 	m.resumeOnly = false
 	m.forkMode = false
 	m.projectScopeLaunch = false
@@ -102,6 +104,12 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{runLabel, "here", "h"})
 		if inTmux {
 			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{tmuxLabel, "tmux", "t"})
+		}
+		if m.executorIsTracker {
+			// The acceptance of this tracker's run (`pm finish`) - always
+			// detached and simulator-free, like chainFinish's spawn; watch it
+			// via W, kill it via K, see it in the Runs view (R).
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Run acceptance in background (pm finish)", "finish", "a"})
 		}
 		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Dry-run preview", "dry-run", "d"})
 		m.claudeMenuCursor = 0 // default to background
@@ -198,6 +206,14 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if typed == "#" {
 		if m.launchAgent == launchAgentExecutor && m.executorAdditionalAvail {
 			m.claudeMenuAdditional = !m.claudeMenuAdditional
+		}
+		return m, nil
+	}
+	// Toggle chaining the acceptance after the epic run (--then-finish;
+	// executor + tracker only - the flag exists only on `pm run-epic`).
+	if typed == "&" {
+		if m.launchAgent == launchAgentExecutor && m.executorIsTracker {
+			m.claudeMenuThenFinish = !m.claudeMenuThenFinish
 		}
 		return m, nil
 	}

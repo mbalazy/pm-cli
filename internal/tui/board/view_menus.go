@@ -391,6 +391,20 @@ func (m Model) viewClaudeMenu() string {
 			lines = append(lines, "       "+busyStyle.Bold(true).Render("all slots busy - this launch will fail; wait or kill a run (K)"))
 		}
 	}
+
+	// Executor tracker only: chain the acceptance (`pm finish`) when the epic
+	// run ends (--then-finish). Off = the flag is not passed, so the tracker's
+	// finish_mode keeps deciding - the label says so to keep the tri-state
+	// honest on screen.
+	if m.launchAgent == launchAgentExecutor && m.executorIsTracker {
+		chainCheck := "[ ]"
+		chainStyle := dimStyle
+		if m.claudeMenuThenFinish {
+			chainCheck = "[x]"
+			chainStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
+		}
+		lines = append(lines, "  "+keyStyle.Render("&")+chainStyle.Render(" "+chainCheck+" chain acceptance after the run (--then-finish; off = tracker's finish_mode decides)"))
+	}
 	lines = append(lines, "")
 
 	for i, item := range m.claudeMenuItems {
@@ -405,8 +419,17 @@ func (m Model) viewClaudeMenu() string {
 	}
 	lines = append(lines, "")
 	help := "press key or enter  @ toggle agent  ! toggle perms  esc back"
-	if m.launchAgent == launchAgentExecutor && m.executorAdditionalAvail {
-		help = "press key or enter  @ agent  ! perms  # additional  esc back"
+	if m.launchAgent == launchAgentExecutor {
+		var toggles string
+		if m.executorAdditionalAvail {
+			toggles += "  # additional"
+		}
+		if m.executorIsTracker {
+			toggles += "  & chain acceptance"
+		}
+		if toggles != "" {
+			help = "press key or enter  @ agent  ! perms" + toggles + "  esc back"
+		}
 	}
 	lines = append(lines, helpStyle.Render(help))
 
