@@ -578,8 +578,8 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	subDurations := map[string]int{} // sub id -> driveSub wall-clock seconds
 	for _, sub := range subs {
 		// Decide, without spending a worker, whether this sub runs. Covers
-		// the re-entrant done skip, the manual gate, the not-ready skip, and
-		// the depends_on gate (see classifySub).
+		// the re-entrant done skip, the manual gate, the not-ready skip, the
+		// crash-recovery pickup, and the depends_on gate (see classifySub).
 		oc, drive, announce := classifySub(sub, byID, plan.startStatus, doneStatus, plan.crashRecovered)
 		if announce != "" {
 			fmt.Fprintf(errOut, "pm run-epic: %s\n", announce)
@@ -709,13 +709,16 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 // classifySub decides what happens to a sub BEFORE any worker is spawned. It is
 // pure (never mutates the sub) so both the manager loop and tests can rely on
 // it. It returns the recorded outcome, drive=true only when the sub should be
-// handed to driveSub, and an optional stderr line to announce a skip.
+// handed to driveSub, and an optional stderr line to announce the decision (a
+// skip, or the one driven case worth announcing: a crash-recovered sub).
 //
 // Precedence: a finished sub is a re-entrant skip; a manual sub is a PERMANENT
 // human-only gate (no worker, status untouched, re-skipped forever until the
 // human moves it to done - distinct "manual" outcome, not "skipped"); a
-// non-ready sub is skipped quietly; an unmet depends_on parks the sub without a
-// worker but leaves it on its ready status so a later re-run picks it up.
+// non-ready sub is skipped quietly UNLESS the previous run's crash left it on
+// "doing" (then it is recovered loudly and driven); an unmet depends_on parks
+// the sub without a worker but leaves it on its ready status so a later re-run
+// picks it up.
 func classifySub(sub *storage.Task, byID map[string]*storage.Task, startStatus, doneStatus storage.TaskStatus, recovered map[string]bool) (oc subOutcome, drive bool, announce string) {
 	if sub.Meta.Status == doneStatus || sub.Meta.Status == storage.StatusDone {
 		return subOutcome{sub.Meta.ID, subSkipped, "already " + string(sub.Meta.Status), ""}, false, ""
