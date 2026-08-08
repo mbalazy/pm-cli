@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -66,11 +68,18 @@ func newRunsCmd(store storage.TaskStore) *cobra.Command {
 			}
 
 			var projects []string
+			// The RESOLVED slug, not the flag's raw value: `-p ap` and `-p App`
+			// both mean the project `app`, and the remote filter downstream
+			// compares slugs. Filtering on what the user typed would silently
+			// drop every remote row for exactly the abbreviations that work
+			// locally.
+			slug := ""
 			if project != "" {
-				slug, err := store.ResolveProject(project)
+				resolved, err := store.ResolveProject(project)
 				if err != nil {
 					return err
 				}
+				slug = resolved
 				projects = []string{slug}
 			}
 
@@ -80,7 +89,7 @@ func newRunsCmd(store storage.TaskStore) *cobra.Command {
 			}
 
 			if !local {
-				remoteRows, err := remoteRunRows(cmd.Context(), store, remote, project)
+				remoteRows, err := remoteRunRows(cmd.Context(), store, remote, slug)
 				if err != nil {
 					return err
 				}
@@ -113,7 +122,8 @@ func newRunsCmd(store storage.TaskStore) *cobra.Command {
 // YAML typo must not read as "you have no remote runners" when the whole point
 // of the file is that you do. An unreachable MACHINE is the opposite case and
 // yields a note row.
-func remoteRunRows(ctx context.Context, store storage.TaskStore, only, project string) ([]storage.RunRow, error) {
+// slug is the already-resolved project slug to narrow to, or "" for all.
+func remoteRunRows(ctx context.Context, store storage.TaskStore, only, slug string) ([]storage.RunRow, error) {
 	cfg, err := store.LoadConfig()
 	if err != nil {
 		return nil, err
@@ -138,7 +148,10 @@ func remoteRunRows(ctx context.Context, store storage.TaskStore, only, project s
 	for _, r := range remotes {
 		fetched, err := fetchRemoteRuns(ctx, r)
 		if err != nil {
-			rows = append(rows, storage.RunRow{Remote: r.Name, Project: r.Name, Note: err.Error()})
+			// Project stays EMPTY on a placeholder row: naming the remote there
+			// would invent a project slug that does not exist, and a consumer
+			// filtering rows by project would match the note against a real one.
+			rows = append(rows, storage.RunRow{Remote: r.Name, Note: err.Error()})
 			continue
 		}
 		for _, row := range fetched {
@@ -151,7 +164,7 @@ func remoteRunRows(ctx context.Context, store storage.TaskStore, only, project s
 			// through: project resolution is fuzzy and runs against the
 			// projects of whichever machine performs it, so asking the remote to
 			// resolve the name could quietly answer about a different project.
-			if project != "" && row.Project != project {
+			if slug != "" && row.Project != slug {
 				continue
 			}
 			rows = append(rows, row)
@@ -210,15 +223,28 @@ func fetchRemoteRuns(ctx context.Context, r storage.Remote) ([]storage.RunRow, e
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("unreachable: no answer within %s", remoteRunsTimeout)
 		}
+		// WHOSE failure was it. ssh reserves exit 255 for its own errors (no
+		// route, unknown host, refused auth) and passes any other code through
+		// from the remote command - so a non-255 code means the machine answered
+		// and its pm failed, which is what a pm too old to have this command
+		// looks like: cobra prints "unknown command" to stderr and exits 1.
+		// Calling that "unreachable" would send a user to check the network for
+		// a version mismatch.
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() != 255 {
+			return nil, fmt.Errorf("remote pm failed (%v) - too old for `runs`?%s",
+				err, detail(stderr.String()+"\n"+stdout.String()))
+		}
 		return nil, fmt.Errorf("unreachable: %v%s", err, detail(stderr.String()))
 	}
 
 	var payload runsPayload
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
-		// The likeliest cause by far, and the one worth naming: the remote pm
-		// predates this command, so it printed usage or an error rather than
-		// JSON. pm versions on the two machines are independent.
-		return nil, fmt.Errorf("remote pm cannot answer `runs --json`%s", detail(stdout.String()))
+		// A remote that exited 0 and still did not produce JSON: not a version
+		// skew (that path exits non-zero, above), but a wrapper script or a
+		// login shell printing over pm's stdout. Named for what it is rather
+		// than guessed at.
+		return nil, fmt.Errorf("remote pm answered `runs --json` with something unparsable%s", detail(stdout.String()))
 	}
 	return payload.Rows, nil
 }
@@ -263,12 +289,15 @@ func writeRunsTable(w io.Writer, rows []storage.RunRow) error {
 	fmt.Fprintf(tw, "-------\t-------\t-----\t---\t----------\n")
 	for _, row := range rows {
 		project := row.Project
-		if row.Remote != "" {
+		switch {
+		case row.Remote != "" && row.Project != "":
 			// Qualified with the remote's name because the same tracker id can
 			// exist on two machines - batch tasks on the VPS get their own ids
 			// out of that machine's pm, and a bare id would make the two rows
 			// indistinguishable.
 			project = row.Remote + "/" + row.Project
+		case row.Remote != "":
+			project = row.Remote
 		}
 		if row.Note != "" {
 			// A placeholder row for a machine that did not answer: the note

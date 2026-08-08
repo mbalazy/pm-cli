@@ -184,6 +184,11 @@ func TestRunsUnreachableRemoteIsANote(t *testing.T) {
 	if note.Remote != "runner" {
 		t.Errorf("note row remote = %q, want runner", note.Remote)
 	}
+	// A placeholder row must not invent a project slug - a consumer filtering
+	// rows by project would match the note against a real one.
+	if note.Project != "" {
+		t.Errorf("note row project = %q, want empty", note.Project)
+	}
 	if !strings.Contains(note.Note, "unreachable") {
 		t.Errorf("note %q does not say the machine could not be reached", note.Note)
 	}
@@ -193,22 +198,48 @@ func TestRunsUnreachableRemoteIsANote(t *testing.T) {
 	}
 }
 
-// An older pm on the far side has no `runs` command, so it answers with usage
-// text (or anything else that is not JSON). That is a note too, never a panic
-// and never an error for the whole listing.
+// An older pm on the far side has no `runs` command: cobra prints "unknown
+// command" to STDERR and the process exits non-zero, which ssh passes through
+// (255 is reserved for ssh's own failures). That is a note - and it must not
+// call the machine unreachable, because it answered.
+func TestRunsRemotePmTooOldIsANote(t *testing.T) {
+	store := runsFixture(t)
+	writeStoreConfig(t, store, configWithRemote)
+	fakeSSH(t, "echo 'Error: unknown command \"runs\" for \"pm\"' >&2\nexit 1\n")
+
+	out, err := runRunsCmd(t, store)
+	if err != nil {
+		t.Fatalf("an old remote pm must not fail the command: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "remote pm failed") || !strings.Contains(out, "too old") {
+		t.Errorf("table does not report the version skew:\n%s", out)
+	}
+	if strings.Contains(out, "unreachable") {
+		t.Errorf("a machine that answered must not be called unreachable:\n%s", out)
+	}
+	if !strings.Contains(out, "unknown command") {
+		t.Errorf("the note drops what the remote actually said:\n%s", out)
+	}
+	if !strings.Contains(out, "app-1") {
+		t.Errorf("local rows lost:\n%s", out)
+	}
+}
+
+// A remote that exits 0 and still does not produce JSON (a login shell or a
+// wrapper printing over pm's stdout): a note too, never a panic.
 func TestRunsRemoteGarbageIsANote(t *testing.T) {
 	store := runsFixture(t)
 	writeStoreConfig(t, store, configWithRemote)
-	fakeSSH(t, "echo 'Error: unknown command \"runs\" for \"pm\"'\nexit 0\n")
+	fakeSSH(t, "echo 'Welcome to runner!'\nexit 0\n")
 
 	out, err := runRunsCmd(t, store)
 	if err != nil {
 		t.Fatalf("garbage from a remote must not fail the command: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "cannot answer") {
-		t.Errorf("table does not report the remote pm as unable to answer:\n%s", out)
+	if !strings.Contains(out, "unparsable") {
+		t.Errorf("table does not report the unparsable answer:\n%s", out)
 	}
-	if !strings.Contains(out, "unknown command") {
+	if !strings.Contains(out, "Welcome to runner!") {
 		t.Errorf("the note drops what the remote actually said:\n%s", out)
 	}
 	if !strings.Contains(out, "app-1") {
@@ -388,7 +419,10 @@ func TestRunsProjectFilterAppliesToRemoteRows(t *testing.T) {
 		`{"project":"orbit","tracker":"atlas-9","title":"VPS other","updated":"2026-08-07T11:00:00Z","run":{"state":"done","done":1,"total":1}}]}`
 	fakeSSH(t, "echo '"+remote+"'\n")
 
-	out, err := runRunsCmd(t, store, "--project", "app")
+	// An ABBREVIATION, not the exact slug: the filter runs on the resolved slug,
+	// so `-p ap` must keep the remote rows for `app` rather than silently
+	// dropping every one of them.
+	out, err := runRunsCmd(t, store, "--project", "ap")
 	if err != nil {
 		t.Fatalf("pm runs --project: %v\n%s", err, out)
 	}

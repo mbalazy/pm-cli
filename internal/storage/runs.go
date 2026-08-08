@@ -81,16 +81,19 @@ type RunCell struct {
 	Total int    `json:"total"`
 }
 
-// String renders the cell in the vocabulary the column is defined in: counts
-// ride along with running/done, and the terminal-or-broken words stand alone.
+// String renders the cell as "<state> N/M". The counts ride along with EVERY
+// state that has any - a crashed batch's "stale 2/8" is exactly what a human
+// coming back to it needs, and dropping them there would hide the progress of
+// the runs most likely to need attention. Only `prepped` stands alone, because
+// there is nothing yet to count.
 func (c RunCell) String() string {
-	switch c.State {
-	case "":
+	switch {
+	case c.State == "":
 		return "-"
-	case RunCellRunning, RunCellDone:
-		return fmt.Sprintf("%s %d/%d", c.State, c.Done, c.Total)
-	default:
+	case c.State == RunCellPrepped || c.Total == 0:
 		return c.State
+	default:
+		return fmt.Sprintf("%s %d/%d", c.State, c.Done, c.Total)
 	}
 }
 
@@ -164,15 +167,20 @@ func LocalRunRows(store TaskStore, projects []string) ([]RunRow, error) {
 		if len(trackers) == 0 {
 			continue
 		}
+		landing := store.GetLandingStatuses(slug)
 		byID := make(map[string]*Task, len(tasks))
+		// landed answers "has this sub's own task actually finished", which is
+		// what tells a run's three kinds of `skipped` apart (see subSettled).
+		landed := make(map[string]bool, len(tasks))
 		for _, t := range tasks {
 			byID[t.Meta.ID] = t
+			landed[t.Meta.ID] = terminalStatus(t.Meta.Status, landing)
 		}
 		dir := store.ProjectDir(slug)
 		runs := ReadRunStates(dir)
 		accepts := ReadFinishRunStates(dir)
 		for _, tr := range trackers {
-			rows = append(rows, runRow(slug, dir, tr, byID[tr.ID], runs[tr.ID], accepts[tr.ID]))
+			rows = append(rows, runRow(slug, dir, tr, byID[tr.ID], runs[tr.ID], accepts[tr.ID], landed))
 		}
 	}
 	SortRunRows(rows)
@@ -181,13 +189,13 @@ func LocalRunRows(store TaskStore, projects []string) ([]RunRow, error) {
 
 // runRow assembles one tracker's row. dir is the project dir, needed for the
 // acceptance claim - the one input that is neither a task nor a run-state.
-func runRow(slug, dir string, tr Tracker, task *Task, run, accept *RunState) RunRow {
+func runRow(slug, dir string, tr Tracker, task *Task, run, accept *RunState, landed map[string]bool) RunRow {
 	row := RunRow{
 		Project: slug,
 		Tracker: tr.ID,
 		Title:   tr.Title,
 		Status:  tr.Status,
-		Run:     runCell(tr, run),
+		Run:     runCell(tr, run, landed),
 		Accept:  acceptCell(dir, tr.ID, accept),
 	}
 	stamps := []string{}
@@ -204,27 +212,39 @@ func runRow(slug, dir string, tr Tracker, task *Task, run, accept *RunState) Run
 	return row
 }
 
+// Sub statuses a run-state can carry that are NOT an outcome. Spelled here
+// rather than imported from the manager because storage is the layer below it;
+// the full vocabulary is documented on SubRun.Status.
+const (
+	subStatusPending = "pending"
+	subStatusSkipped = "skipped"
+	subStatusManual  = "manual"
+)
+
 // runCell derives the RUN column from the run-state.
 //
-// The denominator is the number of subs the RUN drove (a re-run seeds the ones
-// it will skip too), falling back to the tracker's child count when a run-state
-// carries no subs at all - a run killed before it seeded them. The numerator
-// counts subs the run is FINISHED with, whatever the outcome: merged, pushed,
-// failed, skipped and manual are all settled, and only pending/running are not.
-// Counting green subs instead would make a batch that parked two subs on
-// waiting sit at "running 6/8" after the manager had exited.
-func runCell(tr Tracker, st *RunState) RunCell {
+// The denominator is measured against the TRACKER, not just the run: a run-state
+// records the subs that existed when it started, and a tracker that has since
+// grown (the normal prep-iterate-rerun flow) would otherwise report "done 3/3"
+// with five children nobody has touched. The larger of the two counts is the
+// honest one - a run that drove subs no longer among the children still drove
+// them.
+//
+// The numerator counts subs the run is FINISHED with. Failed and blocked count:
+// the run is done with them, and counting only green subs would leave a batch
+// that parked two subs on waiting sitting at "running 6/8" after the manager had
+// exited. Pending and running plainly do not count. `skipped` and `manual` are
+// the interesting ones - see subSettled.
+func runCell(tr Tracker, st *RunState, landed map[string]bool) RunCell {
 	if st == nil {
 		return RunCell{State: RunCellPrepped}
 	}
 	cell := RunCell{Total: len(st.Subs)}
-	if cell.Total == 0 {
+	if tr.Total > cell.Total {
 		cell.Total = tr.Total
 	}
 	for _, s := range st.Subs {
-		switch s.Status {
-		case "", "pending", RunStatusRunning:
-		default:
+		if subSettled(s, landed) {
 			cell.Done++
 		}
 	}
@@ -244,6 +264,28 @@ func runCell(tr Tracker, st *RunState) RunCell {
 		cell.State = st.Status
 	}
 	return cell
+}
+
+// subSettled reports whether the run reached an outcome for this sub.
+//
+// `skipped` and `manual` are the two words that cannot be judged from the run
+// alone, because the manager writes each of them for opposite situations:
+// `skipped` means "already landed before this run" (progress), but ALSO "its
+// depends_on is unmet", "not ready" and "never started - the run aborted"
+// (nothing), and `manual` is a permanent human gate pm never runs at all. The
+// sub's OWN task status settles it: a sub that landed is at a terminal status,
+// and one waiting for a dependency or a human is not. Counting all of them
+// would let a batch that landed 2 of 8 and parked six on a failed dependency
+// print "done 8/8" - the single most misleading thing this screen could say.
+func subSettled(s SubRun, landed map[string]bool) bool {
+	switch s.Status {
+	case "", subStatusPending, RunStatusRunning:
+		return false
+	case subStatusSkipped, subStatusManual:
+		return landed[s.ID]
+	default:
+		return true
+	}
 }
 
 // acceptCell derives the ACCEPTANCE column from the acceptance run-state and
@@ -288,10 +330,36 @@ func acceptCell(dir, trackerID string, st *RunState) AcceptCell {
 		cell.State = AcceptCellFailed
 	case RunStatusDone:
 		cell.State = AcceptCellDone
+		if v := acceptVerdict(st); v != "" {
+			cell.State = v
+		}
 	default:
 		cell.State = st.Status
 	}
 	return cell
+}
+
+// acceptVerdict returns the acceptance's own verdict on the run it accepted.
+//
+// An acceptance run-state's top-level Status says only whether the WORKER came
+// back: `pm finish` stamps RunStatusDone for any worker that returned at all and
+// RunStatusFailed only when one died. The verdict - done | partial | blocked,
+// the acceptance's result contract - lives on its single sub. Without reading it
+// an acceptance that reported `blocked`, i.e. "I could not accept this batch",
+// would render in this column as a plain "done", which is the opposite of what
+// happened. The word is passed through rather than mapped onto one of the run
+// statuses: the acceptance's vocabulary is its own, and translating `partial`
+// into either `done` or `failed` would lose the only thing it says.
+func acceptVerdict(st *RunState) string {
+	if len(st.Subs) == 0 {
+		return ""
+	}
+	switch v := st.Subs[0].Status; v {
+	case "", RunStatusRunning:
+		return ""
+	default:
+		return v
+	}
 }
 
 // SortRunRows orders rows newest activity first. Exported because the board
@@ -340,14 +408,21 @@ func latestStamp(stamps []string) string {
 
 // parseRunStamp parses the stamp formats pm writes: RFC3339 for anything
 // machine-written, a bare date for a task's `updated`.
+//
+// The date is parsed IN THE LOCAL ZONE, because that is where it was written
+// (storage.Today formats time.Now()). Reading it as UTC midnight would shift a
+// whole day's tasks east of UTC by the offset, so a run that finished at 01:30
+// local - stamped the previous day in UTC - would sort below a tracker whose
+// task file was merely touched today.
 func parseRunStamp(s string) (time.Time, bool) {
 	if s == "" {
 		return time.Time{}, false
 	}
-	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
-		if at, err := time.Parse(layout, s); err == nil {
-			return at, true
-		}
+	if at, err := time.Parse(time.RFC3339, s); err == nil {
+		return at, true
+	}
+	if at, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
+		return at, true
 	}
 	return time.Time{}, false
 }

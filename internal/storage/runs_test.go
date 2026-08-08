@@ -12,7 +12,13 @@ func runsStore(t *testing.T) *Store {
 	t.Helper()
 	store := &Store{Root: t.TempDir()}
 	for _, slug := range []string{"alpha", "beta"} {
-		if err := store.CreateProject(slug, &Project{Name: slug, Prefix: slug, Path: t.TempDir()}); err != nil {
+		// `merged` is in the status list because these projects stand in for
+		// executor projects: a landed sub sits on the landing status, and that
+		// is precisely what the counting rule asks about.
+		if err := store.CreateProject(slug, &Project{
+			Name: slug, Prefix: slug, Path: t.TempDir(),
+			Statuses: []string{"todo", "doing", "waiting", "merged", "done"},
+		}); err != nil {
 			t.Fatalf("create project %s: %v", slug, err)
 		}
 	}
@@ -139,12 +145,147 @@ func TestLocalRunRowsDeadPIDIsStale(t *testing.T) {
 	if cell.State != RunCellStale {
 		t.Errorf("RUN state = %q, want %q", cell.State, RunCellStale)
 	}
-	// The counts survive the demotion - they are what says how far it got.
+	// The counts survive the demotion, and they are RENDERED: how far a crashed
+	// batch got is the first thing its owner needs.
 	if cell.Done != 1 || cell.Total != 2 {
 		t.Errorf("stale run lost its counts: %d/%d, want 1/2", cell.Done, cell.Total)
 	}
-	if got := cell.String(); got != RunCellStale {
-		t.Errorf("stale renders as %q, want the bare word", got)
+	if got := cell.String(); got != "stale 1/2" {
+		t.Errorf("stale renders as %q, want %q", got, "stale 1/2")
+	}
+}
+
+// A `skipped` sub is not progress unless its own task actually landed: the
+// manager writes that one word for "already done" AND for "its depends_on is
+// unmet" / "the run aborted before it started".
+func TestRunCellSkippedSubsCountOnlyWhenTheyLanded(t *testing.T) {
+	store := runsStore(t)
+	// alpha-1: 4 children. Two landed (one merged before this run and seeded as
+	// skipped, one merged by the run), two never ran - one gated on the failed
+	// dep, one a permanent manual gate.
+	runsTask(t, store, "alpha", TaskMeta{ID: "alpha-1", Title: "batch", Status: StatusDoing, Created: "2026-08-01", Updated: "2026-08-01"})
+	for _, child := range []struct {
+		id     string
+		status TaskStatus
+	}{
+		{"alpha-1-1", StatusMerged}, // landed in an earlier run -> seeded skipped
+		{"alpha-1-2", StatusMerged}, // merged by this run
+		{"alpha-1-3", StatusTodo},   // skipped: unmet dependency
+		{"alpha-1-4", StatusTodo},   // manual gate, still to be done by hand
+	} {
+		runsTask(t, store, "alpha", TaskMeta{
+			ID: child.id, Title: child.id, Status: child.status,
+			Created: "2026-08-01", Updated: "2026-08-01", Parent: "alpha-1",
+		})
+	}
+	if err := WriteRunState(store.ProjectDir("alpha"), &RunState{
+		TaskID: "alpha-1", Project: "alpha", Kind: RunKindEpic, Status: RunStatusDone,
+		PID: os.Getpid(), Started: "2026-08-01T10:00:00Z",
+		Subs: []SubRun{
+			{ID: "alpha-1-1", Status: subStatusSkipped},
+			{ID: "alpha-1-2", Status: "merged"},
+			{ID: "alpha-1-3", Status: subStatusSkipped},
+			{ID: "alpha-1-4", Status: subStatusManual},
+		},
+	}); err != nil {
+		t.Fatalf("write run state: %v", err)
+	}
+
+	rows, err := LocalRunRows(store, []string{"alpha"})
+	if err != nil {
+		t.Fatalf("LocalRunRows: %v", err)
+	}
+	if got := rowFor(rows, "alpha-1").Run.String(); got != "done 2/4" {
+		t.Errorf("RUN = %q, want %q - a gated sub and a manual one are not progress", got, "done 2/4")
+	}
+}
+
+// A failed sub IS settled: the run is finished with it, and counting only the
+// green ones would leave a parked batch reading as still in flight.
+func TestRunCellCountsFailedSubsAsSettled(t *testing.T) {
+	store := runsStore(t)
+	runsTask(t, store, "alpha", TaskMeta{ID: "alpha-1", Title: "batch", Status: StatusDoing, Created: "2026-08-01", Updated: "2026-08-01"})
+	for _, id := range []string{"alpha-1-1", "alpha-1-2"} {
+		runsTask(t, store, "alpha", TaskMeta{ID: id, Title: id, Status: StatusWaiting, Created: "2026-08-01", Updated: "2026-08-01", Parent: "alpha-1"})
+	}
+	if err := WriteRunState(store.ProjectDir("alpha"), &RunState{
+		TaskID: "alpha-1", Project: "alpha", Kind: RunKindEpic, Status: RunStatusDone,
+		PID: os.Getpid(), Started: "2026-08-01T10:00:00Z",
+		Subs: []SubRun{{ID: "alpha-1-1", Status: "failed"}, {ID: "alpha-1-2", Status: "blocked"}},
+	}); err != nil {
+		t.Fatalf("write run state: %v", err)
+	}
+
+	rows, err := LocalRunRows(store, []string{"alpha"})
+	if err != nil {
+		t.Fatalf("LocalRunRows: %v", err)
+	}
+	if got := rowFor(rows, "alpha-1").Run.String(); got != "done 2/2" {
+		t.Errorf("RUN = %q, want %q", got, "done 2/2")
+	}
+}
+
+// The denominator is measured against the TRACKER: a tracker that gained subs
+// after its run must not report itself complete.
+func TestRunCellDenominatorFollowsTheTracker(t *testing.T) {
+	store := runsStore(t)
+	runsTask(t, store, "alpha", TaskMeta{ID: "alpha-1", Title: "grew", Status: StatusDoing, Created: "2026-08-01", Updated: "2026-08-01"})
+	for _, id := range []string{"alpha-1-1", "alpha-1-2", "alpha-1-3"} {
+		status := StatusTodo
+		if id == "alpha-1-1" {
+			status = StatusMerged
+		}
+		runsTask(t, store, "alpha", TaskMeta{ID: id, Title: id, Status: status, Created: "2026-08-01", Updated: "2026-08-01", Parent: "alpha-1"})
+	}
+	// The run only ever knew about the first sub.
+	if err := WriteRunState(store.ProjectDir("alpha"), &RunState{
+		TaskID: "alpha-1", Project: "alpha", Kind: RunKindEpic, Status: RunStatusDone,
+		PID: os.Getpid(), Started: "2026-08-01T10:00:00Z",
+		Subs: []SubRun{{ID: "alpha-1-1", Status: "merged"}},
+	}); err != nil {
+		t.Fatalf("write run state: %v", err)
+	}
+
+	rows, err := LocalRunRows(store, []string{"alpha"})
+	if err != nil {
+		t.Fatalf("LocalRunRows: %v", err)
+	}
+	if got := rowFor(rows, "alpha-1").Run.String(); got != "done 1/3" {
+		t.Errorf("RUN = %q, want %q - two children were never in the run", got, "done 1/3")
+	}
+}
+
+// The acceptance's top-level status says only that its worker came back; the
+// verdict is on its sub. An acceptance that reported `blocked` must not read as
+// `done`.
+func TestAcceptCellReportsTheVerdictNotJustTheReturn(t *testing.T) {
+	for _, tc := range []struct {
+		verdict string
+		want    string
+	}{
+		{"done", "done"},
+		{"partial", "partial"},
+		{"blocked", "blocked"},
+		{"", "done"}, // nothing recorded on the sub: fall back to the run status
+	} {
+		t.Run("verdict "+tc.verdict, func(t *testing.T) {
+			store := runsStore(t)
+			runsTracker(t, store, "alpha", "alpha-1", "accepted", "2026-08-01")
+			if err := WriteRunState(store.ProjectDir("alpha"), &RunState{
+				TaskID: "alpha-1", Project: "alpha", Kind: RunKindFinish, Status: RunStatusDone,
+				PID: os.Getpid(), Started: "2026-08-01T10:00:00Z",
+				Subs: []SubRun{{ID: "alpha-1", Status: tc.verdict}},
+			}); err != nil {
+				t.Fatalf("write finish state: %v", err)
+			}
+			rows, err := LocalRunRows(store, []string{"alpha"})
+			if err != nil {
+				t.Fatalf("LocalRunRows: %v", err)
+			}
+			if got := rowFor(rows, "alpha-1").Accept.String(); got != tc.want {
+				t.Errorf("ACCEPTANCE = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -278,8 +419,9 @@ func TestRunCellStrings(t *testing.T) {
 		{"prepped", RunCell{State: RunCellPrepped}, "prepped"},
 		{"running", RunCell{State: RunCellRunning, Done: 3, Total: 8}, "running 3/8"},
 		{"done", RunCell{State: RunCellDone, Done: 6, Total: 6}, "done 6/6"},
-		{"failed keeps no counts", RunCell{State: RunCellFailed, Done: 1, Total: 5}, "failed"},
-		{"stale keeps no counts", RunCell{State: RunCellStale, Done: 1, Total: 5}, "stale"},
+		{"failed keeps its counts", RunCell{State: RunCellFailed, Done: 1, Total: 5}, "failed 1/5"},
+		{"stale keeps its counts", RunCell{State: RunCellStale, Done: 1, Total: 5}, "stale 1/5"},
+		{"nothing to count", RunCell{State: RunCellFailed}, "failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.cell.String(); got != tc.want {
