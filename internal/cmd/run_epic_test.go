@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mbalazy/pm/internal/storage"
 )
@@ -292,7 +293,7 @@ func TestClassifySub(t *testing.T) {
 	}
 
 	t.Run("ready auto sub is driven", func(t *testing.T) {
-		_, drive, _ := classifySub(mk("x-1", start, ""), byID(), start, done)
+		_, drive, _ := classifySub(mk("x-1", start, ""), byID(), start, done, nil)
 		if !drive {
 			t.Error("ready auto sub should be driven")
 		}
@@ -301,7 +302,7 @@ func TestClassifySub(t *testing.T) {
 	t.Run("manual sub is never driven even when otherwise ready", func(t *testing.T) {
 		// status == start, no unmet deps -> would be READY if it were auto.
 		sub := mk("x-1", start, "manual")
-		oc, drive, announce := classifySub(sub, byID(), start, done)
+		oc, drive, announce := classifySub(sub, byID(), start, done, nil)
 		if drive {
 			t.Fatal("manual sub must NOT be driven (no worker)")
 		}
@@ -320,14 +321,14 @@ func TestClassifySub(t *testing.T) {
 	t.Run("manual sub with satisfied deps is still not driven", func(t *testing.T) {
 		dep := mk("x-1", done, "")
 		sub := mk("x-2", start, "manual", "x-1")
-		oc, drive, _ := classifySub(sub, byID(dep), start, done)
+		oc, drive, _ := classifySub(sub, byID(dep), start, done, nil)
 		if drive || oc.result != "manual" {
 			t.Errorf("manual sub with met deps: drive=%v result=%q, want drive=false result=manual", drive, oc.result)
 		}
 	})
 
 	t.Run("manual sub already at done reports as skipped/done, not manual", func(t *testing.T) {
-		oc, drive, _ := classifySub(mk("x-1", done, "manual"), byID(), start, done)
+		oc, drive, _ := classifySub(mk("x-1", done, "manual"), byID(), start, done, nil)
 		if drive {
 			t.Error("done sub should not be driven")
 		}
@@ -343,7 +344,7 @@ func TestClassifySub(t *testing.T) {
 
 		// While the manual sub is not done, the downstream sub is gated (unmet dep)
 		// and not driven.
-		oc, drive, _ := classifySub(downstream, m, start, done)
+		oc, drive, _ := classifySub(downstream, m, start, done, nil)
 		if drive {
 			t.Fatal("downstream sub must stay blocked while the manual dep is unmet")
 		}
@@ -353,8 +354,117 @@ func TestClassifySub(t *testing.T) {
 
 		// Human does the work and moves the manual sub to done externally.
 		manual.Meta.Status = done
-		if _, drive, _ := classifySub(downstream, m, start, done); !drive {
+		if _, drive, _ := classifySub(downstream, m, start, done, nil); !drive {
 			t.Error("downstream sub should be driven once the manual dep is done")
+		}
+	})
+
+	t.Run("doing sub of a crashed run is recovered, loudly", func(t *testing.T) {
+		sub := mk("x-1", storage.StatusDoing, "")
+		oc, drive, announce := classifySub(sub, byID(), start, done, map[string]bool{"x-1": true})
+		if !drive {
+			t.Fatal("a crash-recovered doing sub must be driven, not skipped as not ready")
+		}
+		if oc.id != "x-1" {
+			t.Errorf("outcome id = %q", oc.id)
+		}
+		if !strings.Contains(announce, "recovered after crash") {
+			t.Errorf("recovery must be announced, got %q", announce)
+		}
+	})
+
+	t.Run("doing sub NOT owned by the crashed run stays not-ready", func(t *testing.T) {
+		// e.g. a sub a human is working on right now, unrelated to the dead run.
+		oc, drive, _ := classifySub(mk("x-2", storage.StatusDoing, ""), byID(), start, done, map[string]bool{"x-1": true})
+		if drive || !strings.Contains(oc.note, "not ready") {
+			t.Errorf("drive=%v note=%q, want a plain not-ready skip", drive, oc.note)
+		}
+	})
+
+	t.Run("recovery applies to the doing signature only", func(t *testing.T) {
+		// A sub the crashed run touched but that has since moved elsewhere
+		// (waiting, a custom status) is NOT the crash signature - leave it.
+		oc, drive, _ := classifySub(mk("x-1", storage.StatusWaiting, ""), byID(), start, done, map[string]bool{"x-1": true})
+		if drive || !strings.Contains(oc.note, "not ready") {
+			t.Errorf("drive=%v note=%q, want a not-ready skip for a non-doing status", drive, oc.note)
+		}
+	})
+
+	t.Run("a recovered sub still passes the depends_on gate", func(t *testing.T) {
+		dep := mk("x-1", storage.StatusWaiting, "")
+		sub := mk("x-2", storage.StatusDoing, "", "x-1")
+		oc, drive, _ := classifySub(sub, byID(dep), start, done, map[string]bool{"x-2": true})
+		if drive || !strings.Contains(oc.note, "x-1") {
+			t.Errorf("drive=%v note=%q, want an unmet-dep skip even for a recovered sub", drive, oc.note)
+		}
+	})
+}
+
+// deadPID is high enough to be unused on both platforms pm runs on (same
+// constant the storage process tests use).
+const deadPID = 2147483646
+
+func TestCrashRecoveredSubs(t *testing.T) {
+	write := func(t *testing.T, dir string, st *storage.RunState) {
+		t.Helper()
+		if err := storage.WriteRunState(dir, st); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("dead running manager -> its mid-flight subs are recoverable", func(t *testing.T) {
+		dir := t.TempDir()
+		write(t, dir, &storage.RunState{
+			TaskID: "app-1", Project: "app", Kind: storage.RunKindEpic,
+			Status: storage.RunStatusRunning, PID: deadPID,
+			Started:    "2026-01-01T00:00:00Z",
+			CurrentSub: "app-1-2",
+			Subs: []storage.SubRun{
+				{ID: "app-1-1", Status: "merged"},
+				{ID: "app-1-2", Status: storage.RunStatusRunning},
+				{ID: "app-1-3", Status: "pending"},
+			},
+		})
+		rec := crashRecoveredSubs(dir, "app-1")
+		if !rec["app-1-2"] {
+			t.Error("the sub the dead run was driving must be recoverable")
+		}
+		if rec["app-1-1"] || rec["app-1-3"] {
+			t.Errorf("finished/never-started subs must not be marked, got %v", rec)
+		}
+	})
+
+	t.Run("live running manager -> nothing to recover", func(t *testing.T) {
+		dir := t.TempDir()
+		// The stamp must postdate this process's start: a stamp OLDER than the
+		// start time reads as a recycled pid (correctly - see ProcessAliveSince).
+		write(t, dir, &storage.RunState{
+			TaskID: "app-1", Project: "app", Kind: storage.RunKindEpic,
+			Status: storage.RunStatusRunning, PID: os.Getpid(),
+			Started: time.Now().UTC().Format(time.RFC3339), CurrentSub: "app-1-2",
+			Subs: []storage.SubRun{{ID: "app-1-2", Status: storage.RunStatusRunning}},
+		})
+		if rec := crashRecoveredSubs(dir, "app-1"); rec != nil {
+			t.Errorf("a LIVE run's subs must never be stolen, got %v", rec)
+		}
+	})
+
+	t.Run("finished previous run -> nothing to recover", func(t *testing.T) {
+		dir := t.TempDir()
+		write(t, dir, &storage.RunState{
+			TaskID: "app-1", Project: "app", Kind: storage.RunKindEpic,
+			Status: storage.RunStatusDone, PID: deadPID,
+			Started: "2026-01-01T00:00:00Z",
+			Subs:    []storage.SubRun{{ID: "app-1-2", Status: "merged"}},
+		})
+		if rec := crashRecoveredSubs(dir, "app-1"); rec != nil {
+			t.Errorf("a completed run leaves nothing to recover, got %v", rec)
+		}
+	})
+
+	t.Run("no prior run-state -> nothing to recover", func(t *testing.T) {
+		if rec := crashRecoveredSubs(t.TempDir(), "app-1"); rec != nil {
+			t.Errorf("no run-state must mean no recovery, got %v", rec)
 		}
 	})
 }
@@ -406,16 +516,20 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 		{Meta: storage.TaskMeta{ID: "p-1-4", Title: "parked", Status: storage.StatusWaiting, Order: 40}},
 		// a manual sub already at done must report done, not MANUAL
 		{Meta: storage.TaskMeta{ID: "p-1-5", Title: "manual done", Status: storage.StatusDone, Order: 50, Mode: "manual"}},
+		// left on doing by a crashed run -> the plan flags it as recoverable
+		{Meta: storage.TaskMeta{ID: "p-1-6", Title: "crashed", Status: storage.StatusDoing, Order: 60}},
 	}
 	out := captureStdout(t, func() {
-		printEpicPlan(os.Stdout, tracker, "epic/p-1", "main", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", false)
+		printEpicPlan(os.Stdout, tracker, "epic/p-1", "main", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", false,
+			map[string]bool{"p-1-6": true})
 	})
 	for _, want := range []string{
-		"[READY ] p-1-1",
-		"[MANUAL] p-1-2",
-		"[done  ] p-1-3",
-		"[skip  ] p-1-4",
-		"[done  ] p-1-5",
+		"[READY  ] p-1-1",
+		"[MANUAL ] p-1-2",
+		"[done   ] p-1-3",
+		"[skip   ] p-1-4",
+		"[done   ] p-1-5",
+		"[RECOVER] p-1-6",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("plan output missing %q:\n%s", want, out)
@@ -426,7 +540,7 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 	}
 
 	independent := captureStdout(t, func() {
-		printEpicPlan(os.Stdout, tracker, "epic/p-1", "development", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", true)
+		printEpicPlan(os.Stdout, tracker, "epic/p-1", "development", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", true, nil)
 	})
 	if !strings.Contains(independent, "mode: INDEPENDENT") {
 		t.Errorf("independent plan should announce the mode:\n%s", independent)

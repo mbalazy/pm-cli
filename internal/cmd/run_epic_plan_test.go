@@ -169,9 +169,63 @@ func TestPlanEpicResolvesSubsAndBranches(t *testing.T) {
 	}
 	want := map[string]bool{"app-1-1": true, "app-1-2": false, "app-1-3": true}
 	for _, s := range plan.subs {
-		_, drive, _ := classifySub(s, byID, plan.startStatus, plan.doneStatus)
+		_, drive, _ := classifySub(s, byID, plan.startStatus, plan.doneStatus, nil)
 		if drive != want[s.Meta.ID] {
 			t.Errorf("classifySub(%s) drive = %v, want %v", s.Meta.ID, drive, want[s.Meta.ID])
+		}
+	}
+}
+
+// TestPlanEpicCrashRecovery: a sub left on "doing" by a manager that DIED
+// mid-sub (run-state still "running", pid dead) is planned as recoverable and
+// driven by the gate, instead of being skipped as "not ready" - the failure
+// observed on epic pm-cli-100, where a SIGKILLed manager's re-run reported
+// "done" while the sub it had been driving was never picked up again.
+func TestPlanEpicCrashRecovery(t *testing.T) {
+	store, _ := epicFixture(t, testExecutor())
+	sub, err := store.FindTask("app", "app-1-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MoveTask(sub, storage.StatusDoing); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.WriteRunState(store.ProjectDir("app"), &storage.RunState{
+		TaskID: "app-1", Project: "app", Kind: storage.RunKindEpic,
+		Status: storage.RunStatusRunning, PID: deadPID,
+		Started:    "2026-01-01T00:00:00Z",
+		CurrentSub: "app-1-3",
+		Subs:       []storage.SubRun{{ID: "app-1-3", Status: storage.RunStatusRunning}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := planEpic(store, []string{"app", "app-1"}, epicOptions{})
+	if err != nil {
+		t.Fatalf("planEpic: %v", err)
+	}
+	if !plan.crashRecovered["app-1-3"] {
+		t.Fatalf("crashRecovered = %v, want app-1-3 marked", plan.crashRecovered)
+	}
+
+	byID := map[string]*storage.Task{}
+	for _, s := range plan.subs {
+		byID[s.Meta.ID] = s
+	}
+	for _, s := range plan.subs {
+		_, drive, announce := classifySub(s, byID, plan.startStatus, plan.doneStatus, plan.crashRecovered)
+		switch s.Meta.ID {
+		case "app-1-3":
+			if !drive {
+				t.Error("the crashed run's doing sub must be driven on the re-run")
+			}
+			if !strings.Contains(announce, "recovered after crash") {
+				t.Errorf("recovery announce missing, got %q", announce)
+			}
+		case "app-1-2": // waiting - untouched by recovery
+			if drive {
+				t.Error("an unrelated non-ready sub must stay skipped")
+			}
 		}
 	}
 }

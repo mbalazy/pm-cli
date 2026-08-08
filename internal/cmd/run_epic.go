@@ -171,14 +171,19 @@ func (o epicOptions) stderr() io.Writer {
 // - assembling it has NO side effects (reads only), which is what makes the
 // manager's preflight testable and lets --dry-run print the real plan.
 type epicPlan struct {
-	tracker     *storage.Task
-	slug        string
-	proj        *storage.Project
-	exc         storage.Executor
-	subs        []*storage.Task
-	independent bool
-	startStatus storage.TaskStatus
-	doneStatus  storage.TaskStatus
+	tracker *storage.Task
+	slug    string
+	proj    *storage.Project
+	exc     storage.Executor
+	subs    []*storage.Task
+	// crashRecovered marks subs the tracker's PREVIOUS run left mid-flight when
+	// its manager died (run-state still "running", pid dead). They sit on
+	// "doing", which the readiness gate would otherwise skip as "not ready"
+	// forever - see crashRecoveredSubs.
+	crashRecovered map[string]bool
+	independent    bool
+	startStatus    storage.TaskStatus
+	doneStatus     storage.TaskStatus
 	// doneStatusNote explains a done status that is not the configured first
 	// choice (see resolveEpicDoneStatus). Empty in the normal case; printed by
 	// both --dry-run and the real run so the fallback is never silent.
@@ -270,6 +275,7 @@ func planEpic(store storage.TaskStore, args []string, opts epicOptions) (*epicPl
 		proj:           proj,
 		exc:            exc,
 		subs:           subs,
+		crashRecovered: crashRecoveredSubs(store.ProjectDir(slug), tracker.Meta.ID),
 		independent:    independentMode,
 		startStatus:    storage.TaskStatus(exc.StartStatus),
 		doneStatus:     doneStatus,
@@ -372,7 +378,7 @@ func epicDoneStatusGate(doneStatus storage.TaskStatus, slug string, allowed []st
 // will refuse to start.
 func printEpicDryRun(plan *epicPlan, opts epicOptions) error {
 	printEpicPlan(opts.stdout(), plan.tracker, plan.epicBranch, plan.baseBranch, plan.startStatus, plan.doneStatus,
-		plan.subs, opts.additional, plan.workDir, plan.independent)
+		plan.subs, opts.additional, plan.workDir, plan.independent, plan.crashRecovered)
 	if plan.doneStatusNote != "" {
 		fmt.Fprintf(opts.stdout(), "\nnote: %s\n", plan.doneStatusNote)
 	}
@@ -574,13 +580,13 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		// Decide, without spending a worker, whether this sub runs. Covers
 		// the re-entrant done skip, the manual gate, the not-ready skip, and
 		// the depends_on gate (see classifySub).
-		oc, drive, announce := classifySub(sub, byID, plan.startStatus, doneStatus)
+		oc, drive, announce := classifySub(sub, byID, plan.startStatus, doneStatus, plan.crashRecovered)
+		if announce != "" {
+			fmt.Fprintf(errOut, "pm run-epic: %s\n", announce)
+		}
 		if !drive {
 			outcomes = append(outcomes, oc)
 			_ = rw.Update(func(run *storage.RunState) { updateSubRun(run, oc.id, oc.result, oc.note) })
-			if announce != "" {
-				fmt.Fprintf(errOut, "pm run-epic: %s\n", announce)
-			}
 			continue
 		}
 
@@ -710,7 +716,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 // human moves it to done - distinct "manual" outcome, not "skipped"); a
 // non-ready sub is skipped quietly; an unmet depends_on parks the sub without a
 // worker but leaves it on its ready status so a later re-run picks it up.
-func classifySub(sub *storage.Task, byID map[string]*storage.Task, startStatus, doneStatus storage.TaskStatus) (oc subOutcome, drive bool, announce string) {
+func classifySub(sub *storage.Task, byID map[string]*storage.Task, startStatus, doneStatus storage.TaskStatus, recovered map[string]bool) (oc subOutcome, drive bool, announce string) {
 	if sub.Meta.Status == doneStatus || sub.Meta.Status == storage.StatusDone {
 		return subOutcome{sub.Meta.ID, subSkipped, "already " + string(sub.Meta.Status), ""}, false, ""
 	}
@@ -719,12 +725,43 @@ func classifySub(sub *storage.Task, byID map[string]*storage.Task, startStatus, 
 			false, sub.Meta.ID + " skipped - manual sub (human-only)"
 	}
 	if sub.Meta.Status != startStatus {
-		return subOutcome{sub.Meta.ID, subSkipped, "not ready (status " + string(sub.Meta.Status) + ")", ""}, false, ""
+		// A sub on "doing" that the tracker's previous, now-dead run was driving
+		// is not "not ready" - it is the one signature a crash leaves (the
+		// aborted path returns a sub to its ready status; a SIGKILLed manager
+		// cannot). Skipping it would report a "done" run that did nothing to it.
+		// It still passes the depends_on gate below like any other candidate.
+		if !recovered[sub.Meta.ID] || sub.Meta.Status != storage.StatusDoing {
+			return subOutcome{sub.Meta.ID, subSkipped, "not ready (status " + string(sub.Meta.Status) + ")", ""}, false, ""
+		}
+		announce = sub.Meta.ID + " recovered after crash - the previous run died mid-sub, picking it up from status doing"
 	}
 	if reason := unmetDeps(sub, byID, doneStatus); reason != "" {
 		return subOutcome{sub.Meta.ID, subSkipped, reason, ""}, false, sub.Meta.ID + " skipped - " + reason
 	}
-	return subOutcome{id: sub.Meta.ID}, true, ""
+	return subOutcome{id: sub.Meta.ID}, true, announce
+}
+
+// crashRecoveredSubs returns the subs the tracker's previous run left mid-flight
+// when its manager died: the prior run-state still says "running", its pid is
+// dead (the IsLive criterion - ProcessAliveSinceStamp against the run's own
+// Started stamp, so a recycled pid reads as dead too), and the sub never got a
+// terminal status. Read-only and best-effort: no prior run-state, a live prior
+// run, or an unreadable file all recover nothing.
+func crashRecoveredSubs(stateDir, trackerID string) map[string]bool {
+	prev, err := storage.ReadRunState(stateDir, trackerID)
+	if err != nil || prev.Status != storage.RunStatusRunning || prev.IsLive() {
+		return nil
+	}
+	rec := map[string]bool{}
+	for _, s := range prev.Subs {
+		if s.Status == storage.RunStatusRunning {
+			rec[s.ID] = true
+		}
+	}
+	if prev.CurrentSub != "" {
+		rec[prev.CurrentSub] = true
+	}
+	return rec
 }
 
 // unmetDeps returns a human reason if any of sub's depends_on entries is not yet
@@ -1043,7 +1080,7 @@ func describeAutoFinish(plan *epicPlan, opts epicOptions) string {
 		"` starts on THIS machine when the run ends, unless the acceptance claim is already held"
 }
 
-func printEpicPlan(w io.Writer, tracker *storage.Task, epicBranch, base string, startStatus, doneStatus storage.TaskStatus, subs []*storage.Task, additional bool, workDir string, independent bool) {
+func printEpicPlan(w io.Writer, tracker *storage.Task, epicBranch, base string, startStatus, doneStatus storage.TaskStatus, subs []*storage.Task, additional bool, workDir string, independent bool, recovered map[string]bool) {
 	runLine := "run: DEFAULT (main checkout, clean-tree required)"
 	if additional {
 		runLine = "run: ADDITIONAL worktree " + workDir + " (isolated branch/port/sim; main checkout untouched)"
@@ -1062,12 +1099,14 @@ func printEpicPlan(w io.Writer, tracker *storage.Task, epicBranch, base string, 
 			ready = "MANUAL"
 		} else if s.Meta.Status == startStatus {
 			ready = "READY"
+		} else if recovered[s.Meta.ID] && s.Meta.Status == storage.StatusDoing {
+			ready = "RECOVER"
 		}
 		dep := ""
 		if len(s.Meta.DependsOn) > 0 {
 			dep = "  depends_on=" + strings.Join(s.Meta.DependsOn, ",")
 		}
-		fmt.Fprintf(w, "  [%-6s] %-14s %-8s order=%d  -> %s%s\n", ready, s.Meta.ID, s.Meta.Status, s.Meta.Order, resolveWorkBranch(s), dep)
+		fmt.Fprintf(w, "  [%-7s] %-14s %-8s order=%d  -> %s%s\n", ready, s.Meta.ID, s.Meta.Status, s.Meta.Order, resolveWorkBranch(s), dep)
 	}
 }
 
