@@ -105,9 +105,12 @@ type journalStats struct {
 	NestedSpawns int
 	DiffSpawns   int
 	DeniedSpawns int
-	ToolCalls    int            // exploration calls (Read/Grep/Glob) made by subagents
-	ToolDenied   int            // of those attempts, how many the per-agent budget refused
-	ReviewModels map[string]int // model (or "inherit") -> subs that asked for it
+	// BackgroundSpawns: spawns the worker asked to run in the background (or
+	// left to the tool's background default) before pm forced them synchronous.
+	BackgroundSpawns int
+	ToolCalls        int            // exploration calls (Read/Grep/Glob) made by subagents
+	ToolDenied       int            // of those attempts, how many the per-agent budget refused
+	ReviewModels     map[string]int // model (or "inherit") -> subs that asked for it
 }
 
 // runKey identifies a run across its start/terminal lines.
@@ -347,6 +350,7 @@ func (s *journalStats) addSubs(subs []storage.JournalSub) {
 			s.NestedSpawns += r.Nested
 			s.DiffSpawns += r.WithDiff
 			s.DeniedSpawns += r.Denied
+			s.BackgroundSpawns += r.Background
 			s.ToolCalls += r.ToolCalls
 			s.ToolDenied += r.ToolDenied
 			if s.ReviewModels == nil {
@@ -529,6 +533,11 @@ func renderReviewStats(b *strings.Builder, st journalStats) {
 		// sees them (orbit-106-3: one reviewer's own Explore subagent
 		// burned 6.1M tokens over 65 tool calls).
 		fmt.Fprintf(b, "  nested    %d spawn(s) issued from inside another subagent\n", st.NestedSpawns)
+	}
+	if st.BackgroundSpawns > 0 {
+		// What the worker asked for - pm forced these synchronous (pm-cli-105),
+		// so the count measures the ask, not a review that was actually lost.
+		fmt.Fprintf(b, "  async ask %d spawn(s) asked for (or defaulted to) background; pm forced them synchronous\n", st.BackgroundSpawns)
 	}
 	if st.ToolCalls > 0 || st.ToolDenied > 0 {
 		// The budget's own evidence line: without the refusal count an enforced

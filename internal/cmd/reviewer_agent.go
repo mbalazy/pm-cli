@@ -157,6 +157,38 @@ func attachReviewPacket(ti map[string]any, dir, baseSHA string) bool {
 	return true
 }
 
+// forceSyncSpawn makes a generic-type subagent spawn synchronous, and reports
+// whether it changed anything.
+//
+// The cause it removes, established from the pm-cli-100 worker transcripts
+// (sessions 315ff4ff round 1, 3f5742db round 2): the Agent tool runs subagents
+// IN THE BACKGROUND by default on the measured build (claude 2.1.224 - "Async
+// agent launched... you will be notified"), and a headless worker whose mandate
+// is "return the envelope" ends its turn while the reviewer is still running.
+// Re-invoked without the reviewer's notification in hand, it loads TaskStop,
+// kills the reviewer and returns "blocked - review not collected". Three subs
+// in one epic landed there, each costing a human a hand-run review round and a
+// hand merge. A synchronous spawn removes the whole window: the worker blocks
+// in the tool call and the tool result IS the report.
+//
+// Same scope as the model pin: generic types only - a custom agent type
+// running in the background is a decision someone made on purpose. An absent
+// field is forced too, because absent MEANS background on the measured build.
+func forceSyncSpawn(ti map[string]any) bool {
+	if ti == nil {
+		return false
+	}
+	subType, _ := ti["subagent_type"].(string)
+	if !genericSubagentTypes[strings.ToLower(strings.TrimSpace(subType))] {
+		return false
+	}
+	if bg, ok := ti["run_in_background"].(bool); ok && !bg {
+		return false
+	}
+	ti["run_in_background"] = false
+	return true
+}
+
 // rewriteAgentSpawn applies every policy pm has about a spawn it is allowing,
 // and returns what it changed - empty when it changed nothing, which is the
 // signal to stay silent rather than emit an inert rewrite.
@@ -167,6 +199,9 @@ func rewriteAgentSpawn(ti map[string]any, dir, baseSHA, reviewModel string) []st
 	}
 	if attachReviewPacket(ti, dir, baseSHA) {
 		applied = append(applied, "attached the diff under review to the prompt")
+	}
+	if forceSyncSpawn(ti) {
+		applied = append(applied, "forced the spawn synchronous (run_in_background: false) - the tool result is the reviewer's report; a background reviewer outlives the worker's turn and is never collected")
 	}
 	return applied
 }

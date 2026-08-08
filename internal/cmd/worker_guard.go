@@ -170,6 +170,10 @@ type hookEvent struct {
 		Model        string `json:"model"`
 		SubagentType string `json:"subagent_type"`
 		Prompt       string `json:"prompt"`
+		// Pointer on purpose: absent and false are different answers - absent
+		// means the tool's own default, which is BACKGROUND on the measured
+		// build (see forceSyncSpawn).
+		RunInBackground *bool `json:"run_in_background"`
 	} `json:"tool_input"`
 }
 
@@ -272,6 +276,9 @@ func spawnRecord(ev hookEvent, now time.Time) storage.ReviewSpawn {
 		HasDiff:      promptCarriesDiff(ev.ToolInput.Prompt),
 		Nested:       ev.AgentID != "",
 		AgentType:    ev.AgentType,
+		// What the WORKER asked for, before pm forces the spawn synchronous -
+		// absent means the tool's background default, so it counts.
+		Background: ev.ToolInput.RunInBackground == nil || *ev.ToolInput.RunInBackground,
 	}
 }
 

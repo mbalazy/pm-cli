@@ -37,6 +37,12 @@ type ReviewSpawn struct {
 	// burned 6.1M tokens over 65 tool calls.
 	Nested    bool   `json:"nested,omitempty"`
 	AgentType string `json:"agent_type,omitempty"` // spawning agent's type, nested spawns only
+	// Background marks a spawn the worker asked to run in the background - or
+	// left to the tool's background default, which is the same outcome. It
+	// records what the WORKER asked for, before pm forced the spawn synchronous
+	// (forceSyncSpawn): the behavior that lost three reviews in epic pm-cli-100,
+	// not pm's correction of it.
+	Background bool `json:"background,omitempty"`
 	// Denied marks a spawn the guard REFUSED. It is recorded anyway, and kept
 	// out of every other count: it never ran, so it must not consume the round's
 	// budget or show up as review that happened. A refusal is the single most
@@ -140,6 +146,10 @@ type ReviewTelemetry struct {
 	// needed 8-13 turns), so the refusal count is the line a retro looks for.
 	ToolCalls  int `json:"tool_calls,omitempty"`
 	ToolDenied int `json:"tool_denied,omitempty"`
+	// Background: of Spawns, how many the worker asked to run in the background
+	// (or left to the tool's background default - same outcome). Measures the
+	// behavior forceSyncSpawn corrects, recorded before the correction.
+	Background int `json:"background,omitempty"`
 	// Models lists the distinct models the spawns asked for, comma-joined and
 	// sorted; "inherit" stands for a spawn that named no model (the caller-side
 	// model wins over an agent definition's, so "inherit" and an explicit name
@@ -277,6 +287,9 @@ func AggregateReviewSpawns(spawns []ReviewSpawn) *ReviewTelemetry {
 		}
 		if s.HasDiff {
 			t.WithDiff++
+		}
+		if s.Background {
+			t.Background++
 		}
 		if s.Model == "" {
 			models["inherit"] = true

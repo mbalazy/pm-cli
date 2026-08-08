@@ -56,6 +56,17 @@ func TestAggregateReviewSpawns(t *testing.T) {
 			want: ReviewTelemetry{Spawns: 2, Rounds: 1, Nested: 1, Models: "sonnet"},
 		},
 		{
+			// The pm-cli-105 measurement: spawns the worker asked to background
+			// (or left to the tool's background default) are counted, before
+			// pm's forced-sync correction.
+			name: "background asks are counted",
+			spawns: []ReviewSpawn{
+				{TS: ts(0), Model: "opus", Background: true},
+				{TS: ts(700 * time.Millisecond), Model: "opus"},
+			},
+			want: ReviewTelemetry{Spawns: 2, Rounds: 1, Background: 1, Models: "opus"},
+		},
+		{
 			// An unnamed model is a different fact from a named one: the
 			// caller-side model beats an agent definition's, so "inherit" is
 			// exactly what a definition-only pin would leave behind.

@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mbalazy/pm/internal/storage"
 )
@@ -185,13 +186,108 @@ func TestWorkerGuardRewriteKeepsFieldsPmDoesNotModel(t *testing.T) {
 	}
 }
 
+func TestForceSyncSpawn(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      map[string]any
+		changed bool
+		want    any // expected run_in_background afterwards; nil = key absent
+	}{
+		// Absent = the tool's background default on the measured build, so it is
+		// forced exactly like an explicit true.
+		{"absent field on a reviewer is forced false", map[string]any{"subagent_type": "pm-reviewer"}, true, false},
+		{"explicit background ask is overridden", map[string]any{"subagent_type": "pm-reviewer", "run_in_background": true}, true, false},
+		{"already synchronous is left alone", map[string]any{"subagent_type": "pm-reviewer", "run_in_background": false}, false, false},
+		{"generic explore type is forced too", map[string]any{"subagent_type": "Explore"}, true, false},
+		{"custom agent type is not pm's call", map[string]any{"subagent_type": "my-batch-agent", "run_in_background": true}, false, true},
+		{"non-bool junk is treated as unset and forced", map[string]any{"subagent_type": "pm-reviewer", "run_in_background": "yes"}, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := forceSyncSpawn(tc.in); got != tc.changed {
+				t.Errorf("changed = %v, want %v", got, tc.changed)
+			}
+			if got := tc.in["run_in_background"]; got != tc.want {
+				t.Errorf("run_in_background = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if forceSyncSpawn(nil) {
+		t.Error("a nil input must be a no-op, not a panic")
+	}
+}
+
+// The whole point of pm-cli-105 end to end: a reviewer spawn that names no
+// run_in_background - which the measured build runs in the BACKGROUND, where
+// the worker's turn ends before the report and the reviewer gets TaskStop'd -
+// leaves the hook with run_in_background pinned to false in updatedInput.
+func TestWorkerGuardForcesReviewerSpawnSynchronous(t *testing.T) {
+	payload, _ := json.Marshal(map[string]any{
+		"tool_name":  "Agent",
+		"tool_input": map[string]any{"subagent_type": "pm-reviewer", "prompt": "refute the change", "description": "Review round 1"},
+	})
+	var out bytes.Buffer
+	if code := runWorkerGuard(bytes.NewReader(payload), &out, io.Discard, guardOptions{}); code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	var resp struct {
+		Hook struct {
+			Decision string         `json:"permissionDecision"`
+			Reason   string         `json:"permissionDecisionReason"`
+			Updated  map[string]any `json:"updatedInput"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+		t.Fatalf("stdout is not the PreToolUse response shape: %v (%q)", err, out.String())
+	}
+	if resp.Hook.Decision != "allow" {
+		t.Errorf("decision = %q, want allow", resp.Hook.Decision)
+	}
+	if got, ok := resp.Hook.Updated["run_in_background"].(bool); !ok || got {
+		t.Errorf("run_in_background = %v, want false", resp.Hook.Updated["run_in_background"])
+	}
+	if !strings.Contains(resp.Hook.Reason, "synchronous") {
+		t.Errorf("reason should say the spawn was forced synchronous, got %q", resp.Hook.Reason)
+	}
+	// Untouched fields still survive the rewrite.
+	if resp.Hook.Updated["description"] != "Review round 1" {
+		t.Errorf("description = %v, want it preserved", resp.Hook.Updated["description"])
+	}
+}
+
+// spawnRecord captures what the WORKER asked for: a background spawn - explicit
+// or by the tool's default - is the measurement, pm's forced-sync correction is
+// not part of it.
+func TestSpawnRecordBackground(t *testing.T) {
+	now := time.Now()
+	mk := func(body string) hookEvent {
+		var ev hookEvent
+		if err := json.Unmarshal([]byte(body), &ev); err != nil {
+			t.Fatal(err)
+		}
+		return ev
+	}
+	if r := spawnRecord(mk(`{"tool_input":{"subagent_type":"pm-reviewer"}}`), now); !r.Background {
+		t.Error("an absent run_in_background is the background default and must record as background")
+	}
+	if r := spawnRecord(mk(`{"tool_input":{"subagent_type":"pm-reviewer","run_in_background":true}}`), now); !r.Background {
+		t.Error("an explicit background ask must record as background")
+	}
+	if r := spawnRecord(mk(`{"tool_input":{"subagent_type":"pm-reviewer","run_in_background":false}}`), now); r.Background {
+		t.Error("an explicitly synchronous spawn must not record as background")
+	}
+}
+
 // With nothing to change, the hook must stay silent: a stdout payload on every
 // single tool call is output nobody asked for, and an empty rewrite would look
 // like pm had an opinion when it did not.
 func TestWorkerGuardWritesNothingWhenItChangesNothing(t *testing.T) {
 	payload, _ := json.Marshal(map[string]any{
-		"tool_name":  "Agent",
-		"tool_input": map[string]any{"subagent_type": "Explore", "model": "sonnet"},
+		"tool_name": "Agent",
+		// run_in_background is spelled false because an absent field would BE a
+		// change now (forceSyncSpawn pins it) - this test is about the hook
+		// staying quiet when there is genuinely nothing to rewrite.
+		"tool_input": map[string]any{"subagent_type": "Explore", "model": "sonnet", "run_in_background": false},
 	})
 	var out bytes.Buffer
 	if code := runWorkerGuard(bytes.NewReader(payload), &out, io.Discard, guardOptions{reviewModel: "sonnet"}); code != 0 {
