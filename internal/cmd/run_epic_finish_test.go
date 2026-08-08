@@ -18,7 +18,12 @@ import (
 func fakePM(t *testing.T, script string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "pm-fake")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0755); err != nil {
+	// The trailing sentinel is what waitForFile waits for: the chained child is
+	// DETACHED, so a reader polling for mere non-emptiness can win the race
+	// against the script's later lines and assert on half its output - which is
+	// exactly how TestChainFinishSpawnsDetachedAcceptance flaked on a loaded CI
+	// runner (the log held "argv:" but not yet "cwd:").
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\necho '"+fakePMDone+"'\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	orig := finishChainExecutable
@@ -27,19 +32,25 @@ func fakePM(t *testing.T, script string) string {
 	return path
 }
 
-// waitForFile polls until path is non-empty, and returns its contents. The
-// chained acceptance is DETACHED - nothing waits for it - so a test that read
-// the log once would be reading a file the child has not reached yet.
+// fakePMDone is the last line every fakePM script prints - the signal that its
+// output is COMPLETE, not merely started.
+const fakePMDone = "pm-fake: done"
+
+// waitForFile polls until path holds fakePM's complete output (the sentinel is
+// printed last), and returns the contents. The chained acceptance is DETACHED -
+// nothing waits for it - so a test that read the log once would be reading a
+// file the child has not reached yet, and one that only waited for the first
+// byte would be reading a file the child is still writing.
 func waitForFile(t *testing.T, path string) string {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if b, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(b))) > 0 {
+		if b, err := os.ReadFile(path); err == nil && strings.Contains(string(b), fakePMDone) {
 			return string(b)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("nothing was written to %s within the deadline", path)
+	t.Fatalf("the fake pm's complete output never reached %s within the deadline", path)
 	return ""
 }
 
