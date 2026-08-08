@@ -20,6 +20,7 @@ const (
 	viewProjectInfo
 	viewFocus
 	viewExecutor
+	viewRuns
 )
 
 type yankItem struct {
@@ -141,6 +142,32 @@ type execView struct {
 	transcriptCaches map[string]*transcriptCache
 }
 
+// runsView is the Runs list: one row per tracker, every project, this machine
+// and - on demand - the remote runners. One floor ABOVE execView, which shows
+// the transcript of ONE run and can only be reached through the task owning it.
+type runsView struct {
+	// runsRows is what is on screen: the local rows, re-read on every tick while
+	// this view is open, merged with runsRemoteRows and ordered by
+	// storage.SortRunRows so a remote row lands exactly where `pm runs` puts it.
+	runsRows []storage.RunRow
+	// runsRemoteRows is the last remote FETCH's answer, kept across ticks.
+	// Remote rows are deliberately NOT part of the tick: each read is an ssh
+	// round trip per machine (seconds, and a sleeping VPS costs the whole connect
+	// timeout), which would stall the render loop every two seconds. They stay as
+	// fetched - with their age in the header - until `f` fetches again.
+	runsRemoteRows []storage.RunRow
+	runsCursor     int
+	runsScroll     int // first visible row
+	// runsPrevView is where esc returns, kept separate from previousView for the
+	// same reason execView has executorPrevView: Runs -> agent-view -> esc must
+	// come back HERE, and the detail view's own return path has to survive a trip
+	// through both.
+	runsPrevView view
+	runsFetching bool      // a remote fetch is in flight
+	runsFetchAt  time.Time // when runsRemoteRows was last replaced
+	runsFetchErr string    // why the last fetch failed, "" if it did not
+}
+
 // launchMenu is the launch overlay (Claude / Codex / executor) and the
 // per-launch choices made in it. resumeSessionID/resumeOnly/forkMode live here
 // rather than with the session menu: the session menu only seeds them, the
@@ -228,6 +255,7 @@ type Model struct {
 	// m.<field> (no call-site churn, no accessor layer).
 	detailState
 	execView
+	runsView
 	launchMenu
 	pickerState
 	menuState
