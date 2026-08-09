@@ -49,6 +49,7 @@ func New(store storage.TaskStore, filterProject string) Model {
 
 	ti := textinput.New()
 	ti.Prompt = "/ "
+	ti.Placeholder = "filter (-104 = ID only)"
 	ti.CharLimit = 50
 	m.searchInput = ti
 
@@ -301,8 +302,14 @@ func (m Model) filteredTasks(status storage.TaskStatus) []*storage.Task {
 }
 
 // matchesQuery checks if a task matches the search query across all fields.
-// q must be pre-lowercased.
+// q must be pre-lowercased. A leading "-" switches to ID-only mode: the rest
+// of the query is matched against the task ID and its parent ID (so a
+// tracker's children surface alongside it), never against title/body/etc.
 func matchesQuery(t *storage.Task, q string) bool {
+	if rest, ok := strings.CutPrefix(q, "-"); ok {
+		return strings.Contains(strings.ToLower(t.Meta.ID), rest) ||
+			(t.Meta.Parent != "" && strings.Contains(strings.ToLower(t.Meta.Parent), rest))
+	}
 	if strings.Contains(strings.ToLower(t.Meta.Title), q) {
 		return true
 	}

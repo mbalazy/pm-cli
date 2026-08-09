@@ -243,10 +243,44 @@ func TestMatchesQuery(t *testing.T) {
 		{"matches session", "abc-123", true},
 		{"matches ac", "sso login", true},
 		{"no match", "nonexistent", false},
+		{"id-only mode matches id", "-42", true},
+		{"id-only mode matches id fragment", "-proj-4", true},
+		{"id-only mode ignores title", "-auth", false},
+		{"id-only mode ignores body", "-jwt", false},
+		{"id-only mode ignores links", "-jira", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := matchesQuery(task, strings.ToLower(tt.query))
+			if got != tt.want {
+				t.Errorf("matchesQuery(%q) = %v, want %v", tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchesQueryIDOnlyParent(t *testing.T) {
+	child := &storage.Task{
+		Meta: storage.TaskMeta{
+			ID:     "proj-43",
+			Title:  "Child of the tracker",
+			Parent: "proj-42",
+		},
+		Body: "mentions auth here too",
+	}
+	tests := []struct {
+		name  string
+		query string
+		want  bool
+	}{
+		{"child matches via parent id", "-42", true},
+		{"child matches via own id", "-43", true},
+		{"child not matched by unrelated id", "-99", false},
+		{"id-only ignores child title", "-tracker", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchesQuery(child, strings.ToLower(tt.query))
 			if got != tt.want {
 				t.Errorf("matchesQuery(%q) = %v, want %v", tt.query, got, tt.want)
 			}
