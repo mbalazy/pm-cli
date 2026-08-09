@@ -44,6 +44,7 @@ type KeyMap struct {
 	Executor      key.Binding
 	WatchExecutor key.Binding
 	KillRun       key.Binding
+	FinishReport  key.Binding
 	ProjectPicker key.Binding
 	Focus         key.Binding
 	FocusView     key.Binding
@@ -70,7 +71,7 @@ var Keys = KeyMap{
 	Quit:          key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 	Escape:        key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 	Help:          key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
-	Delete:        key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "delete task")),
+	Delete:        key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "delete task")),
 	JumpTop:       key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "jump to top")),
 	JumpBottom:    key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "jump to bottom")),
 	Yank:          key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yank branch")),
@@ -89,9 +90,10 @@ var Keys = KeyMap{
 	ReorderUp:     key.NewBinding(key.WithKeys("ctrl+k"), key.WithHelp("C-k", "reorder up")),
 	ReorderDown:   key.NewBinding(key.WithKeys("ctrl+j"), key.WithHelp("C-j", "reorder down")),
 	Claude:        key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "claude code")),
-	Executor:      key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "run executor")),
+	Executor:      key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "run executor")),
 	WatchExecutor: key.NewBinding(key.WithKeys("W"), key.WithHelp("W", "watch executor run")),
 	KillRun:       key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "kill executor run")),
+	FinishReport:  key.NewBinding(key.WithKeys("F"), key.WithHelp("F", "acceptance report")),
 	ProjectPicker: key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "project picker")),
 	Focus:         key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "focus")),
 	FocusView:     key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "focus view")),

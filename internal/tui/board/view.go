@@ -28,6 +28,8 @@ func (m Model) View() string {
 		return m.viewExecutor()
 	case viewRuns:
 		return m.viewRuns()
+	case viewReport:
+		return m.viewReport()
 	}
 	return m.viewBoard()
 }
@@ -215,13 +217,13 @@ func (m Model) viewBoard() string {
 		case "waiting":
 			prompt = "  press w again to mark waiting"
 		case "delete":
-			prompt = "  press x again to delete"
+			prompt = "  press X again to delete"
 		case "archive":
 			prompt = "  press A again to archive"
 		case "quit":
 			prompt = "  press q again to quit"
 		case "delete-selected":
-			prompt = fmt.Sprintf("  press x again to delete %d tasks", len(m.selected))
+			prompt = fmt.Sprintf("  press X again to delete %d tasks", len(m.selected))
 		case "kill-run":
 			// Named for the run the pending K actually targets: with both live
 			// the two are one keystroke apart and otherwise indistinguishable.
@@ -236,7 +238,7 @@ func (m Model) viewBoard() string {
 		if m.selecting {
 			selectStyle := lipgloss.NewStyle().Bold(true).Foreground(special)
 			label := selectStyle.Render(fmt.Sprintf(" SELECT: %d selected ", len(m.selected)))
-			help := helpStyle.Render("v toggle  m/M move  d done  w wait  A archive  x del  y yank  Y menu  esc")
+			help := helpStyle.Render("v toggle  m/M move  d done  w wait  A archive  X del  y yank  Y menu  esc")
 			gap := m.width - lipgloss.Width(label) - lipgloss.Width(help)
 			if gap < 1 {
 				gap = 1
@@ -245,7 +247,7 @@ func (m Model) viewBoard() string {
 		}
 		startup := fmt.Sprintf("%dms", m.startupDuration.Milliseconds())
 		ver := helpStyle.Render("pm " + version.Version + " " + startup)
-		help := helpStyle.Render("m/M move  d done  a add  c claude  X exec  W watch  R runs  e edit  y/Y yank  L links  i info  C-a archived")
+		help := helpStyle.Render("m/M move  d done  a add  c claude  x exec  W watch  R runs  e edit  y/Y yank  L links  i info  C-a archived")
 		gap := m.width - lipgloss.Width(ver) - lipgloss.Width(help)
 		if gap < 1 {
 			gap = 1
@@ -267,7 +269,16 @@ func (m Model) applyToast(result string) string {
 	if m.toastMsg == "" || !time.Now().Before(m.toastExpiry) {
 		return result
 	}
-	toast := toastStyle.Render(" " + m.toastMsg + " ")
+	// Clamped to the terminal, because a toast that does not fit is not a
+	// truncated toast - it is NO toast. bubbletea's renderer cuts every line at
+	// the terminal width, and the overlay below writes the toast at the END of
+	// the first line, so anything past the last column is dropped before it is
+	// ever drawn. That silently swallowed the whole message, and the longer the
+	// message the more certain it was: exactly backwards, since the long ones
+	// are the warnings.
+	// -4: the two spaces added below plus toastStyle's Padding(0, 1).
+	msg := truncateWidth(m.toastMsg, max(10, m.width-4))
+	toast := toastStyle.Render(" " + msg + " ")
 	toastWidth := lipgloss.Width(toast)
 	lines := strings.Split(result, "\n")
 	if len(lines) > 0 {
@@ -280,10 +291,14 @@ func (m Model) applyToast(result string) string {
 			// Overlay: replace end of first line with toast
 			// Truncate first line to make room
 			target := m.width - toastWidth
-			if target < 0 {
-				target = 0
+			if target <= 0 {
+				// The toast fills the line by itself. Not Width(0) - lipgloss
+				// reads that as "no width set" and hands `first` back whole,
+				// which is how the toast ended up past the last column.
+				lines[0] = toast
+			} else {
+				lines[0] = lipgloss.NewStyle().Width(target).Render(first) + toast
 			}
-			lines[0] = lipgloss.NewStyle().Width(target).Render(first) + toast
 		}
 		result = strings.Join(lines, "\n")
 	}

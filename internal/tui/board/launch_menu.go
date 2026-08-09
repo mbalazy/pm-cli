@@ -21,6 +21,7 @@ func (m *Model) openClaudeMenu(t *storage.Task) {
 	m.claudeMenuAdditional = false
 	m.executorAdditionalAvail = false
 	m.claudeMenuThenFinish = false
+	m.claudeMenuSim = false
 	m.rebuildClaudeMenuItems(t)
 	m.claudeMenu = true
 }
@@ -38,6 +39,7 @@ func (m *Model) openExecutorMenu(t *storage.Task) {
 	m.launchAgent = launchAgentExecutor
 	m.claudeMenuAdditional = false
 	m.claudeMenuThenFinish = false
+	m.claudeMenuSim = false
 	m.resumeOnly = false
 	m.forkMode = false
 	m.projectScopeLaunch = false
@@ -68,15 +70,32 @@ func trackerRunNoun(t *storage.Task) string {
 	return "epic"
 }
 
+// menuHasKind reports whether the overlay currently offers a launch of this
+// kind. Used to gate a toggle on the launch it modifies being reachable at all,
+// rather than re-deriving the conditions that put it there (tmux, tracker, ...)
+// in a second place.
+func (m Model) menuHasKind(kind string) bool {
+	for _, item := range m.claudeMenuItems {
+		if item.kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 	inTmux := os.Getenv("TMUX") != ""
 	m.claudeMenuItems = nil
 	m.claudeMenuCursor = 0
 
+	// Every label below is the NAME of one variant - "here" or "tmux window" -
+	// and nothing else. Where a launch runs, which session it joins and what it
+	// costs are the renderer's job, said once per group and once in the command
+	// preview instead of once per line (view_menu_llm.go).
 	if m.projectScopeLaunch {
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "here", "h"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "tmux", "t"})
 			m.claudeMenuCursor = 1
 		}
 		return
@@ -93,68 +112,73 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 		// first-free at run time by pm work/run-epic. The per-slot lock holders
 		// are gathered here (menu open = decision time) for the slot indicator.
 		m.executorAdditionalAvail = false
+		m.executorSimAvail = false
 		m.executorSlots = nil
 		if t != nil && m.store != nil {
 			if proj, err := m.store.GetProject(t.Project); err == nil {
 				m.executorSlots = executorSlotStatuses(proj)
 				m.executorAdditionalAvail = len(m.executorSlots) > 0
+				// A declared runtime skill is pm's ONLY evidence that this
+				// project has a runtime to drive at all. Resolved rather than
+				// read raw, so a name pointing at nothing on disk offers no
+				// toggle: the acceptance would have no skill to invoke.
+				m.executorSimAvail = proj.GetExecutor().ResolveHandoff(proj.Path).SkillPath != ""
 			}
 		}
 		if !m.executorAdditionalAvail {
 			m.claudeMenuAdditional = false
 		}
-		bgLabel := "Run task in background (watch in pm)"
-		runLabel := "Run task here (pm work)"
-		tmuxLabel := "Run task in tmux (pm work)"
-		// "epic" vs "batch" follows epic_mode, the ONLY thing that decides
-		// integration from independent (the board passes no --independent
-		// flag - the tracker declares it). The command is `pm run-epic`
-		// either way and the label says so, since that is what a user
-		// reproducing this launch by hand has to type.
-		noun := trackerRunNoun(t)
-		if m.executorIsTracker {
-			bgLabel = "Run " + noun + " in background (watch in pm)"
-			runLabel = "Run " + noun + " here (pm run-epic)"
-			tmuxLabel = "Run " + noun + " in tmux (pm run-epic)"
+		if !m.executorSimAvail {
+			m.claudeMenuSim = false
 		}
-		// Background is the default: non-blocking, observable natively in pm.
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{bgLabel, "bg", "b"})
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{runLabel, "here", "h"})
+		// The labels are the NAME of each variant and nothing else: which
+		// command runs, which noun ("epic" vs "batch", following epic_mode -
+		// the board passes no --independent flag, the tracker declares it) and
+		// what each flag does are the renderer's job now, said once per group
+		// and once in the argv preview instead of once per line.
+		// (viewExecutorMenu).
+		m.claudeMenuItems = append(m.claudeMenuItems,
+			// Background first: non-blocking, observable natively in pm.
+			claudeMenuItem{"background", "bg", "b"},
+			claudeMenuItem{"here", "here", "h"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{tmuxLabel, "tmux", "t"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "tmux", "t"})
 		}
 		if m.executorIsTracker {
-			// The acceptance of this tracker's run (`pm finish`) - always
-			// detached and simulator-free, like chainFinish's spawn; watch it
-			// via W, kill it via K, see it in the Runs view (R).
+			// The acceptance of this tracker's run (`pm finish`): watch it
+			// with W, kill it with K, see it in the Runs view (R).
 			//
-			// The wording carries its TIMING, because the word "acceptance"
-			// appears twice in this overlay and the two mean opposite things:
-			// the `&` toggle arms one for AFTER the run, this key starts one
-			// NOW. Naming all three moments is not padding - "before, during
-			// or after" is the actual contract (`pm finish` never checks
-			// whether the run has finished, because batch-finish-auto is built
-			// to accept subs as they land), so pressing this mid-run is a use
-			// rather than a mistake. It also says, by saying "the run", that it
-			// starts none: the item sits under three that all launch the epic.
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{
-				"Accept NOW - before, during or after the " + noun + " (pm finish, detached)", "finish", "a"})
+			// Both labels start with "now", and that word is load-bearing: the
+			// `&` toggle above arms an acceptance for AFTER the run, these two
+			// start one immediately, and "acceptance" alone cannot tell them
+			// apart. That it may be pressed mid-run is a use rather than a
+			// mistake - `pm finish` deliberately never checks whether the run
+			// has finished, because batch-finish-auto accepts subs as they
+			// land - which is what the section header says once for both.
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"now, detached", "finish", "a"})
+			if inTmux {
+				// The tmux variant exists because it is the ONLY launch that
+				// may carry --sim: a detached acceptance driving a slot's
+				// simulator would walk into whatever interactive session holds
+				// that slot's runtime (see resolveFinishSim).
+				m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"now, in a tmux window", "finish-tmux", "A"})
+			}
 		}
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Dry-run preview", "dry-run", "d"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"dry-run preview", "dry-run", "d"})
 		m.claudeMenuCursor = 0 // default to background
 		return
 	}
 
 	if m.launchAgent == launchAgentCodex {
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "here", "h"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "tmux", "t"})
 		}
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree (here)", "worktree", "w"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "worktree", "w"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree + tmux", "worktree-tmux", "W"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "worktree-tmux", "W"})
 		}
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Project scope (no task)", "project", "p"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"project scope", "project", "p"})
 		if inTmux {
 			m.claudeMenuCursor = 1
 		}
@@ -163,9 +187,9 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 
 	if m.resumeOnly && m.forkMode {
 		// Fork sub-menu: fork from selected session
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Fork here", "fork", "h"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "fork", "h"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Fork in tmux", "fork-tmux", "t"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "fork-tmux", "t"})
 			m.claudeMenuCursor = 1 // default to tmux
 		}
 		return
@@ -174,27 +198,30 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 	hasSession := t != nil && lastSession(t) != ""
 	if m.resumeOnly {
 		// Resume sub-menu: only show resume options
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume here", "resume", "h"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "resume", "h"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume in tmux", "resume-tmux", "t"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "resume-tmux", "t"})
 			m.claudeMenuCursor = 1 // default to tmux
 		}
 	} else {
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "here", "h"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "tmux", "t"})
+		}
+		// The worktree pair comes BEFORE resume now: the groups are ordered by
+		// how far a launch is from the checkout you are standing in, and resume
+		// is the one whose group header carries a session id worth reading last.
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "worktree", "w"})
+		if inTmux {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "worktree-tmux", "W"})
 		}
 		if hasSession {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume session", "resume", "r"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "resume", "r"})
 			if inTmux {
-				m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume in tmux", "resume-tmux", "R"})
+				m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "resume-tmux", "R"})
 			}
 		}
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree (here)", "worktree", "w"})
-		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree + tmux", "worktree-tmux", "W"})
-		}
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Project scope (no task)", "project", "p"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"project scope", "project", "p"})
 		// Smart default: tmux if available, else here
 		if inTmux {
 			for i, item := range m.claudeMenuItems {
@@ -243,6 +270,16 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if typed == "&" {
 		if m.launchAgent == launchAgentExecutor && m.executorIsTracker {
 			m.claudeMenuThenFinish = !m.claudeMenuThenFinish
+		}
+		return m, nil
+	}
+	// Toggle letting the acceptance drive the simulator (`pm finish --sim`).
+	// Refused unless the tmux acceptance is actually on the menu: the flag has
+	// no effect on any other launch (resolveFinishSim), and a toggle that shows
+	// [x] while changing nothing is worse than one that will not move.
+	if typed == "$" {
+		if m.launchAgent == launchAgentExecutor && m.executorSimAvail && m.menuHasKind("finish-tmux") {
+			m.claudeMenuSim = !m.claudeMenuSim
 		}
 		return m, nil
 	}

@@ -2,6 +2,7 @@ package board
 
 import (
 	"errors"
+	"fmt"
 	"syscall"
 	"time"
 
@@ -481,8 +482,34 @@ func (m Model) runBadge(taskID string) string {
 // finishBadge is runBadge's counterpart for the acceptance of a run. It is a
 // SEPARATE badge, rendered alongside rather than instead: a card can carry both
 // at once, because a run and its acceptance are routinely live together.
+//
+// Unlike runBadge it also badges a run that ENDED, whenever that run left visual
+// claims open. A clean finish normally needs no badge because the work's own
+// status has moved on - but open visual claims are the one thing an acceptance
+// finishes WITHOUT settling, by design: a detached worker never looks at a
+// screen. Without this the card of a batch with seven things left to look at is
+// indistinguishable from one with nothing left, and the count lives only in the
+// Runs view (R), which is exactly where somebody who does not know there is
+// anything to see will not go.
 func (m Model) finishBadge(taskID string) string {
-	return stateBadge(m.finishStates[taskID], "▶ accepting", "▷ accept stopped", "✗ accept failed")
+	st := m.finishStates[taskID]
+	badge := stateBadge(st, "▶ accepting", "▷ accept stopped", "✗ accept failed")
+	// A live acceptance is still counting; its number is a snapshot of a
+	// half-finished run, so the live word stands alone.
+	if st.IsLive() {
+		return badge
+	}
+	n := st.VisualClaimsOpen()
+	if n == 0 {
+		return badge
+	}
+	claims := fmt.Sprintf("👁 %d to review", n)
+	if badge == "" {
+		return claims
+	}
+	// A failed acceptance may still have counted claims before it died, and both
+	// halves are worth seeing: what happened, and what is left over from it.
+	return badge + " " + claims
 }
 
 // stateBadge is the shared shape of both badges: live, marked-running-but-gone,

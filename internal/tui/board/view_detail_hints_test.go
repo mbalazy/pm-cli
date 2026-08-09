@@ -8,7 +8,7 @@ import (
 	"github.com/mbalazy/pm/internal/storage"
 )
 
-// What the detail view TELLS you about the executor. X is the one key for all
+// What the detail view TELLS you about the executor. x is the one key for all
 // three launches (`pm work`, `pm run-epic`, and the acceptance under [a]), and
 // which one a tracker gets is decided by its frontmatter rather than by the
 // key - so the view has to name both the key and the mode, or the key is
@@ -26,14 +26,14 @@ func TestSubtaskHintNamesTheRunTheTrackerWouldActuallyGet(t *testing.T) {
 			name:     "integration tracker",
 			epicMode: "",
 			width:    100,
-			want:     []string{"p: pick & open", "X: run epic", "X→a: accept"},
+			want:     []string{"p: pick & open", "x: run epic", "x→a: accept"},
 			notWant:  []string{"run batch"},
 		},
 		{
 			name:     "independent tracker",
 			epicMode: storage.EpicModeIndependent,
 			width:    100,
-			want:     []string{"p: pick & open", "X: run batch", "X→a: accept"},
+			want:     []string{"p: pick & open", "x: run batch", "x→a: accept"},
 			notWant:  []string{"run epic"},
 		},
 		{
@@ -42,8 +42,8 @@ func TestSubtaskHintNamesTheRunTheTrackerWouldActuallyGet(t *testing.T) {
 			name:     "narrow terminal keeps the keys",
 			epicMode: storage.EpicModeIndependent,
 			width:    narrowHintWidth - 1,
-			want:     []string{"p: pick", "X: run batch"},
-			notWant:  []string{"pick & open", "X→a"},
+			want:     []string{"p: pick", "x: run batch"},
+			notWant:  []string{"pick & open", "x→a"},
 		},
 	}
 	for _, tc := range cases {
@@ -65,7 +65,7 @@ func TestSubtaskHintNamesTheRunTheTrackerWouldActuallyGet(t *testing.T) {
 }
 
 // The legend and the menu one keypress later must agree. The hint promising
-// "X: run batch" over an overlay titled "Run epic" would make the new legend
+// "x: run batch" over an overlay titled "Run epic" would make the new legend
 // worse than none: it would be teaching the wrong word for the thing.
 func TestTheHintAndTheLaunchMenuAgreeOnTheWord(t *testing.T) {
 	for _, tc := range []struct{ epicMode, noun, other string }{
@@ -77,30 +77,45 @@ func TestTheHintAndTheLaunchMenuAgreeOnTheWord(t *testing.T) {
 				&storage.Task{Meta: storage.TaskMeta{ID: "p-9", Title: "Tracker", Status: storage.StatusDoing, EpicMode: tc.epicMode}},
 				&storage.Task{Meta: storage.TaskMeta{ID: "p-9-1", Title: "Sub one", Status: storage.StatusTodo, Parent: "p-9"}},
 			)
+			m.width, m.height = 130, 40 // the launch overlay's full layout
 			tracker := m.taskByID("p-9")
-			if got := subtaskHint(tracker, 100); !strings.Contains(got, "X: run "+tc.noun) {
+			if got := subtaskHint(tracker, 100); !strings.Contains(got, "x: run "+tc.noun) {
 				t.Errorf("hint = %q, want the %s wording", got, tc.noun)
 			}
 			m.currentView = viewDetail
 			m.openDetailTask(tracker)
 			m.openExecutorMenu(tracker)
 			menu := stripANSI(m.viewClaudeMenu())
-			if !strings.Contains(menu, "Run "+tc.noun+" (pm run-epic)") {
-				t.Errorf("menu title does not say %q:\n%s", tc.noun, menu)
+			// Checked in each of the three places the noun is spoken, and the
+			// OTHER noun forbidden in the same three - "epic" cannot simply be
+			// banned from a batch's overlay, since `pm run-epic` is the command
+			// either way and the preview line prints it.
+			spots := func(n string) []string {
+				return []string{"Run " + n, strings.ToUpper(n) + "  (pm run-epic)", "starts no " + n}
 			}
-			if strings.Contains(menu, "Run "+tc.other+" in background") {
-				t.Errorf("menu offers the %s wording for a %s tracker:\n%s", tc.other, tc.noun, menu)
+			for i, want := range spots(tc.noun) {
+				if !strings.Contains(menu, want) {
+					t.Errorf("menu is missing %q:\n%s", want, menu)
+				}
+				if bad := spots(tc.other)[i]; strings.Contains(menu, bad) {
+					t.Errorf("menu uses the %s wording for a %s tracker (%q):\n%s", tc.other, tc.noun, bad, menu)
+				}
 			}
 			// The acceptance is the same key path in both modes - that is the
-			// whole reason the hint spells it X→a rather than a key of its own.
-			// Its label has to carry the TIMING and the fact that it starts no
-			// run: "acceptance" appears twice in this overlay (the `&` toggle
-			// arms one for after the run) and the item sits under three that
-			// all launch the epic, so both are live confusions, not hypotheses.
-			for _, want := range []string{"[a] Accept NOW", "before, during or after the " + tc.noun} {
+			// whole reason the hint spells it x→a rather than a key of its own.
+			// Its group has to carry the TIMING and the fact that it starts no
+			// run: "acceptance" means two things in this overlay (the `&` toggle
+			// arms one for after the run) and the group sits under three
+			// launches that all start the epic, so both are live confusions.
+			for _, want := range []string{"ACCEPT", "starts no " + tc.noun, "before, during or after"} {
 				if !strings.Contains(menu, want) {
-					t.Errorf("the acceptance item is missing %q:\n%s", want, menu)
+					t.Errorf("the acceptance group is missing %q:\n%s", want, menu)
 				}
+			}
+			// Every launch says what it would actually run, which is what lets
+			// the labels be names rather than sentences.
+			if !strings.Contains(menu, "→ pm run-epic") {
+				t.Errorf("the menu does not preview the command:\n%s", menu)
 			}
 		})
 	}
@@ -109,7 +124,7 @@ func TestTheHintAndTheLaunchMenuAgreeOnTheWord(t *testing.T) {
 // A tracker with no epic_mode at all still gets a legend: empty is a legal
 // value meaning integration, not an absence.
 func TestSubtaskHintHandlesANilParent(t *testing.T) {
-	if got := subtaskHint(nil, 100); !strings.Contains(got, "X: run epic") {
+	if got := subtaskHint(nil, 100); !strings.Contains(got, "x: run epic") {
 		t.Errorf("hint for an unknown parent = %q, want the integration wording", got)
 	}
 }
@@ -126,7 +141,7 @@ func TestSubtaskTableRendersTheHint(t *testing.T) {
 		t.Fatal("tracker not loaded")
 	}
 	detail := m.renderTaskDetail(tracker)
-	for _, want := range []string{"Subtasks (0/1)", "X: run batch"} {
+	for _, want := range []string{"Subtasks (0/1)", "x: run batch"} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("detail is missing %q:\n%s", want, detail)
 		}
@@ -191,7 +206,7 @@ func TestDetailHelpBarNamesTheExecutorKeys(t *testing.T) {
 	m.currentView = viewDetail
 	m.openDetailTask(m.taskByID("p-1"))
 	view := m.viewDetail()
-	for _, want := range []string{"c: claude", "X/W/K: exec run/watch/stop"} {
+	for _, want := range []string{"c: claude", "x/W/K: exec run/watch/stop"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("help bar is missing %q:\n%s", want, view)
 		}

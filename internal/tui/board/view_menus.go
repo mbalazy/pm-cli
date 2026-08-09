@@ -2,7 +2,6 @@ package board
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -25,7 +24,7 @@ func (m Model) viewHelp() string {
 		{"M", "Move task back"},
 		{"w", "Mark waiting (confirm)"},
 		{"d", "Mark done (confirm)"},
-		{"x", "Delete task (confirm)"},
+		{"X", "Delete task (confirm)"},
 		{"A", "Archive task (confirm)"},
 		{"a", "Add new task"},
 		{"e", "Edit in $EDITOR"},
@@ -36,9 +35,10 @@ func (m Model) viewHelp() string {
 		{"V", "Toggle columns"},
 		{"i", "Project info"},
 		{"c", "Claude Code"},
-		{"X", "Run executor (pm work / run-epic)"},
+		{"x", "Run executor (pm work / run-epic)"},
 		{"W", "Watch executor run (live agent-view)"},
 		{"K", "Kill a live executor run (confirm)"},
+		{"F", "Acceptance report (detail / runs view)"},
 		{"R", "Runs view (every run + acceptance)"},
 		{"o / Enter", "Task detail"},
 		{"/ ", "Search tasks"},
@@ -310,134 +310,13 @@ func (m Model) viewColVisMenu() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
+// viewClaudeMenu is the launch overlay's router. Each mode has a renderer of
+// its own: the executor's grew four toggles and a slot table, the LLM's has to
+// say where a session runs and which one it joins, and one function trying to
+// be both is what left every line explaining itself in prose.
 func (m Model) viewClaudeMenu() string {
-	titleText := "Launch LLM"
-	if m.projectScopeLaunch {
-		titleText = "Launch LLM (project)"
-	} else if m.launchAgent == launchAgentExecutor {
-		titleText = "Run task (pm work)"
-		if m.executorIsTracker {
-			titleText = "Run " + trackerRunNoun(m.menuTask()) + " (pm run-epic)"
-		}
-	} else if m.launchAgent != launchAgentCodex && m.resumeOnly {
-		sid := m.resumeSessionID
-		if len(sid) > 8 {
-			sid = sid[:8] + "..."
-		}
-		if m.forkMode {
-			titleText = "Fork session " + sid
-		} else {
-			titleText = "Resume session " + sid
-		}
+	if m.launchAgent == launchAgentExecutor && !m.projectScopeLaunch {
+		return m.viewExecutorMenu()
 	}
-	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render(titleText)
-
-	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(highlight)
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
-
-	var lines []string
-	lines = append(lines, title)
-	lines = append(lines, "")
-
-	lines = append(lines, "  "+keyStyle.Render("@")+" Agent: "+lipgloss.NewStyle().Bold(true).Foreground(special).Render(m.launchAgent.label()))
-	lines = append(lines, "")
-
-	// skip-permissions toggle
-	check := "[ ]"
-	checkStyle := dimStyle
-	if m.claudeMenuSkipPerms {
-		check = "[x]"
-		checkStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF6B6B"))
-	}
-	permsLabel := "skip permissions"
-	switch m.launchAgent {
-	case launchAgentCodex:
-		permsLabel = "bypass sandbox"
-	case launchAgentExecutor:
-		permsLabel = "yolo (bypass autonomy envelope)"
-	}
-	lines = append(lines, "  "+keyStyle.Render("!")+checkStyle.Render(" "+check+" "+permsLabel))
-
-	// Executor-only: choose default (main checkout) vs an isolated "additional"
-	// worktree slot for THIS launch. Shown only when the project has slots
-	// configured, with per-slot occupancy so the user sees which slot a launch
-	// would claim (first free wins).
-	if m.launchAgent == launchAgentExecutor && m.executorAdditionalAvail {
-		addCheck := "[ ]"
-		addStyle := dimStyle
-		if m.claudeMenuAdditional {
-			addCheck = "[x]"
-			addStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
-		}
-		label := " additional worktree (first free slot; own branch/port/sim)"
-		if len(m.executorSlots) == 1 {
-			label = " additional worktree (isolated branch/port/sim)"
-		}
-		lines = append(lines, "  "+keyStyle.Render("#")+addStyle.Render(" "+addCheck+label))
-
-		freeStyle := lipgloss.NewStyle().Foreground(special)
-		busyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B"))
-		allBusy := true
-		for i, s := range m.executorSlots {
-			name := filepath.Base(s.path)
-			if s.holder == nil {
-				allBusy = false
-				lines = append(lines, dimStyle.Render(fmt.Sprintf("       slot %d  %s  ", i+1, name))+freeStyle.Render("○ free"))
-			} else {
-				lines = append(lines, dimStyle.Render(fmt.Sprintf("       slot %d  %s  ", i+1, name))+busyStyle.Render(fmt.Sprintf("● busy: %s (pid %d)", s.holder.TaskID, s.holder.PID)))
-			}
-		}
-		if m.claudeMenuAdditional && allBusy {
-			lines = append(lines, "       "+busyStyle.Bold(true).Render("all slots busy - this launch will fail; wait or kill a run (K)"))
-		}
-	}
-
-	// Executor tracker only: chain the acceptance (`pm finish`) when the epic
-	// run ends (--then-finish). Off = the flag is not passed, so the tracker's
-	// finish_mode keeps deciding - the label says so to keep the tri-state
-	// honest on screen.
-	if m.launchAgent == launchAgentExecutor && m.executorIsTracker {
-		chainCheck := "[ ]"
-		chainStyle := dimStyle
-		if m.claudeMenuThenFinish {
-			chainCheck = "[x]"
-			chainStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
-		}
-		lines = append(lines, "  "+keyStyle.Render("&")+chainStyle.Render(" "+chainCheck+" chain acceptance after the run (--then-finish; off = tracker's finish_mode decides)"))
-	}
-	lines = append(lines, "")
-
-	for i, item := range m.claudeMenuItems {
-		prefix := "  "
-		labelStyle := dimStyle
-		if i == m.claudeMenuCursor {
-			prefix = "> "
-			labelStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
-		}
-		shortcut := keyStyle.Render("[" + item.shortcut + "]")
-		lines = append(lines, prefix+shortcut+" "+labelStyle.Render(item.label))
-	}
-	lines = append(lines, "")
-	help := "press key or enter  @ toggle agent  ! toggle perms  esc back"
-	if m.launchAgent == launchAgentExecutor {
-		var toggles string
-		if m.executorAdditionalAvail {
-			toggles += "  # additional"
-		}
-		if m.executorIsTracker {
-			toggles += "  & chain acceptance"
-		}
-		if toggles != "" {
-			help = "press key or enter  @ agent  ! perms" + toggles + "  esc back"
-		}
-	}
-	lines = append(lines, helpStyle.Render(help))
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(highlight).
-		Padding(1, 3).
-		Render(strings.Join(lines, "\n"))
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+	return m.viewLLMMenu()
 }

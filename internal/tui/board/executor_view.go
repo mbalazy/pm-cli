@@ -122,7 +122,7 @@ func (m Model) otherRunKindExists() bool {
 
 // switchExecutorRunKind flips the agent-view between a run and its acceptance.
 // Deliberately a toggle INSIDE this view rather than a second key on the board:
-// the two runs are one task's story, and the board already spends X/W/K on the
+// the two runs are one task's story, and the board already spends x/W/K on the
 // executor.
 func (m *Model) switchExecutorRunKind() {
 	if !m.otherRunKindExists() {
@@ -497,6 +497,13 @@ func renderExecutorDashboard(run *storage.RunState, width int, canSwitch bool) s
 	hint := "  press W to watch the live transcript"
 	if canSwitch {
 		hint += " (W again switches run ↔ acceptance)"
+	}
+	if run.Kind == storage.RunKindFinish {
+		// Only under the acceptance: the report is what THIS run writes, and a
+		// run has none. Advertised without checking the file, because an
+		// acceptance that got far enough to have a dashboard has written one -
+		// and F says so plainly when it has not.
+		hint += " · F opens the report"
 	}
 	b.WriteString(helpStyle.Render(hint))
 	return b.String()

@@ -28,6 +28,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailViewport.Height = msg.Height - 2
 		m.executorViewport.Width = msg.Width
 		m.executorViewport.Height = executorBodyHeight(msg.Height)
+		m.reportViewport.Width = msg.Width
+		m.reportViewport.Height = reportBodyHeight(msg.Height)
+		// The report is markdown WRAPPED at render time, so unlike the viewports
+		// above it does not re-flow by being told its new width - it has to be
+		// rendered again at it.
+		if m.currentView == viewReport {
+			m.reloadReport()
+		}
 		// The Runs view scrolls on the terminal height, so a resize can leave its
 		// cursor off-screen until the next keypress.
 		m.fixRunsCursor()
@@ -158,6 +166,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.currentView == viewRuns {
 			return m.updateRuns(msg)
+		}
+		if m.currentView == viewReport {
+			return m.updateReportView(msg)
 		}
 		if m.adding {
 			return m.updateAdd(msg)
@@ -487,7 +498,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		if !m.openExecutorView(t) {
-			m.toastMsg = "no executor run for this task (launch with X)"
+			m.toastMsg = "no executor run for this task (launch with x)"
 			m.toastExpiry = time.Now().Add(3 * time.Second)
 		}
 

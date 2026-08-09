@@ -21,6 +21,7 @@ const (
 	viewFocus
 	viewExecutor
 	viewRuns
+	viewReport
 )
 
 type yankItem struct {
@@ -168,6 +169,22 @@ type runsView struct {
 	runsFetchErr string    // why the last fetch failed, "" if it did not
 }
 
+// reportView is the acceptance report: the markdown an acceptance run leaves
+// behind (storage.FinishReportPath), rendered in the board.
+//
+// Its own cluster rather than a second tenant of detailState's viewport,
+// because the two are open at once: F is pressed FROM the detail view and esc
+// returns to it with its scroll position and search state intact.
+type reportView struct {
+	reportViewport viewport.Model
+	reportPath     string
+	reportTaskID   string
+	// reportPrevView is where esc returns - the same rule as executorPrevView
+	// and runsPrevView, and for the same reason: F is reachable from the detail
+	// view AND from the Runs list, and each has to get its own reader back.
+	reportPrevView view
+}
+
 // launchMenu is the launch overlay (Claude / Codex / executor) and the
 // per-launch choices made in it. resumeSessionID/resumeOnly/forkMode live here
 // rather than with the session menu: the session menu only seeds them, the
@@ -196,6 +213,17 @@ type launchMenu struct {
 	// exists only on `pm run-epic`); off = the flag is simply not passed, so
 	// the tracker's own finish_mode keeps deciding (tri-state, run_epic.go).
 	claudeMenuThenFinish bool
+	// claudeMenuSim = user asked THIS acceptance to be allowed the simulator
+	// (`pm finish --sim`). executorSimAvail = the project declares a runtime
+	// skill at all (executor.handoff.runtime_skill), which is the only evidence
+	// pm has that there IS a runtime to drive - without one the toggle is not
+	// shown, since pm-cli and a linux runner have no simulator to offer.
+	//
+	// The toggle is a REQUEST: only the tmux launch honours it (resolveFinishSim),
+	// because a detached acceptance touching a slot's runtime would break the
+	// separation the executor and session locks rest on.
+	claudeMenuSim    bool
+	executorSimAvail bool
 	// executorSlots = the project's worktree slot pool with live lock holders,
 	// gathered when the executor launch menu opens (fresh at decision time) and
 	// rendered under the # toggle so the user sees which slot a launch would get.
@@ -261,6 +289,7 @@ type Model struct {
 	detailState
 	execView
 	runsView
+	reportView
 	launchMenu
 	pickerState
 	menuState

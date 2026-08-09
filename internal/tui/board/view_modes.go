@@ -110,13 +110,13 @@ func (m Model) viewArchive() string {
 	// confirmation prompt
 	if m.confirmAction != "" {
 		sb.WriteString("\n")
-		prompt := "  press x again to delete"
+		prompt := "  press X again to delete"
 		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#FF0000", Dark: "#FF6666"}).Render(prompt))
 		sb.WriteString("\n")
 	}
 
 	sb.WriteString("\n")
-	help := helpStyle.Render("archived: " + fmt.Sprint(len(tasks)) + "  ↑/↓ navigate  r restore  u undo  x delete  o detail  esc back")
+	help := helpStyle.Render("archived: " + fmt.Sprint(len(tasks)) + "  ↑/↓ navigate  r restore  u undo  X delete  o detail  esc back")
 	sb.WriteString(help)
 
 	return m.applyToast(sb.String())
@@ -171,7 +171,7 @@ func (m Model) viewFocus() string {
 
 	sb.WriteString("\n")
 	help := helpStyle.Render(fmt.Sprintf(
-		"focus: %d  ↑/↓ navigate  t/x remove  C-j/C-k reorder  m move  d done  o detail  ; zoom  esc back",
+		"focus: %d  ↑/↓ navigate  t/X remove  C-j/C-k reorder  m move  d done  o detail  ; zoom  esc back",
 		len(tasks)))
 	sb.WriteString(help)
 
