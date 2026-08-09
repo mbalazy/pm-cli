@@ -23,16 +23,7 @@ func TestThePreviewFollowsTheCursorAndTheToggles(t *testing.T) {
 	m := trackerModel(t)
 	m.openExecutorMenu(m.taskByID("p-9"))
 
-	// The overlay is centred inside a box, so the line carries padding and a
-	// border on both sides; the command is what sits between the arrow and them.
-	preview := func(m *Model) string {
-		for _, line := range strings.Split(stripANSI(m.viewClaudeMenu()), "\n") {
-			if _, cmd, ok := strings.Cut(line, "→ "); ok {
-				return strings.TrimSpace(strings.TrimRight(strings.TrimSpace(cmd), "│"))
-			}
-		}
-		return ""
-	}
+	preview := func(m *Model) string { return menuPreview(m) }
 
 	if got := preview(m); got != "pm run-epic p p-9" {
 		t.Errorf("preview on the run = %q", got)
@@ -121,7 +112,7 @@ func TestTheLaunchesAreGroupedByWhatTheyDo(t *testing.T) {
 		t.Fatalf("the two groups are not both headed:\n%s", out)
 	}
 	if runHdr > accHdr {
-		t.Error("the run group comes first - it is what X is normally pressed for")
+		t.Error("the run group comes first - it is what x is normally pressed for")
 	}
 	// Every launch of the run group sits between the two headers.
 	for _, name := range []string{"background", "here", "tmux window"} {

@@ -217,13 +217,13 @@ func (m Model) viewBoard() string {
 		case "waiting":
 			prompt = "  press w again to mark waiting"
 		case "delete":
-			prompt = "  press x again to delete"
+			prompt = "  press X again to delete"
 		case "archive":
 			prompt = "  press A again to archive"
 		case "quit":
 			prompt = "  press q again to quit"
 		case "delete-selected":
-			prompt = fmt.Sprintf("  press x again to delete %d tasks", len(m.selected))
+			prompt = fmt.Sprintf("  press X again to delete %d tasks", len(m.selected))
 		case "kill-run":
 			// Named for the run the pending K actually targets: with both live
 			// the two are one keystroke apart and otherwise indistinguishable.
@@ -238,7 +238,7 @@ func (m Model) viewBoard() string {
 		if m.selecting {
 			selectStyle := lipgloss.NewStyle().Bold(true).Foreground(special)
 			label := selectStyle.Render(fmt.Sprintf(" SELECT: %d selected ", len(m.selected)))
-			help := helpStyle.Render("v toggle  m/M move  d done  w wait  A archive  x del  y yank  Y menu  esc")
+			help := helpStyle.Render("v toggle  m/M move  d done  w wait  A archive  X del  y yank  Y menu  esc")
 			gap := m.width - lipgloss.Width(label) - lipgloss.Width(help)
 			if gap < 1 {
 				gap = 1
@@ -247,7 +247,7 @@ func (m Model) viewBoard() string {
 		}
 		startup := fmt.Sprintf("%dms", m.startupDuration.Milliseconds())
 		ver := helpStyle.Render("pm " + version.Version + " " + startup)
-		help := helpStyle.Render("m/M move  d done  a add  c claude  X exec  W watch  R runs  e edit  y/Y yank  L links  i info  C-a archived")
+		help := helpStyle.Render("m/M move  d done  a add  c claude  x exec  W watch  R runs  e edit  y/Y yank  L links  i info  C-a archived")
 		gap := m.width - lipgloss.Width(ver) - lipgloss.Width(help)
 		if gap < 1 {
 			gap = 1

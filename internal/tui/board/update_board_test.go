@@ -118,10 +118,11 @@ func TestDeleteTaskShowsErrorToast(t *testing.T) {
 		width:         80, height: 24,
 	}
 
-	// First x arms the confirmation, second x (matching confirmTaskID) executes it.
-	result, _ := m.updateBoard(keyRunes('x'))
+	// First X arms the confirmation, second X (matching confirmTaskID) executes
+	// it. Uppercase since 0.45.0: lowercase x launches the executor, matching c.
+	result, _ := m.updateBoard(keyRunes('X'))
 	m2 := result.(Model)
-	result, _ = m2.updateBoard(keyRunes('x'))
+	result, _ = m2.updateBoard(keyRunes('X'))
 	m3 := result.(Model)
 
 	if !strings.Contains(m3.toastMsg, "delete failed") || !strings.Contains(m3.toastMsg, "no file path") {

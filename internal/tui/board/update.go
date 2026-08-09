@@ -498,7 +498,7 @@ func (m Model) updateBoard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		if !m.openExecutorView(t) {
-			m.toastMsg = "no executor run for this task (launch with X)"
+			m.toastMsg = "no executor run for this task (launch with x)"
 			m.toastExpiry = time.Now().Add(3 * time.Second)
 		}
 

@@ -28,13 +28,26 @@ func llmModel(t *testing.T) *Model {
 	return m
 }
 
+// menuPreview reads the previewed command out of a rendered overlay. The block
+// WRAPS onto continuation lines (and is padded with blanks to a fixed height),
+// so the command is the arrow line plus every non-empty line under it.
 func menuPreview(m *Model) string {
+	var parts []string
+	started := false
 	for _, line := range strings.Split(stripANSI(m.viewClaudeMenu()), "\n") {
-		if _, cmd, ok := strings.Cut(line, "→ "); ok {
-			return strings.TrimSpace(strings.TrimRight(strings.TrimSpace(cmd), "│"))
+		clean := strings.TrimSpace(strings.Trim(strings.TrimSpace(line), "│"))
+		if !started {
+			if _, cmd, ok := strings.Cut(clean, "→ "); ok {
+				started, parts = true, append(parts, strings.TrimSpace(cmd))
+			}
+			continue
 		}
+		if clean == "" {
+			break
+		}
+		parts = append(parts, clean)
 	}
-	return ""
+	return strings.Join(parts, " ")
 }
 
 // One group per PLACE a session can run, each naming the actual directory,
@@ -174,5 +187,60 @@ func TestAShortTerminalStillFitsTheWholeMenu(t *testing.T) {
 	}
 	if strings.Contains(out, "takes over this terminal") {
 		t.Errorf("compact must drop the hints - they are what does not fit:\n%s", out)
+	}
+}
+
+// The box must not resize as the cursor moves. A worktree name is a slugified
+// task title, so moving from "here" to the worktree row could double the
+// longest line and shove the whole modal wider under the hand - which is harder
+// to read than having no preview at all, because the eye has to re-find every
+// row. Width AND height are measured, since the preview also wraps.
+func TestTheBoxDoesNotResizeAsTheCursorMoves(t *testing.T) {
+	os.Setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+	defer os.Unsetenv("TMUX")
+	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{
+		ID: "p-9", Status: storage.StatusDoing, Sessions: []string{testSession},
+		// The case from the report: a long slug makes the worktree row's
+		// command far longer than the plain one's.
+		Title: "pm executor generic engine for executing parent subtask",
+	}})
+	m.currentView = viewDetail
+	m.openDetailTask(m.taskByID("p-9"))
+	m.width, m.height = 200, 50
+	m.openClaudeMenu(m.taskByID("p-9"))
+
+	var wantW, wantH int
+	for i := range m.claudeMenuItems {
+		m.claudeMenuCursor = i
+		out := stripANSI(m.viewClaudeMenu())
+		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+		w := 0
+		for _, l := range lines {
+			if x := len([]rune(strings.TrimRight(l, " "))); x > w {
+				w = x
+			}
+		}
+		if i == 0 {
+			wantW, wantH = w, len(lines)
+			continue
+		}
+		if w != wantW {
+			t.Errorf("item %d (%s) changed the box width: %d, want %d\n%s",
+				i, m.claudeMenuItems[i].kind, w, wantW, out)
+		}
+		if len(lines) != wantH {
+			t.Errorf("item %d (%s) changed the box height: %d, want %d",
+				i, m.claudeMenuItems[i].kind, len(lines), wantH)
+		}
+	}
+
+	// And the long command is WRAPPED rather than cut: every token survives.
+	for i, item := range m.claudeMenuItems {
+		if item.kind == "worktree" {
+			m.claudeMenuCursor = i
+		}
+	}
+	if got := menuPreview(m); !strings.Contains(got, worktreeName(m.taskByID("p-9"))) || !strings.HasSuffix(got, "<task prompt>") {
+		t.Errorf("the wrapped preview lost part of the command: %q", got)
 	}
 }

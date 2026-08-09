@@ -169,30 +169,30 @@ func finishModeLabel(mode string) string {
 	if mode == storage.FinishModeAuto {
 		return "auto (runs after the epic)"
 	}
-	return "off (launch with X→a)"
+	return "off (launch with x→a)"
 }
 
 // subtaskHint is the key legend beside the Subtasks header. Naming the run key
-// here is the point: X is the ONE key for all three executor launches, and
+// here is the point: x is the ONE key for all three executor launches, and
 // which of them the menu offers is decided by the task, never by the key - so
-// the legend has to say which one THIS tracker would get. `X: run batch` vs
-// `X: run epic` follows epic_mode (the only thing that picks INDEPENDENT vs
+// the legend has to say which one THIS tracker would get. `x: run batch` vs
+// `x: run epic` follows epic_mode (the only thing that picks INDEPENDENT vs
 // integration mode, since the board passes no --independent flag), and the
-// acceptance is spelled `X→a` because it is a menu item under X rather than a
+// acceptance is spelled `x→a` because it is a menu item under x rather than a
 // key of its own.
 //
 // Below narrowHintWidth the legend degrades to the keys alone: the header is
 // one line above a table already clamped to that width, and a wrapped legend
 // pushes the table down for something the full form only spells out.
 func subtaskHint(parent *storage.Task, width int) string {
-	run := "X: run epic"
+	run := "x: run epic"
 	if parent != nil && parent.Meta.EpicMode == storage.EpicModeIndependent {
-		run = "X: run batch"
+		run = "x: run batch"
 	}
 	if width < narrowHintWidth {
 		return "(p: pick · " + run + ")"
 	}
-	return "(p: pick & open · " + run + " · X→a: accept)"
+	return "(p: pick & open · " + run + " · x→a: accept)"
 }
 
 // narrowHintWidth is where subtaskHint drops to its short form: the full legend
@@ -306,14 +306,14 @@ func (m Model) viewDetail() string {
 		sb.WriteString(helpStyle.Render(fmt.Sprintf("/%s %s  n/N: next/prev  esc: clear  %s", m.detailSearchQuery, matchInfo, pct)))
 	} else {
 		pct := fmt.Sprintf("%3.f%%", m.detailViewport.ScrollPercent()*100)
-		// The executor keys (c/X/W/K) all work in this view - updateDetail
+		// The executor keys (c/x/W/K) all work in this view - updateDetail
 		// dispatches every one of them - and until now none was named here, so
 		// from the detail view X was reachable only by already knowing it. The
 		// bar has a finite width, so `s: sessions` gave up its place: it is the
 		// one entry whose subject the head already shows (a **Sessions:** count
 		// is rendered above whenever there are any), while a launch has no
 		// other trace in this view at all.
-		help := "o/q: back  e: edit  r: refresh  m/w/d/A: move/wait/done/archive  c: claude  X/W/K: exec run/watch/stop  F: report  y/Y: yank  L: links  " + pct
+		help := "o/q: back  e: edit  r: refresh  m/w/d/A: move/wait/done/archive  c: claude  x/W/K: exec run/watch/stop  F: report  y/Y: yank  L: links  " + pct
 		if m.currentView == viewProjectInfo {
 			help = "o/esc/q: back  ↑/↓/j/k scroll  c: claude  y/Y: yank  L: links  " + pct
 		}

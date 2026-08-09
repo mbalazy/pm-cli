@@ -241,7 +241,7 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, common.Keys.WatchExecutor):
 		if t != nil && !m.openExecutorView(t) {
-			m.toastMsg = "no executor run for this task (launch with X)"
+			m.toastMsg = "no executor run for this task (launch with x)"
 			m.toastExpiry = time.Now().Add(3 * time.Second)
 		}
 

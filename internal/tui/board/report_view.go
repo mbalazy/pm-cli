@@ -37,7 +37,7 @@ func (m *Model) openFinishReport(proj, taskID string) bool {
 		// first is the ordinary state of a tracker nobody has accepted yet, the
 		// second is something to go and look at.
 		if os.IsNotExist(err) {
-			m.toastMsg = "no acceptance report for " + taskID + " yet (X→a runs one)"
+			m.toastMsg = "no acceptance report for " + taskID + " yet (x→a runs one)"
 			m.toastExpiry = time.Now().Add(4 * time.Second)
 		} else {
 			m.showErrorToast("acceptance report", err)

@@ -145,33 +145,6 @@ func (m Model) viewExecutorMenu() string {
 	return m.placeMenuBox(body)
 }
 
-// placeMenuBox is the shared chrome: one rounded box, centred.
-func (m Model) placeMenuBox(lines []string) string {
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(highlight).
-		Padding(1, 3).
-		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
-}
-
-// executorMenuBoxChrome is what the border and padding cost horizontally.
-const executorMenuBoxChrome = 2 + 2*3
-
-// menuLineBudget is how many cells one indented line inside the box may use.
-// The command preview is the one line whose length nobody controls - a task id,
-// a project slug and four flags add up - and an overlay that widens past the
-// terminal to fit it is worse than one that ends the command in an ellipsis.
-func menuLineBudget(width int) int {
-	if width <= 0 {
-		return 200 // no terminal size yet (tests, first frame): do not truncate
-	}
-	if b := width - executorMenuBoxChrome - 4; b > 24 {
-		return b
-	}
-	return 24
-}
-
 // executorMenuBody builds the overlay's lines and reports whether they fit the
 // terminal's width.
 func (m Model) executorMenuBody(compact bool) ([]string, bool) {
@@ -295,53 +268,27 @@ func (m Model) executorMenuBody(compact bool) ([]string, bool) {
 	}
 
 	// --- what pressing the highlighted key actually runs ---
-	if t != nil && m.claudeMenuCursor < len(m.claudeMenuItems) {
-		args := m.executorLaunchArgs(t, m.executorIsTracker, m.claudeMenuItems[m.claudeMenuCursor].kind)
-		lines = append(lines, "")
-		lines = append(lines, "  "+dimStyle.Render(truncateWidth("→ pm "+strings.Join(args, " "), menuLineBudget(m.width))))
-	}
-
-	lines = append(lines, "")
+	//
+	// Spliced in AFTER the width is known, from the structural lines plus the
+	// help below: the preview must never be what decides how wide the box is
+	// (see view_menu_common.go), or the modal would resize under the cursor.
 	help := "  ↑↓ move · enter or its key runs it · @ switch to claude/codex · esc back"
 	if compact {
 		help = "  ↑↓ move · enter runs · @ agent · esc back"
 	}
-	lines = append(lines, helpStyle.Render(help))
+	tail := []string{"", helpStyle.Render(help)}
+
+	if t != nil && m.claudeMenuCursor < len(m.claudeMenuItems) {
+		width := menuBodyWidth(append(append([]string{}, lines...), tail...), m.width)
+		all := make([]string, 0, len(m.claudeMenuItems))
+		for _, item := range m.claudeMenuItems {
+			all = append(all, "pm "+strings.Join(m.executorLaunchArgs(t, m.executorIsTracker, item.kind), " "))
+		}
+		cur := "pm " + strings.Join(m.executorLaunchArgs(t, m.executorIsTracker, m.claudeMenuItems[m.claudeMenuCursor].kind), " ")
+		lines = append(lines, "")
+		lines = append(lines, renderPreview(cur, width, tallestPreview(all, width), dimStyle)...)
+	}
+	lines = append(lines, tail...)
 
 	return lines, m.menuBoxFits(lines)
-}
-
-// menuBoxFits reports whether these lines, once boxed, sit inside the terminal
-// in BOTH directions. Height matters as much as width: lipgloss.Place centres
-// the box, so an overlay two lines too tall loses a line off each end - and the
-// bottom one is the help, which is where the way out is written.
-func (m Model) menuBoxFits(lines []string) bool {
-	if m.width <= 0 || m.height <= 0 {
-		return true // no terminal size yet (tests, first frame)
-	}
-	widest := 0
-	for _, l := range lines {
-		if w := lipgloss.Width(l); w > widest {
-			widest = w
-		}
-	}
-	// The box costs 1 border + 1 padding row at the top and the same below.
-	return widest+executorMenuBoxChrome <= m.width && len(lines)+4 <= m.height
-}
-
-// padRight pads s to w display cells (never truncates - a name longer than the
-// column widens the column, it does not lose characters).
-func padRight(s string, w int) string {
-	if pad := w - lipgloss.Width(s); pad > 0 {
-		return s + strings.Repeat(" ", pad)
-	}
-	return s
-}
-
-// chipLabel picks a toggle's long or short name.
-func chipLabel(compact bool, long, short string) string {
-	if compact {
-		return short
-	}
-	return long
 }

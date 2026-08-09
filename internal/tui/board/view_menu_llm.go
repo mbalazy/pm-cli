@@ -166,7 +166,7 @@ func (m Model) llmMenuBody(compact bool) ([]string, bool) {
 	}
 	// Clamped for the same reason as the preview: a repo path is as long as
 	// somebody's directory tree.
-	budget := menuLineBudget(m.width)
+	budget := menuContentWidth(m.width)
 	groupTitle := map[string]string{
 		"repo":     truncateWidth(joinTitle("IN THE REPO", repoDir, compact), budget),
 		"worktree": truncateWidth(joinTitle("ISOLATED WORKTREE", wtName+" · own branch, dev-server port and simulator", compact), budget),
@@ -229,17 +229,25 @@ func (m Model) llmMenuBody(compact bool) ([]string, bool) {
 	chips := chipStyle.Render(box+" ! "+permsLabel) + "   " + helpStyle.Render("@ agent: "+m.launchAgent.label())
 	lines = append(lines, "  "+chips)
 
-	if m.claudeMenuCursor < len(m.claudeMenuItems) {
-		lines = append(lines, "")
-		lines = append(lines, "  "+dimStyle.Render(truncateWidth("→ "+m.llmPreview(m.claudeMenuItems[m.claudeMenuCursor].kind, t), menuLineBudget(m.width))))
-	}
-
-	lines = append(lines, "")
+	// The preview is spliced in after the width is known - see the same
+	// comment in executorMenuBody, and view_menu_common.go for why.
 	help := "  ↑↓ move · enter or its key runs it · ! perms · @ agent · esc back"
 	if compact {
 		help = "  ↑↓ move · enter runs · ! perms · @ agent · esc back"
 	}
-	lines = append(lines, helpStyle.Render(help))
+	tail := []string{"", helpStyle.Render(help)}
+
+	if m.claudeMenuCursor < len(m.claudeMenuItems) {
+		width := menuBodyWidth(append(append([]string{}, lines...), tail...), m.width)
+		all := make([]string, 0, len(m.claudeMenuItems))
+		for _, item := range m.claudeMenuItems {
+			all = append(all, m.llmPreview(item.kind, t))
+		}
+		cur := m.llmPreview(m.claudeMenuItems[m.claudeMenuCursor].kind, t)
+		lines = append(lines, "")
+		lines = append(lines, renderPreview(cur, width, tallestPreview(all, width), dimStyle)...)
+	}
+	lines = append(lines, tail...)
 
 	return lines, m.menuBoxFits(lines)
 }
@@ -254,13 +262,4 @@ func (m Model) launchProjectSlug(t *storage.Task) string {
 		return t.Project
 	}
 	return ""
-}
-
-// joinTitle appends a group's subject to its name, dropping it when the layout
-// has no room - the name alone still says which group this is.
-func joinTitle(name, subject string, compact bool) string {
-	if compact || subject == "" {
-		return name
-	}
-	return name + "   " + subject
 }

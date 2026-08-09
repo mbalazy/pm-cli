@@ -122,7 +122,7 @@ func (m Model) otherRunKindExists() bool {
 
 // switchExecutorRunKind flips the agent-view between a run and its acceptance.
 // Deliberately a toggle INSIDE this view rather than a second key on the board:
-// the two runs are one task's story, and the board already spends X/W/K on the
+// the two runs are one task's story, and the board already spends x/W/K on the
 // executor.
 func (m *Model) switchExecutorRunKind() {
 	if !m.otherRunKindExists() {
