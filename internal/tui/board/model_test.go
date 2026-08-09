@@ -1395,16 +1395,21 @@ func TestFinishPMArgs(t *testing.T) {
 	tests := []struct {
 		name       string
 		additional bool
+		sim        bool
 		want       []string
 	}{
 		// Mirrors chainFinish's spawn: --project (finish takes only the tracker
-		// positionally) and an explicit --no-sim (detached = hands off the sim).
-		{"default", false, []string{"finish", "atlas-100", "--project", "atlas", "--no-sim"}},
-		{"additional worktree", true, []string{"finish", "atlas-100", "--project", "atlas", "--no-sim", "--additional"}},
+		// positionally) and an explicit sim decision either way - it is what
+		// decides whether the acceptance may touch a shared runtime, so it is
+		// spelled out in the argv rather than left to the default.
+		{"default", false, false, []string{"finish", "atlas-100", "--project", "atlas", "--no-sim"}},
+		{"additional worktree", true, false, []string{"finish", "atlas-100", "--project", "atlas", "--no-sim", "--additional"}},
+		{"with the simulator", false, true, []string{"finish", "atlas-100", "--project", "atlas", "--sim"}},
+		{"simulator in a slot", true, true, []string{"finish", "atlas-100", "--project", "atlas", "--sim", "--additional"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := finishPMArgs(tracker, tt.additional)
+			got := finishPMArgs(tracker, tt.additional, tt.sim)
 			if strings.Join(got, " ") != strings.Join(tt.want, " ") {
 				t.Errorf("finishPMArgs = %v, want %v", got, tt.want)
 			}
@@ -1556,7 +1561,7 @@ func TestOpenExecutorMenu(t *testing.T) {
 		}
 	})
 
-	t.Run("tracker with tmux -> run-epic, bg+here+tmux+finish+dry-run, default bg", func(t *testing.T) {
+	t.Run("tracker with tmux -> run-epic, both acceptances offered, default bg", func(t *testing.T) {
 		os.Setenv("TMUX", "/tmp/tmux-1000/default,1,0")
 		defer os.Unsetenv("TMUX")
 		m := Model{tasks: []*storage.Task{parent, child}}
@@ -1564,8 +1569,10 @@ func TestOpenExecutorMenu(t *testing.T) {
 		if !m.executorIsTracker {
 			t.Error("parent with a child must be flagged as tracker")
 		}
-		if got := kinds(m.claudeMenuItems); strings.Join(got, ",") != "bg,here,tmux,finish,dry-run" {
-			t.Errorf("items = %v, want [bg here tmux finish dry-run]", got)
+		// Both acceptance variants: the detached one, and the tmux one that is
+		// the only launch allowed to carry --sim.
+		if got := kinds(m.claudeMenuItems); strings.Join(got, ",") != "bg,here,tmux,finish,finish-tmux,dry-run" {
+			t.Errorf("items = %v, want [bg here tmux finish finish-tmux dry-run]", got)
 		}
 		if m.claudeMenuItems[m.claudeMenuCursor].kind != "bg" {
 			t.Errorf("default cursor at %q, want bg", m.claudeMenuItems[m.claudeMenuCursor].kind)

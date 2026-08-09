@@ -46,18 +46,53 @@ func executorPMArgs(t *storage.Task, isTracker, yolo, dryRun, additional, thenFi
 
 // finishPMArgs builds the `pm` argv for launching a tracker's acceptance from
 // the board. Mirrors chainFinish's spawn (run_epic_finish.go): --project
-// because `pm finish` takes only the tracker positionally, and --no-sim
-// explicitly even though it is the default - a board launch is detached, and a
-// detached acceptance keeps its hands off a shared runtime; saying so in the
-// argv makes that visible in the log and in `ps`. No --yolo handling: the
-// acceptance is yolo by default (the menu's ! toggle does not apply). Pure for
-// the same unit-test reason as executorPMArgs.
-func finishPMArgs(t *storage.Task, additional bool) []string {
-	args := []string{storage.RunKindFinish, t.Meta.ID, "--project", t.Project, "--no-sim"}
+// because `pm finish` takes only the tracker positionally, and the sim decision
+// spelled out either way even though --no-sim is the default - it is the one
+// choice that changes what the acceptance may touch, so it belongs in the log
+// and in `ps` rather than being inferred from an absence. No --yolo handling:
+// the acceptance is yolo by default (the menu's ! toggle does not apply). Pure
+// for the same unit-test reason as executorPMArgs.
+//
+// sim is what the caller RESOLVED, not what the user ticked: whether a launch
+// may run the simulator depends on the kind of launch as much as on the toggle
+// (see resolveFinishSim), and this function must not be the second place that
+// decision is made.
+func finishPMArgs(t *storage.Task, additional, sim bool) []string {
+	simFlag := "--no-sim"
+	if sim {
+		simFlag = "--sim"
+	}
+	args := []string{storage.RunKindFinish, t.Meta.ID, "--project", t.Project, simFlag}
 	if additional {
 		args = append(args, "--additional")
 	}
 	return args
+}
+
+// isFinishKind reports whether a launch kind runs `pm finish` rather than the
+// executor. Two kinds do - the detached one and the tmux one - and everything
+// downstream (argv, log path, run-state routing, the live-run warning) keys off
+// the COMMAND, not off which window it runs in. Before the tmux variant existed
+// the two were one string and the distinction did not have to be drawn; keeping
+// the test in one function is what stops a later branch from reintroducing the
+// conflation.
+func isFinishKind(kind string) bool {
+	return kind == "finish" || kind == "finish-tmux"
+}
+
+// resolveFinishSim decides whether THIS launch may touch the simulator.
+//
+// The toggle is a request; the launch kind is the authority. A simulator is
+// only ever allowed on the tmux variant, and NOT because somebody is watching:
+// pm's separation of the executor's worktree lock from the interactive session
+// lock rests on headless workers never booting Metro or a simulator (see
+// session_lock.go). A detached acceptance that did would claim a slot's runtime
+// - port and sim UDID - with nothing on the other side of that lock to notice,
+// walking straight into whatever interactive session already holds it. A tmux
+// acceptance is a session in front of a human, which is the case the session
+// lock was built for.
+func resolveFinishSim(kind string, sim bool) bool {
+	return sim && kind == "finish-tmux"
 }
 
 // liveRunForLaunch returns the warning to show when a launch of this kind would
@@ -77,6 +112,44 @@ func (m Model) liveRunForLaunch(t *storage.Task, isFinish bool) string {
 		return "⚠ a run of this task is already in flight (W to watch, K to stop); nothing stops two managers from working the same branch"
 	}
 	return ""
+}
+
+// simSlotWarning warns when a simulator-enabled acceptance would claim a
+// worktree slot whose RUNTIME an interactive session is already driving.
+//
+// The two locks are separate resources on purpose - .pm-executor.lock guards
+// the worktree directory, the session lock guards the slot's port and simulator
+// - and they never collide while only interactive sessions use a runtime. A
+// `--sim` acceptance is the first thing pm can start that uses both, so this is
+// the one launch where the executor's own "is the slot free" answer is not the
+// whole question.
+//
+// A WARNING, not a block: which slot a run claims is decided by `pm finish`
+// itself at run time, so anything decided here is a guess one tick old, and the
+// user may well want both (a second simulator, a device, an inspection that
+// touches nothing). It names the slot so the guess can be checked.
+func (m Model) simSlotWarning(t *storage.Task, sim, additional bool) string {
+	// Without --additional there is no slot to collide over: the acceptance runs
+	// in the main checkout with the project's own runtime, which pm neither
+	// locks nor pretends to.
+	if !sim || !additional || m.store == nil || t == nil {
+		return ""
+	}
+	slot := 0
+	for i, s := range m.executorSlots {
+		if s.holder == nil {
+			slot = i + 1 // 1-based, like the session-lock file names
+			break
+		}
+	}
+	if slot == 0 {
+		return "" // no free slot: the launch fails on the worktree lock, before any of this
+	}
+	h := storage.LiveSessionHolder(m.store.ProjectDir(t.Project), slot)
+	if h == nil {
+		return ""
+	}
+	return fmt.Sprintf("⚠ slot %d's runtime (port + sim) is held by a live interactive session (pid %d) - two things would drive one simulator", slot, h.PID)
 }
 
 // openRunLog opens a detached run's log. Fresh launches TRUNCATE, which is what
@@ -153,13 +226,14 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 
 	isTracker := len(m.taskChildren(t)) > 0
 	dryRun := kind == "dry-run"
-	isFinish := kind == "finish"
+	isFinish := isFinishKind(kind)
 	// The additional-worktree choice is per launch and only valid when the project
 	// has it configured (executorAdditionalAvail, set while building the menu).
 	additional := m.claudeMenuAdditional && m.executorAdditionalAvail
+	sim := resolveFinishSim(kind, m.claudeMenuSim && m.executorSimAvail)
 	args := executorPMArgs(t, isTracker, m.claudeMenuSkipPerms, dryRun, additional, m.claudeMenuThenFinish)
 	if isFinish {
-		args = finishPMArgs(t, additional)
+		args = finishPMArgs(t, additional, sim)
 	}
 	winName := "pm:" + args[0] + ":" + t.Meta.ID
 
@@ -186,12 +260,21 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 	// message). What the warning cannot leave to chance is the LOG: the second
 	// launch writes to the same path, so the truncation below would empty the
 	// live run's log under it - see appendLog.
-	warn := ""
+	//
+	// The sim warning is kept OUT of liveWarn on purpose: that one is not a
+	// message but a decision about the log file, and only a run of the same kind
+	// already writing it may turn the truncate into an append.
+	liveWarn := ""
+	var warns []string
 	if !dryRun {
-		if live := m.liveRunForLaunch(t, isFinish); live != "" {
-			warn = live
+		if liveWarn = m.liveRunForLaunch(t, isFinish); liveWarn != "" {
+			warns = append(warns, liveWarn)
+		}
+		if w := m.simSlotWarning(t, sim, additional); w != "" {
+			warns = append(warns, w)
 		}
 	}
+	warn := strings.Join(warns, " · ")
 
 	switch kind {
 	case "bg", "finish":
@@ -214,7 +297,7 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 			m.toastExpiry = time.Now().Add(15 * time.Second)
 			return m, nil
 		}
-		logf, err := openRunLog(logPath, warn != "")
+		logf, err := openRunLog(logPath, liveWarn != "")
 		if err != nil {
 			m.toastMsg = "executor: cannot open log: " + err.Error()
 			m.toastExpiry = time.Now().Add(15 * time.Second)
@@ -277,7 +360,10 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 			return launchResultMsg{agent: launchAgentExecutor, kind: "dry-run", err: err}
 		})
 
-	case "tmux":
+	case "tmux", "finish-tmux":
+		// One branch for both: a tmux launch differs only in the argv, which was
+		// built above. This is also the ONLY path an acceptance may run the
+		// simulator on - see resolveFinishSim.
 		sess, err := tmuxNewWindow(winName, pmShellCommand(projDir, args)+execPauseAlways)
 		if err != nil {
 			m.toastMsg = "executor tmux failed: " + err.Error()

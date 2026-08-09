@@ -406,6 +406,25 @@ func (m Model) viewClaudeMenu() string {
 		}
 		lines = append(lines, "  "+keyStyle.Render("&")+chainStyle.Render(" "+chainCheck+" chain acceptance after the run (--then-finish; off = tracker's finish_mode decides)"))
 	}
+
+	// Executor tracker with a runtime skill only: let the acceptance drive the
+	// simulator (--sim). Shown even when it cannot be armed - outside tmux there
+	// is no launch it applies to - because the alternative is a project's whole
+	// runtime half being invisible from here, and the line says WHY it is off.
+	if m.launchAgent == launchAgentExecutor && m.executorIsTracker && m.executorSimAvail {
+		simCheck := "[ ]"
+		simStyle := dimStyle
+		if m.claudeMenuSim {
+			simCheck = "[x]"
+			simStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
+		}
+		label := " let the acceptance use the simulator (--sim; tmux acceptance only)"
+		if !m.menuHasKind("finish-tmux") {
+			label = " simulator for the acceptance - needs tmux (a detached one never touches a runtime)"
+			simStyle = dimStyle
+		}
+		lines = append(lines, "  "+keyStyle.Render("$")+simStyle.Render(" "+simCheck+label))
+	}
 	lines = append(lines, "")
 
 	for i, item := range m.claudeMenuItems {
@@ -416,7 +435,14 @@ func (m Model) viewClaudeMenu() string {
 			labelStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
 		}
 		shortcut := keyStyle.Render("[" + item.shortcut + "]")
-		lines = append(lines, prefix+shortcut+" "+labelStyle.Render(item.label))
+		label := item.label
+		if item.kind == "finish-tmux" && m.claudeMenuSim {
+			// The $ toggle's effect, said on the item it affects: this is the
+			// only launch it changes, and a checkbox three lines up is not
+			// where somebody about to press A is looking.
+			label += ", WITH the simulator"
+		}
+		lines = append(lines, prefix+shortcut+" "+labelStyle.Render(label))
 	}
 	lines = append(lines, "")
 	help := "press key or enter  @ toggle agent  ! toggle perms  esc back"
@@ -427,6 +453,9 @@ func (m Model) viewClaudeMenu() string {
 		}
 		if m.executorIsTracker {
 			toggles += "  & chain acceptance"
+		}
+		if m.executorIsTracker && m.executorSimAvail {
+			toggles += "  $ sim"
 		}
 		if toggles != "" {
 			help = "press key or enter  @ agent  ! perms" + toggles + "  esc back"

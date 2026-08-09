@@ -21,6 +21,7 @@ func (m *Model) openClaudeMenu(t *storage.Task) {
 	m.claudeMenuAdditional = false
 	m.executorAdditionalAvail = false
 	m.claudeMenuThenFinish = false
+	m.claudeMenuSim = false
 	m.rebuildClaudeMenuItems(t)
 	m.claudeMenu = true
 }
@@ -38,6 +39,7 @@ func (m *Model) openExecutorMenu(t *storage.Task) {
 	m.launchAgent = launchAgentExecutor
 	m.claudeMenuAdditional = false
 	m.claudeMenuThenFinish = false
+	m.claudeMenuSim = false
 	m.resumeOnly = false
 	m.forkMode = false
 	m.projectScopeLaunch = false
@@ -68,6 +70,19 @@ func trackerRunNoun(t *storage.Task) string {
 	return "epic"
 }
 
+// menuHasKind reports whether the overlay currently offers a launch of this
+// kind. Used to gate a toggle on the launch it modifies being reachable at all,
+// rather than re-deriving the conditions that put it there (tmux, tracker, ...)
+// in a second place.
+func (m Model) menuHasKind(kind string) bool {
+	for _, item := range m.claudeMenuItems {
+		if item.kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 	inTmux := os.Getenv("TMUX") != ""
 	m.claudeMenuItems = nil
@@ -93,15 +108,24 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 		// first-free at run time by pm work/run-epic. The per-slot lock holders
 		// are gathered here (menu open = decision time) for the slot indicator.
 		m.executorAdditionalAvail = false
+		m.executorSimAvail = false
 		m.executorSlots = nil
 		if t != nil && m.store != nil {
 			if proj, err := m.store.GetProject(t.Project); err == nil {
 				m.executorSlots = executorSlotStatuses(proj)
 				m.executorAdditionalAvail = len(m.executorSlots) > 0
+				// A declared runtime skill is pm's ONLY evidence that this
+				// project has a runtime to drive at all. Resolved rather than
+				// read raw, so a name pointing at nothing on disk offers no
+				// toggle: the acceptance would have no skill to invoke.
+				m.executorSimAvail = proj.GetExecutor().ResolveHandoff(proj.Path).SkillPath != ""
 			}
 		}
 		if !m.executorAdditionalAvail {
 			m.claudeMenuAdditional = false
+		}
+		if !m.executorSimAvail {
+			m.claudeMenuSim = false
 		}
 		bgLabel := "Run task in background (watch in pm)"
 		runLabel := "Run task here (pm work)"
@@ -139,6 +163,22 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 			// starts none: the item sits under three that all launch the epic.
 			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{
 				"Accept NOW - before, during or after the " + noun + " (pm finish, detached)", "finish", "a"})
+			if inTmux {
+				// The acceptance in a tmux window: the same `pm finish`, in a
+				// session a human can watch and answer. It exists because it is
+				// the ONLY launch that may carry --sim - a detached acceptance
+				// driving a slot's simulator would walk into whatever
+				// interactive session holds that slot's runtime (see
+				// resolveFinishSim). The label says which of the two it is,
+				// since "detached" one line up is otherwise the only clue.
+				// Whether it CARRIES the simulator is appended at render time
+				// (viewClaudeMenu): the toggle would otherwise have to rebuild
+				// the menu, and a rebuild needs the task this was opened for -
+				// which is exactly the thing an overlay must not go looking for
+				// again after the fact.
+				m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{
+					"Accept in a tmux window - watchable (pm finish)", "finish-tmux", "A"})
+			}
 		}
 		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Dry-run preview", "dry-run", "d"})
 		m.claudeMenuCursor = 0 // default to background
@@ -243,6 +283,16 @@ func (m Model) updateClaudeMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if typed == "&" {
 		if m.launchAgent == launchAgentExecutor && m.executorIsTracker {
 			m.claudeMenuThenFinish = !m.claudeMenuThenFinish
+		}
+		return m, nil
+	}
+	// Toggle letting the acceptance drive the simulator (`pm finish --sim`).
+	// Refused unless the tmux acceptance is actually on the menu: the flag has
+	// no effect on any other launch (resolveFinishSim), and a toggle that shows
+	// [x] while changing nothing is worse than one that will not move.
+	if typed == "$" {
+		if m.launchAgent == launchAgentExecutor && m.executorSimAvail && m.menuHasKind("finish-tmux") {
+			m.claudeMenuSim = !m.claudeMenuSim
 		}
 		return m, nil
 	}

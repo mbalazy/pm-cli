@@ -213,6 +213,17 @@ type launchMenu struct {
 	// exists only on `pm run-epic`); off = the flag is simply not passed, so
 	// the tracker's own finish_mode keeps deciding (tri-state, run_epic.go).
 	claudeMenuThenFinish bool
+	// claudeMenuSim = user asked THIS acceptance to be allowed the simulator
+	// (`pm finish --sim`). executorSimAvail = the project declares a runtime
+	// skill at all (executor.handoff.runtime_skill), which is the only evidence
+	// pm has that there IS a runtime to drive - without one the toggle is not
+	// shown, since pm-cli and a linux runner have no simulator to offer.
+	//
+	// The toggle is a REQUEST: only the tmux launch honours it (resolveFinishSim),
+	// because a detached acceptance touching a slot's runtime would break the
+	// separation the executor and session locks rest on.
+	claudeMenuSim    bool
+	executorSimAvail bool
 	// executorSlots = the project's worktree slot pool with live lock holders,
 	// gathered when the executor launch menu opens (fresh at decision time) and
 	// rendered under the # toggle so the user sees which slot a launch would get.
