@@ -269,7 +269,16 @@ func (m Model) applyToast(result string) string {
 	if m.toastMsg == "" || !time.Now().Before(m.toastExpiry) {
 		return result
 	}
-	toast := toastStyle.Render(" " + m.toastMsg + " ")
+	// Clamped to the terminal, because a toast that does not fit is not a
+	// truncated toast - it is NO toast. bubbletea's renderer cuts every line at
+	// the terminal width, and the overlay below writes the toast at the END of
+	// the first line, so anything past the last column is dropped before it is
+	// ever drawn. That silently swallowed the whole message, and the longer the
+	// message the more certain it was: exactly backwards, since the long ones
+	// are the warnings.
+	// -4: the two spaces added below plus toastStyle's Padding(0, 1).
+	msg := truncateWidth(m.toastMsg, max(10, m.width-4))
+	toast := toastStyle.Render(" " + msg + " ")
 	toastWidth := lipgloss.Width(toast)
 	lines := strings.Split(result, "\n")
 	if len(lines) > 0 {
@@ -282,10 +291,14 @@ func (m Model) applyToast(result string) string {
 			// Overlay: replace end of first line with toast
 			// Truncate first line to make room
 			target := m.width - toastWidth
-			if target < 0 {
-				target = 0
+			if target <= 0 {
+				// The toast fills the line by itself. Not Width(0) - lipgloss
+				// reads that as "no width set" and hands `first` back whole,
+				// which is how the toast ended up past the last column.
+				lines[0] = toast
+			} else {
+				lines[0] = lipgloss.NewStyle().Width(target).Render(first) + toast
 			}
-			lines[0] = lipgloss.NewStyle().Width(target).Render(first) + toast
 		}
 		result = strings.Join(lines, "\n")
 	}

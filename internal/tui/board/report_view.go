@@ -125,7 +125,9 @@ func (m Model) updateReportView(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) viewReport() string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render("Acceptance report · " + m.reportTaskID)
-	header := title + "\n" + helpStyle.Render("  "+shortenPath(m.reportPath))
+	// Clamped: an unclamped path is longer than most terminals are wide, and a
+	// wrapped second line would put this view one line over its height budget.
+	header := title + "\n" + helpStyle.Render(truncateWidth("  "+shortenPath(m.reportPath), max(10, m.width)))
 	footer := helpStyle.Render("e: $EDITOR · j/k C-d/C-u scroll · r reload · esc back")
 	return m.applyToast(strings.Join([]string{header, m.reportViewport.View(), footer}, "\n"))
 }

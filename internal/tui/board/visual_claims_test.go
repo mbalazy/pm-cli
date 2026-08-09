@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mbalazy/pm/internal/storage"
 )
 
@@ -76,6 +77,27 @@ func TestFinishBadgeSurfacesOpenVisualClaims(t *testing.T) {
 				t.Errorf("the count never reached the card:\n%s", m.View())
 			}
 		})
+	}
+}
+
+// A toast wider than the terminal used to render as NOTHING: bubbletea cuts
+// every line at the terminal width and applyToast writes the toast at the end
+// of the first line, so the overflow was dropped before it was drawn. The
+// longer the message the more certain the loss - exactly backwards, since the
+// long ones are the warnings.
+func TestALongToastIsTruncatedRatherThanLost(t *testing.T) {
+	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-9", Title: "Batch tracker", Status: storage.StatusDoing}})
+	m.width, m.height = 80, 24
+	m.toastMsg = "⚠ " + strings.Repeat("a warning nobody would ever read ", 8)
+	m.toastExpiry = time.Now().Add(time.Minute)
+
+	first := stripANSI(m.applyToast("head\nbody"))
+	first = strings.SplitN(first, "\n", 2)[0]
+	if !strings.Contains(first, "⚠ a warning") {
+		t.Errorf("the toast never made it onto the line:\n%q", first)
+	}
+	if w := lipgloss.Width(first); w > m.width {
+		t.Errorf("the line is %d cells wide, past the terminal's %d - the tail is cut before it is drawn", w, m.width)
 	}
 }
 

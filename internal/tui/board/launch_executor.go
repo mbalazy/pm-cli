@@ -149,7 +149,9 @@ func (m Model) simSlotWarning(t *storage.Task, sim, additional bool) string {
 	if h == nil {
 		return ""
 	}
-	return fmt.Sprintf("⚠ slot %d's runtime (port + sim) is held by a live interactive session (pid %d) - two things would drive one simulator", slot, h.PID)
+	// Kept short on purpose: it shares one toast line with the launch message,
+	// and applyToast has a terminal's width to spend on both.
+	return fmt.Sprintf("⚠ slot %d's sim/port is held by a live session (pid %d)", slot, h.PID)
 }
 
 // openRunLog opens a detached run's log. Fresh launches TRUNCATE, which is what
