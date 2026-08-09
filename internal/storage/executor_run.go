@@ -415,6 +415,30 @@ func (st *RunState) IsLive() bool {
 	return ProcessAliveSinceStamp(st.PID, st.Started)
 }
 
+// VisualClaimsOpen sums the unsettled visual claims across the run's subs.
+//
+// Meaningful only on an acceptance run (RunKindFinish) - nothing else ever sets
+// the per-sub field - but it is deliberately not gated on Kind: a run whose subs
+// all report zero sums to zero, which is the same answer a gate would give, and
+// a caller holding a state whose kind it has not checked gets the truthful
+// number rather than a silent zero.
+//
+// It exists as a method so that the runs table and the board count by ONE rule.
+// The number is the user's morning TODO list, and two implementations of "how
+// many are left" that disagree is worse than not showing it in either place.
+func (st *RunState) VisualClaimsOpen() int {
+	if st == nil {
+		return 0
+	}
+	n := 0
+	for _, s := range st.Subs {
+		if s.VisualClaimsOpen > 0 {
+			n += s.VisualClaimsOpen
+		}
+	}
+	return n
+}
+
 // Kill signals the run's whole process group, falling back to the bare pid, AND
 // the in-flight worker's group. Background runs are started detached (Setsid),
 // so the manager leads its own process group - but the `claude -p` worker is NOT

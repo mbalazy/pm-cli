@@ -317,14 +317,7 @@ func subSettled(s SubRun, landed map[string]bool) bool {
 // outlive the run that counted them: they are unfinished work on the tracker,
 // true until somebody accepts it again.
 func acceptCell(dir, trackerID string, st *RunState) AcceptCell {
-	cell := AcceptCell{}
-	if st != nil {
-		for _, s := range st.Subs {
-			if s.VisualClaimsOpen > 0 {
-				cell.VisualClaimsOpen += s.VisualClaimsOpen
-			}
-		}
-	}
+	cell := AcceptCell{VisualClaimsOpen: st.VisualClaimsOpen()}
 	if holder := LiveFinishClaimHolder(dir, trackerID); holder != nil {
 		cell.State = AcceptCellRunning
 		cell.Host = holder.Host
