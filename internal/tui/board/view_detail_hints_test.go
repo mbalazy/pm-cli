@@ -77,6 +77,7 @@ func TestTheHintAndTheLaunchMenuAgreeOnTheWord(t *testing.T) {
 				&storage.Task{Meta: storage.TaskMeta{ID: "p-9", Title: "Tracker", Status: storage.StatusDoing, EpicMode: tc.epicMode}},
 				&storage.Task{Meta: storage.TaskMeta{ID: "p-9-1", Title: "Sub one", Status: storage.StatusTodo, Parent: "p-9"}},
 			)
+			m.width, m.height = 130, 40 // the launch overlay's full layout
 			tracker := m.taskByID("p-9")
 			if got := subtaskHint(tracker, 100); !strings.Contains(got, "X: run "+tc.noun) {
 				t.Errorf("hint = %q, want the %s wording", got, tc.noun)
@@ -85,22 +86,36 @@ func TestTheHintAndTheLaunchMenuAgreeOnTheWord(t *testing.T) {
 			m.openDetailTask(tracker)
 			m.openExecutorMenu(tracker)
 			menu := stripANSI(m.viewClaudeMenu())
-			if !strings.Contains(menu, "Run "+tc.noun+" (pm run-epic)") {
-				t.Errorf("menu title does not say %q:\n%s", tc.noun, menu)
+			// Checked in each of the three places the noun is spoken, and the
+			// OTHER noun forbidden in the same three - "epic" cannot simply be
+			// banned from a batch's overlay, since `pm run-epic` is the command
+			// either way and the preview line prints it.
+			spots := func(n string) []string {
+				return []string{"Run " + n, strings.ToUpper(n) + "  (pm run-epic)", "starts no " + n}
 			}
-			if strings.Contains(menu, "Run "+tc.other+" in background") {
-				t.Errorf("menu offers the %s wording for a %s tracker:\n%s", tc.other, tc.noun, menu)
+			for i, want := range spots(tc.noun) {
+				if !strings.Contains(menu, want) {
+					t.Errorf("menu is missing %q:\n%s", want, menu)
+				}
+				if bad := spots(tc.other)[i]; strings.Contains(menu, bad) {
+					t.Errorf("menu uses the %s wording for a %s tracker (%q):\n%s", tc.other, tc.noun, bad, menu)
+				}
 			}
 			// The acceptance is the same key path in both modes - that is the
 			// whole reason the hint spells it X→a rather than a key of its own.
-			// Its label has to carry the TIMING and the fact that it starts no
-			// run: "acceptance" appears twice in this overlay (the `&` toggle
-			// arms one for after the run) and the item sits under three that
-			// all launch the epic, so both are live confusions, not hypotheses.
-			for _, want := range []string{"[a] Accept NOW", "before, during or after the " + tc.noun} {
+			// Its group has to carry the TIMING and the fact that it starts no
+			// run: "acceptance" means two things in this overlay (the `&` toggle
+			// arms one for after the run) and the group sits under three
+			// launches that all start the epic, so both are live confusions.
+			for _, want := range []string{"ACCEPT", "starts no " + tc.noun, "before, during or after"} {
 				if !strings.Contains(menu, want) {
-					t.Errorf("the acceptance item is missing %q:\n%s", want, menu)
+					t.Errorf("the acceptance group is missing %q:\n%s", want, menu)
 				}
+			}
+			// Every launch says what it would actually run, which is what lets
+			// the labels be names rather than sentences.
+			if !strings.Contains(menu, "→ pm run-epic") {
+				t.Errorf("the menu does not preview the command:\n%s", menu)
 			}
 		})
 	}

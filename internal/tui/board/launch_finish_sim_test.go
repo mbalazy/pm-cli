@@ -45,13 +45,25 @@ func simProject(t *testing.T, m *Model, withSkill bool) string {
 }
 
 // trackerModel is a tracker with one sub, which is what puts the acceptance
-// items on the menu at all.
+// items on the menu at all, opened in the DETAIL view.
+//
+// The view matters: the launch overlay resolves its task through menuTask(),
+// and both real openers hand it exactly what menuTask() would return anyway
+// (update.go passes selectedTask, update_detail.go passes detailTask). A test
+// that opened the menu on a task the board cursor was not sitting on would be
+// exercising a state no keypress can produce.
 func trackerModel(t *testing.T) *Model {
 	t.Helper()
-	return newBoardModel(t,
+	m := newBoardModel(t,
 		&storage.Task{Meta: storage.TaskMeta{ID: "p-9", Title: "Batch tracker", Status: storage.StatusDoing}},
 		&storage.Task{Meta: storage.TaskMeta{ID: "p-9-1", Title: "Sub one", Status: storage.StatusTodo, Parent: "p-9"}},
 	)
+	m.currentView = viewDetail
+	m.openDetailTask(m.taskByID("p-9"))
+	// Wide enough for the full layout: newBoardModel's 80 columns trigger the
+	// compact fallback, which drops exactly the hints these tests read.
+	m.width, m.height = 130, 40
+	return m
 }
 
 // The rule itself, as a pure function: the toggle is a request, the launch kind
@@ -119,7 +131,7 @@ func TestTheSimToggleIsOfferedOnlyWhereItMeansSomething(t *testing.T) {
 			t.Fatal("a declared, resolvable runtime skill is what makes the toggle available")
 		}
 		out := stripANSI(m.viewClaudeMenu())
-		for _, want := range []string{"[A] Accept in a tmux window", "$", "--sim; tmux acceptance only"} {
+		for _, want := range []string{"A  now, in a tmux window", "can drive the simulator", "[ ] $ simulator"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("the menu is missing %q:\n%s", want, out)
 			}
@@ -130,9 +142,15 @@ func TestTheSimToggleIsOfferedOnlyWhereItMeansSomething(t *testing.T) {
 		if !v.claudeMenuSim {
 			t.Fatal("$ did not arm the simulator")
 		}
-		// The choice shows up on the item it changes, not only on the toggle line.
-		if out := stripANSI(v.viewClaudeMenu()); !strings.Contains(out, "WITH the simulator") {
-			t.Errorf("the tmux acceptance does not say it would carry the simulator:\n%s", out)
+		// Armed: the chip is checked, and - the assertion that matters - the
+		// previewed command for the tmux acceptance actually carries the flag.
+		v.claudeMenuCursor = len(v.claudeMenuItems) - 2 // the finish-tmux row
+		out = stripANSI(v.viewClaudeMenu())
+		if !strings.Contains(out, "[x] $ simulator") {
+			t.Errorf("the toggle does not read as armed:\n%s", out)
+		}
+		if !strings.Contains(out, "→ pm finish p-9 --project p --sim") {
+			t.Errorf("the previewed command does not carry --sim:\n%s", out)
 		}
 	})
 

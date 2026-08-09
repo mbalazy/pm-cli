@@ -2,7 +2,6 @@ package board
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -312,14 +311,17 @@ func (m Model) viewColVisMenu() string {
 }
 
 func (m Model) viewClaudeMenu() string {
+	// The executor overlay has its OWN renderer. It grew four toggles, six
+	// launches and a slot table inside a layout built for "here or tmux?", and
+	// past a certain density a flat list stops being a menu: nothing said which
+	// toggle touched which launch, so every line had to explain itself in prose
+	// and the whole thing had to be read top to bottom before pressing anything.
+	if m.launchAgent == launchAgentExecutor && !m.projectScopeLaunch {
+		return m.viewExecutorMenu()
+	}
 	titleText := "Launch LLM"
 	if m.projectScopeLaunch {
 		titleText = "Launch LLM (project)"
-	} else if m.launchAgent == launchAgentExecutor {
-		titleText = "Run task (pm work)"
-		if m.executorIsTracker {
-			titleText = "Run " + trackerRunNoun(m.menuTask()) + " (pm run-epic)"
-		}
 	} else if m.launchAgent != launchAgentCodex && m.resumeOnly {
 		sid := m.resumeSessionID
 		if len(sid) > 8 {
@@ -351,80 +353,11 @@ func (m Model) viewClaudeMenu() string {
 		checkStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF6B6B"))
 	}
 	permsLabel := "skip permissions"
-	switch m.launchAgent {
-	case launchAgentCodex:
+	if m.launchAgent == launchAgentCodex {
 		permsLabel = "bypass sandbox"
-	case launchAgentExecutor:
-		permsLabel = "yolo (bypass autonomy envelope)"
 	}
 	lines = append(lines, "  "+keyStyle.Render("!")+checkStyle.Render(" "+check+" "+permsLabel))
 
-	// Executor-only: choose default (main checkout) vs an isolated "additional"
-	// worktree slot for THIS launch. Shown only when the project has slots
-	// configured, with per-slot occupancy so the user sees which slot a launch
-	// would claim (first free wins).
-	if m.launchAgent == launchAgentExecutor && m.executorAdditionalAvail {
-		addCheck := "[ ]"
-		addStyle := dimStyle
-		if m.claudeMenuAdditional {
-			addCheck = "[x]"
-			addStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
-		}
-		label := " additional worktree (first free slot; own branch/port/sim)"
-		if len(m.executorSlots) == 1 {
-			label = " additional worktree (isolated branch/port/sim)"
-		}
-		lines = append(lines, "  "+keyStyle.Render("#")+addStyle.Render(" "+addCheck+label))
-
-		freeStyle := lipgloss.NewStyle().Foreground(special)
-		busyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FF6B6B"))
-		allBusy := true
-		for i, s := range m.executorSlots {
-			name := filepath.Base(s.path)
-			if s.holder == nil {
-				allBusy = false
-				lines = append(lines, dimStyle.Render(fmt.Sprintf("       slot %d  %s  ", i+1, name))+freeStyle.Render("○ free"))
-			} else {
-				lines = append(lines, dimStyle.Render(fmt.Sprintf("       slot %d  %s  ", i+1, name))+busyStyle.Render(fmt.Sprintf("● busy: %s (pid %d)", s.holder.TaskID, s.holder.PID)))
-			}
-		}
-		if m.claudeMenuAdditional && allBusy {
-			lines = append(lines, "       "+busyStyle.Bold(true).Render("all slots busy - this launch will fail; wait or kill a run (K)"))
-		}
-	}
-
-	// Executor tracker only: chain the acceptance (`pm finish`) when the epic
-	// run ends (--then-finish). Off = the flag is not passed, so the tracker's
-	// finish_mode keeps deciding - the label says so to keep the tri-state
-	// honest on screen.
-	if m.launchAgent == launchAgentExecutor && m.executorIsTracker {
-		chainCheck := "[ ]"
-		chainStyle := dimStyle
-		if m.claudeMenuThenFinish {
-			chainCheck = "[x]"
-			chainStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
-		}
-		lines = append(lines, "  "+keyStyle.Render("&")+chainStyle.Render(" "+chainCheck+" chain acceptance after the run (--then-finish; off = tracker's finish_mode decides)"))
-	}
-
-	// Executor tracker with a runtime skill only: let the acceptance drive the
-	// simulator (--sim). Shown even when it cannot be armed - outside tmux there
-	// is no launch it applies to - because the alternative is a project's whole
-	// runtime half being invisible from here, and the line says WHY it is off.
-	if m.launchAgent == launchAgentExecutor && m.executorIsTracker && m.executorSimAvail {
-		simCheck := "[ ]"
-		simStyle := dimStyle
-		if m.claudeMenuSim {
-			simCheck = "[x]"
-			simStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
-		}
-		label := " let the acceptance use the simulator (--sim; tmux acceptance only)"
-		if !m.menuHasKind("finish-tmux") {
-			label = " simulator for the acceptance - needs tmux (a detached one never touches a runtime)"
-			simStyle = dimStyle
-		}
-		lines = append(lines, "  "+keyStyle.Render("$")+simStyle.Render(" "+simCheck+label))
-	}
 	lines = append(lines, "")
 
 	for i, item := range m.claudeMenuItems {
@@ -435,32 +368,10 @@ func (m Model) viewClaudeMenu() string {
 			labelStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
 		}
 		shortcut := keyStyle.Render("[" + item.shortcut + "]")
-		label := item.label
-		if item.kind == "finish-tmux" && m.claudeMenuSim {
-			// The $ toggle's effect, said on the item it affects: this is the
-			// only launch it changes, and a checkbox three lines up is not
-			// where somebody about to press A is looking.
-			label += ", WITH the simulator"
-		}
-		lines = append(lines, prefix+shortcut+" "+labelStyle.Render(label))
+		lines = append(lines, prefix+shortcut+" "+labelStyle.Render(item.label))
 	}
 	lines = append(lines, "")
 	help := "press key or enter  @ toggle agent  ! toggle perms  esc back"
-	if m.launchAgent == launchAgentExecutor {
-		var toggles string
-		if m.executorAdditionalAvail {
-			toggles += "  # additional"
-		}
-		if m.executorIsTracker {
-			toggles += "  & chain acceptance"
-		}
-		if m.executorIsTracker && m.executorSimAvail {
-			toggles += "  $ sim"
-		}
-		if toggles != "" {
-			help = "press key or enter  @ agent  ! perms" + toggles + "  esc back"
-		}
-	}
 	lines = append(lines, helpStyle.Render(help))
 
 	box := lipgloss.NewStyle().

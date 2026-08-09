@@ -127,60 +127,40 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 		if !m.executorSimAvail {
 			m.claudeMenuSim = false
 		}
-		bgLabel := "Run task in background (watch in pm)"
-		runLabel := "Run task here (pm work)"
-		tmuxLabel := "Run task in tmux (pm work)"
-		// "epic" vs "batch" follows epic_mode, the ONLY thing that decides
-		// integration from independent (the board passes no --independent
-		// flag - the tracker declares it). The command is `pm run-epic`
-		// either way and the label says so, since that is what a user
-		// reproducing this launch by hand has to type.
-		noun := trackerRunNoun(t)
-		if m.executorIsTracker {
-			bgLabel = "Run " + noun + " in background (watch in pm)"
-			runLabel = "Run " + noun + " here (pm run-epic)"
-			tmuxLabel = "Run " + noun + " in tmux (pm run-epic)"
-		}
-		// Background is the default: non-blocking, observable natively in pm.
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{bgLabel, "bg", "b"})
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{runLabel, "here", "h"})
+		// The labels are the NAME of each variant and nothing else: which
+		// command runs, which noun ("epic" vs "batch", following epic_mode -
+		// the board passes no --independent flag, the tracker declares it) and
+		// what each flag does are the renderer's job now, said once per group
+		// and once in the argv preview instead of once per line.
+		// (viewExecutorMenu).
+		m.claudeMenuItems = append(m.claudeMenuItems,
+			// Background first: non-blocking, observable natively in pm.
+			claudeMenuItem{"background", "bg", "b"},
+			claudeMenuItem{"here", "here", "h"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{tmuxLabel, "tmux", "t"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "tmux", "t"})
 		}
 		if m.executorIsTracker {
-			// The acceptance of this tracker's run (`pm finish`) - always
-			// detached and simulator-free, like chainFinish's spawn; watch it
-			// via W, kill it via K, see it in the Runs view (R).
+			// The acceptance of this tracker's run (`pm finish`): watch it
+			// with W, kill it with K, see it in the Runs view (R).
 			//
-			// The wording carries its TIMING, because the word "acceptance"
-			// appears twice in this overlay and the two mean opposite things:
-			// the `&` toggle arms one for AFTER the run, this key starts one
-			// NOW. Naming all three moments is not padding - "before, during
-			// or after" is the actual contract (`pm finish` never checks
-			// whether the run has finished, because batch-finish-auto is built
-			// to accept subs as they land), so pressing this mid-run is a use
-			// rather than a mistake. It also says, by saying "the run", that it
-			// starts none: the item sits under three that all launch the epic.
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{
-				"Accept NOW - before, during or after the " + noun + " (pm finish, detached)", "finish", "a"})
+			// Both labels start with "now", and that word is load-bearing: the
+			// `&` toggle above arms an acceptance for AFTER the run, these two
+			// start one immediately, and "acceptance" alone cannot tell them
+			// apart. That it may be pressed mid-run is a use rather than a
+			// mistake - `pm finish` deliberately never checks whether the run
+			// has finished, because batch-finish-auto accepts subs as they
+			// land - which is what the section header says once for both.
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"now, detached", "finish", "a"})
 			if inTmux {
-				// The acceptance in a tmux window: the same `pm finish`, in a
-				// session a human can watch and answer. It exists because it is
-				// the ONLY launch that may carry --sim - a detached acceptance
-				// driving a slot's simulator would walk into whatever
-				// interactive session holds that slot's runtime (see
-				// resolveFinishSim). The label says which of the two it is,
-				// since "detached" one line up is otherwise the only clue.
-				// Whether it CARRIES the simulator is appended at render time
-				// (viewClaudeMenu): the toggle would otherwise have to rebuild
-				// the menu, and a rebuild needs the task this was opened for -
-				// which is exactly the thing an overlay must not go looking for
-				// again after the fact.
-				m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{
-					"Accept in a tmux window - watchable (pm finish)", "finish-tmux", "A"})
+				// The tmux variant exists because it is the ONLY launch that
+				// may carry --sim: a detached acceptance driving a slot's
+				// simulator would walk into whatever interactive session holds
+				// that slot's runtime (see resolveFinishSim).
+				m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"now, in a tmux window", "finish-tmux", "A"})
 			}
 		}
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Dry-run preview", "dry-run", "d"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"dry-run preview", "dry-run", "d"})
 		m.claudeMenuCursor = 0 // default to background
 		return
 	}

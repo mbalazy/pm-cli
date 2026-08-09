@@ -69,6 +69,19 @@ func finishPMArgs(t *storage.Task, additional, sim bool) []string {
 	return args
 }
 
+// executorLaunchArgs turns the menu task plus the overlay's toggles into the
+// `pm` argv a launch of this kind would run. The ONE place that mapping is
+// made: the overlay previews the command it is about to run, and a preview
+// assembled by a second copy of these rules would be a preview of something
+// else the first time one of them changed.
+func (m Model) executorLaunchArgs(t *storage.Task, isTracker bool, kind string) []string {
+	additional := m.claudeMenuAdditional && m.executorAdditionalAvail
+	if isFinishKind(kind) {
+		return finishPMArgs(t, additional, resolveFinishSim(kind, m.claudeMenuSim && m.executorSimAvail))
+	}
+	return executorPMArgs(t, isTracker, m.claudeMenuSkipPerms, kind == "dry-run", additional, m.claudeMenuThenFinish)
+}
+
 // isFinishKind reports whether a launch kind runs `pm finish` rather than the
 // executor. Two kinds do - the detached one and the tmux one - and everything
 // downstream (argv, log path, run-state routing, the live-run warning) keys off
@@ -233,10 +246,7 @@ func (m Model) launchExecutor(kind string) (tea.Model, tea.Cmd) {
 	// has it configured (executorAdditionalAvail, set while building the menu).
 	additional := m.claudeMenuAdditional && m.executorAdditionalAvail
 	sim := resolveFinishSim(kind, m.claudeMenuSim && m.executorSimAvail)
-	args := executorPMArgs(t, isTracker, m.claudeMenuSkipPerms, dryRun, additional, m.claudeMenuThenFinish)
-	if isFinish {
-		args = finishPMArgs(t, additional, sim)
-	}
+	args := m.executorLaunchArgs(t, isTracker, kind)
 	winName := "pm:" + args[0] + ":" + t.Meta.ID
 
 	// Real runs (here/tmux) require a git repo; a clean tree is only required in
