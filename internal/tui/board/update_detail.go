@@ -245,6 +245,14 @@ func (m Model) updateDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toastExpiry = time.Now().Add(3 * time.Second)
 		}
 
+	case key.Matches(msg, common.Keys.FinishReport):
+		// The report of THIS task, never of the tracker above it: a sub has no
+		// acceptance of its own, so F on one says there is no report rather
+		// than opening a document about a different unit of work.
+		if t != nil {
+			m.openFinishReport(t.Project, t.Meta.ID)
+		}
+
 	case key.Matches(msg, common.Keys.KillRun):
 		if t != nil {
 			st, finish := m.pickRunForTask(t)

@@ -39,6 +39,7 @@ func (m Model) viewHelp() string {
 		{"X", "Run executor (pm work / run-epic)"},
 		{"W", "Watch executor run (live agent-view)"},
 		{"K", "Kill a live executor run (confirm)"},
+		{"F", "Acceptance report (detail / runs view)"},
 		{"R", "Runs view (every run + acceptance)"},
 		{"o / Enter", "Task detail"},
 		{"/ ", "Search tasks"},

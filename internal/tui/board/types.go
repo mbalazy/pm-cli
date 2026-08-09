@@ -21,6 +21,7 @@ const (
 	viewFocus
 	viewExecutor
 	viewRuns
+	viewReport
 )
 
 type yankItem struct {
@@ -168,6 +169,22 @@ type runsView struct {
 	runsFetchErr string    // why the last fetch failed, "" if it did not
 }
 
+// reportView is the acceptance report: the markdown an acceptance run leaves
+// behind (storage.FinishReportPath), rendered in the board.
+//
+// Its own cluster rather than a second tenant of detailState's viewport,
+// because the two are open at once: F is pressed FROM the detail view and esc
+// returns to it with its scroll position and search state intact.
+type reportView struct {
+	reportViewport viewport.Model
+	reportPath     string
+	reportTaskID   string
+	// reportPrevView is where esc returns - the same rule as executorPrevView
+	// and runsPrevView, and for the same reason: F is reachable from the detail
+	// view AND from the Runs list, and each has to get its own reader back.
+	reportPrevView view
+}
+
 // launchMenu is the launch overlay (Claude / Codex / executor) and the
 // per-launch choices made in it. resumeSessionID/resumeOnly/forkMode live here
 // rather than with the session menu: the session menu only seeds them, the
@@ -261,6 +278,7 @@ type Model struct {
 	detailState
 	execView
 	runsView
+	reportView
 	launchMenu
 	pickerState
 	menuState

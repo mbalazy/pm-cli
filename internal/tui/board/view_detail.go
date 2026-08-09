@@ -313,7 +313,7 @@ func (m Model) viewDetail() string {
 		// one entry whose subject the head already shows (a **Sessions:** count
 		// is rendered above whenever there are any), while a launch has no
 		// other trace in this view at all.
-		help := "o/q: back  e: edit  r: refresh  m/w/d/A: move/wait/done/archive  c: claude  X/W/K: exec run/watch/stop  y/Y: yank  L: links  " + pct
+		help := "o/q: back  e: edit  r: refresh  m/w/d/A: move/wait/done/archive  c: claude  X/W/K: exec run/watch/stop  F: report  y/Y: yank  L: links  " + pct
 		if m.currentView == viewProjectInfo {
 			help = "o/esc/q: back  ↑/↓/j/k scroll  c: claude  y/Y: yank  L: links  " + pct
 		}

@@ -28,6 +28,8 @@ func (m Model) View() string {
 		return m.viewExecutor()
 	case viewRuns:
 		return m.viewRuns()
+	case viewReport:
+		return m.viewReport()
 	}
 	return m.viewBoard()
 }

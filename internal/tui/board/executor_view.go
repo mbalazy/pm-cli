@@ -498,6 +498,13 @@ func renderExecutorDashboard(run *storage.RunState, width int, canSwitch bool) s
 	if canSwitch {
 		hint += " (W again switches run ↔ acceptance)"
 	}
+	if run.Kind == storage.RunKindFinish {
+		// Only under the acceptance: the report is what THIS run writes, and a
+		// run has none. Advertised without checking the file, because an
+		// acceptance that got far enough to have a dashboard has written one -
+		// and F says so plainly when it has not.
+		hint += " · F opens the report"
+	}
 	b.WriteString(helpStyle.Render(hint))
 	return b.String()
 }

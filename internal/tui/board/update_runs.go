@@ -78,6 +78,10 @@ func (m Model) updateRuns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openRunsRow()
 		return m, nil
 
+	case key.Matches(msg, common.Keys.FinishReport):
+		m.openRowReport()
+		return m, nil
+
 	case msg.String() == "f":
 		// The call is a STATEMENT, not an operand of the return: it takes a
 		// pointer to this copy of m and sets runsFetching, and Go orders only the
@@ -200,6 +204,30 @@ func (m *Model) openRunsRow() {
 		m.toastMsg = "no run recorded for " + row.Tracker + " yet"
 		m.toastExpiry = time.Now().Add(3 * time.Second)
 	}
+}
+
+// openRowReport opens the acceptance report of the row under the cursor.
+//
+// Unlike openRunsRow this switches no tab and reloads nothing: the report is a
+// file read by path, so which project the board happens to be showing does not
+// come into it.
+func (m *Model) openRowReport() {
+	row := m.selectedRunRow()
+	if row == nil {
+		return
+	}
+	if row.Remote != "" {
+		// Same boundary as the transcript: the file is on the other machine.
+		m.toastMsg = "that acceptance ran on " + row.Remote + " - its report lives there, not here"
+		m.toastExpiry = time.Now().Add(4 * time.Second)
+		return
+	}
+	if row.Tracker == "" {
+		m.toastMsg = "this row has no tracker to open"
+		m.toastExpiry = time.Now().Add(3 * time.Second)
+		return
+	}
+	m.openFinishReport(row.Project, row.Tracker)
 }
 
 // runsRemoteMsg carries one remote fetch's answer back into Update.
