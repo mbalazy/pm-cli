@@ -106,13 +106,13 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 		bgLabel := "Run task in background (watch in pm)"
 		runLabel := "Run task here (pm work)"
 		tmuxLabel := "Run task in tmux (pm work)"
+		// "epic" vs "batch" follows epic_mode, the ONLY thing that decides
+		// integration from independent (the board passes no --independent
+		// flag - the tracker declares it). The command is `pm run-epic`
+		// either way and the label says so, since that is what a user
+		// reproducing this launch by hand has to type.
+		noun := trackerRunNoun(t)
 		if m.executorIsTracker {
-			// "epic" vs "batch" follows epic_mode, the ONLY thing that decides
-			// integration from independent (the board passes no --independent
-			// flag - the tracker declares it). The command is `pm run-epic`
-			// either way and the label says so, since that is what a user
-			// reproducing this launch by hand has to type.
-			noun := trackerRunNoun(t)
 			bgLabel = "Run " + noun + " in background (watch in pm)"
 			runLabel = "Run " + noun + " here (pm run-epic)"
 			tmuxLabel = "Run " + noun + " in tmux (pm run-epic)"
@@ -127,7 +127,18 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 			// The acceptance of this tracker's run (`pm finish`) - always
 			// detached and simulator-free, like chainFinish's spawn; watch it
 			// via W, kill it via K, see it in the Runs view (R).
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Run acceptance in background (pm finish)", "finish", "a"})
+			//
+			// The wording carries its TIMING, because the word "acceptance"
+			// appears twice in this overlay and the two mean opposite things:
+			// the `&` toggle arms one for AFTER the run, this key starts one
+			// NOW. Naming all three moments is not padding - "before, during
+			// or after" is the actual contract (`pm finish` never checks
+			// whether the run has finished, because batch-finish-auto is built
+			// to accept subs as they land), so pressing this mid-run is a use
+			// rather than a mistake. It also says, by saying "the run", that it
+			// starts none: the item sits under three that all launch the epic.
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{
+				"Accept NOW - before, during or after the " + noun + " (pm finish, detached)", "finish", "a"})
 		}
 		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Dry-run preview", "dry-run", "d"})
 		m.claudeMenuCursor = 0 // default to background

@@ -93,8 +93,14 @@ func TestTheHintAndTheLaunchMenuAgreeOnTheWord(t *testing.T) {
 			}
 			// The acceptance is the same key path in both modes - that is the
 			// whole reason the hint spells it X→a rather than a key of its own.
-			if !strings.Contains(menu, "[a] Run acceptance in background") {
-				t.Errorf("menu is missing the acceptance item:\n%s", menu)
+			// Its label has to carry the TIMING and the fact that it starts no
+			// run: "acceptance" appears twice in this overlay (the `&` toggle
+			// arms one for after the run) and the item sits under three that
+			// all launch the epic, so both are live confusions, not hypotheses.
+			for _, want := range []string{"[a] Accept NOW", "before, during or after the " + tc.noun} {
+				if !strings.Contains(menu, want) {
+					t.Errorf("the acceptance item is missing %q:\n%s", want, menu)
+				}
 			}
 		})
 	}
