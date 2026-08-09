@@ -310,75 +310,13 @@ func (m Model) viewColVisMenu() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
+// viewClaudeMenu is the launch overlay's router. Each mode has a renderer of
+// its own: the executor's grew four toggles and a slot table, the LLM's has to
+// say where a session runs and which one it joins, and one function trying to
+// be both is what left every line explaining itself in prose.
 func (m Model) viewClaudeMenu() string {
-	// The executor overlay has its OWN renderer. It grew four toggles, six
-	// launches and a slot table inside a layout built for "here or tmux?", and
-	// past a certain density a flat list stops being a menu: nothing said which
-	// toggle touched which launch, so every line had to explain itself in prose
-	// and the whole thing had to be read top to bottom before pressing anything.
 	if m.launchAgent == launchAgentExecutor && !m.projectScopeLaunch {
 		return m.viewExecutorMenu()
 	}
-	titleText := "Launch LLM"
-	if m.projectScopeLaunch {
-		titleText = "Launch LLM (project)"
-	} else if m.launchAgent != launchAgentCodex && m.resumeOnly {
-		sid := m.resumeSessionID
-		if len(sid) > 8 {
-			sid = sid[:8] + "..."
-		}
-		if m.forkMode {
-			titleText = "Fork session " + sid
-		} else {
-			titleText = "Resume session " + sid
-		}
-	}
-	title := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render(titleText)
-
-	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(highlight)
-	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
-
-	var lines []string
-	lines = append(lines, title)
-	lines = append(lines, "")
-
-	lines = append(lines, "  "+keyStyle.Render("@")+" Agent: "+lipgloss.NewStyle().Bold(true).Foreground(special).Render(m.launchAgent.label()))
-	lines = append(lines, "")
-
-	// skip-permissions toggle
-	check := "[ ]"
-	checkStyle := dimStyle
-	if m.claudeMenuSkipPerms {
-		check = "[x]"
-		checkStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF6B6B"))
-	}
-	permsLabel := "skip permissions"
-	if m.launchAgent == launchAgentCodex {
-		permsLabel = "bypass sandbox"
-	}
-	lines = append(lines, "  "+keyStyle.Render("!")+checkStyle.Render(" "+check+" "+permsLabel))
-
-	lines = append(lines, "")
-
-	for i, item := range m.claudeMenuItems {
-		prefix := "  "
-		labelStyle := dimStyle
-		if i == m.claudeMenuCursor {
-			prefix = "> "
-			labelStyle = lipgloss.NewStyle().Bold(true).Foreground(special)
-		}
-		shortcut := keyStyle.Render("[" + item.shortcut + "]")
-		lines = append(lines, prefix+shortcut+" "+labelStyle.Render(item.label))
-	}
-	lines = append(lines, "")
-	help := "press key or enter  @ toggle agent  ! toggle perms  esc back"
-	lines = append(lines, helpStyle.Render(help))
-
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(highlight).
-		Padding(1, 3).
-		Render(strings.Join(lines, "\n"))
-
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+	return m.viewLLMMenu()
 }

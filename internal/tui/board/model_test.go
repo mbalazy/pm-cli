@@ -416,7 +416,9 @@ func TestOpenClaudeMenu(t *testing.T) {
 		for i, item := range m.claudeMenuItems {
 			kinds[i] = item.kind
 		}
-		expected := []string{"here", "resume", "worktree", "project"}
+		// Ordered by how far each launch is from the checkout you are standing
+		// in: this repo, then an isolated worktree, then a session to rejoin.
+		expected := []string{"here", "worktree", "resume", "project"}
 		if len(kinds) != len(expected) {
 			t.Fatalf("items = %v, want %v", kinds, expected)
 		}
@@ -831,12 +833,12 @@ func TestViewClaudeMenuSkipPerms(t *testing.T) {
 				claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
 			},
 		}
-		output := m.viewClaudeMenu()
-		if !strings.Contains(output, "! toggle perms") {
-			t.Error("help text should mention ! toggle perms")
+		output := stripANSI(m.viewClaudeMenu())
+		if !strings.Contains(output, "! perms") {
+			t.Error("help text should mention the perms toggle")
 		}
-		if !strings.Contains(output, "@ toggle agent") {
-			t.Error("help text should mention @ toggle agent")
+		if !strings.Contains(output, "@ agent") {
+			t.Error("help text should mention the agent switch")
 		}
 	})
 
@@ -850,8 +852,10 @@ func TestViewClaudeMenuSkipPerms(t *testing.T) {
 				claudeMenuItems: []claudeMenuItem{{"Here", "here", "h"}},
 			},
 		}
+		// The agent is named in the TITLE - it decides what every item below
+		// does, so it sits where the eye lands rather than on a row of its own.
 		output := stripANSI(m.viewClaudeMenu())
-		if !strings.Contains(output, "Agent: Claude Code") {
+		if !strings.Contains(output, "Launch Claude Code") {
 			t.Error("should show Claude Code as selected agent")
 		}
 	})
@@ -867,7 +871,7 @@ func TestViewClaudeMenuSkipPerms(t *testing.T) {
 			},
 		}
 		output := stripANSI(m.viewClaudeMenu())
-		if !strings.Contains(output, "Agent: Codex") {
+		if !strings.Contains(output, "Launch Codex") {
 			t.Error("should show Codex as selected agent")
 		}
 		if !strings.Contains(output, "bypass sandbox") {

@@ -88,10 +88,14 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 	m.claudeMenuItems = nil
 	m.claudeMenuCursor = 0
 
+	// Every label below is the NAME of one variant - "here" or "tmux window" -
+	// and nothing else. Where a launch runs, which session it joins and what it
+	// costs are the renderer's job, said once per group and once in the command
+	// preview instead of once per line (view_menu_llm.go).
 	if m.projectScopeLaunch {
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "here", "h"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "tmux", "t"})
 			m.claudeMenuCursor = 1
 		}
 		return
@@ -166,15 +170,15 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 	}
 
 	if m.launchAgent == launchAgentCodex {
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "here", "h"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "tmux", "t"})
 		}
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree (here)", "worktree", "w"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "worktree", "w"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree + tmux", "worktree-tmux", "W"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "worktree-tmux", "W"})
 		}
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Project scope (no task)", "project", "p"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"project scope", "project", "p"})
 		if inTmux {
 			m.claudeMenuCursor = 1
 		}
@@ -183,9 +187,9 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 
 	if m.resumeOnly && m.forkMode {
 		// Fork sub-menu: fork from selected session
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Fork here", "fork", "h"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "fork", "h"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Fork in tmux", "fork-tmux", "t"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "fork-tmux", "t"})
 			m.claudeMenuCursor = 1 // default to tmux
 		}
 		return
@@ -194,27 +198,30 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 	hasSession := t != nil && lastSession(t) != ""
 	if m.resumeOnly {
 		// Resume sub-menu: only show resume options
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume here", "resume", "h"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "resume", "h"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume in tmux", "resume-tmux", "t"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "resume-tmux", "t"})
 			m.claudeMenuCursor = 1 // default to tmux
 		}
 	} else {
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Here (takes over terminal)", "here", "h"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "here", "h"})
 		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Tmux window", "tmux", "t"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "tmux", "t"})
+		}
+		// The worktree pair comes BEFORE resume now: the groups are ordered by
+		// how far a launch is from the checkout you are standing in, and resume
+		// is the one whose group header carries a session id worth reading last.
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "worktree", "w"})
+		if inTmux {
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "worktree-tmux", "W"})
 		}
 		if hasSession {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume session", "resume", "r"})
+			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"here", "resume", "r"})
 			if inTmux {
-				m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Resume in tmux", "resume-tmux", "R"})
+				m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"tmux window", "resume-tmux", "R"})
 			}
 		}
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree (here)", "worktree", "w"})
-		if inTmux {
-			m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Worktree + tmux", "worktree-tmux", "W"})
-		}
-		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"Project scope (no task)", "project", "p"})
+		m.claudeMenuItems = append(m.claudeMenuItems, claudeMenuItem{"project scope", "project", "p"})
 		// Smart default: tmux if available, else here
 		if inTmux {
 			for i, item := range m.claudeMenuItems {

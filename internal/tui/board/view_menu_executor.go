@@ -158,6 +158,20 @@ func (m Model) placeMenuBox(lines []string) string {
 // executorMenuBoxChrome is what the border and padding cost horizontally.
 const executorMenuBoxChrome = 2 + 2*3
 
+// menuLineBudget is how many cells one indented line inside the box may use.
+// The command preview is the one line whose length nobody controls - a task id,
+// a project slug and four flags add up - and an overlay that widens past the
+// terminal to fit it is worse than one that ends the command in an ellipsis.
+func menuLineBudget(width int) int {
+	if width <= 0 {
+		return 200 // no terminal size yet (tests, first frame): do not truncate
+	}
+	if b := width - executorMenuBoxChrome - 4; b > 24 {
+		return b
+	}
+	return 24
+}
+
 // executorMenuBody builds the overlay's lines and reports whether they fit the
 // terminal's width.
 func (m Model) executorMenuBody(compact bool) ([]string, bool) {
@@ -204,7 +218,11 @@ func (m Model) executorMenuBody(compact bool) ([]string, bool) {
 	for i, item := range m.claudeMenuItems {
 		sec := executorSectionOf(item.kind)
 		if sec != lastSection {
-			if lastSection != "" {
+			// In compact the header alone separates the groups, and the blank
+			// line above it is the first thing worth its rows of height. A
+			// group with NO header still needs one, or its items read as the
+			// tail of the group above.
+			if lastSection != "" && (!compact || sectionTitle[sec] == "") {
 				lines = append(lines, "")
 			}
 			if title := sectionTitle[sec]; title != "" {
@@ -280,7 +298,7 @@ func (m Model) executorMenuBody(compact bool) ([]string, bool) {
 	if t != nil && m.claudeMenuCursor < len(m.claudeMenuItems) {
 		args := m.executorLaunchArgs(t, m.executorIsTracker, m.claudeMenuItems[m.claudeMenuCursor].kind)
 		lines = append(lines, "")
-		lines = append(lines, "  "+dimStyle.Render("→ pm "+strings.Join(args, " ")))
+		lines = append(lines, "  "+dimStyle.Render(truncateWidth("→ pm "+strings.Join(args, " "), menuLineBudget(m.width))))
 	}
 
 	lines = append(lines, "")
@@ -290,13 +308,25 @@ func (m Model) executorMenuBody(compact bool) ([]string, bool) {
 	}
 	lines = append(lines, helpStyle.Render(help))
 
+	return lines, m.menuBoxFits(lines)
+}
+
+// menuBoxFits reports whether these lines, once boxed, sit inside the terminal
+// in BOTH directions. Height matters as much as width: lipgloss.Place centres
+// the box, so an overlay two lines too tall loses a line off each end - and the
+// bottom one is the help, which is where the way out is written.
+func (m Model) menuBoxFits(lines []string) bool {
+	if m.width <= 0 || m.height <= 0 {
+		return true // no terminal size yet (tests, first frame)
+	}
 	widest := 0
 	for _, l := range lines {
 		if w := lipgloss.Width(l); w > widest {
 			widest = w
 		}
 	}
-	return lines, m.width <= 0 || widest+executorMenuBoxChrome <= m.width
+	// The box costs 1 border + 1 padding row at the top and the same below.
+	return widest+executorMenuBoxChrome <= m.width && len(lines)+4 <= m.height
 }
 
 // padRight pads s to w display cells (never truncates - a name longer than the
