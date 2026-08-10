@@ -41,7 +41,7 @@ func (m Model) viewHelp() string {
 		{"F", "Acceptance report (detail / runs view)"},
 		{"R", "Runs view (every run + acceptance)"},
 		{"o / Enter", "Task detail"},
-		{"/ ", "Search tasks"},
+		{"/ ", "Search tasks (-<id> = ID only)"},
 		{";", "Zoom toggle"},
 		{"t", "Toggle focus"},
 		{"T", "Focus view"},
