@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mbalazy/pm/internal/storage"
 )
 
 // isGitRepo reports whether dir is inside a git work tree.
@@ -210,6 +212,45 @@ func quoteArgs(args []string) []string {
 		}
 	}
 	return out
+}
+
+// gitHeadSHA is the commit a worker is about to start from. Empty on any
+// failure - every caller treats that as "unknown" and degrades rather than
+// guessing.
+// countUnreviewedCommits fills in how many commits the sub landed AFTER the last
+// reviewer that actually ran, using the tip that reviewer could see
+// (t.LastReviewedHead) and the sub's tip now.
+//
+// This is the machine-readable half of a state that used to live only in the
+// worker's prose: a capped review loop cannot review its own last fix, because
+// the round that would is the round past the cap. `blocked` says "something is
+// unresolved"; this says "N commits of this branch were never adversarially
+// reviewed", which is a different instruction to whoever picks the branch up.
+//
+// Silent no-op on every degraded path (no telemetry, no head recorded, a git
+// that will not answer): the number is evidence, and a guessed one would be
+// worse than none. A head that is no longer reachable - the worker rebased or
+// amended its own history - is one of those paths: rev-list fails and the count
+// stays 0 rather than becoming a fiction.
+func countUnreviewedCommits(dir string, t *storage.ReviewTelemetry) {
+	if t == nil || t.LastReviewedHead == "" || dir == "" {
+		return
+	}
+	head := gitHeadSHA(dir)
+	if head == "" || head == t.LastReviewedHead {
+		return
+	}
+	c := exec.Command("git", "rev-list", "--count", t.LastReviewedHead+"..HEAD")
+	c.Dir = dir
+	out, err := c.Output()
+	if err != nil {
+		return
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || n <= 0 {
+		return
+	}
+	t.UnreviewedCommits = n
 }
 
 // gitHeadSHA is the commit a worker is about to start from. Empty on any

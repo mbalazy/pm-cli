@@ -875,6 +875,12 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// on plan.sessionID (what pm pinned and baked into the hook command), not on
 	// the id the envelope reports, which a dead worker never sends.
 	telemetry := storage.CollectReviewTelemetry(store.ProjectDir(task.Project), plan.sessionID)
+	// How much of the sub's own work no reviewer ever saw. Measured HERE because
+	// this is the only place that knows both halves: the last tip a reviewer could
+	// see (telemetry, from the hook) and the tip the sub actually ended on. It has
+	// to run before the manager merges or pushes anything, or the count would
+	// include commits that are not the sub's.
+	countUnreviewedCommits(dir, telemetry)
 	if res != nil {
 		res.Review = telemetry
 	}
