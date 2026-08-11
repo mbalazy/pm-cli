@@ -571,11 +571,21 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		journalDir = workDir
 	}
 	epicStart := time.Now()
-	_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
+	// Close any earlier crash of this project that never got a terminal line,
+	// BEFORE adding a start line of our own. This run is frequently the re-run OF
+	// that crash, which is when its reason is worth reading.
+	reportReconciledCrashes(errOut, stateDir, "pm run-epic")
+	start := storage.JournalEntry{
 		Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID, RunID: runID,
 		PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Independent: independentMode, Branch: journalBranch,
 		WorkDir: journalDir, Baseline: baselineUsed,
-	})
+	}
+	_ = storage.AppendJournal(stateDir, &start)
+	// From here until the end line below, a catchable signal (a terminal's Ctrl-C,
+	// a session harness taking the process group down, the board's kill) journals
+	// its own terminal line naming the signal instead of leaving this start line
+	// orphaned - see armCrashJournal.
+	defer armCrashJournal(stateDir, start)()
 
 	// ID -> sub for the dependency gate. Pointers are shared with the loop,
 	// so statuses mutated by driveSub are visible to later subs' gates.

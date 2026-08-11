@@ -138,6 +138,10 @@ func forwardTerminalSignals(pid *atomic.Int64) func() {
 			if !ok {
 				return
 			}
+			// Before anything else, and before the re-raise below kills this
+			// process: this is the only moment a catchable death can be recorded
+			// (see executor_crash.go). A no-op unless a run armed it.
+			journalTerminalSignal(sig)
 			stopGroup(int(pid.Load()))
 			signal.Stop(sigc)
 			_ = syscall.Kill(os.Getpid(), sig)

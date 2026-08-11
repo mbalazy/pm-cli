@@ -16,9 +16,14 @@ import (
 // why, how long do runs take") that feed back into the epic flow.
 //
 // Event model: every run appends a "start" line when it begins and an "end"
-// line when it finishes; a kill from the board appends "killed". A "start"
-// with no matching "end"/"killed" line means the run crashed or was killed
-// externally (SIGKILL, reboot) - itself a signal worth surfacing in analysis.
+// line when it finishes; a kill appends "killed" - from the board, or from the
+// dying manager itself when it catches the signal (that line names the signal in
+// Error). A death nothing can catch - SIGKILL, an OOM kill, a reboot - is
+// reconciled AFTERWARDS by the next run in that project, which appends "crashed"
+// carrying what the dead run's run-state still establishes (see
+// ReconcileCrashedRuns). A "start" with no terminal line at all therefore means
+// a crash that has not been reconciled yet - and, since it is what every journal
+// written before this looks like, consumers must keep counting it.
 // All appends are best-effort observability, same contract as WriteRunState:
 // a failed write costs history, never correctness.
 
@@ -27,6 +32,11 @@ const (
 	JournalEventStart  = "start"
 	JournalEventEnd    = "end"
 	JournalEventKilled = "killed"
+	// JournalEventCrashed closes a run whose manager died without being able to
+	// write anything itself. Written by the NEXT run in the project, not by the
+	// dead one, so its Error says what could be reconstructed rather than a cause
+	// nobody observed.
+	JournalEventCrashed = "crashed"
 )
 
 // JournalSub is one sub's outcome inside an "end" event (a single entry for
