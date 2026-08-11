@@ -157,6 +157,33 @@ func TestDoctorUnknownRuntimeSkillIsError(t *testing.T) {
 	}
 }
 
+func TestDoctorRigSkill(t *testing.T) {
+	t.Run("declared and resolved is a passing finding", func(t *testing.T) {
+		proj, _ := handoffProject(t, "x")
+		if levelOf(t, runExecutorDoctor(proj), "rig skill /start-rig") != levelOK {
+			t.Error("a resolved rig skill is a passing finding")
+		}
+	})
+
+	t.Run("declared but absent is an ERROR", func(t *testing.T) {
+		proj, _ := handoffProject(t, "x")
+		proj.Executor.Handoff.RigSkill = "no-such-rig"
+
+		if levelOf(t, runExecutorDoctor(proj), `handoff.rig_skill "no-such-rig" not found`) != levelError {
+			t.Error("a declared-but-absent rig skill is a binary fact and must be an ERROR")
+		}
+	})
+
+	t.Run("unset is silence, not a warning", func(t *testing.T) {
+		proj, _ := handoffProject(t, "x")
+		proj.Executor.Handoff.RigSkill = ""
+
+		if c := findCheck(runExecutorDoctor(proj), "rig"); c != nil {
+			t.Errorf("an optional field left unset must produce no finding, got [%s] %s", c.Level.tag(), c.Msg)
+		}
+	})
+}
+
 func TestDoctorDeadContextRepoIsError(t *testing.T) {
 	proj, _ := handoffProject(t, "x")
 	proj.Executor.ContextRepos = map[string]string{"backend": "/definitely/not/here"}

@@ -19,6 +19,7 @@ func handoffProject(t *testing.T, playbook string) (*storage.Project, string) {
 	writeFile(t, filepath.Join(skill, "SKILL.md"), "# simulator-verify")
 	writeFile(t, filepath.Join(skill, "scripts", "measure-element.py"), "")
 	writeFile(t, filepath.Join(skill, "scripts", "read-rn-logs.sh"), "")
+	writeFile(t, filepath.Join(repo, ".claude", "skills", "start-rig", "SKILL.md"), "# start-rig")
 
 	proj := &storage.Project{
 		Name: "Demo",
@@ -39,6 +40,7 @@ func handoffProject(t *testing.T, playbook string) (*storage.Project, string) {
 			Handoff: storage.Handoff{
 				Playbook:     ".claude/evidence-playbook.md",
 				RuntimeSkill: "simulator-verify",
+				RigSkill:     "start-rig",
 			},
 			StartStatus: "todo", WipStatus: "doing", DoneStatus: "merged", FixRounds: 3,
 		},
@@ -70,6 +72,8 @@ func TestRenderExecutorProfile(t *testing.T) {
 		"runtime skill: /simulator-verify",
 		"measure-element.py",
 		"read-rn-logs.sh",
+		"rig skill:     /start-rig",
+		"stands the runtime up when it is down",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("profile missing %q\n---\n%s", want, out)

@@ -289,6 +289,21 @@ func checkHandoff(e storage.Executor, projPath string) []check {
 			fmt.Sprintf("runtime skill /%s -> %s (%d script(s))", h.RuntimeSkill, h.SkillPath, len(h.Scripts)), ""})
 	}
 
+	// rig_skill is optional - a runtime that needs no standing up has nothing
+	// to declare - so an unset value is silence, not a warning. But a declared
+	// name that resolves nowhere is a binary filesystem fact: the acceptance
+	// would be sent to a cold-start procedure that does not exist.
+	switch {
+	case h.RigSkill == "":
+	case h.RigSkillPath == "":
+		out = append(out, check{levelError,
+			fmt.Sprintf("handoff.rig_skill %q not found under .claude/skills, .claude/commands or ~/.claude/skills", h.RigSkill),
+			"fix the name or add the skill"})
+	default:
+		out = append(out, check{levelOK,
+			fmt.Sprintf("rig skill /%s -> %s", h.RigSkill, h.RigSkillPath), ""})
+	}
+
 	if !h.PlaybookExists {
 		return out
 	}
