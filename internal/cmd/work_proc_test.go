@@ -272,7 +272,17 @@ const forwardChildEnv = "PM_TEST_FORWARD_CHILD"
 // it the way killRun does, and checks the worker's descendants died with it.
 func TestForwardedSignalTakesTheWorkerTreeDown(t *testing.T) {
 	if dir := os.Getenv(forwardChildEnv); dir != "" {
-		// Manager role: block on a worker that would otherwise run for 10m.
+		// Manager role: journal a start line, arm the crash journal exactly as a
+		// real run does, then block on a worker that would otherwise run for 10m.
+		// The deferred disarm below can never run - the forwarder re-raises the
+		// signal with default handling - which is precisely why the killed line has
+		// to be written from inside the handler.
+		start := storage.JournalEntry{
+			Event: storage.JournalEventStart, Kind: storage.RunKindEpic,
+			Project: "proj", TaskID: "proj-1", RunID: "run-sig", PID: os.Getpid(),
+		}
+		_ = storage.AppendJournal(dir, &start)
+		defer armCrashJournal(dir, start)()
 		_, _, _ = runWorker(os.Stderr, dir, []string{"-p", "x"}, 10*time.Minute, "", nil, "", nil)
 		return
 	}
@@ -333,6 +343,29 @@ func TestForwardedSignalTakesTheWorkerTreeDown(t *testing.T) {
 		t.Fatal("the manager survived the SIGTERM it was supposed to forward and re-raise")
 	}
 	requirePidGone(t, pid, "the worker tree of a SIGTERM'd manager")
+
+	// The other half of dying by signal: SAY SO in the journal. Without this the
+	// manager leaves an orphaned `start` line indistinguishable from a SIGKILL,
+	// which is how three runs in the 2026-08-11 retro window became unexplainable.
+	entries, err := storage.ReadJournal(dir)
+	if err != nil {
+		t.Fatalf("read journal: %v", err)
+	}
+	var killed *storage.JournalEntry
+	for i := range entries {
+		if entries[i].Event == storage.JournalEventKilled {
+			killed = &entries[i]
+		}
+	}
+	if killed == nil {
+		t.Fatalf("a SIGTERM'd manager must journal its own terminal line, got %+v", entries)
+	}
+	if killed.RunID != "run-sig" {
+		t.Errorf("killed line run id = %q, want the start line's own id (that is what pairs them)", killed.RunID)
+	}
+	if !strings.Contains(killed.Error, "SIGTERM") {
+		t.Errorf("killed line does not name the signal: %q", killed.Error)
+	}
 }
 
 // TestExecuteWorkPublishesTheWorkerGroup covers the handle an outside observer

@@ -790,13 +790,20 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		// heartbeat goroutine below shares this exact struct.
 		runw = storage.NewRunWriter(stateDir, run)
 		_ = runw.Update(nil)
+		// Close any earlier crash of this project that never got a terminal line,
+		// BEFORE adding a start line of our own (see reportReconciledCrashes).
+		reportReconciledCrashes(opts.stderr(), stateDir, "pm work")
 		// Journal start line (durable cross-run history; epic subs are journaled
 		// by the manager instead). Best-effort like the run-state writes.
-		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
+		start := storage.JournalEntry{
 			Event: storage.JournalEventStart, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
 			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
 			WorkDir: journalDir, Baseline: baselineUsed,
-		})
+		}
+		_ = storage.AppendJournal(stateDir, &start)
+		// From here until the end line, a catchable signal journals its own
+		// terminal line instead of leaving the start line orphaned.
+		defer armCrashJournal(stateDir, start)()
 	}
 
 	fmt.Fprintf(opts.stderr(), "pm work: launching headless worker for %s on %s (%s)...\n", task.Meta.ID, plan.branch, modeLabel(opts.standalone))

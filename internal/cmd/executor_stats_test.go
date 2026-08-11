@@ -792,7 +792,7 @@ func TestRenderJournalStats(t *testing.T) {
 		"# executor stats: app",
 		"/tmp/app/.executor/journal.jsonl (7 parsed entries)",
 		"## Runs: 4",
-		"crashed 1 (start with no end/killed line)",
+		"crashed 1 (a reconciled crash line, or a start with no terminal line at all)",
 		"## Subs: 2",
 		"turns     60 total, 60.0 avg (1 sub(s))",
 		"cost      $2.00 total, $2.00 avg (1 sub(s))",
@@ -884,7 +884,7 @@ func TestRenderJournalStatsShowsRunningRun(t *testing.T) {
 		ignoreRef(func(pid int) bool { return pid == 700 }), testNow)
 	out := renderJournalStats("app", "/tmp/j.jsonl", st)
 
-	if !strings.Contains(out, "running 1 (no end/killed line yet, pid still alive)") {
+	if !strings.Contains(out, "running 1 (no terminal line yet, pid still alive)") {
 		t.Errorf("a live unpaired start should render as running\n---\n%s", out)
 	}
 	if strings.Contains(out, "crashed") {

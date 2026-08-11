@@ -11,9 +11,11 @@ import (
 )
 
 // Run statuses used in the rollup. done/failed come off the end line (the same
-// vocabulary RunState uses); the rest are synthesised here for a start line
-// with no terminal partner - "crashed" is the documented start-without-end
-// convention, "running" is that same shape while the pid is still alive.
+// vocabulary RunState uses); "killed" and "crashed" come off the lines of those
+// names, and "crashed" is ALSO synthesised for a start line with no terminal
+// partner at all (an unreconciled crash - every journal written before pm
+// recorded reasons looks like that). "running" is that same shape while the pid
+// is still alive.
 const (
 	runStatusKilled  = "killed"
 	runStatusCrashed = "crashed"
@@ -85,11 +87,16 @@ type kindStats struct {
 
 // journalStats is the whole-journal rollup rendered by `pm executor stats`.
 type journalStats struct {
-	Entries     int
-	Runs        int // starts seen (one per run)
-	Kinds       map[string]*kindStats
-	Crashes     int // starts with no end/killed partner, holder pid dead
-	Running     int // starts with no end/killed partner, holder pid still alive
+	Entries int
+	Runs    int // starts seen (one per run)
+	Kinds   map[string]*kindStats
+	Crashes int // runs with no orderly end: a reconciled `crashed` line, or a start with no terminal partner at all
+	Running int // starts with no terminal partner, holder pid still alive
+	// Deaths are the runs that ended by signal or crash AND said why (the
+	// `killed`/`crashed` lines carrying an Error). This is the half a count could
+	// never give: "crashed 2" tells a retro the shape, the reason tells it what to
+	// fix. Ordered as the journal has them, oldest first.
+	Deaths      []runDeath
 	Subs        int
 	SubResults  map[string]int
 	SubDuration numStat
@@ -111,6 +118,15 @@ type journalStats struct {
 	ToolCalls        int            // exploration calls (Read/Grep/Glob) made by subagents
 	ToolDenied       int            // of those attempts, how many the per-agent budget refused
 	ReviewModels     map[string]int // model (or "inherit") -> subs that asked for it
+}
+
+// runDeath is one recorded abnormal end: which run, when, and the reason the
+// dying manager (or the reconciler that found it) wrote down.
+type runDeath struct {
+	Event  string // killed | crashed
+	TaskID string
+	TS     string
+	Reason string
 }
 
 // runKey identifies a run across its start/terminal lines.
@@ -138,8 +154,8 @@ type runKey struct {
 const liveWindow = 24 * time.Hour
 
 // aggregateJournal folds journal entries into the rollup. Start lines are
-// paired FIFO with their terminal (end/killed) line by runKey; leftover starts
-// are crashes (or still-running runs, when the pid is alive and recent).
+// paired FIFO with their terminal (end/killed/crashed) line by runKey; leftover
+// starts are crashes (or still-running runs, when the pid is alive and recent).
 //
 // Entries carrying a run id pair EXACTLY (see runKey). The heuristics below
 // exist for pre-0.27.0 lines, which have no id and can only be paired by
@@ -190,7 +206,7 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int, time.Time)
 			st.kind(e.Kind).Runs++
 			open[key]++
 			startTS[key] = append(startTS[key], e.TS)
-		case storage.JournalEventEnd, storage.JournalEventKilled:
+		case storage.JournalEventEnd, storage.JournalEventKilled, storage.JournalEventCrashed:
 			duplicate := false
 			switch {
 			case open[key] > 0:
@@ -221,6 +237,16 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int, time.Time)
 			k := st.kind(e.Kind)
 			if !duplicate {
 				k.Statuses[terminalStatus(e)]++
+				// A reconciled crash is counted here rather than by the
+				// leftover-start pass below, which can no longer see it: the
+				// crashed line closed the start. Both paths feed the same counter,
+				// so the total is "runs with no orderly end" either way.
+				if e.Event == storage.JournalEventCrashed {
+					st.Crashes++
+				}
+			}
+			if e.Error != "" && e.Event != storage.JournalEventEnd {
+				st.Deaths = append(st.Deaths, runDeath{Event: e.Event, TaskID: e.TaskID, TS: e.TS, Reason: e.Error})
 			}
 			// Run-level duration is only ever sampled off "end" lines (see
 			// kindStats.DurationS) - there is exactly one such line per
@@ -390,6 +416,13 @@ func terminalStatus(e storage.JournalEntry) string {
 	if e.Event == storage.JournalEventKilled {
 		return runStatusKilled
 	}
+	// A reconciled crash carries Status "failed" (the run did fail), but as a run
+	// STATUS it is a crash - the histogram must not report it as an orderly
+	// failure, and a crash reconciled from a run-state has to land in the same row
+	// as one still detectable only as an orphaned start.
+	if e.Event == storage.JournalEventCrashed {
+		return runStatusCrashed
+	}
 	if e.Status == "" {
 		return runStatusUnknown
 	}
@@ -465,12 +498,13 @@ func renderJournalStats(slug, path string, st journalStats) string {
 	if st.Crashes > 0 || st.Running > 0 {
 		fmt.Fprintln(&b, "  -- across all kinds (already counted above):")
 		if st.Crashes > 0 {
-			fmt.Fprintf(&b, "     crashed %d (start with no end/killed line)\n", st.Crashes)
+			fmt.Fprintf(&b, "     crashed %d (a reconciled crash line, or a start with no terminal line at all)\n", st.Crashes)
 		}
 		if st.Running > 0 {
-			fmt.Fprintf(&b, "     running %d (no end/killed line yet, pid still alive)\n", st.Running)
+			fmt.Fprintf(&b, "     running %d (no terminal line yet, pid still alive)\n", st.Running)
 		}
 	}
+	renderDeaths(&b, st.Deaths)
 
 	// Re-entrancy warning is not cosmetic: a re-run of an 8-sub epic where 5
 	// subs are already done records 5 more "skipped" rows, so the raw count
@@ -499,6 +533,32 @@ func renderJournalStats(slug, path string, st journalStats) string {
 		st.Cost.Total, st.Cost.avg(), st.Cost.Samples)
 	renderReviewStats(&b, st)
 	return b.String()
+}
+
+// deathReasonsShown bounds the printed reasons. The journal spans months, and a
+// retro reads this to ask "what killed the recent runs" - an unbounded list would
+// push the sub histogram off the screen. The count line says how many were held
+// back, and the journal itself holds all of them.
+const deathReasonsShown = 5
+
+// renderDeaths prints why the abnormal ends happened, newest last. Nothing is
+// printed when nothing said why - which is what every journal line written before
+// pm recorded reasons looks like, and reporting "0 reasons" on those would read
+// as "the deaths had no cause" rather than "nobody was writing them down".
+func renderDeaths(b *strings.Builder, deaths []runDeath) {
+	if len(deaths) == 0 {
+		return
+	}
+	shown := deaths
+	if len(shown) > deathReasonsShown {
+		shown = shown[len(shown)-deathReasonsShown:]
+		fmt.Fprintf(b, "  -- why runs ended abnormally (last %d of %d recorded):\n", len(shown), len(deaths))
+	} else {
+		fmt.Fprintf(b, "  -- why runs ended abnormally (%d recorded):\n", len(deaths))
+	}
+	for _, d := range shown {
+		fmt.Fprintf(b, "     %s %s %s\n        %s\n", d.TS, d.Event, d.TaskID, d.Reason)
+	}
 }
 
 // renderReviewStats prints the review-phase section. Omitted entirely when no
