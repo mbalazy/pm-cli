@@ -50,6 +50,13 @@ type ReviewSpawn struct {
 	// something - so dropping it would make an enforced run look like one where
 	// the worker simply behaved.
 	Denied bool `json:"denied,omitempty"`
+	// Head is the repo's HEAD commit when the spawn was judged, i.e. the tip this
+	// reviewer could possibly have seen. It is what makes "the last fix was never
+	// reviewed" a MEASURABLE fact rather than a sentence in the worker's prose:
+	// compare the last allowed spawn's Head against the sub's final tip and the
+	// commits in between are the ones no reviewer looked at. Empty when the head
+	// could not be read (no git dir), which degrades to no signal.
+	Head string `json:"head,omitempty"`
 }
 
 // AgentToolCall is one exploration tool call (Read/Grep/Glob) made from INSIDE
@@ -155,6 +162,26 @@ type ReviewTelemetry struct {
 	// model wins over an agent definition's, so "inherit" and an explicit name
 	// are genuinely different facts).
 	Models string `json:"models,omitempty"`
+	// LastReviewedHead is the repo tip the LAST reviewer that actually ran could
+	// see (top-level, not denied). UnreviewedCommits is how many commits the sub
+	// added after it - filled in by the caller once the worker is done, since only
+	// it knows the final tip (see storage.CountUnreviewedCommits).
+	//
+	// The pair exists to separate two states that both come back as `blocked` with
+	// prose in `unresolved`: "findings are still open at the round cap" and "the
+	// findings were fixed, but the LAST fix landed after the cap and nothing
+	// reviewed it". The second is structural to any capped loop - the round that
+	// would check the final fix is the round past the cap - and it was readable
+	// only inside a sentence (orbit-114-1, $23.75: "the final mechanism ...
+	// landed after the review round cap and has had NO adversarial review").
+	// UnreviewedCommits > 0 is now that same fact, in a number.
+	//
+	// Commits are the unit, so a final fix left UNCOMMITTED does not register.
+	// That is the honest limit of a cheap signal: the workers commit as they go
+	// (which is why a timed-out sub still has a branch), and the alternative -
+	// hashing trees - buys a case nobody has observed.
+	LastReviewedHead  string `json:"last_reviewed_head,omitempty"`
+	UnreviewedCommits int    `json:"unreviewed_commits,omitempty"`
 }
 
 // ReviewRoundGap separates one review round from the next. Measured 2026-08-07
@@ -298,6 +325,11 @@ func AggregateReviewSpawns(spawns []ReviewSpawn) *ReviewTelemetry {
 		}
 		if s.Nested {
 			continue
+		}
+		// The spawns file is append-only and written in judgement order, so the
+		// last top-level allowed spawn's head is the newest tip any reviewer saw.
+		if s.Head != "" {
+			t.LastReviewedHead = s.Head
 		}
 		if ts, err := time.Parse(time.RFC3339Nano, s.TS); err == nil {
 			topTimes = append(topTimes, ts)

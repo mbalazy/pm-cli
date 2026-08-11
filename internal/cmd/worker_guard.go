@@ -274,8 +274,13 @@ func spawnRecord(ev hookEvent, now time.Time) storage.ReviewSpawn {
 		Model:        ev.ToolInput.Model,
 		SubagentType: ev.ToolInput.SubagentType,
 		HasDiff:      promptCarriesDiff(ev.ToolInput.Prompt),
-		Nested:       ev.AgentID != "",
-		AgentType:    ev.AgentType,
+		// The tip this reviewer could see. Recorded per spawn rather than once per
+		// round because the worker commits between rounds, and the only head that
+		// matters afterwards is the LAST one a reviewer got (see
+		// countUnreviewedCommits).
+		Head:      gitHeadSHA(guardDir(ev)),
+		Nested:    ev.AgentID != "",
+		AgentType: ev.AgentType,
 		// What the WORKER asked for, before pm forces the spawn synchronous -
 		// absent means the tool's background default, so it counts.
 		Background: ev.ToolInput.RunInBackground == nil || *ev.ToolInput.RunInBackground,

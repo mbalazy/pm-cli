@@ -115,9 +115,18 @@ type journalStats struct {
 	// BackgroundSpawns: spawns the worker asked to run in the background (or
 	// left to the tool's background default) before pm forced them synchronous.
 	BackgroundSpawns int
-	ToolCalls        int            // exploration calls (Read/Grep/Glob) made by subagents
-	ToolDenied       int            // of those attempts, how many the per-agent budget refused
-	ReviewModels     map[string]int // model (or "inherit") -> subs that asked for it
+	ToolCalls        int // exploration calls (Read/Grep/Glob) made by subagents
+	ToolDenied       int // of those attempts, how many the per-agent budget refused
+	// UnreviewedSubs / UnreviewedCommits: subs that committed AFTER their last
+	// reviewer ran, and how many such commits there were in total. This is the
+	// structural version of a sentence that used to live only in a worker's prose
+	// - "the final mechanism ... landed after the review round cap and has had NO
+	// adversarial review" - and it is what separates a `blocked` with findings
+	// still open from a `blocked` whose findings were all fixed by a last commit
+	// nothing checked.
+	UnreviewedSubs    int
+	UnreviewedCommits int
+	ReviewModels      map[string]int // model (or "inherit") -> subs that asked for it
 }
 
 // runDeath is one recorded abnormal end: which run, when, and the reason the
@@ -379,6 +388,10 @@ func (s *journalStats) addSubs(subs []storage.JournalSub) {
 			s.BackgroundSpawns += r.Background
 			s.ToolCalls += r.ToolCalls
 			s.ToolDenied += r.ToolDenied
+			if r.UnreviewedCommits > 0 {
+				s.UnreviewedSubs++
+				s.UnreviewedCommits += r.UnreviewedCommits
+			}
 			if s.ReviewModels == nil {
 				s.ReviewModels = map[string]int{}
 			}
@@ -598,6 +611,15 @@ func renderReviewStats(b *strings.Builder, st journalStats) {
 		// What the worker asked for - pm forced these synchronous (pm-cli-105),
 		// so the count measures the ask, not a review that was actually lost.
 		fmt.Fprintf(b, "  async ask %d spawn(s) asked for (or defaulted to) background; pm forced them synchronous\n", st.BackgroundSpawns)
+	}
+	if st.UnreviewedSubs > 0 {
+		// The line a retro is looking for when a sub came back `blocked` after a
+		// long review loop: not "was something unresolved" but "how much of this
+		// branch did no reviewer see". A capped loop cannot review its own last
+		// fix, so this is expected to be non-zero sometimes - what matters is that
+		// it is a number on the branch, not a sentence in a note.
+		fmt.Fprintf(b, "  unreviewed %d sub(s) landed %d commit(s) after their last review - nothing reviewed those\n",
+			st.UnreviewedSubs, st.UnreviewedCommits)
 	}
 	if st.ToolCalls > 0 || st.ToolDenied > 0 {
 		// The budget's own evidence line: without the refusal count an enforced

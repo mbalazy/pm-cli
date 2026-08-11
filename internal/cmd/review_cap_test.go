@@ -269,6 +269,18 @@ func TestJudgeAgentSpawnEnforcesTheCap(t *testing.T) {
 	if agg.Rounds != 2 {
 		t.Errorf("rounds = %d, want 2", agg.Rounds)
 	}
+	// Each recorded spawn carries the tip that reviewer could see, which is what
+	// makes "the last fix was never reviewed" countable afterwards (see
+	// countUnreviewedCommits). The head here is the base commit: the worker's
+	// changes are still uncommitted.
+	for i, sp := range spawns {
+		if sp.Head != base {
+			t.Errorf("spawn %d recorded head %q, want the repo tip %q", i, sp.Head, base)
+		}
+	}
+	if agg.LastReviewedHead != base {
+		t.Errorf("LastReviewedHead = %q, want %q", agg.LastReviewedHead, base)
+	}
 }
 
 // The contrast with the test above, on the same shape: prose instead of code.
