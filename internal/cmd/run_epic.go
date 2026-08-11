@@ -84,7 +84,8 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := epicOptions{
-				model: model, maxTurns: maxTurns, yolo: yolo, timeout: timeout,
+				model: model, maxTurns: maxTurns, yolo: yolo,
+				timeout: timeout, timeoutSet: cmd.Flags().Changed("timeout"),
 				base: base, noPR: noPR, allowDirty: allowDirty,
 				additional: additional, slotPin: slotPin, independent: independent,
 				thenFinish: thenFinish, thenFinishSet: cmd.Flags().Changed("then-finish"),
@@ -108,7 +109,7 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 	cmd.Flags().StringVar(&model, "model", "opus", "model for the workers")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 150, "max agent turns per worker")
 	cmd.Flags().BoolVar(&yolo, "yolo", false, "bypass all permission checks in the workers")
-	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Minute, "max wall-clock time per worker")
+	cmd.Flags().DurationVar(&timeout, "timeout", defaultWorkerTimeout, "max wall-clock time per worker (overrides the project's executor.timeout)")
 	cmd.Flags().StringVar(&base, "base", "", "base branch the integration branch forks from (default: with --additional executor.base_branch, else main)")
 	cmd.Flags().BoolVar(&noPR, "no-pr", false, "do not open the final epic->main draft PR")
 	cmd.Flags().BoolVar(&allowDirty, "allow-dirty", false, "skip the clean-working-tree precondition")
@@ -133,6 +134,7 @@ type epicOptions struct {
 	maxTurns    int
 	yolo        bool
 	timeout     time.Duration
+	timeoutSet  bool // --timeout was passed explicitly - it then outranks executor.timeout
 	base        string
 	noPR        bool
 	allowDirty  bool
@@ -200,7 +202,11 @@ type epicPlan struct {
 	autoFinish bool
 	epicBranch string
 	baseBranch string
-	slots      []storage.ResolvedWorktree
+	// timeout is the RESOLVED per-worker ceiling every sub of this run gets
+	// (--timeout > executor.timeout > the flag default), see resolveWorkerTimeout.
+	// Resolved once for the whole run so subs cannot disagree about it.
+	timeout time.Duration
+	slots   []storage.ResolvedWorktree
 	// workDir is where the run will happen - the main checkout, or (additional
 	// mode) a PROVISIONAL description of the slot pool for the dry-run display;
 	// the real slot is claimed in executeEpic.
@@ -284,6 +290,7 @@ func planEpic(store storage.TaskStore, args []string, opts epicOptions) (*epicPl
 		autoFinish:     resolveAutoFinish(opts, tracker.Meta.FinishMode),
 		epicBranch:     "epic/" + tracker.Meta.ID,
 		baseBranch:     resolveWorktreeBase(opts.base, execBase, "main"),
+		timeout:        resolveWorkerTimeout(opts.timeout, opts.timeoutSet, exc.Timeout),
 		slots:          slots,
 		workDir:        workDir,
 	}, nil
@@ -390,7 +397,8 @@ func printEpicDryRun(plan *epicPlan, opts epicOptions) error {
 	if bl := strings.TrimSpace(plan.exc.Baseline); bl != "" {
 		fmt.Fprintf(opts.stdout(), "\nbaseline (once per run, injected into every worker prompt): %s\n", bl)
 	}
-	fmt.Fprintf(opts.stdout(), "\nacceptance after the run: %s\n", describeAutoFinish(plan, opts))
+	fmt.Fprintf(opts.stdout(), "\nper-worker timeout: %s\n", describeTimeout(plan.timeout, opts.timeoutSet, plan.exc.Timeout))
+	fmt.Fprintf(opts.stdout(), "acceptance after the run: %s\n", describeAutoFinish(plan, opts))
 	return plan.doneStatusGate
 }
 
@@ -482,7 +490,10 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 
 	workOpts := workOptions{
 		standalone: false, model: opts.model, maxTurns: opts.maxTurns, yolo: opts.yolo,
-		allowDirty: true, timeout: opts.timeout, additional: opts.additional, independent: independentMode,
+		// timeout comes from the PLAN, already resolved against the project's
+		// executor.timeout, and is marked as set so the sub's own planWork keeps
+		// the manager's number instead of resolving it a second time.
+		allowDirty: true, timeout: plan.timeout, timeoutSet: true, additional: opts.additional, independent: independentMode,
 		errOut: errOut,
 	}
 	if opts.additional {

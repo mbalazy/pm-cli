@@ -104,6 +104,19 @@ type Executor struct {
 	FixRounds             int                     `yaml:"fix_rounds,omitempty"` // review->fix loop cap before escalating
 	Phases                map[string]PhaseBinding `yaml:"phases,omitempty"`
 	Notes                 string                  `yaml:"notes,omitempty"`
+	// Timeout is the wall-clock ceiling for ONE worker in this project, as a
+	// duration string ("90m"). Empty/zero = the command's own default (60m); an
+	// explicit --timeout on the run still wins over both.
+	//
+	// It exists because the ceiling is a property of the PROJECT (how long a real
+	// sub takes on this machine, in this repo, with this test suite) while the
+	// only place to say it was a flag - so a slower machine needed the flag
+	// remembered on every single invocation, and the runs that hit the wall show
+	// what forgetting costs: pm-cli-57, pm-cli-72-1 and orbit-1-2 all died
+	// at ~3600 s with their branch ALREADY pushed, i.e. real work truncated, not a
+	// hung worker. In the same window five green subs finished between 2839 s and
+	// 3530 s - the wall sits inside the distribution, not outside it.
+	Timeout Duration `yaml:"timeout,omitempty"`
 	// ReviewModel is the model reviewer subagents run on, independent of the
 	// run's own --model. Reviewers were the single largest line item measured in
 	// epic orbit-106 (58% of the epic's tokens) and they inherited opus
