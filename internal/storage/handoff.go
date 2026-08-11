@@ -35,11 +35,22 @@ type Handoff struct {
 	// (simulator, device, browser) - the one an acceptance needs in full, not by its
 	// one-line description. Bare name, with or without a leading "/".
 	RuntimeSkill string `yaml:"runtime_skill,omitempty"`
+	// RigSkill names the skill that STANDS UP the runtime when it is down -
+	// the cold-start procedure (local backend, dev server, booting the rig).
+	// RuntimeSkill drives a runtime that exists; RigSkill brings one into
+	// existence. Optional: a project whose runtime needs no standing up has
+	// nothing to declare here. Unlike the runtime skill it often lives in the
+	// user's GLOBAL skills (~/.claude/skills) rather than the repo - how to
+	// stand up a dev loop is machine knowledge, not repo knowledge - so
+	// resolution falls back there. Bare name, with or without a leading "/".
+	RigSkill string `yaml:"rig_skill,omitempty"`
 }
 
 // IsZero reports whether the project declares no handoff contract at all.
 func (h Handoff) IsZero() bool {
-	return strings.TrimSpace(h.Playbook) == "" && strings.TrimSpace(h.RuntimeSkill) == ""
+	return strings.TrimSpace(h.Playbook) == "" &&
+		strings.TrimSpace(h.RuntimeSkill) == "" &&
+		strings.TrimSpace(h.RigSkill) == ""
 }
 
 // ResolvedHandoff is the handoff contract resolved against the repo on disk:
@@ -55,6 +66,8 @@ type ResolvedHandoff struct {
 	SkillPath      string // absolute path to the skill's SKILL.md / command .md; "" when not found
 	ScriptsDir     string // absolute; "" when the skill has no scripts/ dir
 	Scripts        []string
+	RigSkill       string // normalised bare name; "" when not declared
+	RigSkillPath   string // absolute path to the rig skill's SKILL.md / command .md; "" when not found
 }
 
 // ResolveHandoff resolves the executor's handoff block against the project's
@@ -70,24 +83,38 @@ func (e Executor) ResolveHandoff(projPath string) ResolvedHandoff {
 		}
 	}
 
-	name := strings.TrimPrefix(strings.TrimSpace(h.RuntimeSkill), "/")
-	if name == "" {
-		return out
+	if name := strings.TrimPrefix(strings.TrimSpace(h.RuntimeSkill), "/"); name != "" {
+		out.RuntimeSkill = name
+		out.SkillPath, out.ScriptsDir, out.Scripts = resolveSkillRef(projPath, name)
 	}
-	out.RuntimeSkill = name
-
-	skillDir := filepath.Join(projPath, ".claude", "skills", name)
-	if md := filepath.Join(skillDir, "SKILL.md"); fileReadable(md) {
-		out.SkillPath = md
-		out.ScriptsDir, out.Scripts = skillScripts(skillDir)
-		return out
-	}
-	// A runtime helper may also live as a plain slash-command; it just cannot
-	// carry a scripts/ dir.
-	if cmd := filepath.Join(projPath, ".claude", "commands", name+".md"); fileReadable(cmd) {
-		out.SkillPath = cmd
+	if name := strings.TrimPrefix(strings.TrimSpace(h.RigSkill), "/"); name != "" {
+		out.RigSkill = name
+		// The rig skill's scripts are deliberately NOT surfaced: the runtime
+		// skill's inventory exists because the playbook must explain those
+		// tools, while a rig skill's SKILL.md is its own manual - read whole,
+		// once, when the runtime is down.
+		out.RigSkillPath, _, _ = resolveSkillRef(projPath, name)
 	}
 	return out
+}
+
+// resolveSkillRef locates a named skill (or plain slash-command - it just
+// cannot carry a scripts/ dir) for the handoff contract. The repo's own
+// .claude/ is searched first, then the user's global ~/.claude/ - so a
+// project-local skill always wins, and a machine-wide one (a rig cold-start
+// shared by three repos) still resolves without being copied into the repo.
+func resolveSkillRef(projPath, name string) (skillPath, scriptsDir string, scripts []string) {
+	for _, root := range []string{filepath.Join(projPath, ".claude"), expandTilde("~/.claude")} {
+		dir := filepath.Join(root, "skills", name)
+		if md := filepath.Join(dir, "SKILL.md"); fileReadable(md) {
+			d, s := skillScripts(dir)
+			return md, d, s
+		}
+		if cmd := filepath.Join(root, "commands", name+".md"); fileReadable(cmd) {
+			return cmd, "", nil
+		}
+	}
+	return "", "", nil
 }
 
 // skillScripts returns the skill's scripts/ dir and the sorted names of the

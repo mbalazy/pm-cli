@@ -169,20 +169,31 @@ func renderHandoff(h storage.ResolvedHandoff) string {
 	}
 	if h.RuntimeSkill == "" {
 		b.WriteString("  runtime skill: (unset)\n")
-		return b.String()
-	}
-	loc := "NOT FOUND"
-	if h.SkillPath != "" {
-		loc = h.SkillPath
-	}
-	fmt.Fprintf(&b, "  runtime skill: /%s\n", h.RuntimeSkill)
-	fmt.Fprintf(&b, "                 %s\n", loc)
-	if len(h.Scripts) > 0 {
-		fmt.Fprintf(&b, "  scripts:       %s\n", h.ScriptsDir)
-		for _, s := range h.Scripts {
-			fmt.Fprintf(&b, "                 %s\n", s)
+	} else {
+		loc := "NOT FOUND"
+		if h.SkillPath != "" {
+			loc = h.SkillPath
 		}
-		b.WriteString("  ^ what each script is FOR and when to reach for it: see the playbook.\n")
+		fmt.Fprintf(&b, "  runtime skill: /%s\n", h.RuntimeSkill)
+		fmt.Fprintf(&b, "                 %s\n", loc)
+		if len(h.Scripts) > 0 {
+			fmt.Fprintf(&b, "  scripts:       %s\n", h.ScriptsDir)
+			for _, s := range h.Scripts {
+				fmt.Fprintf(&b, "                 %s\n", s)
+			}
+			b.WriteString("  ^ what each script is FOR and when to reach for it: see the playbook.\n")
+		}
+	}
+	if h.RigSkill != "" {
+		loc := "NOT FOUND"
+		if h.RigSkillPath != "" {
+			loc = h.RigSkillPath
+		}
+		fmt.Fprintf(&b, "  rig skill:     /%s\n", h.RigSkill)
+		fmt.Fprintf(&b, "                 %s\n", loc)
+		b.WriteString("  ^ stands the runtime up when it is down (cold start). Read it in full\n")
+		b.WriteString("    before restarting anything by hand; status check first, never restart\n")
+		b.WriteString("    what already runs.\n")
 	}
 	return b.String()
 }
