@@ -848,6 +848,14 @@ func logIfErr(errOut io.Writer, context string, err error) {
 // A FAILED ahead-check (typo'd base branch, detached ref) is not "nothing to
 // push": that silent 0 was exactly the partial-work-dies-at-next-wipe scenario
 // this mechanism exists to prevent. When in doubt, push anyway and say why.
+//
+// The branch NAME in this note duplicates JournalSub.Branch, and that stays.
+// Filed as redundancy in the 2026-08-11 retro and checked: the run-state's
+// SubRun carries no branch field at all, and the board's live dashboard prints
+// only id/status/note per sub (executor_view.go, renderExecutorDashboard), so
+// this note is the ONLY place a human watching a batch run sees which branch a
+// sub pushed. Dropping the name would trade a duplicated string in the journal
+// for a missing one on the screen.
 func pushIfAhead(dir, branch, base string) string {
 	ahead, err := gitAheadCount(dir, branch, base)
 	if err == nil && ahead == 0 {
