@@ -55,7 +55,7 @@ func TestReconcileCrashedRunsClosesAnOrphanedStart(t *testing.T) {
 	}
 	// The whole point of the line: it carries a reason, and the reason contains
 	// what could actually be established.
-	for _, want := range []string{"no signal recorded", "SIGKILL", st.Updated, "proj-1-2"} {
+	for _, want := range []string{"no signal recorded", "SIGKILL", st.Updated, "proj-1-2", "phase running"} {
 		if !strings.Contains(e.Error, want) {
 			t.Errorf("crash reason missing %q:\n%s", want, e.Error)
 		}

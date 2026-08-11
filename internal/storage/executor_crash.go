@@ -46,6 +46,17 @@ import (
 //     run's start line;
 //   - it never touches the run-state itself. Recovering the WORK is a separate,
 //     already-solved job (see crashRecoveredSubs); this only records history.
+//
+// What it therefore CANNOT do is reconstruct a crash whose run-state has since
+// been overwritten: the file is keyed by task id, so a later run of the same
+// tracker replaces it, and the dead run's forensics are gone with it. Measured
+// on the three crashes of 2026-08-08: `pm-cli-102` still had its own run-state
+// and reconciles in full, while `orbit-108` and `pm-cli-100` were re-run
+// later the same day and now carry the SUCCESSFUL run's state, whose run id does
+// not match the orphaned start - so they are skipped rather than described
+// wrongly, and keep being counted by the orphaned-start heuristic. Going forward
+// the window is small (the reconcile happens at the start of the next run, which
+// is what overwrites the state), but it is not zero.
 func ReconcileCrashedRuns(projectDir string) []JournalEntry {
 	entries, err := ReadJournal(projectDir)
 	if err != nil || len(entries) == 0 {
@@ -127,8 +138,9 @@ func describeCrash(st *RunState) string {
 		where += " (phase " + st.Phase + ")"
 	}
 	return fmt.Sprintf(
-		"manager died with no terminal line and no signal recorded, so it was uncatchable: SIGKILL, an OOM kill or a reboot. "+
-			"Reconstructed from the run-state: pid %d, started %s, last heartbeat %s%s. "+
+		"manager died with no terminal line and no signal recorded: an uncatchable death (SIGKILL, an OOM kill, a reboot), "+
+			"or - only on a run from a pm that did not yet journal caught signals - a signal nobody wrote down. "+
+			"Reconstructed from the run-state: pid %d, run-state left on %q, started %s, last heartbeat %s%s. "+
 			"The heartbeat runs every %s while the manager lives, so the death is inside the window after it.",
-		st.PID, st.Started, st.Updated, where, HeartbeatInterval)
+		st.PID, st.Status, st.Started, st.Updated, where, HeartbeatInterval)
 }
