@@ -102,6 +102,16 @@ type journalStats struct {
 	SubDuration numStat
 	Turns       numStat
 	Cost        numStat
+	// EffortSubs / EffortTurns / EffortTokens cover the subs whose worker died
+	// before sending a result envelope: they contribute 0 to Turns and Cost
+	// because no envelope exists to read those off, which used to make an hour of
+	// work indistinguishable from a skip. Reconstructed from the workers' own
+	// transcripts (storage.WorkerEffort), kept in their own fields because they
+	// are a different measurement - and because their presence is what makes the
+	// cost total a floor rather than a number.
+	EffortSubs   int
+	EffortTurns  int
+	EffortTokens int
 	// Review-phase telemetry, over the subs that carry it. ReviewSubs is its own
 	// denominator on purpose: subs from before the telemetry existed report
 	// nothing, and averaging over all subs would quietly dilute the very number
@@ -374,6 +384,11 @@ func (s *journalStats) addSubs(subs []storage.JournalSub) {
 		s.SubDuration.add(float64(sub.DurationS))
 		s.Turns.add(float64(sub.Turns))
 		s.Cost.add(sub.CostUSD)
+		if e := sub.Effort; e != nil {
+			s.EffortSubs++
+			s.EffortTurns += e.Turns
+			s.EffortTokens += e.OutputTokens
+		}
 		if r := sub.Review; r != nil {
 			s.ReviewSubs++
 			// addSample, not add: a sub that spawned zero reviewers is a real
@@ -544,6 +559,15 @@ func renderJournalStats(slug, path string, st journalStats) string {
 		st.Turns.Total, st.Turns.avg(), st.Turns.Samples)
 	fmt.Fprintf(&b, "  cost      $%.2f total, $%.2f avg (%d sub(s))\n",
 		st.Cost.Total, st.Cost.avg(), st.Cost.Samples)
+	if st.EffortSubs > 0 {
+		// The line that stops the cost total being read as a total. These subs
+		// died before their envelope, so they are worth $0.00 and 0 turns above
+		// however long they ran; what their transcripts hold is printed instead,
+		// with no dollar figure derived from it (a transcript carries tokens, not
+		// prices).
+		fmt.Fprintf(&b, "  partial   %d sub(s) died with no envelope, so they count as 0 turns / $0 above - their transcripts hold %d turn(s) and %d output token(s), which makes the cost total a FLOOR\n",
+			st.EffortSubs, st.EffortTurns, st.EffortTokens)
+	}
 	renderReviewStats(&b, st)
 	return b.String()
 }

@@ -920,6 +920,9 @@ func journalSubs(outcomes []subOutcome, durations map[string]int, run *storage.R
 			ID: o.id, Result: o.result, Note: o.note, Branch: o.branch,
 			DurationS: durations[o.id], Session: sr.Session,
 			Turns: sr.Turns, CostUSD: sr.CostUSD, Review: sr.Review,
+			// Set only for a sub whose worker died without an envelope, where
+			// Turns/CostUSD above are 0 for lack of one (see executeWork).
+			Effort: sr.Effort,
 		})
 	}
 	return out
