@@ -132,6 +132,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 				yolo:       yolo,
 				allowDirty: allowDirty,
 				timeout:    timeout,
+				timeoutSet: cmd.Flags().Changed("timeout"),
 				base:       base,
 				additional: additional,
 				errOut:     stderr,
@@ -165,6 +166,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 				if plan.baselineCmd != "" {
 					fmt.Fprintf(stdout, "baseline (captured before worker, injected into prompt): %s\n", plan.baselineCmd)
 				}
+				fmt.Fprintf(stdout, "timeout: %s\n", describeTimeout(plan.timeout, opts.timeoutSet, plan.proj.GetExecutor().Timeout))
 				fmt.Fprintf(stdout, "\n$ claude %s\n\n", strings.Join(quoteArgs(plan.cmdArgs), " "))
 				fmt.Fprintf(stdout, "=== SYSTEM PROMPT ===\n%s\n\n=== PROMPT ===\n%s\n", plan.sysPrompt, plan.prompt)
 				return nil
@@ -205,7 +207,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 150, "max agent turns for the worker")
 	cmd.Flags().BoolVar(&yolo, "yolo", false, "bypass all permission checks instead of the curated allowlist")
 	cmd.Flags().BoolVar(&allowDirty, "allow-dirty", false, "skip the clean-working-tree precondition (standalone)")
-	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Minute, "max wall-clock time for the worker before it is killed")
+	cmd.Flags().DurationVar(&timeout, "timeout", defaultWorkerTimeout, "max wall-clock time for the worker before it is killed (overrides the project's executor.timeout)")
 	cmd.Flags().StringVar(&base, "base", "", "with --additional: base the fresh task branch forks from (default: executor.base_branch, else the main checkout's current branch)")
 	cmd.Flags().BoolVar(&additional, "additional", false, "run in an isolated 'additional' worktree slot (own branch/port/sim) instead of the main checkout; requires executor.worktrees (or legacy additional_worktree) in project.yaml")
 	cmd.Flags().IntVar(&slotPin, "slot", 0, "with --additional: pin a specific worktree slot (1-based); default 0 = first free slot")
@@ -383,6 +385,11 @@ type workOptions struct {
 	yolo       bool
 	allowDirty bool
 	timeout    time.Duration
+	// timeoutSet = the caller passed --timeout explicitly, so it outranks the
+	// project's executor.timeout. Without the flag being distinguishable from its
+	// own default, a project profile could never win: the default is always
+	// "present" (see resolveWorkerTimeout).
+	timeoutSet bool
 	base       string // with additional: base branch the fresh task branch forks from
 	additional bool   // opt in to an isolated "additional" worktree slot for THIS run
 	// slotDir/slotEnv: the worktree slot the CALLER already claimed (the epic
@@ -475,6 +482,48 @@ type workPlan struct {
 	// a hook cannot know is not computable at all), and what reviewer subagents
 	// run on (reviewModel).
 	guard guardOptions
+	// timeout is the RESOLVED wall-clock ceiling for this worker (see
+	// resolveWorkerTimeout): the run's --timeout when it was passed, else the
+	// project's executor.timeout, else the flag's default. Resolved here, in the
+	// side-effect-free half, so --dry-run prints the same number the worker is
+	// actually given - the whole point of putting the value in project.yaml is
+	// that nobody has to remember which one is in force.
+	timeout time.Duration
+}
+
+// defaultWorkerTimeout is the built-in per-worker ceiling: what a run gets when
+// neither --timeout nor the project's executor.timeout says otherwise. Named
+// rather than repeated as a literal because three places now have to agree on
+// it - both commands' flag defaults and what `pm executor show` reports for a
+// project that has not set the field.
+const defaultWorkerTimeout = 60 * time.Minute
+
+// resolveWorkerTimeout applies the run's timeout precedence: an explicit
+// --timeout beats the project's executor.timeout, which beats the flag's own
+// default (60m, the value flagValue already carries when the flag was not
+// passed). flagSet is what makes the middle term reachable at all - the flag
+// always has a value, so "the flag says 60m" and "nobody said anything" are the
+// same string and only cobra can tell them apart.
+func resolveWorkerTimeout(flagValue time.Duration, flagSet bool, configured storage.Duration) time.Duration {
+	if flagSet || configured <= 0 {
+		return flagValue
+	}
+	return configured.Duration()
+}
+
+// describeTimeout renders the resolved ceiling AND which of the three sources
+// won it, for the dry-runs. The number alone would be the least useful half:
+// the reason a project can carry the value is so nobody has to know whether a
+// flag was passed, and that is exactly what this prints back.
+func describeTimeout(resolved time.Duration, flagSet bool, configured storage.Duration) string {
+	switch {
+	case flagSet:
+		return fmt.Sprintf("%s (--timeout)", resolved)
+	case configured > 0:
+		return fmt.Sprintf("%s (executor.timeout)", resolved)
+	default:
+		return fmt.Sprintf("%s (built-in default)", resolved)
+	}
 }
 
 // warnInertFlags surfaces flag combinations that silently do nothing. A
@@ -626,6 +675,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		workDir: workDir, worktree: opts.additional, base: base, env: env, slots: slots,
 		prepare: prepare, baselineCmd: baselineCmd, guard: guard,
 		buildPrompt: buildPrompt, opts: opts,
+		timeout: resolveWorkerTimeout(opts.timeout, opts.timeoutSet, exec.Timeout),
 	}, nil
 }
 
@@ -797,7 +847,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// anything outside this process has on it. Publishing it lets the board kill
 	// the worker tree directly when it has to SIGKILL the manager - a signal the
 	// manager cannot forward (see storage.RunState.Kill).
-	res, sessionID, err := runWorker(opts.stderr(), dir, plan.cmdArgs, opts.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env, plan.sessionID,
+	res, sessionID, err := runWorker(opts.stderr(), dir, plan.cmdArgs, plan.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env, plan.sessionID,
 		func(pgid int) { _ = hbw.Update(func(run *storage.RunState) { run.WorkerPGID = pgid }) })
 	stopHeartbeat()
 	// The worker is gone and the heartbeat died with it, so drop the in-flight
