@@ -885,6 +885,17 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		res.Review = telemetry
 	}
 	if err != nil {
+		// No envelope arrived, so this sub's turns and cost are 0 - and a sub
+		// that burned an hour then died is, in the journal, indistinguishable
+		// from one nobody started. Read the effort back off the worker's own
+		// transcript instead. Recorded on the run-state by id, which serves both
+		// callers: standalone (one sub) and the epic manager's shared state,
+		// whose journalSubs lifts it from there.
+		deadEffort := recoverWorkerEffort(plan.proj.ResolveClaudeConfigDir(), dir, plan.sessionID)
+		if deadEffort != nil {
+			fmt.Fprintf(opts.stderr(), "pm work: %s\n", describeEffort(deadEffort))
+			_ = hbw.Update(func(run *storage.RunState) { setSubEffort(run, task.Meta.ID, deadEffort) })
+		}
 		if runw != nil {
 			_ = runw.Update(func(run *storage.RunState) {
 				run.Status = storage.RunStatusFailed
@@ -897,7 +908,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 				}
 			})
 			journalEnd(storage.RunStatusFailed, err.Error(),
-				storage.JournalSub{Result: "failed", Note: err.Error(), Session: plan.sessionID, Review: telemetry})
+				storage.JournalSub{Result: "failed", Note: err.Error(), Session: plan.sessionID, Review: telemetry, Effort: deadEffort})
 		}
 		return nil, err
 	}

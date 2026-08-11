@@ -94,6 +94,11 @@ type SubRun struct {
 	// Worker run stats from the claude envelope (0 for skips/manual).
 	Turns   int     `json:"turns,omitempty"`
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// Effort is what the worker's transcript still says when there was no
+	// envelope to read those two fields off - i.e. the worker died mid-run. Nil
+	// whenever the envelope arrived (then Turns/CostUSD are the real thing) and
+	// on every run written before this existed. See WorkerEffort.
+	Effort *WorkerEffort `json:"effort,omitempty"`
 	// VisualClaimsOpen is set only on an acceptance run (RunKindFinish): the
 	// number of that run's claims which could only be settled by looking at a
 	// screen, and therefore were not - a detached acceptance never touches the

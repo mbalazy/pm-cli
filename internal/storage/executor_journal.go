@@ -54,8 +54,13 @@ type JournalSub struct {
 	Branch    string  `json:"branch,omitempty"`     // the branch the sub's work landed on (key artifact in independent mode)
 	DurationS int     `json:"duration_s,omitempty"` // wall-clock of the driveSub/worker, 0 for skips
 	Session   string  `json:"session,omitempty"`    // worker session id -> transcript .jsonl
-	Turns     int     `json:"turns,omitempty"`      // claude envelope num_turns (0 for skips)
-	CostUSD   float64 `json:"cost_usd,omitempty"`   // claude envelope total_cost_usd
+	Turns     int     `json:"turns,omitempty"`      // claude envelope num_turns (0 for skips, and for a worker that died before sending one)
+	CostUSD   float64 `json:"cost_usd,omitempty"`   // claude envelope total_cost_usd (same two zeros)
+	// Effort carries what a dead worker's transcript still establishes, for
+	// exactly the subs where the two fields above are 0 because no envelope
+	// arrived. Nil on a normal outcome and on every line written before it
+	// existed. See WorkerEffort for why it is not folded into Turns/CostUSD.
+	Effort *WorkerEffort `json:"effort,omitempty"`
 	// Review is the review-phase rollup (spawns, rounds, model). Absent on every
 	// line written before it existed, which is why it is a pointer: a retro
 	// comparing against the pre-change baseline must be able to tell "no
