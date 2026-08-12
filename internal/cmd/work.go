@@ -771,6 +771,12 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// manager under ITS run id, so this only matters standalone.
 	runID := storage.NewRunID()
 	if opts.standalone {
+		// Close any earlier crash of this project that never got a terminal
+		// line, BEFORE this run writes its own run-state below: the file is
+		// keyed by task id, so a re-run of the same task - the most common
+		// follow-up to a crash - would otherwise overwrite the dead run's
+		// forensics one step before the reconciler looks for them.
+		reportReconciledCrashes(opts.stderr(), stateDir, "pm work")
 		run := &storage.RunState{
 			TaskID:         task.Meta.ID,
 			RunID:          runID,
@@ -790,9 +796,6 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		// heartbeat goroutine below shares this exact struct.
 		runw = storage.NewRunWriter(stateDir, run)
 		_ = runw.Update(nil)
-		// Close any earlier crash of this project that never got a terminal line,
-		// BEFORE adding a start line of our own (see reportReconciledCrashes).
-		reportReconciledCrashes(opts.stderr(), stateDir, "pm work")
 		// Journal start line (durable cross-run history; epic subs are journaled
 		// by the manager instead). Best-effort like the run-state writes.
 		start := storage.JournalEntry{

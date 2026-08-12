@@ -145,3 +145,25 @@ func TestStatsReportsCrashReasons(t *testing.T) {
 		t.Errorf("crashed/killed lines must not double-count their runs:\n%s", out)
 	}
 }
+
+// TestStatsDeathsDeduplicateBoardKills: one board kill produces TWO killed
+// lines for the same physical death (the dying manager's own, then killRun's,
+// sharing a run id). The histogram already counts them once; the deaths report
+// must list them once too, or a few board kills push genuine crash reasons off
+// its display cap.
+func TestStatsDeathsDeduplicateBoardKills(t *testing.T) {
+	st := aggregateJournal([]storage.JournalEntry{
+		{Event: storage.JournalEventStart, TS: "2026-08-11T09:00:00Z", Kind: "run-epic", TaskID: "p-1", RunID: "r1", PID: 10},
+		{Event: storage.JournalEventKilled, TS: "2026-08-11T09:30:00Z", Kind: "run-epic", TaskID: "p-1", RunID: "r1", PID: 10,
+			Status: storage.RunStatusFailed, Error: "manager received SIGTERM (signal 15) and re-raised it"},
+		{Event: storage.JournalEventKilled, TS: "2026-08-11T09:30:02Z", Kind: "run-epic", TaskID: "p-1", RunID: "r1", PID: 10,
+			Status: storage.RunStatusFailed, Error: "stopped by user"},
+	}, func(int, time.Time) bool { return false }, testNow)
+
+	if len(st.Deaths) != 1 {
+		t.Fatalf("Deaths = %d, want 1 - two killed lines with one run id are one physical death", len(st.Deaths))
+	}
+	if !strings.Contains(st.Deaths[0].Reason, "SIGTERM") {
+		t.Errorf("the first (self-journaled) line should be the one listed, got %q", st.Deaths[0].Reason)
+	}
+}
