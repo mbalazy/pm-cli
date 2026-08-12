@@ -349,7 +349,15 @@ func readWorktreeLockFile(path string) (*WorktreeLock, error) {
 //     simultaneous takeovers race on the rename; the loser's rename fails
 //     (ENOENT) and its next claim attempt sees the winner's fresh lock.
 func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
-	lk := WorktreeLock{PID: pid, TaskID: taskID, Kind: kind, Started: time.Now().UTC().Format(time.RFC3339)}
+	// Nanosecond precision, not just RFC3339: ReleaseWorktreeLock's post-rename
+	// identity check compares Started to tell an untouched lock from a same-pid
+	// refresh that landed in the race window (see there) - two refreshes by the
+	// same pid within one second would otherwise stamp identically and make
+	// that check pass when it should not. time.Parse(time.RFC3339, ...)
+	// (ProcessAliveSinceStamp) still reads a nanosecond stamp fine - Go's parser
+	// accepts a fractional-second suffix regardless of the reference layout.
+	// Same reasoning as finish_claim.go's claimTimeLayout.
+	lk := WorktreeLock{PID: pid, TaskID: taskID, Kind: kind, Started: time.Now().UTC().Format(time.RFC3339Nano)}
 	data, err := json.MarshalIndent(&lk, "", "  ")
 	if err != nil {
 		return err
