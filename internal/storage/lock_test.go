@@ -2,12 +2,37 @@ package storage
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+// captureStderr swaps os.Stderr for a pipe for the duration of fn and returns
+// what fn wrote to it, draining concurrently so a write larger than the OS
+// pipe buffer can't deadlock the test.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	drained := make(chan string, 1)
+	go func() {
+		out, _ := io.ReadAll(r)
+		r.Close()
+		drained <- string(out)
+	}()
+	os.Stderr = w
+	fn()
+	os.Stderr = old
+	w.Close()
+	return <-drained
+}
 
 // TestLockProjectMutualExclusion: a second acquirer must wait until the first
 // releases (flock blocks across fds even in one process).
@@ -342,5 +367,61 @@ func TestUpdateProjectConcurrentWrites(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "custom_key: keep-me") {
 		t.Fatalf("unknown key lost under concurrent writes:\n%s", raw)
+	}
+}
+
+// TestLockDegradeWarnsLoudly: when LockProject fails, every degrade-to-
+// unlocked-write site must still complete the write (the mitigating context is
+// that this is about observability, not about changing the degrade-vs-fail
+// decision) AND say so on stderr - a silent degrade used to hide that a
+// concurrent session's edit may get clobbered.
+func TestLockDegradeWarnsLoudly(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses the file-permission check this test relies on")
+	}
+	s := setupLockTestStore(t)
+
+	// Force a genuine LockProject failure without touching the project dir's
+	// own writability (the task write itself needs that): make the lock file
+	// unwritable, which fails LockProject's O_RDWR open but leaves the
+	// directory free for the task file's tmp+rename. setupLockTestStore's
+	// CreateProject already took the lock once, so the file exists (0644) -
+	// chmod it directly rather than os.WriteFile, whose perm arg is a no-op
+	// on an existing file.
+	lockPath := filepath.Join(s.ProjectDir("app"), ".pm.lock")
+	if err := os.Chmod(lockPath, 0444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(lockPath, 0644) })
+
+	if _, err := s.LockProject("app"); err == nil {
+		t.Fatal("expected LockProject to fail against a read-only lock file")
+	}
+
+	task, err := s.FindTask("app", "app-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var moveErr error
+	out := captureStderr(t, func() {
+		moveErr = s.MoveTask(task, StatusDone)
+	})
+	if moveErr != nil {
+		t.Fatalf("MoveTask degraded to unlocked but still failed: %v", moveErr)
+	}
+
+	final, err := s.FindTask("app", "app-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Meta.Status != StatusDone {
+		t.Fatalf("status = %s, want done despite the lock failure", final.Meta.Status)
+	}
+	if !strings.Contains(out, "app") {
+		t.Fatalf("warning does not name the project slug: %q", out)
+	}
+	if !strings.Contains(strings.ToLower(out), "lock") {
+		t.Fatalf("warning does not mention the lock: %q", out)
 	}
 }

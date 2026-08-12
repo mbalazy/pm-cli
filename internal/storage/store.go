@@ -33,6 +33,15 @@ func (s *Store) RootDir() string {
 	return s.Root
 }
 
+// warnLockDegrade reports a silent-degrade hazard: a caller that could not
+// take the project lock and is about to write UNLOCKED anyway. Without this,
+// a concurrent session's edit can get clobbered with no trace - see
+// applyWorkerResult (internal/cmd/work.go), the one site that already got
+// this right, whose wording this mirrors.
+func warnLockDegrade(op, slug string, lockErr error) {
+	fmt.Fprintf(os.Stderr, "pm: project lock unavailable for %q (%v) - %s without it\n", slug, lockErr, op)
+}
+
 func (s *Store) Init() error {
 	return os.MkdirAll(s.Root, 0755)
 }
@@ -185,6 +194,8 @@ func (s *Store) CreateProject(slug string, p *Project) error {
 	}
 	if release, err := s.LockProject(slug); err == nil {
 		defer release()
+	} else {
+		warnLockDegrade("creating project", slug, err)
 	}
 	return writeProject(s.ProjectYAML(slug), p)
 }
@@ -241,6 +252,8 @@ func (s *Store) MoveTask(t *Task, newStatus TaskStatus) error {
 	}
 	if release, err := s.LockProject(t.Project); err == nil {
 		defer release()
+	} else {
+		warnLockDegrade("moving task "+t.Meta.ID, t.Project, err)
 	}
 	// The re-read is a PRECONDITION, not a best-effort refresh: swallowing its
 	// error and writing the caller's copy anyway RESURRECTS a task another
@@ -286,6 +299,8 @@ func (s *Store) WriteTask(t *Task) error {
 func (s *Store) UpdateProject(slug string, p *Project) error {
 	if release, err := s.LockProject(slug); err == nil {
 		defer release()
+	} else {
+		warnLockDegrade("updating project", slug, err)
 	}
 	return writeProject(s.ProjectYAML(slug), p)
 }
@@ -304,6 +319,8 @@ func (s *Store) UpdateProject(slug string, p *Project) error {
 func (s *Store) MutateProject(slug string, fn func(*Project) error) (*Project, error) {
 	if release, err := s.LockProject(slug); err == nil {
 		defer release()
+	} else {
+		warnLockDegrade("mutating project", slug, err)
 	}
 	p, err := s.GetProject(slug)
 	if err != nil {

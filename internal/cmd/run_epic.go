@@ -973,6 +973,11 @@ func recordSubFeedback(store storage.TaskStore, parent *storage.Task, subID, out
 	// mid-run edit (spec update, note) is never clobbered by a stale copy.
 	if release, err := store.LockProject(parent.Project); err == nil {
 		defer release()
+	} else {
+		// Degrade to an unlocked write rather than dropping the sub's feedback,
+		// but say so - a silent degrade hides that a concurrent session's edit
+		// to the parent may get clobbered. Mirrors applyWorkerResult's wording.
+		fmt.Fprintf(os.Stderr, "pm: project lock unavailable for %q (%v) - recording sub feedback without it\n", parent.Project, err)
 	}
 	// PRECONDITION, not a best-effort refresh (same rule as Store.MoveTask and
 	// applyWorkerResult): if the parent's file is gone - deleted, or no longer
