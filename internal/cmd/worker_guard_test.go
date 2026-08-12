@@ -21,6 +21,9 @@ func TestBashCommandBlocked(t *testing.T) {
 		{"trailing no-verify", `git commit -m "x" --no-verify`},
 		{"short -n on commit", `git commit -m "x" -n`},
 		{"short -n on push", `git push -n origin main`},
+		{"cluster -nm on commit", `git commit -nm "add feature"`},
+		{"cluster -anm on commit", `git commit -anm "add feature"`},
+		{"cluster -nm on push", `git push -nm origin main`},
 		{"hooksPath via -c", `git -c core.hooksPath=/dev/null commit -m "x"`},
 		{"hooksPath via config", `git config core.hooksPath /dev/null`},
 		{"hooksPath case", `git -c core.HooksPath=/dev/null commit -m x`},
@@ -79,7 +82,37 @@ func TestBashCommandBlocked(t *testing.T) {
 		{"long message flag", `git commit --message="stop honouring HUSKY=0"`},
 		{"message naming a hook file", `git commit -m "regenerate .husky/pre-commit from the template"`},
 		{"single-quoted message", `git commit -m 'explain why -n is refused'`},
+		{"message describing the -nm cluster bypass", `git commit -m "fix the -nm cluster bypass in worker-guard"`},
 		{"empty", ``},
+	}
+	for _, c := range allowed {
+		if ok, what := bashCommandBlocked(c.cmd); ok {
+			t.Errorf("%s: %q must be allowed, blocked as %s", c.name, c.cmd, what)
+		}
+	}
+}
+
+// TestBashCommandBlockedClusterGuard is the -nm/-anm regression named so
+// `go test -run Guard` picks it up directly, independent of where the cluster
+// cases also live in TestBashCommandBlocked's tables: git's short-option
+// parser splits `-nm "msg"` into `-n` (--no-verify) + `-m <msg>`, and the
+// scoped `-n` pattern used to require a standalone token, so the cluster form
+// slipped through (verified empirically 2026-08-12).
+func TestBashCommandBlockedClusterGuard(t *testing.T) {
+	blocked := []struct{ name, cmd string }{
+		{"cluster -nm on commit", `git commit -nm "add feature"`},
+		{"cluster -anm on commit", `git commit -anm "add feature"`},
+		{"cluster -nm on push", `git push -nm origin main`},
+	}
+	for _, c := range blocked {
+		if ok, _ := bashCommandBlocked(c.cmd); !ok {
+			t.Errorf("%s: %q must be blocked", c.name, c.cmd)
+		}
+	}
+
+	allowed := []struct{ name, cmd string }{
+		{"combined short flag without n", `git commit -am "drop the --no-verify escape hatch"`},
+		{"cluster mentioned only in a stripped message", `git commit -m "fix the -nm cluster bypass in worker-guard"`},
 	}
 	for _, c := range allowed {
 		if ok, what := bashCommandBlocked(c.cmd); ok {

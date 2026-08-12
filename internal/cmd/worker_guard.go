@@ -57,7 +57,13 @@ var hookBypassPatterns = []struct {
 	{re: regexp.MustCompile(`(?i)\bsed\s[^;&|]*(-i|--in-place)[^;&|]*` + hookDirRef), what: "an in-place sed on the hook directory"},
 	{re: regexp.MustCompile(`(?i)\btee\s[^;&|]*` + hookDirRef), what: "a tee into the hook directory"},
 	{re: regexp.MustCompile(`>\s*[^\s;&|]*` + hookDirRef), what: "a redirect into the hook directory"},
-	{re: regexp.MustCompile(`(^|\s)-n(\s|$)`), what: "-n (short --no-verify)", scoped: true},
+	// Any short-option cluster containing `n`, not just a standalone `-n`: git's
+	// own short-flag parser splits `-nm "msg"` into `-n` (--no-verify) + `-m`, so
+	// `git commit -nm "x"` bypassed a failing pre-commit hook that `git commit -m
+	// "x"` was blocked by (verified empirically 2026-08-12). Long flags start with
+	// `--` and never match (`-` is not in the char class); `-am`, `-u`, `-S` carry
+	// no `n` and stay allowed.
+	{re: regexp.MustCompile(`(^|\s)-[A-Za-z]*n[A-Za-z]*(\s|$)`), what: "-n (short --no-verify, including a combined cluster like -nm)", scoped: true},
 }
 
 var gitCommitOrPush = regexp.MustCompile(`git\s+(commit|push)\b`)
