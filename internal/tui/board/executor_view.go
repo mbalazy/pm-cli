@@ -509,6 +509,25 @@ func renderExecutorDashboard(run *storage.RunState, width int, canSwitch bool) s
 	return b.String()
 }
 
+// renderFinishClaimNotice is the detail-view block for a HAND-DRIVEN
+// acceptance: a live claim (taken via `pm finish claim`, e.g. by a
+// batch-finish-auto session) with no live acceptance process behind it. Such
+// an acceptance writes no .finish.json, so renderExecutorDashboard has nothing
+// to draw - without this block a claimed run reads as having no acceptance at
+// all, which is the hole pm-cli-112 closes. Renders the claim's own facts and
+// nothing more: there are no subs and no transcript to offer.
+func renderFinishClaimNotice(claim *storage.FinishClaim) string {
+	chip := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#9ECE6A")).Render("▶ in progress")
+	hdr := lipgloss.NewStyle().Bold(true).Foreground(highlight).Render("Acceptance (hand-claimed)") + "  " + chip
+	who := fmt.Sprintf("  claimed by %s", claim.Host)
+	if claim.Session != "" {
+		who += fmt.Sprintf(", session %s", shortSession(claim.Session))
+	}
+	who += fmt.Sprintf(" · started %s ago · refreshed %s ago (lapses %s after the last refresh)",
+		storage.FinishClaimAge(claim.Started), storage.FinishClaimAge(claim.Refreshed), storage.FinishClaimTTL)
+	return hdr + "\n" + execAssistantStyle.Render(who)
+}
+
 func execSubGlyph(status string) string {
 	switch status {
 	case storage.RunStatusRunning:

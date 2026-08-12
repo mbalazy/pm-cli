@@ -577,3 +577,47 @@ func readRaw(t *testing.T, path string) string {
 	}
 	return string(data)
 }
+
+// LiveFinishClaims is the board's per-tick enumeration of hand-driven
+// acceptances, so it must return exactly the claims that are live - and key
+// each under the tracker its own content names, never under a guess parsed
+// out of the file name.
+func TestLiveFinishClaims(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC().Format(claimTimeLayout)
+	old := time.Now().Add(-FinishClaimTTL - time.Minute).UTC().Format(claimTimeLayout)
+
+	seedClaim(t, dir, FinishClaim{TrackerID: "proj-1", Host: "mac", PID: 1, Session: "sess-live", Started: now, Refreshed: now})
+	seedClaim(t, dir, FinishClaim{TrackerID: "proj-2", Host: "mac", PID: 2, Started: old, Refreshed: old})
+	if err := os.WriteFile(FinishClaimPath(dir, "proj-3"), []byte("{garbage"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Content naming ANOTHER tracker than the file it sits in: skipped, the
+	// same self-identification rule readRunStatesDir applies to run-states.
+	stray, err := json.Marshal(FinishClaim{TrackerID: "somewhere-else", Host: "mac", Started: now, Refreshed: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(FinishClaimPath(dir, "proj-4"), stray, 0644); err != nil {
+		t.Fatal(err)
+	}
+	// A dot in a task id is legal, and `x.finish`'s claim file ends in
+	// `.finish.finish.claim` - it must come back under its own id.
+	seedClaim(t, dir, FinishClaim{TrackerID: "x.finish", Host: "mac", PID: 3, Started: now, Refreshed: now})
+
+	got := LiveFinishClaims(dir)
+	if len(got) != 2 {
+		t.Fatalf("LiveFinishClaims returned %d claims (%v), want exactly proj-1 and x.finish", len(got), got)
+	}
+	if c := got["proj-1"]; c == nil || c.Session != "sess-live" {
+		t.Errorf("proj-1 = %+v, want the live claim with its session", c)
+	}
+	if c := got["x.finish"]; c == nil {
+		t.Errorf("the dotted tracker id went missing: %v", got)
+	}
+
+	// No .executor dir at all reads as no claims, never as an error.
+	if n := len(LiveFinishClaims(t.TempDir())); n != 0 {
+		t.Errorf("a project without an .executor dir returned %d claims", n)
+	}
+}

@@ -92,6 +92,15 @@ func (m Model) renderTaskDetail(t *storage.Task) string {
 		out.WriteString(renderExecutorDashboard(fin, contentWidth, both))
 		out.WriteString("\n\n")
 	}
+	// A live claim with no live acceptance process is a hand-driven acceptance
+	// (see Model.finishClaims) - the dashboards above can only draw what a
+	// .finish.json records, so this is its one line on screen. Suppressed while
+	// an acceptance PROCESS is live: that process holds its own claim, and its
+	// dashboard already says everything the claim would.
+	if claim := m.finishClaims[t.Meta.ID]; claim != nil && !fin.IsLive() {
+		out.WriteString(renderFinishClaimNotice(claim))
+		out.WriteString("\n\n")
+	}
 	out.WriteString(glamourRender(rest.String(), contentWidth))
 
 	pad := (termWidth - contentWidth) / 2

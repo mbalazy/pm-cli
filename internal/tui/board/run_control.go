@@ -16,6 +16,7 @@ import (
 func (m *Model) refreshRunStates() {
 	states := map[string]*storage.RunState{}
 	finish := map[string]*storage.RunState{}
+	claims := map[string]*storage.FinishClaim{}
 	var slugs []string
 	if m.activeProject == 0 {
 		slugs = append(slugs, m.projects[1:]...) // "all": every project (skip the "all" pseudo-entry)
@@ -33,9 +34,16 @@ func (m *Model) refreshRunStates() {
 		for id, st := range storage.ReadFinishRunStates(dir) {
 			finish[id] = st
 		}
+		// Live claims ride the same tick: a hand-driven acceptance leaves no
+		// run-state, so the claim is the one artifact that says it is happening
+		// (see Model.finishClaims).
+		for id, c := range storage.LiveFinishClaims(dir) {
+			claims[id] = c
+		}
 	}
 	m.runStates = states
 	m.finishStates = finish
+	m.finishClaims = claims
 }
 
 // refreshRunsView reloads the Runs view's LOCAL rows and merges in whatever the
@@ -493,6 +501,15 @@ func (m Model) runBadge(taskID string) string {
 // anything to see will not go.
 func (m Model) finishBadge(taskID string) string {
 	st := m.finishStates[taskID]
+	// A live claim with no live acceptance PROCESS behind it is a hand-driven
+	// acceptance (a CC session that ran `pm finish claim` - batch-finish-auto's
+	// shape), the one acceptance that never writes a run-state. Badge it like a
+	// live acceptance, and like one it stands alone: whatever was counted
+	// before is being worked on right now. A live .finish.json wins the tie -
+	// that process holds its own claim, and one badge is the truth.
+	if !st.IsLive() && m.finishClaims[taskID] != nil {
+		return "▶ accepting (claimed)"
+	}
 	badge := stateBadge(st, "▶ accepting", "▷ accept stopped", "✗ accept failed")
 	// A live acceptance is still counting; its number is a snapshot of a
 	// half-finished run, so the live word stands alone.
