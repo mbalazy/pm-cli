@@ -405,6 +405,27 @@ func TestDoctorHooksPathUnsetIsSilent(t *testing.T) {
 	}
 }
 
+// TestDoctorHooksPathEmptyValueWarns: core.hooksPath explicitly set to the
+// empty string is its own broken state, not "unset" - git resolves it to the
+// project root itself (`--git-path hooks` echoes back the invocation dir),
+// which without special-casing would make an unrelated executable at the
+// repo root (a checked-in `configure` script, `gradlew`) read as a healthy
+// hook setup.
+func TestDoctorHooksPathEmptyValueWarns(t *testing.T) {
+	hermeticGitEnv(t)
+	dir := t.TempDir()
+	gitInitRepo(t, dir)
+	gitT(t, dir, "config", "core.hooksPath", "")
+
+	checks := checkHooksPath(dir)
+	if levelOf(t, checks, "configured but empty") != levelWarn {
+		t.Error("an explicitly empty core.hooksPath must WARN, not read as unset or as a healthy project-root hooks dir")
+	}
+	if c := findCheck(checks, "git hooks ->"); c != nil {
+		t.Errorf("must not report the project root as a valid hooks dir: [%s] %s", c.Level.tag(), c.Msg)
+	}
+}
+
 // TestDoctorHooksPathDeadDirWarns covers case (b): core.hooksPath set
 // repo-local, pointing at a directory that does not exist.
 func TestDoctorHooksPathDeadDirWarns(t *testing.T) {
@@ -507,12 +528,15 @@ func TestDoctorHooksPathResolvesAgainstProjectSubdir(t *testing.T) {
 // TestDoctorHooksPathWiredIntoRunExecutorDoctor confirms the check actually
 // runs as part of the full report, not just standalone.
 func TestDoctorHooksPathWiredIntoRunExecutorDoctor(t *testing.T) {
-	hermeticGitEnv(t)
-	proj, repo := handoffProject(t, "# playbook\nmeasure-element.py, read-rn-logs.sh\n")
+	proj, repo := handoffProject(t, "# playbook\nmeasure-element.py, read-rn-logs.sh\n") // hermeticizes itself
 	gitInitRepo(t, repo)
 	gitT(t, repo, "config", "core.hooksPath", "nonexistent-hooks")
 
-	if levelOf(t, runExecutorDoctor(proj), "does not exist") != levelWarn {
+	// "does not exist" alone would also match checkContextRepos/checkHandoff's
+	// wording on this same fixture - match the hooks-specific phrasing so a
+	// future fixture tweak can't turn this into a false pass for a DIFFERENT
+	// check.
+	if levelOf(t, runExecutorDoctor(proj), "configured git hooks dir does not exist") != levelWarn {
 		t.Error("runExecutorDoctor must include the hooksPath check")
 	}
 }

@@ -421,6 +421,18 @@ func checkHooksPath(projPath string) []check {
 	if err != nil {
 		return nil // not configured in any scope - nothing to check
 	}
+	origin := gitConfigOrigin(projPath, "core.hooksPath")
+	if value == "" {
+		// An explicitly empty value is its own broken state, not "unset":
+		// `git rev-parse --git-path hooks` resolves it to the project
+		// directory itself (the `hooks` path component is replaced by
+		// nothing), which would otherwise make this function report the
+		// project root as the hooks dir - a real executable anywhere at the
+		// root (a `configure` script, a `gradlew`) would then read as a
+		// healthy hook setup.
+		return []check{{levelWarn, "core.hooksPath is configured but empty (" + origin + ") - hooks never run",
+			"set core.hooksPath to a real directory, or unset it to fall back to the default .git/hooks"}}
+	}
 
 	resolved, err := gitRevParseGitPath(projPath, "hooks")
 	if err != nil {
@@ -429,7 +441,6 @@ func checkHooksPath(projPath string) []check {
 	if !filepath.IsAbs(resolved) {
 		resolved = filepath.Join(projPath, resolved)
 	}
-	origin := gitConfigOrigin(projPath, "core.hooksPath")
 	hint := fmt.Sprintf("core.hooksPath = %q (%s) - project hooks (secret scanning, lint, formatting) do not run without a real hook file there", value, origin)
 
 	entries, err := os.ReadDir(resolved)
