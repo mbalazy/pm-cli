@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"errors"
-	"os/exec"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -350,12 +350,20 @@ func TestDoctorLandingStatusNotInProjectStatuses(t *testing.T) {
 	})
 }
 
-// hermeticGitEnv isolates git's global/system config resolution for the
-// duration of the test, via t.Setenv (which affects every subprocess spawned
-// during the test, including the ones checkHooksPath itself shells out to).
-// Without this, a hooksPath test would read, and could fail against, the
-// actual developer machine's ~/.gitconfig - which is exactly what motivated
-// this feature (this project's own machine has a global core.hooksPath set).
+// hermeticGitEnv isolates git's global/system config resolution AND its
+// repo-location env vars for the duration of the test, via t.Setenv/
+// os.Unsetenv (both affect every subprocess spawned during the test,
+// including the ones checkHooksPath itself shells out to).
+//
+// Without the config isolation, a hooksPath test would read, and could fail
+// against, the actual developer machine's ~/.gitconfig - which is exactly
+// what motivated this feature (this project's own machine has a global
+// core.hooksPath set). Without the GIT_DIR-family unset, a test run from
+// inside a git hook (git exports GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/... into
+// hook subprocesses) would have every `git -C <tempdir>` command in this file
+// silently operate on the ENCLOSING repo instead of the fixture - the same
+// hazard githooks/pre-commit already guards `make check` against for exactly
+// this reason.
 func hermeticGitEnv(t *testing.T) {
 	t.Helper()
 	empty := t.TempDir()
@@ -363,21 +371,22 @@ func hermeticGitEnv(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(empty, "xdg-config"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(empty, "gitconfig-unused"))
+	for _, k := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_PREFIX"} {
+		if v, ok := os.LookupEnv(k); ok {
+			os.Unsetenv(k)
+			t.Cleanup(func() { os.Setenv(k, v) })
+		}
+	}
 }
 
-func initGitRepo(t *testing.T) string {
+// writeExecutableHook writes a hook file with the exec bit set - a real hook
+// file is executable, and hasHookFile now requires that to tell one apart
+// from a stray README or .DS_Store sitting in the configured hooks dir.
+func writeExecutableHook(t *testing.T, path string) {
 	t.Helper()
-	dir := t.TempDir()
-	runGit(t, dir, "init", "-q")
-	return dir
-}
-
-func runGit(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	full := append([]string{"-C", dir}, args...)
-	out, err := exec.Command("git", full...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
+	writeFile(t, path, "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -387,7 +396,8 @@ func runGit(t *testing.T, dir string, args ...string) {
 // every repo and must never produce a finding.
 func TestDoctorHooksPathUnsetIsSilent(t *testing.T) {
 	hermeticGitEnv(t)
-	dir := initGitRepo(t)
+	dir := t.TempDir()
+	gitInitRepo(t, dir)
 
 	checks := checkHooksPath(dir)
 	if len(checks) != 0 {
@@ -399,8 +409,9 @@ func TestDoctorHooksPathUnsetIsSilent(t *testing.T) {
 // repo-local, pointing at a directory that does not exist.
 func TestDoctorHooksPathDeadDirWarns(t *testing.T) {
 	hermeticGitEnv(t)
-	dir := initGitRepo(t)
-	runGit(t, dir, "config", "core.hooksPath", "nonexistent-hooks")
+	dir := t.TempDir()
+	gitInitRepo(t, dir)
+	gitT(t, dir, "config", "core.hooksPath", "nonexistent-hooks")
 
 	checks := checkHooksPath(dir)
 	if levelOf(t, checks, "does not exist") != levelWarn {
@@ -419,16 +430,14 @@ func TestDoctorHooksPathDeadDirWarns(t *testing.T) {
 // repo-local, pointing at a directory that holds a real hook file.
 func TestDoctorHooksPathWithRealHookIsFine(t *testing.T) {
 	hermeticGitEnv(t)
-	dir := initGitRepo(t)
-	writeFile(t, filepath.Join(dir, "myhooks", "pre-commit"), "#!/bin/sh\nexit 0\n")
-	runGit(t, dir, "config", "core.hooksPath", "myhooks")
+	dir := t.TempDir()
+	gitInitRepo(t, dir)
+	writeExecutableHook(t, filepath.Join(dir, "myhooks", "pre-commit"))
+	gitT(t, dir, "config", "core.hooksPath", "myhooks")
 
 	checks := checkHooksPath(dir)
-	if c := findCheck(checks, "does not exist"); c != nil {
-		t.Errorf("unexpected finding: [%s] %s", c.Level.tag(), c.Msg)
-	}
-	if c := findCheck(checks, "no hook files"); c != nil {
-		t.Errorf("unexpected finding: [%s] %s", c.Level.tag(), c.Msg)
+	if levelOf(t, checks, "git hooks ->") != levelOK {
+		t.Errorf("a configured hooksPath with a real hook file must pass, got: %s", formatChecks(checks))
 	}
 }
 
@@ -437,20 +446,61 @@ func TestDoctorHooksPathWithRealHookIsFine(t *testing.T) {
 // missing dir, git silently runs no hooks either way.
 func TestDoctorHooksPathEmptyDirWarns(t *testing.T) {
 	hermeticGitEnv(t)
-	dir := initGitRepo(t)
+	dir := t.TempDir()
+	gitInitRepo(t, dir)
 	writeFile(t, filepath.Join(dir, "myhooks", "pre-commit.sample"), "#!/bin/sh\n")
-	runGit(t, dir, "config", "core.hooksPath", "myhooks")
+	gitT(t, dir, "config", "core.hooksPath", "myhooks")
 
 	if levelOf(t, checkHooksPath(dir), "no hook files") != levelWarn {
 		t.Error("a configured hooksPath dir with only *.sample files has no real hooks - must WARN")
 	}
 }
 
+// TestDoctorHooksPathNonExecutableFileWarns: a hook file that lost its exec
+// bit is silently skipped by git, so a dir holding only one must WARN the
+// same as an empty dir - not read as healthy just because a file exists.
+func TestDoctorHooksPathNonExecutableFileWarns(t *testing.T) {
+	hermeticGitEnv(t)
+	dir := t.TempDir()
+	gitInitRepo(t, dir)
+	writeFile(t, filepath.Join(dir, "myhooks", "pre-commit"), "#!/bin/sh\nexit 0\n") // writeFile: 0644, no exec bit
+	gitT(t, dir, "config", "core.hooksPath", "myhooks")
+
+	if levelOf(t, checkHooksPath(dir), "no hook files") != levelWarn {
+		t.Error("a non-executable file is not a hook git will ever run - must WARN")
+	}
+}
+
 // TestDoctorHooksPathNotAGitRepoIsSilent: checkHooksPath must degrade to
 // silence, not a crash, when the project path is not a git repo at all.
 func TestDoctorHooksPathNotAGitRepoIsSilent(t *testing.T) {
+	hermeticGitEnv(t)
 	if checks := checkHooksPath(t.TempDir()); len(checks) != 0 {
 		t.Errorf("a non-git project path must produce no finding, got: %s", formatChecks(checks))
+	}
+}
+
+// TestDoctorHooksPathResolvesAgainstProjectSubdir: a project's `path` can
+// point at a subdirectory of its repo (a monorepo app dir), not the repo
+// root. A relative core.hooksPath must still resolve to the same absolute
+// dir git itself would use - not <project path>/<value> taken naively -
+// which `git rev-parse --git-path` already guarantees by printing the value
+// pre-adjusted for the invocation directory's depth (e.g. "../../myhooks").
+func TestDoctorHooksPathResolvesAgainstProjectSubdir(t *testing.T) {
+	hermeticGitEnv(t)
+	repo := t.TempDir()
+	gitInitRepo(t, repo)
+	gitT(t, repo, "config", "core.hooksPath", "myhooks")
+	sub := filepath.Join(repo, "app", "nested")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	checks := checkHooksPath(sub)
+	want := "configured git hooks dir does not exist: " + filepath.Join(repo, "myhooks")
+	c := findCheck(checks, "does not exist")
+	if c == nil || c.Msg != want {
+		t.Errorf("relative core.hooksPath must resolve against the repo root reached from the project subdir, got %s, want message %q", formatChecks(checks), want)
 	}
 }
 
@@ -459,8 +509,8 @@ func TestDoctorHooksPathNotAGitRepoIsSilent(t *testing.T) {
 func TestDoctorHooksPathWiredIntoRunExecutorDoctor(t *testing.T) {
 	hermeticGitEnv(t)
 	proj, repo := handoffProject(t, "# playbook\nmeasure-element.py, read-rn-logs.sh\n")
-	runGit(t, repo, "init", "-q")
-	runGit(t, repo, "config", "core.hooksPath", "nonexistent-hooks")
+	gitInitRepo(t, repo)
+	gitT(t, repo, "config", "core.hooksPath", "nonexistent-hooks")
 
 	if levelOf(t, runExecutorDoctor(proj), "does not exist") != levelWarn {
 		t.Error("runExecutorDoctor must include the hooksPath check")

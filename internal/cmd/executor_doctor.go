@@ -396,27 +396,30 @@ func checkRuntimeDrift(e storage.Executor, projPath, playbookPath, playbook stri
 	return out
 }
 
-// checkHooksPath warns when core.hooksPath is explicitly configured (in any
-// git scope - repo-local, global, or system) but resolves to a dead hooks
-// directory. A repo whose local config never touches core.hooksPath is
-// deliberately silent here: a stock .git/hooks with only *.sample files is
-// normal for most repos and must never warn. But once something IS
-// configured - including a global override this project never opted into -
-// the entire worker-guard investment (and every project hook it protects:
-// secret scanning, lint, formatting) is silently protecting nothing while
-// commits are reported as hook-checked.
+// checkHooksPath warns when core.hooksPath is configured (in any git scope -
+// repo-local, global, or system) but resolves to a dead hooks directory. A
+// repo where NO scope configures core.hooksPath at all is deliberately
+// silent here: a stock .git/hooks with only *.sample files is normal for
+// most repos and must never warn. But once something IS configured -
+// including a global override this project never opted into - the entire
+// worker-guard investment (and every project hook it protects: secret
+// scanning, lint, formatting) is silently protecting nothing while commits
+// are reported as hook-checked.
 //
-// Resolution goes through `git rev-parse --git-path hooks`, which applies
-// git's own core.hooksPath semantics (relative values resolve against the
-// top of the working tree, not the current directory) instead of
-// reimplementing them by hand.
+// Resolution goes through `git rev-parse --git-path hooks`, invoked with
+// `-C projPath` exactly like every lookup this function makes: for a
+// relative core.hooksPath, git prints the value already adjusted for
+// projPath's depth below the worktree root (e.g. "../../myhooks" from two
+// levels down), so joining it back onto projPath - not the worktree root -
+// and letting filepath.Join clean the ".." segments away reproduces git's
+// own resolution instead of reimplementing it by hand.
 func checkHooksPath(projPath string) []check {
 	if !isGitRepo(projPath) {
 		return nil
 	}
 	value, err := gitConfigGet(projPath, "core.hooksPath")
-	if err != nil || value == "" {
-		return nil // not configured anywhere - nothing to check
+	if err != nil {
+		return nil // not configured in any scope - nothing to check
 	}
 
 	resolved, err := gitRevParseGitPath(projPath, "hooks")
@@ -431,8 +434,10 @@ func checkHooksPath(projPath string) []check {
 
 	entries, err := os.ReadDir(resolved)
 	switch {
-	case err != nil:
+	case os.IsNotExist(err):
 		return []check{{levelWarn, "configured git hooks dir does not exist: " + resolved, hint}}
+	case err != nil:
+		return []check{{levelWarn, "configured git hooks dir cannot be read: " + resolved + " (" + err.Error() + ")", hint}}
 	case !hasHookFile(entries):
 		return []check{{levelWarn, "configured git hooks dir has no hook files: " + resolved, hint}}
 	default:
@@ -441,14 +446,21 @@ func checkHooksPath(projPath string) []check {
 }
 
 // hasHookFile reports whether entries contains a real hook file: not a
-// directory, and not one of the *.sample placeholders `git init` seeds the
-// default hooks dir with.
+// directory, not one of the *.sample placeholders `git init` seeds the
+// default hooks dir with, and executable - git silently skips a hook file
+// that lost its exec bit, and a hooks dir holding only a README or a stray
+// .DS_Store must not read as healthy. A file whose mode cannot be read fails
+// open (counts as a hook) rather than turn this heuristic WARN into a false
+// alarm over a filesystem race.
 func hasHookFile(entries []os.DirEntry) bool {
 	for _, e := range entries {
 		if e.IsDir() || strings.HasSuffix(e.Name(), ".sample") {
 			continue
 		}
-		return true
+		info, err := e.Info()
+		if err != nil || info.Mode()&0o111 != 0 {
+			return true
+		}
 	}
 	return false
 }
