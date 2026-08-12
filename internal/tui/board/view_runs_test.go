@@ -241,6 +241,61 @@ func TestRunsViewNavigation(t *testing.T) {
 		}
 	})
 
+	t.Run("t opens the task detail and esc comes back to Runs", func(t *testing.T) {
+		m := newRunsModel(t)
+		cursorOnTracker(t, m, "p-9")
+		res, _ := m.updateRuns(keyRunes('t'))
+		detail := res.(Model)
+		if detail.currentView != viewDetail {
+			t.Fatalf("t should open the detail view, currentView = %v (toast %q)", detail.currentView, detail.toastMsg)
+		}
+		if detail.detailTask == nil || detail.detailTask.Meta.ID != "p-9" {
+			t.Fatalf("detail opened on %+v, want p-9", detail.detailTask)
+		}
+		if detail.previousView != viewRuns {
+			t.Errorf("previousView = %v, want viewRuns", detail.previousView)
+		}
+		back, _ := detail.updateDetail(tea.KeyMsg{Type: tea.KeyEsc})
+		if got := back.(Model).currentView; got != viewRuns {
+			t.Errorf("esc out of the detail returned to %v, want viewRuns", got)
+		}
+	})
+
+	t.Run("t on another project's row switches the tab first", func(t *testing.T) {
+		m := newRunsModel(t)
+		runsProjectWithRun(t, m, "q", "q-4")
+		cursorOnTracker(t, m, "q-4")
+		m.openRunsRowDetail()
+		if m.currentView != viewDetail {
+			t.Fatalf("the detail view did not open (toast %q)", m.toastMsg)
+		}
+		if got := m.projects[m.activeProject]; got != "q" {
+			t.Errorf("active project = %q, want q - detail's run dashboard reads the visible tab's maps", got)
+		}
+	})
+
+	t.Run("t on a remote row says where the task lives instead of opening nothing", func(t *testing.T) {
+		m := newRunsModel(t)
+		m.runsRemoteRows = []storage.RunRow{{
+			Remote: "runner", Project: "orbit", Tracker: "orbit-vps-3", Title: "remote batch",
+			Updated: time.Now().UTC().Format(time.RFC3339),
+			Run:     storage.RunCell{State: storage.RunCellRunning, Done: 1, Total: 4},
+		}}
+		m.refreshRunsView()
+		for i, r := range m.runsRows {
+			if r.Remote == "runner" {
+				m.runsCursor = i
+			}
+		}
+		m.openRunsRowDetail()
+		if m.currentView == viewDetail {
+			t.Error("a remote run's task lives in the other machine's pm - the detail view must not open on it")
+		}
+		if !strings.Contains(m.toastMsg, "runner") || !strings.Contains(m.toastMsg, "task") {
+			t.Errorf("toast = %q, want it to name the machine and the task", m.toastMsg)
+		}
+	})
+
 	t.Run("enter on another project's row switches the tab first", func(t *testing.T) {
 		m := newRunsModel(t)
 		if err := m.store.CreateProject("q", &storage.Project{Name: "Q"}); err != nil {

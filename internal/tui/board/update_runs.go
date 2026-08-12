@@ -82,6 +82,10 @@ func (m Model) updateRuns(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openRowReport()
 		return m, nil
 
+	case msg.String() == "t":
+		m.openRunsRowDetail()
+		return m, nil
+
 	case msg.String() == "f":
 		// The call is a STATEMENT, not an operand of the return: it takes a
 		// pointer to this copy of m and sets runsFetching, and Go orders only the
@@ -108,27 +112,60 @@ func (m Model) runsHalfPage() int {
 	return 1
 }
 
-// openRunsRow opens the agent-view for the run under the cursor, switching the
-// board's project tab first when the row belongs to another one - the board's
-// run-state maps only cover the tab that is showing, so without the switch the
-// view would open on nothing.
+// openRunsRow opens the agent-view for the run under the cursor.
 func (m *Model) openRunsRow() {
-	row := m.selectedRunRow()
-	if row == nil {
+	t := m.resolveRunsRowTask("transcript")
+	if t == nil {
 		return
 	}
-	if row.Remote != "" {
-		// The transcript is a file on the OTHER machine. pm could stream it over
-		// ssh, but that is a feature (and a failure mode) of its own; this row's
-		// job is to say the run exists and where.
-		m.toastMsg = "that run is on " + row.Remote + " - its transcript lives there, not here"
-		m.toastExpiry = time.Now().Add(4 * time.Second)
+	// openExecutorView stamps executorPrevView from the CURRENT view, which is
+	// still viewRuns here - that is what makes esc out of the agent-view come
+	// back to this list instead of the board.
+	if !m.openExecutorView(t) {
+		m.toastMsg = "no run recorded for " + t.Meta.ID + " yet"
+		m.toastExpiry = time.Now().Add(3 * time.Second)
+	}
+}
+
+// openRunsRowDetail opens the task-detail view on the tracker under the cursor
+// - the row says how the run went, the task says what the work was.
+func (m *Model) openRunsRowDetail() {
+	t := m.resolveRunsRowTask("task")
+	if t == nil {
 		return
+	}
+	// previousView is detail's own return pointer, so esc (and the status keys
+	// that leave detail) come back to this list, the same way the agent-view's
+	// executorPrevView does.
+	m.previousView = viewRuns
+	m.currentView = viewDetail
+	m.openDetailTask(t)
+}
+
+// resolveRunsRowTask turns the row under the cursor into its LOCAL task,
+// switching the board's project tab first when the row belongs to another one -
+// the board's run-state and task maps only cover the tab that is showing, so
+// without the switch the caller's view would open on nothing. Returns nil after
+// saying why in a toast; `what` names the thing the caller wanted (transcript,
+// task), because a remote row's refusal should say what it is that lives on the
+// other machine.
+func (m *Model) resolveRunsRowTask(what string) *storage.Task {
+	row := m.selectedRunRow()
+	if row == nil {
+		return nil
+	}
+	if row.Remote != "" {
+		// The task (and the run's transcript) live on the OTHER machine. pm could
+		// reach over ssh, but that is a feature (and a failure mode) of its own;
+		// this row's job is to say the run exists and where.
+		m.toastMsg = "that run is on " + row.Remote + " - its " + what + " lives there, not here"
+		m.toastExpiry = time.Now().Add(4 * time.Second)
+		return nil
 	}
 	if row.Tracker == "" {
 		m.toastMsg = "this row has no tracker to open"
 		m.toastExpiry = time.Now().Add(3 * time.Second)
-		return
+		return nil
 	}
 	// The tab list is re-read FIRST. m.projects is filled at startup and by the
 	// board's own `r`, never by reload() - while the rows under this cursor come
@@ -172,7 +209,7 @@ func (m *Model) openRunsRow() {
 			}
 			m.toastMsg = "project " + row.Project + " is not on this board (archived?)"
 			m.toastExpiry = time.Now().Add(4 * time.Second)
-			return
+			return nil
 		case m.hiddenProjects[row.Project]:
 			// A hidden project is IN m.projects but has no tab (renderTabs marks
 			// the active one among the VISIBLE projects only), so selecting it by
@@ -190,20 +227,15 @@ func (m *Model) openRunsRow() {
 		m.activeProject = target
 		m.reload()
 	}
-	// The maps are what pickRunForTask reads, and the tab may have just changed.
+	// The maps are what pickRunForTask (and detail's run dashboard) read, and
+	// the tab may have just changed.
 	m.refreshRunStates()
 	t, err := m.store.FindTask(row.Project, row.Tracker)
 	if err != nil {
 		m.showErrorToast("open run", err)
-		return
+		return nil
 	}
-	// openExecutorView stamps executorPrevView from the CURRENT view, which is
-	// still viewRuns here - that is what makes esc out of the agent-view come
-	// back to this list instead of the board.
-	if !m.openExecutorView(t) {
-		m.toastMsg = "no run recorded for " + row.Tracker + " yet"
-		m.toastExpiry = time.Now().Add(3 * time.Second)
-	}
+	return t
 }
 
 // openRowReport opens the acceptance report of the row under the cursor.
