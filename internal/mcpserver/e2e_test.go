@@ -1220,6 +1220,95 @@ func TestE2ECrossProjectSkipsBrokenProjectWithWarning(t *testing.T) {
 	})
 }
 
+// TestE2ECrossProjectSkipsUnreadableTaskDirWithWarning: the GetTasks-failure
+// half of the skip+warn contract (as opposed to GetProject-failure, covered
+// above) - a project.yaml that parses fine sitting in a dir GetTasks can't
+// list must be skipped with a warning too, from both cross-project entry
+// points, not just the project-scoped one.
+func TestE2ECrossProjectSkipsUnreadableTaskDirWithWarning(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	lockedDir := filepath.Join(store.Root, "locked")
+	if err := os.MkdirAll(lockedDir, 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", lockedDir, err)
+	}
+	if err := storage.WriteProject(filepath.Join(lockedDir, "project.yaml"), &storage.Project{Name: "Locked Project", Prefix: "l"}); err != nil {
+		t.Fatalf("write locked project.yaml: %v", err)
+	}
+	makeTaskDirUnlistable(t, store.Root, "locked")
+	sess := startMCP(t, store)
+
+	t.Run("pm_context", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_context", nil)
+		if isErr {
+			t.Fatalf("pm_context error: %s", text)
+		}
+		var out struct {
+			Projects []struct {
+				Slug string `json:"slug"`
+			} `json:"projects"`
+			Note string `json:"note"`
+		}
+		mustUnmarshal(t, text, &out)
+		if len(out.Projects) != 1 || out.Projects[0].Slug != "test" {
+			t.Fatalf("want only the healthy project 'test', got %+v", out.Projects)
+		}
+		if !strings.Contains(out.Note, "locked") {
+			t.Fatalf("note must name the locked slug, got %q", out.Note)
+		}
+	})
+
+	t.Run("pm_list_projects", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_list_projects", nil)
+		if isErr {
+			t.Fatalf("list_projects error: %s", text)
+		}
+		var out struct {
+			Projects []struct {
+				Slug string `json:"slug"`
+			} `json:"projects"`
+			Note string `json:"note"`
+		}
+		mustUnmarshal(t, text, &out)
+		if len(out.Projects) != 1 || out.Projects[0].Slug != "test" {
+			t.Fatalf("want only the healthy project 'test', got %+v", out.Projects)
+		}
+		if !strings.Contains(out.Note, "locked") {
+			t.Fatalf("note must name the locked slug, got %q", out.Note)
+		}
+	})
+}
+
+// TestE2ERootUnlistableErrors: the pm root itself being unreadable (not a
+// single project dir) must surface as a tool error too, from both
+// crossProjectContext's ListActiveProjects call and pm_list_projects'
+// ListProjects call - regression coverage for the round-1 finding that
+// `projects, _ := store.ListActiveProjects()` swallowed exactly this.
+func TestE2ERootUnlistableErrors(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses directory permission checks")
+	}
+	store, _ := setupMCPTestStore(t)
+	if err := os.Chmod(store.Root, 0311); err != nil {
+		t.Fatalf("chmod %s: %v", store.Root, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(store.Root, 0755) })
+	sess := startMCP(t, store)
+
+	t.Run("pm_context", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_context", nil)
+		if !isErr {
+			t.Fatalf("pm_context with an unreadable pm root must be a tool error, got: %s", text)
+		}
+	})
+
+	t.Run("pm_list_projects", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_list_projects", nil)
+		if !isErr {
+			t.Fatalf("pm_list_projects with an unreadable pm root must be a tool error, got: %s", text)
+		}
+	})
+}
+
 // TestE2ECreateProject drives the real pm_create_project handler end to end:
 // project.yaml is written with every field and immediately resolvable
 // through the store. Also covers the duplicate-slug and slug-validation
