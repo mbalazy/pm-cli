@@ -77,12 +77,16 @@ func TestCountUnreviewedCommits(t *testing.T) {
 func TestLastReviewedHeadIsTheLastAllowedSpawn(t *testing.T) {
 	tel := storage.AggregateReviewSpawns([]storage.ReviewSpawn{
 		{TS: "2026-08-11T10:00:00.0Z", Head: "aaa"},
-		{TS: "2026-08-11T10:20:00.0Z", Head: "bbb"},
+		{TS: "2026-08-11T10:20:00.0Z", Head: "bbb", SubagentType: "general-purpose"},
 		{TS: "2026-08-11T10:40:00.0Z", Head: "ccc", Denied: true},
 		{TS: "2026-08-11T10:41:00.0Z", Head: "ddd", Nested: true},
+		// A custom-type spawn is untouched by the review harness (no packet, no
+		// model pin) - a late explore/helper agent must not zero the
+		// unreviewed-commits signal by "seeing" the post-fix tip.
+		{TS: "2026-08-11T10:42:00.0Z", Head: "eee", SubagentType: "my-custom-agent"},
 	})
 	if tel.LastReviewedHead != "bbb" {
-		t.Fatalf("LastReviewedHead = %q, want bbb (the last spawn that actually ran at top level)", tel.LastReviewedHead)
+		t.Fatalf("LastReviewedHead = %q, want bbb (the last top-level spawn pm treats as a reviewer)", tel.LastReviewedHead)
 	}
 }
 

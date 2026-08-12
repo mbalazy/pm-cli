@@ -23,6 +23,26 @@ import (
 // here. The hook is a separate process per tool call, so a file is the only
 // state that survives between calls.
 
+// ReviewerAgentType is the subagent type pm defines for reviewer spawns (the
+// --agents payload the worker is launched with names it).
+const ReviewerAgentType = "pm-reviewer"
+
+// GenericSubagentType reports whether a subagent type is one of the built-in
+// generic types that inherit the session's model. They are the only types the
+// review harness treats as REVIEWERS - re-modeled, handed the diff packet,
+// forced synchronous; a custom type is left completely alone. Compared
+// lowercase (the same type has been seen spelled `Explore` and
+// `general-purpose` in one transcript). An empty type is NOT generic here -
+// callers that want the guard's "no type becomes a reviewer" rule handle the
+// empty string themselves, because they apply it at different moments.
+func GenericSubagentType(t string) bool {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "explore", "general-purpose", "plan", ReviewerAgentType:
+		return true
+	}
+	return false
+}
+
 // ReviewSpawn is one observed subagent spawn - one line of the telemetry JSONL.
 type ReviewSpawn struct {
 	TS           string `json:"ts"`                      // RFC3339Nano; round clustering reads this
@@ -327,8 +347,18 @@ func AggregateReviewSpawns(spawns []ReviewSpawn) *ReviewTelemetry {
 			continue
 		}
 		// The spawns file is append-only and written in judgement order, so the
-		// last top-level allowed spawn's head is the newest tip any reviewer saw.
-		if s.Head != "" {
+		// last top-level allowed REVIEWER spawn's head is the newest tip any
+		// reviewer saw. Only spawns pm treats as reviewers advance it: a
+		// generic type (or none, which the guard turns into the reviewer type)
+		// is pinned to the review model and handed the current diff, while a
+		// custom-type spawn - an explore helper, a project-defined agent - is
+		// left untouched by the review harness and says nothing about what a
+		// reviewer saw; letting it advance the signal would zero the
+		// unreviewed-commits count on a sub whose final fix no reviewer ever
+		// read. (A generic-type helper spawned for non-review work still
+		// advances it - the harness attached the diff to its prompt, and
+		// nothing recordable tells it apart from a reviewer.)
+		if s.Head != "" && (s.SubagentType == "" || GenericSubagentType(s.SubagentType)) {
 			t.LastReviewedHead = s.Head
 		}
 		if ts, err := time.Parse(time.RFC3339Nano, s.TS); err == nil {

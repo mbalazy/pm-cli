@@ -214,9 +214,6 @@ func quoteArgs(args []string) []string {
 	return out
 }
 
-// gitHeadSHA is the commit a worker is about to start from. Empty on any
-// failure - every caller treats that as "unknown" and degrades rather than
-// guessing.
 // countUnreviewedCommits fills in how many commits the sub landed AFTER the last
 // reviewer that actually ran, using the tip that reviewer could see
 // (t.LastReviewedHead) and the sub's tip now.
