@@ -268,6 +268,15 @@ func TestE2EJournalListOpenFilterAndLimit(t *testing.T) {
 	if !strings.Contains(cappedOut.Note, fmt.Sprintf("capped at %d", maxJournalLimit)) {
 		t.Fatalf("note should disclose the cap, got %q", cappedOut.Note)
 	}
+
+	// limit == maxJournalLimit exactly is a request AT the ceiling, not above
+	// it - it must not be reported as capped.
+	text, _ = call(t, sess, "pm_journal_list", map[string]any{"project": "test", "name": "sim-rig", "limit": maxJournalLimit})
+	var atCapOut journalEntriesOutput
+	mustUnmarshal(t, text, &atCapOut)
+	if atCapOut.Shown != 3 || atCapOut.Note != "" {
+		t.Fatalf("shown=%d note=%q, want 3 and empty note (limit==cap is not a clamp)", atCapOut.Shown, atCapOut.Note)
+	}
 }
 
 // TestE2EJournalListHardCapTruncates: no limit value can make pm_journal_list

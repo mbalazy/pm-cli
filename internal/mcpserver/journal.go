@@ -170,13 +170,17 @@ func registerJournalTools(s *mcp.Server, store storage.TaskStore) {
 			capped = true
 		}
 		total := len(shown)
+		entryWord := "entries"
+		if in.Open {
+			entryWord = "open entries"
+		}
 		note := ""
 		switch {
 		case capped && total > limit:
 			shown = shown[:limit]
-			note = fmt.Sprintf("%d of %d entries shown (newest first) - limit capped at %d; use `pm journal list --limit 0` for full history", len(shown), total, maxJournalLimit)
+			note = fmt.Sprintf("%d of %d %s shown (newest first) - limit capped at %d; use `pm journal show %s --limit 0 --project %s` for the full history", len(shown), total, entryWord, maxJournalLimit, subject.Name, slug)
 		case capped:
-			note = fmt.Sprintf("all %d entries shown; limit capped at %d", total, maxJournalLimit)
+			note = fmt.Sprintf("all %d %s shown; limit capped at %d", total, entryWord, maxJournalLimit)
 		case total > limit:
 			shown = shown[:limit]
 			// Silent truncation would read as "that is the whole history",

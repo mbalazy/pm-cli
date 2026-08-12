@@ -17,7 +17,7 @@ import (
 type listTasksInput struct {
 	Project string `json:"project,omitempty" jsonschema:"Project slug or prefix (omit for all projects)"`
 	Status  string `json:"status,omitempty" jsonschema:"Filter by status (e.g. todo, doing, done, archived)"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"Max tasks to return, newest first (default 50, hard cap 200). The result reports total vs shown; narrow with project/status to see more of a truncated result."`
+	Limit   int    `json:"limit,omitempty" jsonschema:"Max tasks to return, newest first (default 50, hard cap 200). The result reports total vs shown; raise limit (up to 200) or narrow with project/status to see more of a truncated result."`
 }
 
 // defaultListLimit caps unfiltered pm_list_tasks output: without it a full

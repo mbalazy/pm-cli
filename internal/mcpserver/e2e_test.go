@@ -534,6 +534,17 @@ func TestE2EListTasksBudget(t *testing.T) {
 			t.Fatalf("note should disclose the cap, got %q", out.Note)
 		}
 	})
+
+	// limit == maxListLimit exactly is a request AT the ceiling, not above it -
+	// it must not be reported as capped.
+	t.Run("limit at the cap boundary is not reported as capped", func(t *testing.T) {
+		text, _ := call(t, sess, "pm_list_tasks", map[string]any{"project": "test", "limit": maxListLimit})
+		var out listOut
+		mustUnmarshal(t, text, &out)
+		if out.Shown != 60 || out.Note != "" {
+			t.Fatalf("shown=%d note=%q, want 60 and empty note (limit==cap is not a clamp)", out.Shown, out.Note)
+		}
+	})
 }
 
 // TestE2EListTasksHardCapTruncates: no limit value can make pm_list_tasks
