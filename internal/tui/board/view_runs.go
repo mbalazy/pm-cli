@@ -65,7 +65,7 @@ func (m Model) viewRuns() string {
 	// of the key list with nothing to say it did - and the footer is where the
 	// way out of this view is written.
 	footer := helpStyle.Render(truncateWidth(
-		"↑/↓ navigate · enter agent-view · F report · f fetch remote · r refresh · esc back", m.width))
+		"↑/↓ navigate · enter agent-view · t task · F report · f fetch remote · r refresh · esc back", m.width))
 	lines = append(lines, footer)
 
 	// Exactness, enforced rather than assumed. Overshoot is only possible in a
