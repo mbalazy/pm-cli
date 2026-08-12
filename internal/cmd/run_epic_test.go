@@ -122,11 +122,11 @@ func TestRecordSubFeedback(t *testing.T) {
 		parent := addTask(t, store, slug, storage.TaskMeta{ID: "proj-10", Title: "Epic", Status: storage.StatusDoing},
 			storage.SpecStart+"\n## Description\nbuild it\n"+storage.SpecEnd+"\n\nlog tail")
 
-		if err := recordSubFeedback(store, parent, "proj-10-1", "merged", []string{"streak store seam"}); err != nil {
+		if err := recordSubFeedback(store, parent, "proj-10-1", "merged", []string{"streak store seam"}, io.Discard); err != nil {
 			t.Fatalf("recordSubFeedback: %v", err)
 		}
 		// second finding from a later sub accumulates
-		if err := recordSubFeedback(store, parent, "proj-10-2", "merged", []string{"nav handoff"}); err != nil {
+		if err := recordSubFeedback(store, parent, "proj-10-2", "merged", []string{"nav handoff"}, io.Discard); err != nil {
 			t.Fatalf("recordSubFeedback 2: %v", err)
 		}
 
@@ -151,7 +151,7 @@ func TestRecordSubFeedback(t *testing.T) {
 		parent := addTask(t, store, slug, storage.TaskMeta{ID: "proj-12", Title: "Epic3", Status: storage.StatusDoing},
 			storage.SpecStart+"\n## Description\nbuild it\n"+storage.SpecEnd)
 
-		if err := recordSubFeedback(store, parent, "proj-12-2", "blocked", []string{"needs API field X"}); err != nil {
+		if err := recordSubFeedback(store, parent, "proj-12-2", "blocked", []string{"needs API field X"}, io.Discard); err != nil {
 			t.Fatalf("record blocked: %v", err)
 		}
 		reloaded, _ := store.FindTask(slug, "proj-12")
@@ -159,7 +159,7 @@ func TestRecordSubFeedback(t *testing.T) {
 		mustContain(t, spec, "[proj-12-2 · blocked] needs API field X")
 
 		// Re-run: same sub, fresh reason -> the old line is replaced, not stacked.
-		if err := recordSubFeedback(store, reloaded, "proj-12-2", "blocked", []string{"still needs API field X (v2)"}); err != nil {
+		if err := recordSubFeedback(store, reloaded, "proj-12-2", "blocked", []string{"still needs API field X (v2)"}, io.Discard); err != nil {
 			t.Fatalf("record blocked 2: %v", err)
 		}
 		reloaded2, _ := store.FindTask(slug, "proj-12")
@@ -173,12 +173,12 @@ func TestRecordSubFeedback(t *testing.T) {
 	t.Run("a shared-prefix sub id is not clobbered", func(t *testing.T) {
 		parent := addTask(t, store, slug, storage.TaskMeta{ID: "proj-13", Title: "Epic4", Status: storage.StatusDoing},
 			storage.SpecStart+"\n## Description\nx\n"+storage.SpecEnd)
-		_ = recordSubFeedback(store, parent, "proj-13-1", "blocked", []string{"one"})
+		_ = recordSubFeedback(store, parent, "proj-13-1", "blocked", []string{"one"}, io.Discard)
 		reloaded, _ := store.FindTask(slug, "proj-13")
-		_ = recordSubFeedback(store, reloaded, "proj-13-12", "blocked", []string{"twelve"})
+		_ = recordSubFeedback(store, reloaded, "proj-13-12", "blocked", []string{"twelve"}, io.Discard)
 		// refreshing proj-13-1 must leave proj-13-12 intact
 		reloaded2, _ := store.FindTask(slug, "proj-13")
-		_ = recordSubFeedback(store, reloaded2, "proj-13-1", "blocked", []string{"one-again"})
+		_ = recordSubFeedback(store, reloaded2, "proj-13-1", "blocked", []string{"one-again"}, io.Discard)
 		final, _ := store.FindTask(slug, "proj-13")
 		spec := storage.ExtractSpec(final.Body)
 		mustContain(t, spec, "[proj-13-1 · blocked] one-again")
@@ -187,7 +187,7 @@ func TestRecordSubFeedback(t *testing.T) {
 
 	t.Run("falls back to Log when parent has no spec", func(t *testing.T) {
 		parent := addTask(t, store, slug, storage.TaskMeta{ID: "proj-11", Title: "Epic2", Status: storage.StatusDoing}, "plain body, no markers")
-		if err := recordSubFeedback(store, parent, "proj-11-1", "merged", []string{"finding x"}); err != nil {
+		if err := recordSubFeedback(store, parent, "proj-11-1", "merged", []string{"finding x"}, io.Discard); err != nil {
 			t.Fatalf("recordSubFeedback: %v", err)
 		}
 		reloaded, _ := store.FindTask(slug, "proj-11")

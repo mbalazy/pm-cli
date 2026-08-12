@@ -124,7 +124,7 @@ func driveSubFlow(store storage.TaskStore, workDir, slug string, tracker, sub *s
 		// human sees, in one place (the epic), why a sub stalled - without opening
 		// each child. Status itself stays in the child + generated rollup; this is
 		// open-questions content, not a status table.
-		logIfErr(errOut, "record feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, res.Status, parkedFindings(res)))
+		logIfErr(errOut, "record feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, res.Status, parkedFindings(res), errOut))
 		return subOutcome{sub.Meta.ID, res.Status, note, branch}
 	}
 
@@ -137,7 +137,7 @@ func driveSubFlow(store storage.TaskStore, workDir, slug string, tracker, sub *s
 	// Refresh the parent's Manager Notes for this sub: record cross-cutting
 	// findings for later subs, and (with empty findings) clear any stale parked
 	// note now that the sub has landed.
-	logIfErr(errOut, "refresh feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, flow.green, res.Unresolved))
+	logIfErr(errOut, "refresh feedback for "+sub.Meta.ID, recordSubFeedback(store, tracker, sub.Meta.ID, flow.green, res.Unresolved, errOut))
 	return subOutcome{sub.Meta.ID, flow.green, note, branch}
 }
 

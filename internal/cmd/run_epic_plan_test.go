@@ -417,7 +417,7 @@ func TestRecordSubFeedbackRefusesToResurrectADeletedParent(t *testing.T) {
 	}
 	filePath := parent.FilePath
 
-	err := recordSubFeedback(store, parent, "proj-20-1", "blocked", []string{"needs a decision"})
+	err := recordSubFeedback(store, parent, "proj-20-1", "blocked", []string{"needs a decision"}, io.Discard)
 	if err == nil {
 		t.Fatal("recording feedback onto a deleted parent must fail, not resurrect it")
 	}
