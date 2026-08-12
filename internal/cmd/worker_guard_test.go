@@ -23,7 +23,8 @@ func TestBashCommandBlocked(t *testing.T) {
 		{"short -n on push", `git push -n origin main`},
 		{"cluster -nm on commit", `git commit -nm "add feature"`},
 		{"cluster -anm on commit", `git commit -anm "add feature"`},
-		{"cluster -nm on push", `git push -nm origin main`},
+		{"cluster -nf on push", `git push -nf origin main`},
+		{"attached cluster, no separator", `git commit -nm"add feature"`},
 		{"hooksPath via -c", `git -c core.hooksPath=/dev/null commit -m "x"`},
 		{"hooksPath via config", `git config core.hooksPath /dev/null`},
 		{"hooksPath case", `git -c core.HooksPath=/dev/null commit -m x`},
@@ -102,7 +103,9 @@ func TestBashCommandBlockedClusterGuard(t *testing.T) {
 	blocked := []struct{ name, cmd string }{
 		{"cluster -nm on commit", `git commit -nm "add feature"`},
 		{"cluster -anm on commit", `git commit -anm "add feature"`},
-		{"cluster -nm on push", `git push -nm origin main`},
+		{"cluster -nf on push", `git push -nf origin main`},
+		{"attached cluster, quoted payload, no separator", `git commit -nm"add feature"`},
+		{"attached cluster, bare payload, no separator", `git commit -nmfix-typo`},
 	}
 	for _, c := range blocked {
 		if ok, _ := bashCommandBlocked(c.cmd); !ok {
@@ -113,6 +116,11 @@ func TestBashCommandBlockedClusterGuard(t *testing.T) {
 	allowed := []struct{ name, cmd string }{
 		{"combined short flag without n", `git commit -am "drop the --no-verify escape hatch"`},
 		{"cluster mentioned only in a stripped message", `git commit -m "fix the -nm cluster bypass in worker-guard"`},
+		// The scoped `-n` check is judged per git-commit/push segment, not
+		// against the whole line - an unrelated flag containing `n` in a
+		// command chained ahead of the commit must not trip it.
+		{"unrelated -n-bearing flag chained before a commit", `go test ./internal/cmd/ -run Guard -v && git commit -am "fix"`},
+		{"unrelated -n-bearing flag chained after a commit", `git commit -am "fix" && go test -run Guard -v`},
 	}
 	for _, c := range allowed {
 		if ok, what := bashCommandBlocked(c.cmd); ok {
@@ -131,6 +139,10 @@ func TestStripMessagePayload(t *testing.T) {
 		{`git commit --message="HUSKY=0 is banned"`, `git commit --message MSG`},
 		{`git commit -m fix && rm .husky/pre-commit`, `git commit -m MSG && rm .husky/pre-commit`},
 		{`git push --no-verify origin HEAD`, `git push --no-verify origin HEAD`},
+		// Attached form, no separator at all: git's own short-option parser
+		// accepts the value glued directly onto the flag cluster.
+		{`git commit -nm"add feature"`, `git commit -nm MSG`},
+		{`git commit -nmfix-typo`, `git commit -nm MSG`},
 	}
 	for _, c := range cases {
 		if got := stripMessagePayload(c.in); got != c.want {
