@@ -836,10 +836,15 @@ func finishTarget(cmd *cobra.Command, store storage.TaskStore, args []string) (s
 func newFinishClaimCmd(store storage.TaskStore) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "claim <tracker>",
-		Short: "Claim a run for acceptance (fails when somebody else holds it)",
+		Short: "Claim a run for acceptance (fails when somebody else holds it; same --session refreshes)",
 		Long: "Claims <tracker> for acceptance. Fails with a non-zero exit when a live claim is already held, " +
 			"naming the host, the pid and how long ago it was refreshed, so it is obvious which machine to go " +
-			"and look at. A claim nobody has refreshed within the TTL is taken over automatically.",
+			"and look at. A claim nobody has refreshed within the TTL is taken over automatically.\n\n" +
+			"EXCEPTION: a live claim taken on this host with the SAME --session is refreshed in place instead of " +
+			"refused - `started` stays put, `refreshed` moves forward. That is the heartbeat of a hand-driven " +
+			"acceptance (e.g. a batch-finish-auto session): re-run this command with the same --session at least " +
+			"once per few minutes and the claim never lapses mid-work. Without --session there is no identity to " +
+			"match, so nothing can refresh the claim and it lapses after the TTL.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dir, tracker, err := finishTarget(cmd, store, args)
@@ -851,26 +856,46 @@ func newFinishClaimCmd(store storage.TaskStore) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "claimed %s for acceptance (host %s, pid %d)\n",
+			out := cmd.OutOrStdout()
+			// A refreshed claim is recognizable by its stamps: a FRESH claim is
+			// born with started == refreshed, and only a refresh moves the
+			// second without the first. Saying which of the two happened is the
+			// point - the holder re-running this as a heartbeat needs to see
+			// the claim's age held still, not a new claim silently minted.
+			if claim.Refreshed != claim.Started {
+				fmt.Fprintf(out, "refreshed the claim on %s (host %s, held since %s)\n",
+					claim.TrackerID, claim.Host, claim.Started)
+				fmt.Fprintf(out, "  valid for another %s - keep re-running this command with the same --session "+
+					"while the acceptance lasts\n", storage.FinishClaimTTL)
+				return nil
+			}
+			fmt.Fprintf(out, "claimed %s for acceptance (host %s, pid %d)\n",
 				claim.TrackerID, claim.Host, claim.PID)
-			fmt.Fprintf(cmd.OutOrStdout(), "  claim: %s\n", storage.FinishClaimPath(dir, claim.TrackerID))
-			fmt.Fprintf(cmd.OutOrStdout(), "  started: %s\n", claim.Started)
-			fmt.Fprintf(cmd.OutOrStdout(), "  release it with `pm finish release %s --started %s`\n",
+			fmt.Fprintf(out, "  claim: %s\n", storage.FinishClaimPath(dir, claim.TrackerID))
+			fmt.Fprintf(out, "  started: %s\n", claim.Started)
+			fmt.Fprintf(out, "  release it with `pm finish release %s --started %s`\n",
 				claim.TrackerID, claim.Started)
-			// Be exact about what does and does not keep this alive. A claim
-			// taken BY HAND, here, has no refresher behind it: the process that
-			// took it has already exited, so the claim lapses after the TTL and
-			// the next acceptance takes it over mid-work. Only `pm finish
-			// <tracker>` refreshes its own claim for as long as it runs. This
-			// is the line somebody reads right before deciding whether a long
-			// acceptance is safe, so it must not imply the wrong one.
-			fmt.Fprintf(cmd.OutOrStdout(), "  valid for %s, and NOTHING refreshes a claim taken by hand - a longer "+
-				"acceptance can be taken over once it lapses (`pm finish %s` keeps its own claim alive instead)\n",
-				storage.FinishClaimTTL, claim.TrackerID)
+			// Be exact about what does and does not keep this alive. This is
+			// the line somebody reads right before deciding whether a long
+			// acceptance is safe, so it must name the one working refresh: a
+			// re-run of this command with the SAME --session. Anything else -
+			// no session, a different session - leaves the claim to lapse
+			// after the TTL, free for the next acceptance to take over
+			// mid-work. (`pm finish <tracker>` refreshes its own claim by
+			// itself for as long as it runs.)
+			if claim.Session != "" {
+				fmt.Fprintf(out, "  valid for %s - re-run `pm finish claim %s --session %s` at least once per few "+
+					"minutes to refresh it (a refresh inside the last %s before expiry is refused as unsafe)\n",
+					storage.FinishClaimTTL, claim.TrackerID, claim.Session, storage.FinishClaimRefreshInterval)
+			} else {
+				fmt.Fprintf(out, "  valid for %s, and without --session NOTHING can refresh it - a longer acceptance "+
+					"is taken over once it lapses; claim with --session <id> to be able to refresh\n",
+					storage.FinishClaimTTL)
+			}
 			return nil
 		},
 	}
-	cmd.Flags().String("session", "", "CC session or run id to record in the claim (informational)")
+	cmd.Flags().String("session", "", "CC session or run id recorded in the claim - also the refresh identity: re-claiming with the same session refreshes instead of failing")
 	return cmd
 }
 

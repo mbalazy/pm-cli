@@ -621,3 +621,99 @@ func TestLiveFinishClaims(t *testing.T) {
 		t.Errorf("a project without an .executor dir returned %d claims", n)
 	}
 }
+
+// The same-session re-claim is the hand-driven acceptance's heartbeat: a CC
+// session that took the claim via `pm finish claim` has no resident process
+// to refresh it, so re-running the command must refresh rather than refuse -
+// under exactly the identity (host + non-empty session) that cannot be faked
+// by accident, and never past RefreshFinishClaim's own safety edge.
+func TestAcquireFinishClaimSameSessionRefreshes(t *testing.T) {
+	t.Run("same host and session refreshes in place, keeping identity and payload", func(t *testing.T) {
+		dir := t.TempDir()
+		first, err := AcquireFinishClaim(dir, "proj-100", "sess-x")
+		if err != nil {
+			t.Fatalf("first acquire: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond) // nanosecond stamps - make the refresh visibly later
+		second, err := AcquireFinishClaim(dir, "proj-100", "sess-x")
+		if err != nil {
+			t.Fatalf("same-session re-acquire must refresh, got: %v", err)
+		}
+		if second.Started != first.Started {
+			t.Errorf("started moved on a refresh: %q -> %q (the claim's age must hold still)", first.Started, second.Started)
+		}
+		if second.Refreshed == first.Refreshed {
+			t.Error("refreshed did not move - the re-claim was a no-op, the TTL never advanced")
+		}
+		if second.PID != first.PID || second.Session != "sess-x" || second.TrackerID != "proj-100" {
+			t.Errorf("the refresh must keep the original payload: %+v vs %+v", second, first)
+		}
+		disk, err := ReadFinishClaim(dir, "proj-100")
+		if err != nil || disk == nil || disk.Refreshed != second.Refreshed || disk.Started != first.Started {
+			t.Errorf("on-disk claim = %+v (err %v), want the refreshed one", disk, err)
+		}
+	})
+
+	t.Run("a different session on the same host stays busy", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := AcquireFinishClaim(dir, "proj-100", "sess-x"); err != nil {
+			t.Fatal(err)
+		}
+		var busy *FinishClaimBusyError
+		if _, err := AcquireFinishClaim(dir, "proj-100", "sess-y"); !errors.As(err, &busy) {
+			t.Fatalf("err = %v, want busy - another session is another acceptance", err)
+		}
+	})
+
+	t.Run("an empty session never matches, even an empty one on disk", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := AcquireFinishClaim(dir, "proj-100", ""); err != nil {
+			t.Fatal(err)
+		}
+		var busy *FinishClaimBusyError
+		if _, err := AcquireFinishClaim(dir, "proj-100", ""); !errors.As(err, &busy) {
+			t.Fatalf("err = %v, want busy - two anonymous claims are two acceptances", err)
+		}
+	})
+
+	t.Run("another host's claim with the same session stays busy", func(t *testing.T) {
+		dir := t.TempDir()
+		now := time.Now().UTC().Format(claimTimeLayout)
+		seedClaim(t, dir, FinishClaim{TrackerID: "proj-100", Host: "runner", PID: 1, Session: "sess-x", Started: now, Refreshed: now})
+		var busy *FinishClaimBusyError
+		if _, err := AcquireFinishClaim(dir, "proj-100", "sess-x"); !errors.As(err, &busy) {
+			t.Fatalf("err = %v, want busy - the session id alone must not cross hosts", err)
+		}
+	})
+
+	t.Run("a refresh inside the last tick before the TTL is refused, not raced", func(t *testing.T) {
+		dir := t.TempDir()
+		started := time.Now().Add(-20 * time.Minute).UTC().Format(claimTimeLayout)
+		lapsing := time.Now().Add(-FinishClaimTTL + FinishClaimRefreshInterval/2).UTC().Format(claimTimeLayout)
+		seedClaim(t, dir, FinishClaim{TrackerID: "proj-100", Host: hostname(), PID: 1, Session: "sess-x", Started: started, Refreshed: lapsing})
+		_, err := AcquireFinishClaim(dir, "proj-100", "sess-x")
+		if err == nil {
+			t.Fatal("a lapsing claim must not be refreshed - a rival may be mid-takeover")
+		}
+		var busy *FinishClaimBusyError
+		if errors.As(err, &busy) {
+			t.Fatalf("the refusal must be RefreshFinishClaim's own (explaining the TTL edge), not a plain busy: %v", err)
+		}
+		if disk, _ := ReadFinishClaim(dir, "proj-100"); disk == nil || disk.Refreshed != lapsing {
+			t.Errorf("the refused refresh must leave the claim untouched: %+v", disk)
+		}
+	})
+
+	t.Run("an expired claim from the same session is taken over fresh, not refreshed", func(t *testing.T) {
+		dir := t.TempDir()
+		old := time.Now().Add(-FinishClaimTTL - time.Minute).UTC().Format(claimTimeLayout)
+		seedClaim(t, dir, FinishClaim{TrackerID: "proj-100", Host: hostname(), PID: 1, Session: "sess-x", Started: old, Refreshed: old})
+		got, err := AcquireFinishClaim(dir, "proj-100", "sess-x")
+		if err != nil {
+			t.Fatalf("takeover of an own expired claim: %v", err)
+		}
+		if got.Started == old {
+			t.Error("an expired claim was REFRESHED - a real gap in the acceptance must show as a fresh start")
+		}
+	})
+}
