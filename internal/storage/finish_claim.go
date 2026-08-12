@@ -233,9 +233,11 @@ func (c *FinishClaim) Expired(now time.Time) bool {
 }
 
 // AcquireFinishClaim claims trackerID for this host/process. A live claim held
-// by anyone (including this same process - one run gets one acceptance) returns
-// *FinishClaimBusyError with the holder. An EXPIRED or corrupt claim is taken
-// over automatically.
+// by anyone else returns *FinishClaimBusyError with the holder; a live claim
+// held by THIS host under the SAME non-empty session is refreshed in place
+// instead (see the heartbeat note inside - that is how a hand-driven
+// acceptance stays alive at all). An EXPIRED or corrupt claim is taken over
+// automatically.
 //
 // The claim is ATOMIC, with the two primitives AcquireWorktreeLock established:
 //   - claim = link(2) of a fully written scratch file onto the claim path, so
@@ -303,6 +305,29 @@ func AcquireFinishClaim(projectDir, trackerID, session string) (*FinishClaim, er
 		case rerr == nil && existing == nil:
 			continue // released or stolen between EEXIST and the read - retry
 		case rerr == nil && !existing.Expired(time.Now()):
+			// The same acceptance asking again is a HEARTBEAT, not a rival. A
+			// hand-driven acceptance (a CC session that ran `pm finish claim`)
+			// has no resident process to call RefreshFinishClaim on a timer -
+			// re-running the claim command is the only refresh it can perform,
+			// and refusing it used to force exactly the failure the claim
+			// exists to prevent: the claim lapsed mid-acceptance, invisible to
+			// every surface and free for the auto-chain to race
+			// (orbit-117, pm-cli-113).
+			//
+			// Identity is host + session, nothing weaker: the pid died with
+			// the claiming CLI, and Started is precisely what a later CLI
+			// invocation cannot know. An EMPTY session matches nothing - two
+			// anonymous claims are two different acceptances, so a
+			// session-less re-claim stays busy. The refresh itself is
+			// RefreshFinishClaim, so the write (scratch+rename), the identity
+			// it preserves (Started, pid, session) and the refusal inside the
+			// last tick before the TTL are all the resident refresher's own.
+			if session != "" && existing.Session == session && existing.Host == hostname() {
+				if err := RefreshFinishClaim(projectDir, trackerID, existing); err != nil {
+					return nil, err
+				}
+				return existing, nil
+			}
 			return nil, &FinishClaimBusyError{Holder: existing}
 		}
 		// Expired, or corrupt (a truncated file from a crashed process must not
