@@ -363,7 +363,11 @@ func TestDoctorLandingStatusNotInProjectStatuses(t *testing.T) {
 // hook subprocesses) would have every `git -C <tempdir>` command in this file
 // silently operate on the ENCLOSING repo instead of the fixture - the same
 // hazard githooks/pre-commit already guards `make check` against for exactly
-// this reason.
+// this reason. GIT_CONFIG_PARAMETERS/GIT_CONFIG_COUNT go with them: `git -c
+// core.hooksPath=... commit` exports its override to every descendant,
+// including the pre-commit hook's `make check`, which made all nine hooksPath
+// tests resolve to the ENCLOSING repo's hooks dir - config injected by the
+// invoker is no more hermetic than config read off ~/.gitconfig.
 func hermeticGitEnv(t *testing.T) {
 	t.Helper()
 	empty := t.TempDir()
@@ -371,7 +375,7 @@ func hermeticGitEnv(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(empty, "xdg-config"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(empty, "gitconfig-unused"))
-	for _, k := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_PREFIX"} {
+	for _, k := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_PREFIX", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"} {
 		if v, ok := os.LookupEnv(k); ok {
 			os.Unsetenv(k)
 			t.Cleanup(func() { os.Setenv(k, v) })
@@ -390,6 +394,13 @@ func writeExecutableHook(t *testing.T, path string) {
 	}
 }
 
+func symlinkT(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestDoctorHooksPathUnsetIsSilent covers case (a): a stock repo whose
 // .git/hooks holds only git's own *.sample placeholders and whose config
 // never touches core.hooksPath at all. That is the default shape of nearly
@@ -402,6 +413,22 @@ func TestDoctorHooksPathUnsetIsSilent(t *testing.T) {
 	checks := checkHooksPath(dir)
 	if len(checks) != 0 {
 		t.Errorf("no core.hooksPath configured must produce no finding, got: %s", formatChecks(checks))
+	}
+}
+
+// TestDoctorHooksPathIgnoresInjectedGitConfig: a core.hooksPath handed to git
+// on the command line (`git -c core.hooksPath=... commit`) travels to every
+// descendant process through GIT_CONFIG_PARAMETERS - a pre-commit hook's
+// `make check` included. Observed before hermeticGitEnv stripped it: every
+// hooksPath test resolved to the enclosing repo's githooks dir and failed.
+func TestDoctorHooksPathIgnoresInjectedGitConfig(t *testing.T) {
+	t.Setenv("GIT_CONFIG_PARAMETERS", "'core.hooksPath=/definitely/not/here'")
+	hermeticGitEnv(t)
+	dir := t.TempDir()
+	gitInitRepo(t, dir)
+
+	if checks := checkHooksPath(dir); len(checks) != 0 {
+		t.Errorf("an injected core.hooksPath must not reach the fixture, got: %s", formatChecks(checks))
 	}
 }
 
@@ -464,12 +491,15 @@ func TestDoctorHooksPathWithRealHookIsFine(t *testing.T) {
 
 // TestDoctorHooksPathEmptyDirWarns: the configured dir exists but holds no
 // real hook file (only samples, or nothing) - the same failure mode as a
-// missing dir, git silently runs no hooks either way.
+// missing dir, git silently runs no hooks either way. The sample is written
+// EXECUTABLE on purpose: that is the mode `git init` seeds the real ones
+// with (0755), so a non-executable sample would pass this test through the
+// exec-bit branch and leave the .sample skip itself unexercised.
 func TestDoctorHooksPathEmptyDirWarns(t *testing.T) {
 	hermeticGitEnv(t)
 	dir := t.TempDir()
 	gitInitRepo(t, dir)
-	writeFile(t, filepath.Join(dir, "myhooks", "pre-commit.sample"), "#!/bin/sh\n")
+	writeExecutableHook(t, filepath.Join(dir, "myhooks", "pre-commit.sample"))
 	gitT(t, dir, "config", "core.hooksPath", "myhooks")
 
 	if levelOf(t, checkHooksPath(dir), "no hook files") != levelWarn {
@@ -489,6 +519,79 @@ func TestDoctorHooksPathNonExecutableFileWarns(t *testing.T) {
 
 	if levelOf(t, checkHooksPath(dir), "no hook files") != levelWarn {
 		t.Error("a non-executable file is not a hook git will ever run - must WARN")
+	}
+}
+
+// TestDoctorHooksPathSymlinkedHooks covers the layout every hook manager
+// produces: the configured dir holds symlinks, not files. A symlink's own
+// mode is 0777, so judging it unfollowed would report ANY dir of links as
+// healthy - including one git runs nothing from.
+func TestDoctorHooksPathSymlinkedHooks(t *testing.T) {
+	cases := []struct {
+		name     string
+		link     func(t *testing.T, dir, linkPath string)
+		wantMsg  string
+		wantWarn bool
+	}{
+		{
+			name: "dangling link",
+			link: func(t *testing.T, dir, linkPath string) {
+				symlinkT(t, filepath.Join(dir, "gone"), linkPath)
+			},
+			wantMsg:  "no hook files",
+			wantWarn: true,
+		},
+		{
+			name: "link to a non-executable file",
+			link: func(t *testing.T, dir, linkPath string) {
+				target := filepath.Join(dir, "shared-hook")
+				writeFile(t, target, "#!/bin/sh\nexit 0\n") // 0644
+				symlinkT(t, target, linkPath)
+			},
+			wantMsg:  "no hook files",
+			wantWarn: true,
+		},
+		{
+			name: "link to an executable file",
+			link: func(t *testing.T, dir, linkPath string) {
+				target := filepath.Join(dir, "shared-hook")
+				writeExecutableHook(t, target)
+				symlinkT(t, target, linkPath)
+			},
+			wantMsg: "git hooks ->",
+		},
+		{
+			name: "link to a directory",
+			link: func(t *testing.T, dir, linkPath string) {
+				if err := os.MkdirAll(filepath.Join(dir, "subdir"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				symlinkT(t, filepath.Join(dir, "subdir"), linkPath)
+			},
+			wantMsg:  "no hook files",
+			wantWarn: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hermeticGitEnv(t)
+			dir := t.TempDir()
+			gitInitRepo(t, dir)
+			if err := os.MkdirAll(filepath.Join(dir, "myhooks"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			tc.link(t, dir, filepath.Join(dir, "myhooks", "pre-commit"))
+			gitT(t, dir, "config", "core.hooksPath", "myhooks")
+
+			want := levelOK
+			if tc.wantWarn {
+				want = levelWarn
+			}
+			checks := checkHooksPath(dir)
+			if got := levelOf(t, checks, tc.wantMsg); got != want {
+				t.Errorf("got: %s", formatChecks(checks))
+			}
+		})
 	}
 }
 

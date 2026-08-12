@@ -449,29 +449,43 @@ func checkHooksPath(projPath string) []check {
 		return []check{{levelWarn, "configured git hooks dir does not exist: " + resolved, hint}}
 	case err != nil:
 		return []check{{levelWarn, "configured git hooks dir cannot be read: " + resolved + " (" + err.Error() + ")", hint}}
-	case !hasHookFile(entries):
+	case !hasHookFile(resolved, entries):
 		return []check{{levelWarn, "configured git hooks dir has no hook files: " + resolved, hint}}
 	default:
 		return []check{{levelOK, "git hooks -> " + resolved, ""}}
 	}
 }
 
-// hasHookFile reports whether entries contains a real hook file: not a
+// hasHookFile reports whether dir's entries contain a real hook file: not a
 // directory, not one of the *.sample placeholders `git init` seeds the
 // default hooks dir with, and executable - git silently skips a hook file
 // that lost its exec bit, and a hooks dir holding only a README or a stray
-// .DS_Store must not read as healthy. A file whose mode cannot be read fails
-// open (counts as a hook) rather than turn this heuristic WARN into a false
-// alarm over a filesystem race.
-func hasHookFile(entries []os.DirEntry) bool {
+// .DS_Store must not read as healthy.
+//
+// Symlinks are followed rather than judged by their own mode. A symlink's
+// lstat mode is 0777 on every unix, so counting it as a hook unseen would
+// pass a dir whose links all dangle - and linking each hook at a shared
+// script is how most hook managers lay the directory out, i.e. exactly the
+// setup where a broken link is plausible and where git, which tests the hook
+// with access(X_OK) through the link, runs nothing at all. A non-symlink
+// whose mode cannot be read fails open (counts as a hook) rather than turn
+// this heuristic WARN into a false alarm over a filesystem race.
+func hasHookFile(dir string, entries []os.DirEntry) bool {
 	for _, e := range entries {
 		if e.IsDir() || strings.HasSuffix(e.Name(), ".sample") {
 			continue
 		}
-		info, err := e.Info()
-		if err != nil || info.Mode()&0o111 != 0 {
+		info, err := os.Stat(filepath.Join(dir, e.Name()))
+		if err != nil {
+			if e.Type()&os.ModeSymlink != 0 {
+				continue // dangling link - git has nothing to run
+			}
 			return true
 		}
+		if info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+		return true
 	}
 	return false
 }
