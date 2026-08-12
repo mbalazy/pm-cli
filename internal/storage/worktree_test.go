@@ -472,14 +472,16 @@ func TestAcquireWorktreeLockAtomicRace(t *testing.T) {
 // between ReleaseWorktreeLock's ownership read and its rename - a rival
 // judges that same dead pid stale and lands its own fresh lock. The real
 // window is a single read-then-rename with nothing externally observable in
-// between, so a live goroutine race almost never lands inside it (verified:
-// hammering the pre-fix code with two real goroutines for 250 iterations
-// never once triggered the bug) - releaseRaceHook forces the exact
-// adversarial ordering deterministically instead. The assertion that catches
-// a lost lock is that the rival's fresh lock survives ON DISK: a release that
+// between, so a live goroutine race is not a reliable way to land inside it -
+// releaseRaceHook forces the exact adversarial ordering deterministically
+// instead (the hook only ever runs from ReleaseWorktreeLock itself, so it
+// cannot re-enter; it self-disarms only as a defensive habit against a future
+// second call site). The assertions that catch a lost lock: the rival's fresh
+// lock must survive ON DISK, release must report that it lost the race rather
+// than claim success, and no scratch litter is left behind - a release that
 // unlinked-by-path instead of verifying what it renamed aside would instead
-// delete the rival's winning lock out from under it, even though
-// AcquireWorktreeLock had already returned nil to its caller.
+// silently delete the rival's winning lock, even though AcquireWorktreeLock
+// had already returned nil to its caller.
 func TestWorktreeLockReleaseVsTakeoverRace(t *testing.T) {
 	const deadPID = 2147483646
 	livePID := os.Getpid()
@@ -492,14 +494,16 @@ func TestWorktreeLockReleaseVsTakeoverRace(t *testing.T) {
 	prev := releaseRaceHook
 	t.Cleanup(func() { releaseRaceHook = prev })
 	releaseRaceHook = func() {
-		releaseRaceHook = func() {} // fire exactly once, so the rival's own steal/relink isn't re-entered
+		releaseRaceHook = func() {} // defensive: must not fire again even if a future call site adds a second invocation
 		if err := AcquireWorktreeLock(dir, "task-new", "work", livePID); err != nil {
 			t.Errorf("rival takeover inside the race window: %v", err)
 		}
 	}
 
 	relErr := ReleaseWorktreeLock(dir, deadPID)
-	t.Logf("release returned: %v (an error here is expected - it lost the race and left the rival's lock alone)", relErr)
+	if relErr == nil {
+		t.Fatalf("release must report that it lost the race, not silently succeed")
+	}
 
 	lk, err := ReadWorktreeLock(dir)
 	if err != nil {
@@ -507,5 +511,15 @@ func TestWorktreeLockReleaseVsTakeoverRace(t *testing.T) {
 	}
 	if lk == nil || lk.TaskID != "task-new" || lk.PID != livePID {
 		t.Fatalf("a release racing a concurrent takeover must never erase the rival's fresh lock, got %+v", lk)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != worktreeLockFile {
+			t.Fatalf("scratch file left behind after the race: %s", e.Name())
+		}
 	}
 }

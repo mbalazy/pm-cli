@@ -286,9 +286,15 @@ func worktreeLockPath(worktreePath string) string {
 var worktreeLockSeq atomic.Uint64
 
 // worktreeScratchPath builds a per-process, per-call scratch name next to the
-// lock, so concurrent writers never share one (see worktreeLockSeq).
-func worktreeScratchPath(path, kind string, pid int) string {
-	return fmt.Sprintf("%s.%s.%d.%d", path, kind, pid, worktreeLockSeq.Add(1))
+// lock, so concurrent writers never share one (see worktreeLockSeq). Keyed on
+// THIS process's own pid (os.Getpid()), never on the lock's PID field: a
+// release can legitimately act on behalf of a foreign pid (killRun cleans up
+// a dead worker's lock from the board process, see ReleaseWorktreeLock), and
+// keying on that target pid would let two independent releasing PROCESSES -
+// each with its own worktreeLockSeq starting at 0 - compute the identical
+// scratch name for the same dead holder.
+func worktreeScratchPath(path, kind string) string {
+	return fmt.Sprintf("%s.%s.%d.%d", path, kind, os.Getpid(), worktreeLockSeq.Add(1))
 }
 
 // LiveWorktreeHolder returns the lock holder when worktreePath is held by
@@ -354,8 +360,9 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 	path := worktreeLockPath(worktreePath)
 
 	for attempt := 0; attempt < 5; attempt++ {
-		tmp := worktreeScratchPath(path, "tmp", pid)
+		tmp := worktreeScratchPath(path, "tmp")
 		if err := os.WriteFile(tmp, data, 0644); err != nil {
+			_ = os.Remove(tmp) // names are unique per call, so a leftover never gets reused
 			return err
 		}
 		linkErr := os.Link(tmp, path)
@@ -380,11 +387,16 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 				// truncated-file window, and a rival reading that torn state as
 				// corrupt would steal a LIVE holder's lock. Write-tmp + rename keeps
 				// the refresh atomic like every other lock transition.
-				refresh := worktreeScratchPath(path, "refresh", pid)
+				refresh := worktreeScratchPath(path, "refresh")
 				if err := os.WriteFile(refresh, data, 0644); err != nil {
+					_ = os.Remove(refresh)
 					return err
 				}
-				return os.Rename(refresh, path)
+				if err := os.Rename(refresh, path); err != nil {
+					_ = os.Remove(refresh)
+					return err
+				}
+				return nil
 			}
 			// Started is the second criterion: a holder pid that belongs to a
 			// process which started AFTER this lock was stamped is a recycled
@@ -399,7 +411,7 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 		// crashed process must not brick the slot). Steal it ATOMICALLY: rename
 		// aside and loop to re-claim. If a rival steals first our rename fails
 		// harmlessly and the next attempt sees their fresh lock.
-		steal := worktreeScratchPath(path, "steal", pid)
+		steal := worktreeScratchPath(path, "steal")
 		if os.Rename(path, steal) == nil {
 			_ = os.Remove(steal)
 		}
@@ -419,7 +431,11 @@ var releaseRaceHook = func() {}
 
 // ReleaseWorktreeLock removes the lock on worktreePath, but only when it is held
 // by pid (so a process never steals a lock now owned by someone else). A missing
-// lock, or one held by another pid, is a no-op. Idempotent.
+// lock, or one held by another pid, is a no-op. On the race path below it can
+// also return a non-nil error for a lock that WAS pid's when read but changed
+// hands before the removal landed - callers that discard the error (as both
+// current callers do) still get the safe outcome: the lock is left exactly as
+// its new holder expects it.
 //
 // The removal is NOT a plain unlink of the path. Between reading the lock and
 // deleting it, a rival can take over what it judged a stale lock (e.g. pid
@@ -429,6 +445,22 @@ var releaseRaceHook = func() {}
 // is moved aside first and only deleted once the copy in hand is confirmed to
 // still be pid's; anything else goes back where it came from. Ported from the
 // identical fix in ReleaseFinishClaim.
+//
+// Identity on the re-check is PID **and** Started, not PID alone - mirroring
+// why AcquireWorktreeLock's own staleness check needs Started too
+// (ProcessAliveSinceStamp, above): a bare PID match cannot tell a genuinely
+// untouched lock from one a recycled pid re-acquired, or from this same pid's
+// own same-pid refresh (AcquireWorktreeLock's re-entrant branch, which rewrites
+// Started under an unchanged PID) racing the release. Comparing both against
+// the PRE-rename `existing` closes both.
+//
+// What this does NOT close: between the rename and the restore the path is
+// empty, so a third actor can claim the worktree in that window, and the
+// restore then fails and reports "move it back" - which would clobber that
+// third actor's live lock if followed literally. The window is short and its
+// outcome is now a loud error rather than a silent double grant, but it is
+// real (the identical residual is documented at stealExpiredClaim in
+// finish_claim.go).
 func ReleaseWorktreeLock(worktreePath string, pid int) error {
 	existing, err := ReadWorktreeLock(worktreePath)
 	if err != nil || existing == nil {
@@ -441,7 +473,7 @@ func ReleaseWorktreeLock(worktreePath string, pid int) error {
 	releaseRaceHook()
 
 	path := worktreeLockPath(worktreePath)
-	aside := worktreeScratchPath(path, "release", pid)
+	aside := worktreeScratchPath(path, "release")
 	if err := os.Rename(path, aside); err != nil {
 		if os.IsNotExist(err) {
 			return nil // released or taken over between the read and here
@@ -449,7 +481,7 @@ func ReleaseWorktreeLock(worktreePath string, pid int) error {
 		return err
 	}
 	moved, rerr := readWorktreeLockFile(aside)
-	if rerr == nil && moved != nil && moved.PID != pid {
+	if rerr == nil && moved != nil && (moved.PID != pid || moved.Started != existing.Started) {
 		// It changed hands in the window (a rival took over the stale lock and
 		// linked a fresh one before our rename fired). Put it back rather than
 		// deleting a lock somebody else now holds.
