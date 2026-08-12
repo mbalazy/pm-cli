@@ -446,6 +446,12 @@ func executeFinish(plan *finishPlan) (*finishResult, error) {
 	// and accept each sub as it lands, so a live run and a live acceptance of it
 	// are the designed state, not an error. The claim guards two ACCEPTANCES
 	// against each other, which is the collision that actually exists.
+	// Close any earlier crash of this project that never got a terminal line,
+	// BEFORE the writer below persists this acceptance's own state: finish
+	// states are keyed by tracker id like run states are by task id, so a
+	// re-acceptance of the same tracker would otherwise overwrite the dead
+	// run's forensics one step before the reconciler looks for them.
+	reportReconciledCrashes(errOut, plan.stateDir, "pm finish")
 	runID := storage.NewRunID()
 	run := &storage.RunState{
 		TaskID:  tracker,
@@ -476,6 +482,11 @@ func executeFinish(plan *finishPlan) (*finishResult, error) {
 	start := journalBase()
 	start.Event = storage.JournalEventStart
 	_ = storage.AppendJournal(plan.stateDir, start)
+	// From here until the end line, a catchable signal (a terminal's Ctrl-C, a
+	// session harness taking a detached acceptance's process group down - the
+	// way an auto-chained finish most often dies) journals its own terminal
+	// line naming the signal instead of leaving this start line orphaned.
+	defer armCrashJournal(plan.stateDir, *start)()
 
 	fmt.Fprintf(errOut, "pm finish: launching headless acceptance worker for %s (sim %s)...\n",
 		tracker, map[bool]string{true: "on", false: "off"}[plan.opts.sim])

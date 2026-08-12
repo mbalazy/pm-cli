@@ -155,7 +155,7 @@ func runExecutorDoctor(proj *storage.Project) []check {
 	out = append(out, checkBaseline(e)...)
 	out = append(out, checkContextRepos(e)...)
 	out = append(out, checkSlots(e, proj.Path)...)
-	out = append(out, checkHandoff(e, proj.Path)...)
+	out = append(out, checkHandoff(e, proj)...)
 	return out
 }
 
@@ -256,8 +256,8 @@ func checkSlots(e storage.Executor, projPath string) []check {
 	return out
 }
 
-func checkHandoff(e storage.Executor, projPath string) []check {
-	h := e.ResolveHandoff(projPath)
+func checkHandoff(e storage.Executor, proj *storage.Project) []check {
+	h := e.ResolveHandoff(proj.Path, proj.ResolveClaudeConfigDir())
 	if !h.Declared {
 		return []check{{levelWarn,
 			"no `executor.handoff` block - the acceptance has no declared playbook or runtime skill",
@@ -297,7 +297,7 @@ func checkHandoff(e storage.Executor, projPath string) []check {
 	case h.RigSkill == "":
 	case h.RigSkillPath == "":
 		out = append(out, check{levelError,
-			fmt.Sprintf("handoff.rig_skill %q not found under .claude/skills, .claude/commands or ~/.claude/skills", h.RigSkill),
+			fmt.Sprintf("handoff.rig_skill %q not found under the repo's .claude/skills or .claude/commands, nor under %s (skills/ or commands/)", h.RigSkill, h.GlobalRoot),
 			"fix the name or add the skill"})
 	default:
 		out = append(out, check{levelOK,
@@ -315,7 +315,7 @@ func checkHandoff(e storage.Executor, projPath string) []check {
 	text := string(data)
 	out = append(out, checkPlaybookTODOs(h.PlaybookPath, text)...)
 	out = append(out, checkScriptsMentioned(h, text)...)
-	out = append(out, checkRuntimeDrift(e, projPath, h.PlaybookPath, text)...)
+	out = append(out, checkRuntimeDrift(e, proj.Path, h.PlaybookPath, text)...)
 	return out
 }
 

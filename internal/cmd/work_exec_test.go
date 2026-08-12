@@ -58,6 +58,53 @@ func executorFixture(t *testing.T) (*storage.Store, *storage.Task, *workPlan, wo
 	return store, task, plan, opts
 }
 
+// TestExecuteWorkReconcilesCrashOfSameTaskBeforeOverwriting: the re-run of a
+// crashed task is the MOST common follow-up to a crash, and the run-state file
+// is keyed by task id - so if this run wrote its own state before reconciling,
+// it would destroy the dead run's forensics one step before looking for them,
+// and the crash would never gain a reason (this ordering was reversed once).
+func TestExecuteWorkReconcilesCrashOfSameTaskBeforeOverwriting(t *testing.T) {
+	fakeClaude(t, "echo '"+envelope(workerVerified, "implemented + verified")+"'")
+	store, task, plan, opts := executorFixture(t)
+	stateDir := store.ProjectDir("app")
+
+	// The dead prior run of the SAME task: an orphaned start line plus the
+	// run-state it left behind, on a pid that is demonstrably not alive.
+	if err := storage.WriteRunState(stateDir, &storage.RunState{
+		TaskID: "app-1", RunID: "run-dead", Project: "app", Kind: storage.RunKindWork,
+		Status: storage.RunStatusRunning, PID: 2147483646,
+		Started: "2026-08-08T17:45:56Z", Updated: "2026-08-08T18:02:11Z", Phase: "running",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.AppendJournal(stateDir, &storage.JournalEntry{
+		Event: storage.JournalEventStart, Kind: storage.RunKindWork, Project: "app", TaskID: "app-1",
+		RunID: "run-dead", PID: 2147483646,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := executeWork(store, task, plan, opts); err != nil {
+		t.Fatalf("executeWork: %v", err)
+	}
+
+	entries, _ := storage.ReadJournal(stateDir)
+	var crashed *storage.JournalEntry
+	for i := range entries {
+		if entries[i].Event == storage.JournalEventCrashed && entries[i].RunID == "run-dead" {
+			crashed = &entries[i]
+		}
+	}
+	if crashed == nil {
+		t.Fatalf("the dead run's start must be closed with a crashed line BEFORE this run overwrites its run-state; journal: %+v", entries)
+	}
+	// WriteRunState re-stamps Updated on write, so the heartbeat is not
+	// assertable here; the dead pid and start time are.
+	if !strings.Contains(crashed.Error, "pid 2147483646") || !strings.Contains(crashed.Error, "started 2026-08-08T17:45:56Z") {
+		t.Errorf("the crashed line must carry the DEAD run's forensics, not the new run's: %q", crashed.Error)
+	}
+}
+
 func TestExecuteWorkVerifiedRecordsEverything(t *testing.T) {
 	fakeClaude(t, "echo '"+envelope(workerVerified, "implemented + verified")+"'")
 	store, task, plan, opts := executorFixture(t)

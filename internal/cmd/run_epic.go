@@ -552,6 +552,12 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		}
 		run.Subs = append(run.Subs, storage.SubRun{ID: s.Meta.ID, Status: init})
 	}
+	// Close any earlier crash of this project that never got a terminal line,
+	// BEFORE the writer below persists this run's own state: the file is keyed
+	// by task id, so a re-run of the same tracker - frequently the re-run OF
+	// that crash - would otherwise overwrite the dead run's forensics one step
+	// before the reconciler looks for them.
+	reportReconciledCrashes(errOut, stateDir, "pm run-epic")
 	// From here on the run-state is only touched through the writer: each
 	// sub's worker heartbeats this same struct from its own goroutine, so
 	// every mutation has to be serialized (see storage.RunWriter).
@@ -571,10 +577,6 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		journalDir = workDir
 	}
 	epicStart := time.Now()
-	// Close any earlier crash of this project that never got a terminal line,
-	// BEFORE adding a start line of our own. This run is frequently the re-run OF
-	// that crash, which is when its reason is worth reading.
-	reportReconciledCrashes(errOut, stateDir, "pm run-epic")
 	start := storage.JournalEntry{
 		Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID, RunID: runID,
 		PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Independent: independentMode, Branch: journalBranch,

@@ -263,9 +263,14 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int, time.Time)
 				if e.Event == storage.JournalEventCrashed {
 					st.Crashes++
 				}
-			}
-			if e.Error != "" && e.Event != storage.JournalEventEnd {
-				st.Deaths = append(st.Deaths, runDeath{Event: e.Event, TaskID: e.TaskID, TS: e.TS, Reason: e.Error})
+				// Inside the duplicate guard on purpose: a board kill produces
+				// TWO killed lines for one physical death (the dying manager's
+				// own and killRun's, same run id), and listing both would
+				// inflate the deaths report and push genuine crash reasons off
+				// its display cap.
+				if e.Error != "" && e.Event != storage.JournalEventEnd {
+					st.Deaths = append(st.Deaths, runDeath{Event: e.Event, TaskID: e.TaskID, TS: e.TS, Reason: e.Error})
+				}
 			}
 			// Run-level duration is only ever sampled off "end" lines (see
 			// kindStats.DurationS) - there is exactly one such line per

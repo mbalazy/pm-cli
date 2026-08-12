@@ -18,7 +18,10 @@ import (
 //     board's kill): the process is still running when the signal arrives, so it
 //     journals its own terminal line naming the signal. That half lives in the
 //     cmd package, next to the signal forwarder that already exists for the
-//     worker's sake.
+//     worker's sake - and it covers only what the forwarder covers: a signal
+//     landing while a worker (or baseline) child is in flight. One that lands
+//     between workers dies with the default disposition and is reconciled here
+//     instead, which is why describeCrash lists it among the causes.
 //   - UNCATCHABLE (SIGKILL, an OOM kill, a reboot): nothing can run at the
 //     moment of death, so the reason is reconstructed AFTERWARDS, from what the
 //     dead run left behind - which is what ReconcileCrashedRuns does, and it is
@@ -55,8 +58,10 @@ import (
 // later the same day and now carry the SUCCESSFUL run's state, whose run id does
 // not match the orphaned start - so they are skipped rather than described
 // wrongly, and keep being counted by the orphaned-start heuristic. Going forward
-// the window is small (the reconcile happens at the start of the next run, which
-// is what overwrites the state), but it is not zero.
+// the window is small but not zero: every run kind reconciles BEFORE writing its
+// own run-state (the ordering is load-bearing - reversed, a re-run of the same
+// task would destroy the forensics one step before looking for them), so what
+// remains is only a concurrent run in another process racing the overwrite.
 func ReconcileCrashedRuns(projectDir string) []JournalEntry {
 	entries, err := ReadJournal(projectDir)
 	if err != nil || len(entries) == 0 {
@@ -139,7 +144,9 @@ func describeCrash(st *RunState) string {
 	}
 	return fmt.Sprintf(
 		"manager died with no terminal line and no signal recorded: an uncatchable death (SIGKILL, an OOM kill, a reboot), "+
-			"or - only on a run from a pm that did not yet journal caught signals - a signal nobody wrote down. "+
+			"a catchable signal that arrived while no worker was in flight (the signal journaling rides the worker's "+
+			"forwarder, so a Ctrl-C between subs is never written down), "+
+			"or - on a run from a pm that did not yet journal caught signals - a signal nobody wrote down. "+
 			"Reconstructed from the run-state: pid %d, run-state left on %q, started %s, last heartbeat %s%s. "+
 			"The heartbeat runs every %s while the manager lives, so the death is inside the window after it.",
 		st.PID, st.Status, st.Started, st.Updated, where, HeartbeatInterval)

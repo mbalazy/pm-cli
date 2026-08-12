@@ -3,6 +3,8 @@ package cmd
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/mbalazy/pm/internal/storage"
 )
 
 // Reviewer subagents are the largest single line item the executor spends on:
@@ -26,7 +28,7 @@ import (
 //     Agent calls unprompted, while in 106-1 and 106-2 it named none. Layer 2
 //     asks; layer 3 is what makes the answer not matter.
 
-const reviewerAgentType = "pm-reviewer"
+const reviewerAgentType = storage.ReviewerAgentType
 
 // reviewerAgentTools is what a reviewer may reach for.
 //
@@ -79,20 +81,12 @@ func reviewerAgentsJSON(model string) string {
 	return string(b)
 }
 
-// genericSubagentTypes are the built-in types that carry no model of their own
-// and therefore INHERIT the session's. They are the only types pm re-models,
-// and the reason is exactly that inheritance: pinning a model onto a type whose
-// own definition names one would be pm overruling a decision someone made on
-// purpose, which is not what this is for.
-//
-// Written lowercase and compared lowercase - the same type has been seen
-// spelled `Explore` and `general-purpose` in one transcript.
-var genericSubagentTypes = map[string]bool{
-	"explore":         true,
-	"general-purpose": true,
-	"plan":            true,
-	reviewerAgentType: true,
-}
+// The generic-type predicate the three policies below share lives in storage
+// (storage.GenericSubagentType) so the telemetry aggregate can apply the same
+// definition of "a spawn pm treats as a reviewer" when advancing the
+// reviewed-tip signal. The rationale is inheritance: generic types carry no
+// model of their own, and pinning a model onto a type whose own definition
+// names one would be pm overruling a decision someone made on purpose.
 
 // pinReviewerAgent applies pm's model policy to one subagent spawn, mutating
 // the raw tool input in place and reporting whether anything changed.
@@ -121,7 +115,7 @@ func pinReviewerAgent(ti map[string]any, model string) bool {
 		ti["subagent_type"] = subType
 		changed = true
 	}
-	if !genericSubagentTypes[strings.ToLower(strings.TrimSpace(subType))] {
+	if !storage.GenericSubagentType(subType) {
 		return changed
 	}
 	if cur, _ := ti["model"].(string); cur != model {
@@ -143,7 +137,7 @@ func attachReviewPacket(ti map[string]any, dir, baseSHA string) bool {
 		return false
 	}
 	subType, _ := ti["subagent_type"].(string)
-	if !genericSubagentTypes[strings.ToLower(strings.TrimSpace(subType))] {
+	if !storage.GenericSubagentType(subType) {
 		return false
 	}
 	prompt, _ := ti["prompt"].(string)
@@ -180,7 +174,7 @@ func forceSyncSpawn(ti map[string]any) bool {
 		return false
 	}
 	subType, _ := ti["subagent_type"].(string)
-	if !genericSubagentTypes[strings.ToLower(strings.TrimSpace(subType))] {
+	if !storage.GenericSubagentType(subType) {
 		return false
 	}
 	if bg, ok := ti["run_in_background"].(bool); ok && !bg {
