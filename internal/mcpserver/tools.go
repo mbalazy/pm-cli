@@ -396,26 +396,41 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			TaskCounts map[string]int `json:"task_counts"`
 		}
 
+		// listProjectsResult wraps the array so a broken project can be skipped
+		// with a visible warning instead of silently going missing - the same
+		// shape as listTasksResult.Note, applied here for the same reason.
+		type listProjectsResult struct {
+			Projects []projectInfo `json:"projects"`
+			Note     string        `json:"note,omitempty"`
+		}
+
+		var warnings []string
 		result := []projectInfo{}
 		for _, slug := range projects {
-			proj, _ := store.GetProject(slug)
+			proj, err := store.GetProject(slug)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("project %q: failed to read project.yaml: %v", slug, err))
+				continue
+			}
 			pi := projectInfo{
 				Slug:       slug,
+				Name:       proj.Name,
+				Stack:      proj.Stack,
+				Archived:   proj.Archived,
 				TaskCounts: make(map[string]int),
 			}
-			if proj != nil {
-				pi.Name = proj.Name
-				pi.Stack = proj.Stack
-				pi.Archived = proj.Archived
+			tasks, err := store.GetTasks(slug)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("project %q: failed to read tasks: %v", slug, err))
+				continue
 			}
-			tasks, _ := store.GetTasks(slug)
 			for _, t := range tasks {
 				pi.TaskCounts[string(t.Meta.Status)]++
 			}
 			result = append(result, pi)
 		}
 
-		r, err := jsonText(result)
+		r, err := jsonText(listProjectsResult{Projects: result, Note: strings.Join(warnings, "; ")})
 		return r, nil, err
 	})
 
@@ -974,7 +989,11 @@ func validateStatusesKeepTasks(store storage.TaskStore, slug string, newStatuses
 }
 
 func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, any, error) {
-	proj, _ := store.GetProject(slug)
+	proj, err := store.GetProject(slug)
+	if err != nil {
+		r, _ := toolError(fmt.Sprintf("project %q: failed to read project.yaml: %v", slug, err))
+		return r, nil, nil
+	}
 
 	type projectMeta struct {
 		Slug     string            `json:"slug"`
@@ -1000,7 +1019,11 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 		pm.Statuses = append(pm.Statuses, string(s))
 	}
 
-	tasks, _ := store.GetTasks(slug)
+	tasks, err := store.GetTasks(slug)
+	if err != nil {
+		r, _ := toolError(fmt.Sprintf("project %q: failed to read tasks: %v", slug, err))
+		return r, nil, nil
+	}
 	trackers, suppressed := storage.BuildTrackers(tasks, store.GetLandingStatuses(slug)...)
 	counts := make(map[string]int)
 	doing := []taskDetail{}
@@ -1068,18 +1091,25 @@ func crossProjectContext(store storage.TaskStore, note string) (*mcp.CallToolRes
 		Trackers   []storage.Tracker `json:"trackers,omitempty"`
 	}
 
+	var warnings []string
 	result := []projectSummary{}
 	for _, slug := range projects {
-		proj, _ := store.GetProject(slug)
+		proj, err := store.GetProject(slug)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("project %q: failed to read project.yaml: %v", slug, err))
+			continue
+		}
 		ps := projectSummary{
 			Slug:       slug,
+			Name:       proj.Name,
+			Repo:       proj.Repo,
 			TaskCounts: make(map[string]int),
 		}
-		if proj != nil {
-			ps.Name = proj.Name
-			ps.Repo = proj.Repo
+		tasks, err := store.GetTasks(slug)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("project %q: failed to read tasks: %v", slug, err))
+			continue
 		}
-		tasks, _ := store.GetTasks(slug)
 		trackers, suppressed := storage.BuildTrackers(tasks, store.GetLandingStatuses(slug)...)
 		ps.Trackers = trackers
 		for _, t := range tasks {
@@ -1105,8 +1135,13 @@ func crossProjectContext(store storage.TaskStore, note string) (*mcp.CallToolRes
 	if focus := focusTaskSummaries(store); len(focus) > 0 {
 		output["focus_tasks"] = focus
 	}
+	noteParts := []string{}
 	if note != "" {
-		output["note"] = note
+		noteParts = append(noteParts, note)
+	}
+	noteParts = append(noteParts, warnings...)
+	if len(noteParts) > 0 {
+		output["note"] = strings.Join(noteParts, "; ")
 	}
 
 	r, err := jsonText(output)

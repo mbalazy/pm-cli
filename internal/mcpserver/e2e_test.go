@@ -1064,27 +1064,33 @@ func TestE2EListProjects(t *testing.T) {
 	if isErr {
 		t.Fatalf("list_projects error: %s", text)
 	}
-	var out []struct {
-		Slug       string         `json:"slug"`
-		Name       string         `json:"name"`
-		Archived   bool           `json:"archived"`
-		TaskCounts map[string]int `json:"task_counts"`
+	var out struct {
+		Projects []struct {
+			Slug       string         `json:"slug"`
+			Name       string         `json:"name"`
+			Archived   bool           `json:"archived"`
+			TaskCounts map[string]int `json:"task_counts"`
+		} `json:"projects"`
+		Note string `json:"note"`
 	}
 	mustUnmarshal(t, text, &out)
-	if len(out) != 1 || out[0].Slug != "test" {
-		t.Fatalf("want 1 project 'test', got %+v", out)
+	if len(out.Projects) != 1 || out.Projects[0].Slug != "test" {
+		t.Fatalf("want 1 project 'test', got %+v", out.Projects)
 	}
-	if out[0].TaskCounts["doing"] != 1 {
-		t.Fatalf("task_counts[doing] = %d, want 1", out[0].TaskCounts["doing"])
+	if out.Projects[0].TaskCounts["doing"] != 1 {
+		t.Fatalf("task_counts[doing] = %d, want 1", out.Projects[0].TaskCounts["doing"])
 	}
-	if out[0].Archived {
+	if out.Projects[0].Archived {
 		t.Fatal("fresh project must not be archived")
+	}
+	if out.Note != "" {
+		t.Fatalf("want no warnings, got note %q", out.Note)
 	}
 }
 
-// TestE2EListProjectsEmpty: no projects must serialize as [] not null - a nil
-// slice through json.Marshal renders "null", which breaks a caller that
-// assumes it always gets an array.
+// TestE2EListProjectsEmpty: no projects must serialize the projects field as
+// [] not null - a nil slice through json.Marshal renders "null", which
+// breaks a caller that assumes it always gets an array.
 func TestE2EListProjectsEmpty(t *testing.T) {
 	store := &storage.Store{Root: t.TempDir()}
 	sess := startMCP(t, store)
@@ -1093,9 +1099,90 @@ func TestE2EListProjectsEmpty(t *testing.T) {
 	if isErr {
 		t.Fatalf("list_projects error: %s", text)
 	}
-	if strings.TrimSpace(text) != "[]" {
-		t.Fatalf("empty project list must serialize as [], got %q", text)
+	if strings.TrimSpace(text) != `{"projects":[]}` {
+		t.Fatalf("empty project list must serialize as {\"projects\":[]}, got %q", text)
 	}
+}
+
+// writeCorruptProjectYAML overwrites a project dir's project.yaml with
+// content that fails yaml.Unmarshal into storage.Project (a plain scalar,
+// not a map) - simulating a hand-edit gone wrong or partial-write corruption.
+func writeCorruptProjectYAML(t *testing.T, root, slug string) {
+	t.Helper()
+	dir := filepath.Join(root, slug)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "project.yaml"), []byte("not-a-map\n"), 0644); err != nil {
+		t.Fatalf("write corrupt project.yaml: %v", err)
+	}
+}
+
+// TestE2EProjectContextUnreadableProjectErrors: a corrupt project.yaml for
+// THE project the caller explicitly asked about must surface as a tool
+// error, never a plausible empty context - the bug this task closes.
+func TestE2EProjectContextUnreadableProjectErrors(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	writeCorruptProjectYAML(t, store.Root, "broken")
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_context", map[string]any{"project": "broken"})
+	if !isErr {
+		t.Fatalf("pm_context for a corrupt project.yaml must be a tool error, got: %s", text)
+	}
+	if !strings.Contains(text, "broken") {
+		t.Fatalf("error must name the broken slug, got: %s", text)
+	}
+}
+
+// TestE2ECrossProjectSkipsBrokenProjectWithWarning: one broken project among
+// healthy ones must not blank the whole rollup - pm_context's cross-project
+// branch and pm_list_projects both keep serving the healthy projects and
+// name the broken one in a warning instead of silently dropping it.
+func TestE2ECrossProjectSkipsBrokenProjectWithWarning(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	writeCorruptProjectYAML(t, store.Root, "broken")
+	sess := startMCP(t, store)
+
+	t.Run("pm_context", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_context", nil)
+		if isErr {
+			t.Fatalf("pm_context error: %s", text)
+		}
+		var out struct {
+			Projects []struct {
+				Slug string `json:"slug"`
+			} `json:"projects"`
+			Note string `json:"note"`
+		}
+		mustUnmarshal(t, text, &out)
+		if len(out.Projects) != 1 || out.Projects[0].Slug != "test" {
+			t.Fatalf("want only the healthy project 'test', got %+v", out.Projects)
+		}
+		if !strings.Contains(out.Note, "broken") {
+			t.Fatalf("note must name the broken slug, got %q", out.Note)
+		}
+	})
+
+	t.Run("pm_list_projects", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_list_projects", nil)
+		if isErr {
+			t.Fatalf("list_projects error: %s", text)
+		}
+		var out struct {
+			Projects []struct {
+				Slug string `json:"slug"`
+			} `json:"projects"`
+			Note string `json:"note"`
+		}
+		mustUnmarshal(t, text, &out)
+		if len(out.Projects) != 1 || out.Projects[0].Slug != "test" {
+			t.Fatalf("want only the healthy project 'test', got %+v", out.Projects)
+		}
+		if !strings.Contains(out.Note, "broken") {
+			t.Fatalf("note must name the broken slug, got %q", out.Note)
+		}
+	})
 }
 
 // TestE2ECreateProject drives the real pm_create_project handler end to end:
