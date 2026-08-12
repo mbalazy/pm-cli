@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -156,6 +158,7 @@ func runExecutorDoctor(proj *storage.Project) []check {
 	out = append(out, checkContextRepos(e)...)
 	out = append(out, checkSlots(e, proj.Path)...)
 	out = append(out, checkHandoff(e, proj)...)
+	out = append(out, checkHooksPath(proj.Path)...)
 	return out
 }
 
@@ -391,6 +394,95 @@ func checkRuntimeDrift(e storage.Executor, projPath, playbookPath, playbook stri
 		}
 	}
 	return out
+}
+
+// checkHooksPath warns when core.hooksPath is explicitly configured (in any
+// git scope - repo-local, global, or system) but resolves to a dead hooks
+// directory. A repo whose local config never touches core.hooksPath is
+// deliberately silent here: a stock .git/hooks with only *.sample files is
+// normal for most repos and must never warn. But once something IS
+// configured - including a global override this project never opted into -
+// the entire worker-guard investment (and every project hook it protects:
+// secret scanning, lint, formatting) is silently protecting nothing while
+// commits are reported as hook-checked.
+//
+// Resolution goes through `git rev-parse --git-path hooks`, which applies
+// git's own core.hooksPath semantics (relative values resolve against the
+// top of the working tree, not the current directory) instead of
+// reimplementing them by hand.
+func checkHooksPath(projPath string) []check {
+	if !isGitRepo(projPath) {
+		return nil
+	}
+	value, err := gitConfigGet(projPath, "core.hooksPath")
+	if err != nil || value == "" {
+		return nil // not configured anywhere - nothing to check
+	}
+
+	resolved, err := gitRevParseGitPath(projPath, "hooks")
+	if err != nil {
+		return nil
+	}
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(projPath, resolved)
+	}
+	origin := gitConfigOrigin(projPath, "core.hooksPath")
+	hint := fmt.Sprintf("core.hooksPath = %q (%s) - project hooks (secret scanning, lint, formatting) do not run without a real hook file there", value, origin)
+
+	entries, err := os.ReadDir(resolved)
+	switch {
+	case err != nil:
+		return []check{{levelWarn, "configured git hooks dir does not exist: " + resolved, hint}}
+	case !hasHookFile(entries):
+		return []check{{levelWarn, "configured git hooks dir has no hook files: " + resolved, hint}}
+	default:
+		return []check{{levelOK, "git hooks -> " + resolved, ""}}
+	}
+}
+
+// hasHookFile reports whether entries contains a real hook file: not a
+// directory, and not one of the *.sample placeholders `git init` seeds the
+// default hooks dir with.
+func hasHookFile(entries []os.DirEntry) bool {
+	for _, e := range entries {
+		if e.IsDir() || strings.HasSuffix(e.Name(), ".sample") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func gitConfigGet(dir, key string) (string, error) {
+	out, err := exec.Command("git", "-C", dir, "config", "--get", key).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func gitRevParseGitPath(dir, path string) (string, error) {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--git-path", path).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// gitConfigOrigin returns the human-readable origin git attributes the
+// configured value to (e.g. "file:.git/config" or "file:/home/x/.gitconfig").
+// Best-effort: an unresolvable origin degrades to a placeholder rather than
+// failing the whole check.
+func gitConfigOrigin(dir, key string) string {
+	out, err := exec.Command("git", "-C", dir, "config", "--show-origin", "--get", key).Output()
+	if err != nil {
+		return "unknown origin"
+	}
+	origin, _, ok := strings.Cut(strings.TrimRight(string(out), "\n"), "\t")
+	if !ok {
+		return "unknown origin"
+	}
+	return origin
 }
 
 func pathExists(p string) bool {

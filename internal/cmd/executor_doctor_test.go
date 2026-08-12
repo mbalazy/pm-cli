@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"errors"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -346,4 +348,121 @@ func TestDoctorLandingStatusNotInProjectStatuses(t *testing.T) {
 			t.Errorf("unexpected finding: [%s] %s", c.Level.tag(), c.Msg)
 		}
 	})
+}
+
+// hermeticGitEnv isolates git's global/system config resolution for the
+// duration of the test, via t.Setenv (which affects every subprocess spawned
+// during the test, including the ones checkHooksPath itself shells out to).
+// Without this, a hooksPath test would read, and could fail against, the
+// actual developer machine's ~/.gitconfig - which is exactly what motivated
+// this feature (this project's own machine has a global core.hooksPath set).
+func hermeticGitEnv(t *testing.T) {
+	t.Helper()
+	empty := t.TempDir()
+	t.Setenv("HOME", empty)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(empty, "xdg-config"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(empty, "gitconfig-unused"))
+}
+
+func initGitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q")
+	return dir
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	full := append([]string{"-C", dir}, args...)
+	out, err := exec.Command("git", full...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// TestDoctorHooksPathUnsetIsSilent covers case (a): a stock repo whose
+// .git/hooks holds only git's own *.sample placeholders and whose config
+// never touches core.hooksPath at all. That is the default shape of nearly
+// every repo and must never produce a finding.
+func TestDoctorHooksPathUnsetIsSilent(t *testing.T) {
+	hermeticGitEnv(t)
+	dir := initGitRepo(t)
+
+	checks := checkHooksPath(dir)
+	if len(checks) != 0 {
+		t.Errorf("no core.hooksPath configured must produce no finding, got: %s", formatChecks(checks))
+	}
+}
+
+// TestDoctorHooksPathDeadDirWarns covers case (b): core.hooksPath set
+// repo-local, pointing at a directory that does not exist.
+func TestDoctorHooksPathDeadDirWarns(t *testing.T) {
+	hermeticGitEnv(t)
+	dir := initGitRepo(t)
+	runGit(t, dir, "config", "core.hooksPath", "nonexistent-hooks")
+
+	checks := checkHooksPath(dir)
+	if levelOf(t, checks, "does not exist") != levelWarn {
+		t.Error("a configured hooksPath pointing nowhere is a WARN, not silence or an ERROR - the run still works, the hooks are just absent")
+	}
+	c := findCheck(checks, "does not exist")
+	if !strings.Contains(c.Hint, "core.hooksPath") || !strings.Contains(c.Hint, "nonexistent-hooks") {
+		t.Errorf("hint must name the configured value, got %q", c.Hint)
+	}
+	if failed(checks, false) {
+		t.Error("a warning must not fail the command by default")
+	}
+}
+
+// TestDoctorHooksPathWithRealHookIsFine covers case (c): core.hooksPath set
+// repo-local, pointing at a directory that holds a real hook file.
+func TestDoctorHooksPathWithRealHookIsFine(t *testing.T) {
+	hermeticGitEnv(t)
+	dir := initGitRepo(t)
+	writeFile(t, filepath.Join(dir, "myhooks", "pre-commit"), "#!/bin/sh\nexit 0\n")
+	runGit(t, dir, "config", "core.hooksPath", "myhooks")
+
+	checks := checkHooksPath(dir)
+	if c := findCheck(checks, "does not exist"); c != nil {
+		t.Errorf("unexpected finding: [%s] %s", c.Level.tag(), c.Msg)
+	}
+	if c := findCheck(checks, "no hook files"); c != nil {
+		t.Errorf("unexpected finding: [%s] %s", c.Level.tag(), c.Msg)
+	}
+}
+
+// TestDoctorHooksPathEmptyDirWarns: the configured dir exists but holds no
+// real hook file (only samples, or nothing) - the same failure mode as a
+// missing dir, git silently runs no hooks either way.
+func TestDoctorHooksPathEmptyDirWarns(t *testing.T) {
+	hermeticGitEnv(t)
+	dir := initGitRepo(t)
+	writeFile(t, filepath.Join(dir, "myhooks", "pre-commit.sample"), "#!/bin/sh\n")
+	runGit(t, dir, "config", "core.hooksPath", "myhooks")
+
+	if levelOf(t, checkHooksPath(dir), "no hook files") != levelWarn {
+		t.Error("a configured hooksPath dir with only *.sample files has no real hooks - must WARN")
+	}
+}
+
+// TestDoctorHooksPathNotAGitRepoIsSilent: checkHooksPath must degrade to
+// silence, not a crash, when the project path is not a git repo at all.
+func TestDoctorHooksPathNotAGitRepoIsSilent(t *testing.T) {
+	if checks := checkHooksPath(t.TempDir()); len(checks) != 0 {
+		t.Errorf("a non-git project path must produce no finding, got: %s", formatChecks(checks))
+	}
+}
+
+// TestDoctorHooksPathWiredIntoRunExecutorDoctor confirms the check actually
+// runs as part of the full report, not just standalone.
+func TestDoctorHooksPathWiredIntoRunExecutorDoctor(t *testing.T) {
+	hermeticGitEnv(t)
+	proj, repo := handoffProject(t, "# playbook\nmeasure-element.py, read-rn-logs.sh\n")
+	runGit(t, repo, "init", "-q")
+	runGit(t, repo, "config", "core.hooksPath", "nonexistent-hooks")
+
+	if levelOf(t, runExecutorDoctor(proj), "does not exist") != levelWarn {
+		t.Error("runExecutorDoctor must include the hooksPath check")
+	}
 }
