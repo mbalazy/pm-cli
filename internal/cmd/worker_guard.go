@@ -79,6 +79,18 @@ var hookBypassPatterns = []struct {
 // next line) read as part of the same segment.
 var gitCommitOrPushSegment = regexp.MustCompile(`git\s+(?:commit|push)\b[^;&|\n]*`)
 
+// shellLineContinuation is a backslash immediately followed by a newline - the
+// one newline that does NOT end a command. The shell deletes it and joins the
+// two lines into a single word stream, so the segment boundary above has to
+// delete it first, or `git commit -m "x" \` + newline + `-n` reads as a commit
+// whose segment ends before the flag that bypasses the hooks (verified against
+// a probe repo with a failing pre-commit hook 2026-08-12: that form commits).
+// Deleted rather than replaced with a space, exactly as the shell does it, so
+// a continuation splitting a word (`git com\` + newline + `mit -n`) rejoins.
+// Applied before stripMessagePayload, so a continuation inside a commit message
+// is joined into the payload and blanked with it instead of leaking prose.
+var shellLineContinuation = regexp.MustCompile(`\\\r?\n`)
+
 // gitCommitOrPushSegments returns every such span in cmd. A scoped pattern
 // (see hookBypassPatterns) is checked against these, never against the whole
 // command - otherwise a legitimate flag in an unrelated command chained ahead
@@ -118,6 +130,7 @@ func bashCommandBlocked(cmd string) (bool, string) {
 	if strings.TrimSpace(cmd) == "" {
 		return false, ""
 	}
+	cmd = shellLineContinuation.ReplaceAllString(cmd, "")
 	cmd = stripMessagePayload(cmd)
 	segments := gitCommitOrPushSegments(cmd)
 	for _, p := range hookBypassPatterns {

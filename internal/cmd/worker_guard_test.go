@@ -111,6 +111,15 @@ func TestBashCommandBlockedClusterGuard(t *testing.T) {
 		// second carries the bypass. FindAllString must not merge them into
 		// one span that only the first flag set is checked against.
 		{"second of two chained git segments carries the bypass", `git commit -am "x" && git commit -nm "y"`},
+		// A backslash-newline is the one newline that does not end a command:
+		// the shell deletes it and runs a single `git commit ... -n`, which a
+		// probe repo with a failing pre-commit hook commits through. The
+		// segment boundary stops at a bare newline, so the continuation has to
+		// be joined before the segments are cut.
+		{"continuation before the cluster", "git commit \\\n  -nm \"x\""},
+		{"continuation before a standalone -n", "git commit -m \"x\" \\\n  -n"},
+		{"continuation before -n on push", "git push \\\n  -n origin main"},
+		{"continuation splitting the subcommand itself", "git com\\\nmit -m \"x\" -n"},
 	}
 	for _, c := range blocked {
 		if ok, _ := bashCommandBlocked(c.cmd); !ok {
@@ -131,6 +140,11 @@ func TestBashCommandBlockedClusterGuard(t *testing.T) {
 		{"unrelated -n-bearing flag after a semicolon", `git commit -am "fix"; grep -rn TODO src`},
 		{"unrelated -n-bearing flag after a pipe", `git commit -am "fix" | tee log; grep -rn TODO src`},
 		{"unrelated -n-bearing flag on the next line", "git commit -am \"fix guard\"\ngo test ./internal/cmd/ -run Guard -v"},
+		// Joining continuations must not cost the anti-cry-wolf property: a
+		// message wrapped across lines is joined INTO the payload and blanked
+		// with it, so prose about -n stays an ordinary commit.
+		{"continuation inside the message, prose about -n", "git commit -m \"first line \\\n-n is refused here\""},
+		{"bare newline inside the message, prose about -n", "git commit -m \"first line\nabout -n here\""},
 	}
 	for _, c := range allowed {
 		if ok, what := bashCommandBlocked(c.cmd); ok {
