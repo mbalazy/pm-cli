@@ -1130,7 +1130,7 @@ func TestE2EProjectContextUnreadableProjectErrors(t *testing.T) {
 	if !isErr {
 		t.Fatalf("pm_context for a corrupt project.yaml must be a tool error, got: %s", text)
 	}
-	if !strings.Contains(text, "broken") {
+	if !strings.Contains(text, `project "broken"`) {
 		t.Fatalf("error must name the broken slug, got: %s", text)
 	}
 }
@@ -1165,7 +1165,10 @@ func TestE2EProjectContextUnreadableTaskDirErrors(t *testing.T) {
 	if !isErr {
 		t.Fatalf("pm_context for an unreadable task dir must be a tool error, got: %s", text)
 	}
-	if !strings.Contains(text, "test") {
+	// Match the message's own `project "<slug>"` prefix, not a bare substring:
+	// a permission error already carries the directory path, which ends in the
+	// slug, so a bare match passes even when the message never names it.
+	if !strings.Contains(text, `project "test"`) {
 		t.Fatalf("error must name the slug, got: %s", text)
 	}
 }
@@ -1194,7 +1197,7 @@ func TestE2ECrossProjectSkipsBrokenProjectWithWarning(t *testing.T) {
 		if len(out.Projects) != 1 || out.Projects[0].Slug != "test" {
 			t.Fatalf("want only the healthy project 'test', got %+v", out.Projects)
 		}
-		if !strings.Contains(out.Note, "broken") {
+		if !strings.Contains(out.Note, `project "broken"`) {
 			t.Fatalf("note must name the broken slug, got %q", out.Note)
 		}
 	})
@@ -1214,7 +1217,7 @@ func TestE2ECrossProjectSkipsBrokenProjectWithWarning(t *testing.T) {
 		if len(out.Projects) != 1 || out.Projects[0].Slug != "test" {
 			t.Fatalf("want only the healthy project 'test', got %+v", out.Projects)
 		}
-		if !strings.Contains(out.Note, "broken") {
+		if !strings.Contains(out.Note, `project "broken"`) {
 			t.Fatalf("note must name the broken slug, got %q", out.Note)
 		}
 	})
@@ -1252,7 +1255,7 @@ func TestE2ECrossProjectSkipsUnreadableTaskDirWithWarning(t *testing.T) {
 		if len(out.Projects) != 1 || out.Projects[0].Slug != "test" {
 			t.Fatalf("want only the healthy project 'test', got %+v", out.Projects)
 		}
-		if !strings.Contains(out.Note, "locked") {
+		if !strings.Contains(out.Note, `project "locked"`) {
 			t.Fatalf("note must name the locked slug, got %q", out.Note)
 		}
 	})
@@ -1272,7 +1275,7 @@ func TestE2ECrossProjectSkipsUnreadableTaskDirWithWarning(t *testing.T) {
 		if len(out.Projects) != 1 || out.Projects[0].Slug != "test" {
 			t.Fatalf("want only the healthy project 'test', got %+v", out.Projects)
 		}
-		if !strings.Contains(out.Note, "locked") {
+		if !strings.Contains(out.Note, `project "locked"`) {
 			t.Fatalf("note must name the locked slug, got %q", out.Note)
 		}
 	})
