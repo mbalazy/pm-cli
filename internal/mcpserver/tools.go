@@ -17,7 +17,7 @@ import (
 type listTasksInput struct {
 	Project string `json:"project,omitempty" jsonschema:"Project slug or prefix (omit for all projects)"`
 	Status  string `json:"status,omitempty" jsonschema:"Filter by status (e.g. todo, doing, done, archived)"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"Max tasks to return, newest first (default 50, hard cap 200). The result reports total vs shown; narrow with project/status or raise limit to see more."`
+	Limit   int    `json:"limit,omitempty" jsonschema:"Max tasks to return, newest first (default 50, hard cap 200). The result reports total vs shown; narrow with project/status to see more of a truncated result."`
 }
 
 // defaultListLimit caps unfiltered pm_list_tasks output: without it a full
@@ -333,9 +333,9 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		result := listTasksResult{Tasks: filtered, Total: total, Shown: len(filtered)}
 		switch {
 		case capped && result.Shown < total:
-			result.Note = fmt.Sprintf("%d of %d tasks shown (newest first) - limit capped at %d", result.Shown, total, maxListLimit)
+			result.Note = fmt.Sprintf("%d of %d tasks shown (newest first) - limit capped at %d, narrow with project/status", result.Shown, total, maxListLimit)
 		case capped:
-			result.Note = fmt.Sprintf("limit capped at %d", maxListLimit)
+			result.Note = fmt.Sprintf("all %d tasks shown; limit capped at %d", total, maxListLimit)
 		case result.Shown < total:
 			result.Note = fmt.Sprintf("%d of %d tasks shown (newest first) - narrow with project/status or raise limit", result.Shown, total)
 		}

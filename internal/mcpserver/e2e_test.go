@@ -516,11 +516,11 @@ func TestE2EListTasksBudget(t *testing.T) {
 		}
 	})
 
-	// A limit far above the hard cap must never bypass it: the caller gets at
-	// most maxListLimit tasks and a note saying so, not the 10000 they asked
-	// for. 60 seeded tasks stays well under the 200 cap, so this also proves
-	// the clamp is disclosed even when it never actually truncates the result.
-	t.Run("limit above hard cap is clamped and disclosed", func(t *testing.T) {
+	// A limit far above the hard cap must never bypass it. 60 seeded tasks
+	// stays well under the 200 cap, so this proves the clamp is disclosed even
+	// when it never actually truncates the result; TestE2EListTasksHardCapTruncates
+	// covers the case where the cap actually cuts the result down.
+	t.Run("limit above hard cap is clamped and disclosed even without truncation", func(t *testing.T) {
 		text, _ := call(t, sess, "pm_list_tasks", map[string]any{"project": "test", "limit": 10000})
 		var out listOut
 		mustUnmarshal(t, text, &out)
@@ -534,6 +534,51 @@ func TestE2EListTasksBudget(t *testing.T) {
 			t.Fatalf("note should disclose the cap, got %q", out.Note)
 		}
 	})
+}
+
+// TestE2EListTasksHardCapTruncates: no limit value can make pm_list_tasks
+// return more than maxListLimit. Seeds more tasks than the cap so the clamp
+// actually has to cut the result down, not just clamp an already-small one.
+func TestE2EListTasksHardCapTruncates(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	projDir := filepath.Join(store.RootDir(), "test")
+	const seeded = maxListLimit + 5
+	for i := 2; i <= seeded; i++ {
+		storage.WriteTask(&storage.Task{
+			Meta: storage.TaskMeta{
+				ID:      fmt.Sprintf("t-%d", i),
+				Title:   fmt.Sprintf("Task %d", i),
+				Status:  storage.StatusTodo,
+				Created: "2025-01-01",
+				Updated: fmt.Sprintf("2025-03-01-%04d", i),
+			},
+			FilePath: filepath.Join(projDir, fmt.Sprintf("t-%d.md", i)),
+			Project:  "test",
+		})
+	}
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_list_tasks", map[string]any{"project": "test", "limit": 10000})
+	if isErr {
+		t.Fatalf("list error: %s", text)
+	}
+	var out struct {
+		Tasks []struct{ ID string } `json:"tasks"`
+		Total int                   `json:"total"`
+		Shown int                   `json:"shown"`
+		Note  string                `json:"note"`
+	}
+	mustUnmarshal(t, text, &out)
+	if out.Total != seeded {
+		t.Fatalf("total=%d, want %d", out.Total, seeded)
+	}
+	if out.Shown != maxListLimit || len(out.Tasks) != maxListLimit {
+		t.Fatalf("shown=%d len(tasks)=%d, want %d (the hard cap) - limit=10000 must never bypass it", out.Shown, len(out.Tasks), maxListLimit)
+	}
+	wantNote := fmt.Sprintf("%d of %d", maxListLimit, seeded)
+	if !strings.Contains(out.Note, wantNote) || !strings.Contains(out.Note, fmt.Sprintf("capped at %d", maxListLimit)) {
+		t.Fatalf("note = %q, want it to contain %q and the cap value", out.Note, wantNote)
+	}
 }
 
 // TestE2EContextBodyCapped: pm_context returns doing tasks with the body
