@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,18 @@ import (
 
 	"github.com/mbalazy/pm/internal/storage"
 )
+
+// lockFailStore wraps a real TaskStore and forces LockProject to fail, so
+// tests can exercise the degrade-to-unlocked-write path without racing a
+// real lock failure.
+type lockFailStore struct {
+	storage.TaskStore
+	err error
+}
+
+func (s *lockFailStore) LockProject(slug string) (func(), error) {
+	return nil, s.err
+}
 
 // captureStderr swaps os.Stderr for a pipe, runs fn, and returns what it wrote.
 func captureStderr(t *testing.T, fn func()) string {
@@ -196,6 +209,27 @@ func TestRecordSubFeedback(t *testing.T) {
 		}
 		mustContain(t, reloaded.Body, "[proj-11-1] finding x")
 		mustContain(t, reloaded.Body, "plain body, no markers")
+	})
+
+	t.Run("degrades to an unlocked write and warns on errOut when the lock fails", func(t *testing.T) {
+		parent := addTask(t, store, slug, storage.TaskMeta{ID: "proj-14", Title: "Epic5", Status: storage.StatusDoing},
+			storage.SpecStart+"\n## Description\nx\n"+storage.SpecEnd)
+
+		lockErr := errors.New("boom: permission denied")
+		failing := &lockFailStore{TaskStore: store, err: lockErr}
+
+		var errOut bytes.Buffer
+		if err := recordSubFeedback(failing, parent, "proj-14-1", "merged", []string{"finding"}, &errOut); err != nil {
+			t.Fatalf("recordSubFeedback degraded to unlocked but still failed: %v", err)
+		}
+
+		reloaded, _ := store.FindTask(slug, "proj-14")
+		mustContain(t, storage.ExtractSpec(reloaded.Body), "[proj-14-1] finding")
+
+		want := fmt.Sprintf("pm run-epic: project lock unavailable for %q (%v) - recording feedback for proj-14-1 without it\n", slug, lockErr)
+		if errOut.String() != want {
+			t.Fatalf("warning = %q, want %q", errOut.String(), want)
+		}
 	})
 }
 

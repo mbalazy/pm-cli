@@ -428,10 +428,9 @@ func TestLockDegradeWarnsLoudly(t *testing.T) {
 	if final, err := s.FindTask("app", "app-1"); err != nil || final.Meta.Status != StatusDone {
 		t.Fatalf("MoveTask did not persist despite degrading: task=%+v err=%v", final, err)
 	}
-	for _, want := range []string{"app", "moving task app-1", errText} {
-		if !strings.Contains(moveOut, want) {
-			t.Fatalf("MoveTask warning missing %q: got %q", want, moveOut)
-		}
+	wantMove := fmt.Sprintf("pm: project lock unavailable for %q (%v) - moving task app-1 without it\n", "app", errText)
+	if moveOut != wantMove {
+		t.Fatalf("MoveTask warning = %q, want %q", moveOut, wantMove)
 	}
 
 	var updateErr error
@@ -444,9 +443,8 @@ func TestLockDegradeWarnsLoudly(t *testing.T) {
 	if p, err := s.GetProject("app"); err != nil || p.Name != "Updated" {
 		t.Fatalf("UpdateProject did not persist despite degrading: project=%+v err=%v", p, err)
 	}
-	for _, want := range []string{"app", "updating project", errText} {
-		if !strings.Contains(updateOut, want) {
-			t.Fatalf("UpdateProject warning missing %q: got %q", want, updateOut)
-		}
+	wantUpdate := fmt.Sprintf("pm: project lock unavailable for %q (%v) - updating project without it\n", "app", errText)
+	if updateOut != wantUpdate {
+		t.Fatalf("UpdateProject warning = %q, want %q", updateOut, wantUpdate)
 	}
 }
