@@ -465,3 +465,47 @@ func TestAcquireWorktreeLockAtomicRace(t *testing.T) {
 		}
 	}
 }
+
+// TestWorktreeLockReleaseVsTakeoverRace reproduces the release TOCTOU: a
+// process cleans up a lock on behalf of a pid that has already died (killRun
+// releasing on a worker's behalf from a DIFFERENT process), and - in the gap
+// between ReleaseWorktreeLock's ownership read and its rename - a rival
+// judges that same dead pid stale and lands its own fresh lock. The real
+// window is a single read-then-rename with nothing externally observable in
+// between, so a live goroutine race almost never lands inside it (verified:
+// hammering the pre-fix code with two real goroutines for 250 iterations
+// never once triggered the bug) - releaseRaceHook forces the exact
+// adversarial ordering deterministically instead. The assertion that catches
+// a lost lock is that the rival's fresh lock survives ON DISK: a release that
+// unlinked-by-path instead of verifying what it renamed aside would instead
+// delete the rival's winning lock out from under it, even though
+// AcquireWorktreeLock had already returned nil to its caller.
+func TestWorktreeLockReleaseVsTakeoverRace(t *testing.T) {
+	const deadPID = 2147483646
+	livePID := os.Getpid()
+
+	dir := t.TempDir()
+	if err := AcquireWorktreeLock(dir, "task-crashed", "run-epic", deadPID); err != nil {
+		t.Fatalf("seed stale lock: %v", err)
+	}
+
+	prev := releaseRaceHook
+	t.Cleanup(func() { releaseRaceHook = prev })
+	releaseRaceHook = func() {
+		releaseRaceHook = func() {} // fire exactly once, so the rival's own steal/relink isn't re-entered
+		if err := AcquireWorktreeLock(dir, "task-new", "work", livePID); err != nil {
+			t.Errorf("rival takeover inside the race window: %v", err)
+		}
+	}
+
+	relErr := ReleaseWorktreeLock(dir, deadPID)
+	t.Logf("release returned: %v (an error here is expected - it lost the race and left the rival's lock alone)", relErr)
+
+	lk, err := ReadWorktreeLock(dir)
+	if err != nil {
+		t.Fatalf("read after race: %v", err)
+	}
+	if lk == nil || lk.TaskID != "task-new" || lk.PID != livePID {
+		t.Fatalf("a release racing a concurrent takeover must never erase the rival's fresh lock, got %+v", lk)
+	}
+}

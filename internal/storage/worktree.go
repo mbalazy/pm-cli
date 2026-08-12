@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -275,6 +276,21 @@ func worktreeLockPath(worktreePath string) string {
 	return filepath.Join(worktreePath, worktreeLockFile)
 }
 
+// worktreeLockSeq makes every scratch/temp file this process writes for a
+// worktree lock unique per call - the same reasoning as finish_claim.go's
+// finishClaimSeq: the pid alone is not enough, because two goroutines in ONE
+// process (e.g. the epic manager refreshing its own lock while a release runs
+// concurrently) would share a scratch name, and the second os.WriteFile would
+// truncate a file the first has already hard-linked into place, corrupting
+// the winner's lock through the link.
+var worktreeLockSeq atomic.Uint64
+
+// worktreeScratchPath builds a per-process, per-call scratch name next to the
+// lock, so concurrent writers never share one (see worktreeLockSeq).
+func worktreeScratchPath(path, kind string, pid int) string {
+	return fmt.Sprintf("%s.%s.%d.%d", path, kind, pid, worktreeLockSeq.Add(1))
+}
+
 // LiveWorktreeHolder returns the lock holder when worktreePath is held by
 // another LIVE process, else nil (free, stale, or the caller's own re-entrant
 // lock). Shared by the slot allocator (cmd) and the board's slot indicator.
@@ -292,7 +308,13 @@ func LiveWorktreeHolder(worktreePath string) *WorktreeLock {
 // ReadWorktreeLock returns the lock currently held on worktreePath, or (nil,
 // nil) when there is none.
 func ReadWorktreeLock(worktreePath string) (*WorktreeLock, error) {
-	data, err := os.ReadFile(worktreeLockPath(worktreePath))
+	return readWorktreeLockFile(worktreeLockPath(worktreePath))
+}
+
+// readWorktreeLockFile reads a lock from an exact path (the live lock, or one
+// renamed aside mid-release/mid-takeover).
+func readWorktreeLockFile(path string) (*WorktreeLock, error) {
+	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -332,7 +354,7 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 	path := worktreeLockPath(worktreePath)
 
 	for attempt := 0; attempt < 5; attempt++ {
-		tmp := fmt.Sprintf("%s.%d.tmp", path, pid)
+		tmp := worktreeScratchPath(path, "tmp", pid)
 		if err := os.WriteFile(tmp, data, 0644); err != nil {
 			return err
 		}
@@ -358,7 +380,7 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 				// truncated-file window, and a rival reading that torn state as
 				// corrupt would steal a LIVE holder's lock. Write-tmp + rename keeps
 				// the refresh atomic like every other lock transition.
-				refresh := fmt.Sprintf("%s.%d.refresh", path, pid)
+				refresh := worktreeScratchPath(path, "refresh", pid)
 				if err := os.WriteFile(refresh, data, 0644); err != nil {
 					return err
 				}
@@ -377,7 +399,7 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 		// crashed process must not brick the slot). Steal it ATOMICALLY: rename
 		// aside and loop to re-claim. If a rival steals first our rename fails
 		// harmlessly and the next attempt sees their fresh lock.
-		steal := fmt.Sprintf("%s.steal.%d", path, pid)
+		steal := worktreeScratchPath(path, "steal", pid)
 		if os.Rename(path, steal) == nil {
 			_ = os.Remove(steal)
 		}
@@ -385,9 +407,28 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 	return fmt.Errorf("could not acquire worktree lock at %s (takeover contention)", path)
 }
 
+// releaseRaceHook runs, in ReleaseWorktreeLock, right after the ownership
+// read has confirmed the lock looks like pid's own and right before it is
+// moved aside - the TOCTOU window a concurrent takeover can land in. A no-op
+// in production; the real window is a single read-then-rename with no
+// externally observable midpoint, so a test forces the adversarial ordering
+// deterministically through this seam instead of hoping for it via goroutine
+// scheduling luck (the same role killSignal plays for the kill path, see
+// executor_run.go).
+var releaseRaceHook = func() {}
+
 // ReleaseWorktreeLock removes the lock on worktreePath, but only when it is held
 // by pid (so a process never steals a lock now owned by someone else). A missing
 // lock, or one held by another pid, is a no-op. Idempotent.
+//
+// The removal is NOT a plain unlink of the path. Between reading the lock and
+// deleting it, a rival can take over what it judged a stale lock (e.g. pid
+// died) and link its own fresh one - and unlinking by path would then delete
+// THEIRS: killRun releases on a dead worker's behalf from a DIFFERENT process,
+// which is exactly the window a concurrent takeover can land in. So the file
+// is moved aside first and only deleted once the copy in hand is confirmed to
+// still be pid's; anything else goes back where it came from. Ported from the
+// identical fix in ReleaseFinishClaim.
 func ReleaseWorktreeLock(worktreePath string, pid int) error {
 	existing, err := ReadWorktreeLock(worktreePath)
 	if err != nil || existing == nil {
@@ -396,9 +437,30 @@ func ReleaseWorktreeLock(worktreePath string, pid int) error {
 	if existing.PID != pid {
 		return nil
 	}
-	err = os.Remove(worktreeLockPath(worktreePath))
-	if os.IsNotExist(err) {
-		return nil
+
+	releaseRaceHook()
+
+	path := worktreeLockPath(worktreePath)
+	aside := worktreeScratchPath(path, "release", pid)
+	if err := os.Rename(path, aside); err != nil {
+		if os.IsNotExist(err) {
+			return nil // released or taken over between the read and here
+		}
+		return err
 	}
-	return err
+	moved, rerr := readWorktreeLockFile(aside)
+	if rerr == nil && moved != nil && moved.PID != pid {
+		// It changed hands in the window (a rival took over the stale lock and
+		// linked a fresh one before our rename fired). Put it back rather than
+		// deleting a lock somebody else now holds.
+		if os.Link(aside, path) == nil {
+			_ = os.Remove(aside)
+			return fmt.Errorf("release worktree lock at %s: it changed hands while we were releasing it "+
+				"(now pid %d, task %s) - left it alone", path, moved.PID, moved.TaskID)
+		}
+		return fmt.Errorf("release worktree lock at %s: it changed hands while we were releasing it and could not "+
+			"be restored - it is at %s, move it back", path, aside)
+	}
+	_ = os.Remove(aside)
+	return nil
 }
