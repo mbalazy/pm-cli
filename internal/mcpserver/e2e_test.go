@@ -1135,6 +1135,41 @@ func TestE2EProjectContextUnreadableProjectErrors(t *testing.T) {
 	}
 }
 
+// makeTaskDirUnlistable isolates the GetTasks failure path from the
+// GetProject one: the directory keeps its execute (traverse) bit so
+// os.Stat/os.ReadFile on project.yaml inside it still succeed, but loses its
+// read bit so os.ReadDir (what GetTasks/ReadTasksFromDir calls) fails - a
+// project.yaml that parses fine, sitting in a dir that can't be listed.
+func makeTaskDirUnlistable(t *testing.T, root, slug string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses directory permission checks")
+	}
+	dir := filepath.Join(root, slug)
+	if err := os.Chmod(dir, 0311); err != nil {
+		t.Fatalf("chmod %s: %v", dir, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0755) })
+}
+
+// TestE2EProjectContextUnreadableTaskDirErrors: GetProject succeeds (valid
+// project.yaml) but GetTasks fails (unreadable task dir) - the other half of
+// projectContext's two read calls, and the "unreadable dir" case named in
+// the AC alongside "unparsable project.yaml".
+func TestE2EProjectContextUnreadableTaskDirErrors(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	makeTaskDirUnlistable(t, store.Root, "test")
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_context", map[string]any{"project": "test"})
+	if !isErr {
+		t.Fatalf("pm_context for an unreadable task dir must be a tool error, got: %s", text)
+	}
+	if !strings.Contains(text, "test") {
+		t.Fatalf("error must name the slug, got: %s", text)
+	}
+}
+
 // TestE2ECrossProjectSkipsBrokenProjectWithWarning: one broken project among
 // healthy ones must not blank the whole rollup - pm_context's cross-project
 // branch and pm_list_projects both keep serving the healthy projects and

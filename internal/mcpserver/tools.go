@@ -380,7 +380,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	// pm_list_projects
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_list_projects",
-		Description: "List all projects with task counts.",
+		Description: "List all projects with task counts, as {projects, note}. A project whose project.yaml or task dir fails to read is skipped and named in `note` instead of silently vanishing from `projects`.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
 		projects, err := store.ListProjects()
 		if err != nil {
@@ -1005,17 +1005,15 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 		Statuses []string          `json:"statuses"`
 	}
 
-	pm := projectMeta{Slug: slug}
-	statuses := storage.DefaultStatuses
-	if proj != nil {
-		pm.Name = proj.Name
-		pm.Repo = proj.Repo
-		pm.Stack = proj.Stack
-		pm.Notes = proj.Notes
-		pm.Links = proj.Links
-		statuses = proj.GetStatuses()
+	pm := projectMeta{
+		Slug:  slug,
+		Name:  proj.Name,
+		Repo:  proj.Repo,
+		Stack: proj.Stack,
+		Notes: proj.Notes,
+		Links: proj.Links,
 	}
-	for _, s := range statuses {
+	for _, s := range proj.GetStatuses() {
 		pm.Statuses = append(pm.Statuses, string(s))
 	}
 
@@ -1054,7 +1052,7 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 	// output sits in every session's window - the executor/handoff profile is
 	// only worth its size to the session that actually runs or accepts work,
 	// and `pm executor show` charges it to that session alone.
-	if proj != nil && proj.HasExecutor() {
+	if proj.HasExecutor() {
 		result["executor_profile"] = "run `pm executor show " + slug +
 			"` for phase bindings, worktree slot runtimes (ports/device ids), context repos and the handoff playbook"
 	}
@@ -1064,11 +1062,9 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 	// unbounded, permanently growing payload in every session's window - and
 	// its readers are the sessions about to touch that subsystem, not all of
 	// them. The counts are what makes those sessions ask.
-	if proj != nil {
-		if counts, err := storage.JournalCounts(store.ProjectDir(slug), proj); err == nil && len(counts) > 0 {
-			result["journals"] = counts
-			result["journals_note"] = "subsystems this project keeps a running incident record for. Call pm_journal_list with the name BEFORE touching one of them; record what bit you with pm_journal_add."
-		}
+	if counts, err := storage.JournalCounts(store.ProjectDir(slug), proj); err == nil && len(counts) > 0 {
+		result["journals"] = counts
+		result["journals_note"] = "subsystems this project keeps a running incident record for. Call pm_journal_list with the name BEFORE touching one of them; record what bit you with pm_journal_add."
 	}
 
 	if focus := focusTaskSummaries(store); len(focus) > 0 {
@@ -1080,7 +1076,11 @@ func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, 
 }
 
 func crossProjectContext(store storage.TaskStore, note string) (*mcp.CallToolResult, any, error) {
-	projects, _ := store.ListActiveProjects()
+	projects, err := store.ListActiveProjects()
+	if err != nil {
+		r, _ := toolError(fmt.Sprintf("failed to list projects: %v", err))
+		return r, nil, nil
+	}
 
 	type projectSummary struct {
 		Slug       string            `json:"slug"`
