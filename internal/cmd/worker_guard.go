@@ -70,9 +70,14 @@ var hookBypassPatterns = []struct {
 }
 
 // gitCommitOrPushSegment matches from a `git commit`/`git push` invocation to
-// the next command separator (`;`, `&&`, `||`, `|`) or the end of the string -
-// the span a scoped pattern is judged within.
-var gitCommitOrPushSegment = regexp.MustCompile(`git\s+(?:commit|push)\b[^;&|]*`)
+// the next command separator (`;`, `&&`, `||`, `|`, a newline) or the end of
+// the string - the span a scoped pattern is judged within. The newline matters
+// as much as the shell operators: a worker's Bash call is routinely a whole
+// multi-line script in one `command` string, and a negated Go character class
+// matches `\n` unless it is excluded explicitly - without it, an unrelated
+// flag on a LATER line (`git commit -am "x"` then `go test -run Foo` on the
+// next line) read as part of the same segment.
+var gitCommitOrPushSegment = regexp.MustCompile(`git\s+(?:commit|push)\b[^;&|\n]*`)
 
 // gitCommitOrPushSegments returns every such span in cmd. A scoped pattern
 // (see hookBypassPatterns) is checked against these, never against the whole
@@ -90,7 +95,7 @@ func gitCommitOrPushSegments(cmd string) []string {
 // no separator (`-nm"msg"`, `-amfix-typo`), and a model that learns the spaced
 // form is refused reaches for that next. Never crosses a command separator, so
 // `git commit -m fix && rm .husky/pre-commit` keeps its second half.
-var commitMessageArg = regexp.MustCompile(`(^|\s)(--message|-[A-Za-z]*m)(=|\s+|)("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|]+)`)
+var commitMessageArg = regexp.MustCompile(`(^|\s)(--message|-[A-Za-z]*m)(=|\s+)?("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|]+)`)
 
 // stripMessagePayload blanks out commit-message prose before the bypass patterns
 // ever see it. Describing a door is not opening one: `git commit -m "add -n flag

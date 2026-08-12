@@ -106,6 +106,11 @@ func TestBashCommandBlockedClusterGuard(t *testing.T) {
 		{"cluster -nf on push", `git push -nf origin main`},
 		{"attached cluster, quoted payload, no separator", `git commit -nm"add feature"`},
 		{"attached cluster, bare payload, no separator", `git commit -nmfix-typo`},
+		{"attached cluster with -a, quoted payload, no separator", `git commit -anm"add feature"`},
+		// Two git segments in one line: the first is a harmless -am, the
+		// second carries the bypass. FindAllString must not merge them into
+		// one span that only the first flag set is checked against.
+		{"second of two chained git segments carries the bypass", `git commit -am "x" && git commit -nm "y"`},
 	}
 	for _, c := range blocked {
 		if ok, _ := bashCommandBlocked(c.cmd); !ok {
@@ -118,9 +123,14 @@ func TestBashCommandBlockedClusterGuard(t *testing.T) {
 		{"cluster mentioned only in a stripped message", `git commit -m "fix the -nm cluster bypass in worker-guard"`},
 		// The scoped `-n` check is judged per git-commit/push segment, not
 		// against the whole line - an unrelated flag containing `n` in a
-		// command chained ahead of the commit must not trip it.
+		// command chained ahead of the commit must not trip it, whatever the
+		// separator is (&&, ;, |, or a newline - a worker's Bash call is
+		// routinely a whole multi-line script in one `command` string).
 		{"unrelated -n-bearing flag chained before a commit", `go test ./internal/cmd/ -run Guard -v && git commit -am "fix"`},
 		{"unrelated -n-bearing flag chained after a commit", `git commit -am "fix" && go test -run Guard -v`},
+		{"unrelated -n-bearing flag after a semicolon", `git commit -am "fix"; grep -rn TODO src`},
+		{"unrelated -n-bearing flag after a pipe", `git commit -am "fix" | tee log; grep -rn TODO src`},
+		{"unrelated -n-bearing flag on the next line", "git commit -am \"fix guard\"\ngo test ./internal/cmd/ -run Guard -v"},
 	}
 	for _, c := range allowed {
 		if ok, what := bashCommandBlocked(c.cmd); ok {
