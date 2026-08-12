@@ -122,7 +122,7 @@ func (m *Model) rebuildClaudeMenuItems(t *storage.Task) {
 				// project has a runtime to drive at all. Resolved rather than
 				// read raw, so a name pointing at nothing on disk offers no
 				// toggle: the acceptance would have no skill to invoke.
-				m.executorSimAvail = proj.GetExecutor().ResolveHandoff(proj.Path).SkillPath != ""
+				m.executorSimAvail = proj.GetExecutor().ResolveHandoff(proj.Path, proj.ResolveClaudeConfigDir()).SkillPath != ""
 			}
 		}
 		if !m.executorAdditionalAvail {

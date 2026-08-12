@@ -39,10 +39,13 @@ type Handoff struct {
 	// the cold-start procedure (local backend, dev server, booting the rig).
 	// RuntimeSkill drives a runtime that exists; RigSkill brings one into
 	// existence. Optional: a project whose runtime needs no standing up has
-	// nothing to declare here. Unlike the runtime skill it often lives in the
-	// user's GLOBAL skills (~/.claude/skills) rather than the repo - how to
-	// stand up a dev loop is machine knowledge, not repo knowledge - so
-	// resolution falls back there. Bare name, with or without a leading "/".
+	// nothing to declare here. Unlike the runtime skill - which resolves in the
+	// REPO ONLY, so that a misplaced one fails doctor before it fails a run on
+	// another machine - the rig skill often lives in the user's global skills:
+	// how to stand up THIS machine's dev loop is machine knowledge, not repo
+	// knowledge, so resolution falls back to the project's Claude config dir
+	// (claude_config_dir, default ~/.claude - the dir the acceptance session
+	// actually loads skills from). Bare name, with or without a leading "/".
 	RigSkill string `yaml:"rig_skill,omitempty"`
 }
 
@@ -68,13 +71,26 @@ type ResolvedHandoff struct {
 	Scripts        []string
 	RigSkill       string // normalised bare name; "" when not declared
 	RigSkillPath   string // absolute path to the rig skill's SKILL.md / command .md; "" when not found
+	// GlobalRoot is the Claude config dir the rig skill's fallback searched -
+	// carried so doctor/show can name the actual location set they judged.
+	GlobalRoot string
 }
 
 // ResolveHandoff resolves the executor's handoff block against the project's
-// repo dir.
-func (e Executor) ResolveHandoff(projPath string) ResolvedHandoff {
+// repo dir. claudeConfigDir is the project's pinned Claude config dir
+// (Project.ResolveClaudeConfigDir()) - the ONE global root the rig skill may
+// fall back to, because it is the dir the acceptance session actually loads
+// skills from; empty degrades to the unpinned default. The runtime skill never
+// uses it: it resolves in the repo only, so a runtime skill misplaced on one
+// machine fails `pm executor doctor` here instead of failing the acceptance on
+// the machine the project is synced to.
+func (e Executor) ResolveHandoff(projPath, claudeConfigDir string) ResolvedHandoff {
 	h := e.Handoff
 	out := ResolvedHandoff{Declared: !h.IsZero()}
+	if claudeConfigDir == "" {
+		claudeConfigDir = DefaultClaudeConfigDir()
+	}
+	out.GlobalRoot = claudeConfigDir
 
 	if p := strings.TrimSpace(h.Playbook); p != "" {
 		out.PlaybookPath = resolveRepoPath(projPath, p)
@@ -83,9 +99,10 @@ func (e Executor) ResolveHandoff(projPath string) ResolvedHandoff {
 		}
 	}
 
+	repoRoot := filepath.Join(projPath, ".claude")
 	if name := strings.TrimPrefix(strings.TrimSpace(h.RuntimeSkill), "/"); name != "" {
 		out.RuntimeSkill = name
-		out.SkillPath, out.ScriptsDir, out.Scripts = resolveSkillRef(projPath, name)
+		out.SkillPath, out.ScriptsDir, out.Scripts = resolveSkillRef([]string{repoRoot}, name)
 	}
 	if name := strings.TrimPrefix(strings.TrimSpace(h.RigSkill), "/"); name != "" {
 		out.RigSkill = name
@@ -93,18 +110,17 @@ func (e Executor) ResolveHandoff(projPath string) ResolvedHandoff {
 		// skill's inventory exists because the playbook must explain those
 		// tools, while a rig skill's SKILL.md is its own manual - read whole,
 		// once, when the runtime is down.
-		out.RigSkillPath, _, _ = resolveSkillRef(projPath, name)
+		out.RigSkillPath, _, _ = resolveSkillRef([]string{repoRoot, claudeConfigDir}, name)
 	}
 	return out
 }
 
 // resolveSkillRef locates a named skill (or plain slash-command - it just
-// cannot carry a scripts/ dir) for the handoff contract. The repo's own
-// .claude/ is searched first, then the user's global ~/.claude/ - so a
-// project-local skill always wins, and a machine-wide one (a rig cold-start
-// shared by three repos) still resolves without being copied into the repo.
-func resolveSkillRef(projPath, name string) (skillPath, scriptsDir string, scripts []string) {
-	for _, root := range []string{filepath.Join(projPath, ".claude"), expandTilde("~/.claude")} {
+// cannot carry a scripts/ dir) under the given roots, first hit wins. The repo
+// root always comes first, so a project-local skill beats a global one of the
+// same name.
+func resolveSkillRef(roots []string, name string) (skillPath, scriptsDir string, scripts []string) {
+	for _, root := range roots {
 		dir := filepath.Join(root, "skills", name)
 		if md := filepath.Join(dir, "SKILL.md"); fileReadable(md) {
 			d, s := skillScripts(dir)

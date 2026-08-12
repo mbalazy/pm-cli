@@ -143,7 +143,7 @@ func renderExecutorProfile(slug string, proj *storage.Project) string {
 	}
 
 	b.WriteString("\n## Handoff (acceptance)\n")
-	b.WriteString(renderHandoff(e.ResolveHandoff(proj.Path)))
+	b.WriteString(renderHandoff(e.ResolveHandoff(proj.Path, proj.ResolveClaudeConfigDir())))
 
 	if e.Notes != "" {
 		fmt.Fprintf(&b, "\n## Notes\n%s\n", strings.TrimRight(e.Notes, "\n"))
@@ -170,12 +170,7 @@ func renderHandoff(h storage.ResolvedHandoff) string {
 	if h.RuntimeSkill == "" {
 		b.WriteString("  runtime skill: (unset)\n")
 	} else {
-		loc := "NOT FOUND"
-		if h.SkillPath != "" {
-			loc = h.SkillPath
-		}
-		fmt.Fprintf(&b, "  runtime skill: /%s\n", h.RuntimeSkill)
-		fmt.Fprintf(&b, "                 %s\n", loc)
+		renderSkillLoc(&b, "runtime skill:", h.RuntimeSkill, h.SkillPath)
 		if len(h.Scripts) > 0 {
 			fmt.Fprintf(&b, "  scripts:       %s\n", h.ScriptsDir)
 			for _, s := range h.Scripts {
@@ -185,17 +180,24 @@ func renderHandoff(h storage.ResolvedHandoff) string {
 		}
 	}
 	if h.RigSkill != "" {
-		loc := "NOT FOUND"
-		if h.RigSkillPath != "" {
-			loc = h.RigSkillPath
-		}
-		fmt.Fprintf(&b, "  rig skill:     /%s\n", h.RigSkill)
-		fmt.Fprintf(&b, "                 %s\n", loc)
+		renderSkillLoc(&b, "rig skill:    ", h.RigSkill, h.RigSkillPath)
 		b.WriteString("  ^ stands the runtime up when it is down (cold start). Read it in full\n")
 		b.WriteString("    before restarting anything by hand; status check first, never restart\n")
 		b.WriteString("    what already runs.\n")
 	}
 	return b.String()
+}
+
+// renderSkillLoc prints one handoff skill's name and resolved location - the
+// shared shape for the runtime and rig lines, so an unresolved skill can never
+// render differently between the two.
+func renderSkillLoc(b *strings.Builder, label, name, path string) {
+	loc := "NOT FOUND"
+	if path != "" {
+		loc = path
+	}
+	fmt.Fprintf(b, "  %s /%s\n", label, name)
+	fmt.Fprintf(b, "                 %s\n", loc)
 }
 
 // describeBinding renders a phase binding the way the worker prompt resolves it.

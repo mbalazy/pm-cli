@@ -34,7 +34,9 @@ func planPlaybook(projPath, slug string, e *storage.Executor) *playbookPlan {
 	if strings.TrimSpace(e.Handoff.Playbook) == "" {
 		return nil
 	}
-	h := e.ResolveHandoff(projPath)
+	// The scaffold derives from the runtime skill, which resolves in the repo
+	// only - the config dir does not matter here, so the unpinned default is fine.
+	h := e.ResolveHandoff(projPath, "")
 	if h.PlaybookPath == "" {
 		return nil
 	}

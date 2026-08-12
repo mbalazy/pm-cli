@@ -79,7 +79,7 @@ func TestHandoffIsZero(t *testing.T) {
 }
 
 func TestResolveHandoffUndeclared(t *testing.T) {
-	got := Executor{}.ResolveHandoff(t.TempDir())
+	got := Executor{}.ResolveHandoff(t.TempDir(), "")
 	if got.Declared {
 		t.Error("expected Declared=false for an executor with no handoff block")
 	}
@@ -94,7 +94,7 @@ func TestResolveHandoffPlaybook(t *testing.T) {
 
 	t.Run("relative path resolves against the repo", func(t *testing.T) {
 		e := Executor{Handoff: Handoff{Playbook: ".claude/evidence-playbook.md"}}
-		got := e.ResolveHandoff(repo)
+		got := e.ResolveHandoff(repo, "")
 		if !got.Declared {
 			t.Fatal("expected Declared=true")
 		}
@@ -109,7 +109,7 @@ func TestResolveHandoffPlaybook(t *testing.T) {
 
 	t.Run("missing file resolves but is reported absent", func(t *testing.T) {
 		e := Executor{Handoff: Handoff{Playbook: ".claude/nope.md"}}
-		got := e.ResolveHandoff(repo)
+		got := e.ResolveHandoff(repo, "")
 		if got.PlaybookPath == "" {
 			t.Error("a missing playbook must still resolve to a path so the error can name it")
 		}
@@ -121,14 +121,14 @@ func TestResolveHandoffPlaybook(t *testing.T) {
 	t.Run("absolute path is used as-is", func(t *testing.T) {
 		abs := filepath.Join(repo, ".claude", "evidence-playbook.md")
 		e := Executor{Handoff: Handoff{Playbook: abs}}
-		if got := e.ResolveHandoff(repo); got.PlaybookPath != abs || !got.PlaybookExists {
+		if got := e.ResolveHandoff(repo, ""); got.PlaybookPath != abs || !got.PlaybookExists {
 			t.Errorf("got %q exists=%v, want %q exists=true", got.PlaybookPath, got.PlaybookExists, abs)
 		}
 	})
 
 	t.Run("a directory is not a playbook", func(t *testing.T) {
 		e := Executor{Handoff: Handoff{Playbook: ".claude"}}
-		if got := e.ResolveHandoff(repo); got.PlaybookExists {
+		if got := e.ResolveHandoff(repo, ""); got.PlaybookExists {
 			t.Error("a directory must not count as an existing playbook")
 		}
 	})
@@ -147,7 +147,7 @@ func TestResolveHandoffRuntimeSkillScripts(t *testing.T) {
 
 	t.Run("scripts are derived from disk, sorted, dirs and dotfiles skipped", func(t *testing.T) {
 		e := Executor{Handoff: Handoff{RuntimeSkill: "simulator-verify"}}
-		got := e.ResolveHandoff(repo)
+		got := e.ResolveHandoff(repo, "")
 		if got.SkillPath != filepath.Join(skillDir, "SKILL.md") {
 			t.Errorf("SkillPath = %q", got.SkillPath)
 		}
@@ -164,21 +164,31 @@ func TestResolveHandoffRuntimeSkillScripts(t *testing.T) {
 
 	t.Run("a leading slash is accepted", func(t *testing.T) {
 		e := Executor{Handoff: Handoff{RuntimeSkill: "/simulator-verify"}}
-		got := e.ResolveHandoff(repo)
+		got := e.ResolveHandoff(repo, "")
 		if got.RuntimeSkill != "simulator-verify" || got.SkillPath == "" {
 			t.Errorf("got %+v, want the slash stripped and the skill found", got)
 		}
 	})
 
 	t.Run("unknown skill resolves to no path", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir()) // the global-skills fallback must miss hermetically
 		e := Executor{Handoff: Handoff{RuntimeSkill: "nope"}}
-		got := e.ResolveHandoff(repo)
+		got := e.ResolveHandoff(repo, "")
 		if !got.Declared || got.RuntimeSkill != "nope" {
 			t.Fatalf("got %+v", got)
 		}
 		if got.SkillPath != "" || len(got.Scripts) != 0 {
 			t.Errorf("expected nothing found, got %+v", got)
+		}
+	})
+
+	t.Run("the runtime skill never falls back to the global root", func(t *testing.T) {
+		global := t.TempDir()
+		writeHandoffFile(t, filepath.Join(global, "skills", "elsewhere", "SKILL.md"), "# elsewhere")
+
+		e := Executor{Handoff: Handoff{RuntimeSkill: "elsewhere"}}
+		if got := e.ResolveHandoff(repo, global); got.SkillPath != "" {
+			t.Errorf("a runtime skill living only in the global root must stay NOT FOUND "+
+				"(doctor is the portability check - the repo may be synced to a machine without it), got %q", got.SkillPath)
 		}
 	})
 }
@@ -189,7 +199,7 @@ func TestResolveHandoffCommandFallback(t *testing.T) {
 	writeHandoffFile(t, cmdPath, "# device-check")
 
 	e := Executor{Handoff: Handoff{RuntimeSkill: "device-check"}}
-	got := e.ResolveHandoff(repo)
+	got := e.ResolveHandoff(repo, "")
 	if got.SkillPath != cmdPath {
 		t.Errorf("SkillPath = %q, want the command file %q", got.SkillPath, cmdPath)
 	}
@@ -204,41 +214,41 @@ func TestResolveHandoffRigSkill(t *testing.T) {
 		md := filepath.Join(repo, ".claude", "skills", "start-rig", "SKILL.md")
 		writeHandoffFile(t, md, "# start-rig")
 
-		got := Executor{Handoff: Handoff{RigSkill: "/start-rig"}}.ResolveHandoff(repo)
+		got := Executor{Handoff: Handoff{RigSkill: "/start-rig"}}.ResolveHandoff(repo, "")
 		if got.RigSkill != "start-rig" || got.RigSkillPath != md {
 			t.Errorf("got name=%q path=%q, want the slash stripped and %q", got.RigSkill, got.RigSkillPath, md)
 		}
 	})
 
-	t.Run("falls back to the user's global skills", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
-		md := filepath.Join(home, ".claude", "skills", "starting-local-rig", "SKILL.md")
+	t.Run("falls back to the project's pinned Claude config dir", func(t *testing.T) {
+		configDir := t.TempDir() // e.g. ~/.claude-alt on a pinned project
+		md := filepath.Join(configDir, "skills", "starting-local-rig", "SKILL.md")
 		writeHandoffFile(t, md, "# starting-local-rig")
 
-		got := Executor{Handoff: Handoff{RigSkill: "starting-local-rig"}}.ResolveHandoff(t.TempDir())
+		got := Executor{Handoff: Handoff{RigSkill: "starting-local-rig"}}.ResolveHandoff(t.TempDir(), configDir)
 		if got.RigSkillPath != md {
 			t.Errorf("RigSkillPath = %q, want the global skill %q", got.RigSkillPath, md)
+		}
+		if got.GlobalRoot != configDir {
+			t.Errorf("GlobalRoot = %q, want the searched dir %q carried for doctor/show", got.GlobalRoot, configDir)
 		}
 	})
 
 	t.Run("a project-local skill beats the global one", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
-		writeHandoffFile(t, filepath.Join(home, ".claude", "skills", "rig", "SKILL.md"), "# global")
+		configDir := t.TempDir()
+		writeHandoffFile(t, filepath.Join(configDir, "skills", "rig", "SKILL.md"), "# global")
 		repo := t.TempDir()
 		local := filepath.Join(repo, ".claude", "skills", "rig", "SKILL.md")
 		writeHandoffFile(t, local, "# local")
 
-		got := Executor{Handoff: Handoff{RigSkill: "rig"}}.ResolveHandoff(repo)
+		got := Executor{Handoff: Handoff{RigSkill: "rig"}}.ResolveHandoff(repo, configDir)
 		if got.RigSkillPath != local {
 			t.Errorf("RigSkillPath = %q, want the project-local %q", got.RigSkillPath, local)
 		}
 	})
 
 	t.Run("declared but missing resolves to no path", func(t *testing.T) {
-		t.Setenv("HOME", t.TempDir())
-		got := Executor{Handoff: Handoff{RigSkill: "ghost"}}.ResolveHandoff(t.TempDir())
+		got := Executor{Handoff: Handoff{RigSkill: "ghost"}}.ResolveHandoff(t.TempDir(), t.TempDir())
 		if !got.Declared || got.RigSkill != "ghost" || got.RigSkillPath != "" {
 			t.Errorf("got %+v, want declared, named, pathless", got)
 		}
@@ -249,7 +259,7 @@ func TestResolveHandoffSkillWithoutScriptsDir(t *testing.T) {
 	repo := t.TempDir()
 	writeHandoffFile(t, filepath.Join(repo, ".claude", "skills", "verify", "SKILL.md"), "# verify")
 
-	got := Executor{Handoff: Handoff{RuntimeSkill: "verify"}}.ResolveHandoff(repo)
+	got := Executor{Handoff: Handoff{RuntimeSkill: "verify"}}.ResolveHandoff(repo, "")
 	if got.SkillPath == "" {
 		t.Fatal("expected the skill to be found")
 	}
