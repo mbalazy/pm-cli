@@ -515,6 +515,25 @@ func TestE2EListTasksBudget(t *testing.T) {
 			t.Fatalf("tasks[0]=%v, want the newest (t-60)", out.Tasks)
 		}
 	})
+
+	// A limit far above the hard cap must never bypass it: the caller gets at
+	// most maxListLimit tasks and a note saying so, not the 10000 they asked
+	// for. 60 seeded tasks stays well under the 200 cap, so this also proves
+	// the clamp is disclosed even when it never actually truncates the result.
+	t.Run("limit above hard cap is clamped and disclosed", func(t *testing.T) {
+		text, _ := call(t, sess, "pm_list_tasks", map[string]any{"project": "test", "limit": 10000})
+		var out listOut
+		mustUnmarshal(t, text, &out)
+		if out.Shown != 60 || out.Total != 60 {
+			t.Fatalf("shown=%d total=%d, want 60/60 (all seeded tasks, well under the cap)", out.Shown, out.Total)
+		}
+		if len(out.Tasks) > maxListLimit {
+			t.Fatalf("returned %d tasks, must never exceed maxListLimit=%d", len(out.Tasks), maxListLimit)
+		}
+		if !strings.Contains(out.Note, fmt.Sprintf("capped at %d", maxListLimit)) {
+			t.Fatalf("note should disclose the cap, got %q", out.Note)
+		}
+	})
 }
 
 // TestE2EContextBodyCapped: pm_context returns doing tasks with the body

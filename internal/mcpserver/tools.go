@@ -17,7 +17,7 @@ import (
 type listTasksInput struct {
 	Project string `json:"project,omitempty" jsonschema:"Project slug or prefix (omit for all projects)"`
 	Status  string `json:"status,omitempty" jsonschema:"Filter by status (e.g. todo, doing, done, archived)"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"Max tasks to return, newest first (default 50). The result reports total vs shown; narrow with project/status or raise limit to see more."`
+	Limit   int    `json:"limit,omitempty" jsonschema:"Max tasks to return, newest first (default 50, hard cap 200). The result reports total vs shown; narrow with project/status or raise limit to see more."`
 }
 
 // defaultListLimit caps unfiltered pm_list_tasks output: without it a full
@@ -25,6 +25,12 @@ type listTasksInput struct {
 // context. Newest-first + an explicit total/shown footer keeps the tool
 // useful while bounding the damage.
 const defaultListLimit = 50
+
+// maxListLimit is a hard ceiling on the `limit` param. Without it, the note
+// telling a caller to "raise limit" when truncated is an invitation to pass
+// something huge and get exactly the context dump defaultListLimit exists to
+// prevent.
+const maxListLimit = 200
 
 type getTaskInput struct {
 	Project string `json:"project" jsonschema:"Project slug or prefix"`
@@ -313,15 +319,24 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		})
 
 		limit := in.Limit
+		capped := false
 		if limit <= 0 {
 			limit = defaultListLimit
+		} else if limit > maxListLimit {
+			limit = maxListLimit
+			capped = true
 		}
 		total := len(filtered)
 		if total > limit {
 			filtered = filtered[:limit]
 		}
 		result := listTasksResult{Tasks: filtered, Total: total, Shown: len(filtered)}
-		if result.Shown < total {
+		switch {
+		case capped && result.Shown < total:
+			result.Note = fmt.Sprintf("%d of %d tasks shown (newest first) - limit capped at %d", result.Shown, total, maxListLimit)
+		case capped:
+			result.Note = fmt.Sprintf("limit capped at %d", maxListLimit)
+		case result.Shown < total:
 			result.Note = fmt.Sprintf("%d of %d tasks shown (newest first) - narrow with project/status or raise limit", result.Shown, total)
 		}
 

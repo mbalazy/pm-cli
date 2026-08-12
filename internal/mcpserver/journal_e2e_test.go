@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -250,6 +251,20 @@ func TestE2EJournalListOpenFilterAndLimit(t *testing.T) {
 	// wrong conclusion for a record whose purpose is showing recurrence.
 	if !strings.Contains(out.Note, "1 of 3") {
 		t.Fatalf("truncation not disclosed: %q", out.Note)
+	}
+
+	// A limit far above the hard cap must never bypass it, and the clamp is
+	// disclosed even though the 3 seeded entries stay well under the cap.
+	text, _ = call(t, sess, "pm_journal_list", map[string]any{"project": "test", "name": "sim-rig", "limit": 10000})
+	mustUnmarshal(t, text, &out)
+	if out.Shown != 3 || out.Total != 3 {
+		t.Fatalf("shown=%d total=%d, want 3/3 (all seeded entries, well under the cap)", out.Shown, out.Total)
+	}
+	if len(out.Entries) > maxJournalLimit {
+		t.Fatalf("returned %d entries, must never exceed maxJournalLimit=%d", len(out.Entries), maxJournalLimit)
+	}
+	if !strings.Contains(out.Note, fmt.Sprintf("capped at %d", maxJournalLimit)) {
+		t.Fatalf("note should disclose the cap, got %q", out.Note)
 	}
 }
 
