@@ -44,7 +44,7 @@ func newFinishCmd(store storage.TaskStore) *cobra.Command {
 		Long: "Accepts an executor run: spawns a headless acceptance worker that runs the `batch-finish-auto` " +
 			"skill for <tracker>, and wraps it in the executor harness (claim, run-state, guard hook, journal, " +
 			"report). Without a tracker it prints this help; the `claim`/`release`/`status` subcommands operate " +
-			"the lock on its own.\n\n" +
+			"the lock on its own, and `record` persists a HAND-driven acceptance's verdict.\n\n" +
 			"The claim lives next to the run it covers (<project data dir>/.executor/<tracker>.finish.claim), " +
 			"never next to whoever is accepting: a run and its acceptance routinely stand on different machines " +
 			"(the batch runs on the VPS, the human accepts on the mac), and a lock kept locally by the accepting " +
@@ -55,8 +55,8 @@ func newFinishCmd(store storage.TaskStore) *cobra.Command {
 			"for as long as it lasts, and releases it on the way out.\n\n" +
 			"The acceptance never touches the simulator unless --sim is passed: anything running detached keeps " +
 			"its hands off a shared runtime, so its visual claims come back counted rather than guessed.\n\n" +
-			"Note that a tracker id spelled exactly like a subcommand (`claim`, `release`, `status`) reaches the " +
-			"subcommand, not the acceptance run.",
+			"Note that a tracker id spelled exactly like a subcommand (`claim`, `release`, `status`, `record`) " +
+			"reaches the subcommand, not the acceptance run.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -115,6 +115,7 @@ func newFinishCmd(store storage.TaskStore) *cobra.Command {
 		newFinishClaimCmd(store),
 		newFinishReleaseCmd(store),
 		newFinishStatusCmd(store),
+		newFinishRecordCmd(store),
 	)
 	return cmd
 }
