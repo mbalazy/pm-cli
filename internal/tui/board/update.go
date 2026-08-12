@@ -72,7 +72,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentView == viewDetail && m.detailTask != nil {
 			// Either dashboard being live is reason enough to re-render: an
 			// acceptance can be the only thing still moving on a finished run.
-			if m.runStates[m.detailTask.Meta.ID].IsLive() || m.finishStates[m.detailTask.Meta.ID].IsLive() {
+			// A live CLAIM counts the same - a hand-driven acceptance has no
+			// run-state, so the claim is all that moves (it appears, its ages
+			// tick, it expires). detailHadClaim buys the ONE render after the
+			// claim goes: refreshRunStates above has already dropped it from
+			// finishClaims by the time this condition runs, so without the
+			// memory the notice would sit on screen until a keypress.
+			claimLive := m.finishClaims[m.detailTask.Meta.ID] != nil
+			if m.runStates[m.detailTask.Meta.ID].IsLive() || m.finishStates[m.detailTask.Meta.ID].IsLive() || claimLive || m.detailHadClaim {
 				m.reload()
 				if rt, err := m.store.FindTask(m.detailTask.Project, m.detailTask.Meta.ID); err == nil {
 					m.detailTask = rt
@@ -83,6 +90,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.detailPlainContent = stripANSI(content)
 				m.detailViewport.SetYOffset(off)
 			}
+			m.detailHadClaim = claimLive
 		}
 		return m, doTick()
 

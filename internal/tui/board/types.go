@@ -110,6 +110,13 @@ type detailState struct {
 	detailSearchMatches []int // line numbers of matches
 	detailSearchIdx     int
 	detailPlainContent  string // ANSI-stripped for searching
+
+	// detailHadClaim: whether the last tick's re-render check saw a live
+	// acceptance claim for detailTask. The tick that drops an expired claim
+	// from finishClaims must ALSO re-render the detail view once more to take
+	// the claim notice off the screen - by then the claim itself is gone, so
+	// only this memory can say the screen still shows one.
+	detailHadClaim bool
 }
 
 // execView is the executor agent-view (18-7): the live transcript of the
@@ -370,6 +377,15 @@ type Model struct {
 	// `batch-finish-auto` is built to start before the run it accepts has
 	// finished, accepting each sub as it lands.
 	finishStates map[string]*storage.RunState
+
+	// finishClaims: live acceptance claims (<tracker>.finish.claim), keyed by
+	// tracker id - refreshed from the same dir on the same tick. This is the
+	// ONLY trace a hand-driven acceptance leaves (a CC session running `pm
+	// finish claim`, e.g. batch-finish-auto, never writes a .finish.json), so
+	// without it the board reports a claimed run as having no acceptance at
+	// all. Expired claims are dropped by the reader, so an abandoned
+	// acceptance disappears on its own within the TTL.
+	finishClaims map[string]*storage.FinishClaim
 
 	startupDuration time.Duration
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -175,6 +176,47 @@ func LiveFinishClaimHolder(projectDir, trackerID string) *FinishClaim {
 		return nil
 	}
 	return c
+}
+
+// LiveFinishClaims returns every live acceptance claim in the project dir,
+// keyed by tracker id. The board's tick reads this to show a HAND-DRIVEN
+// acceptance - a claim taken via `pm finish claim` (e.g. a batch-finish-auto
+// session), which never writes a .finish.json - on the tracker's card and in
+// the detail view, the same "a live claim wins" rule acceptCell follows in the
+// Runs view.
+//
+// A file vouches for its own tracker the way readRunStatesDir's states do: the
+// claim counts only when the path its TrackerID would be written to is the
+// very file it was read from. Matching on the name alone would not survive a
+// dot in a task id (ValidateTaskID permits one): `x.finish.claim` is the claim
+// of tracker `x`, while a tracker literally named `x.finish` claims at
+// `x.finish.finish.claim`. Expired, corrupt and unreadable entries are skipped
+// - each already reads as free everywhere else (see LiveFinishClaimHolder).
+func LiveFinishClaims(projectDir string) map[string]*FinishClaim {
+	out := map[string]*FinishClaim{}
+	entries, err := os.ReadDir(executorRunDir(projectDir))
+	if err != nil {
+		return out
+	}
+	now := time.Now()
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".finish.claim") {
+			continue
+		}
+		c, err := readClaimFile(filepath.Join(executorRunDir(projectDir), name))
+		if err != nil || c == nil {
+			continue
+		}
+		if filepath.Base(FinishClaimPath(projectDir, c.TrackerID)) != name {
+			continue
+		}
+		if c.Expired(now) {
+			continue
+		}
+		out[c.TrackerID] = c
+	}
+	return out
 }
 
 // Expired reports whether the claim has gone stale by now - i.e. it was not

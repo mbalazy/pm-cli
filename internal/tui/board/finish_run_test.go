@@ -531,3 +531,120 @@ func writeClaimFixture(t *testing.T, stateDir string, claim *storage.FinishClaim
 		t.Fatal(err)
 	}
 }
+
+// A hand-driven acceptance (a CC session that took the claim via `pm finish
+// claim` - batch-finish-auto's shape) writes no .finish.json, so the claim is
+// its ONLY artifact. The board must show it on the card and in the detail
+// view for exactly as long as the claim is live - and hand the screen back to
+// the .finish.json dashboard the moment a real acceptance process runs.
+func TestHandClaimedAcceptanceIsVisibleUntilTheClaimExpires(t *testing.T) {
+	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-9", Title: "Batch tracker", Status: storage.StatusDoing}})
+	stateDir := m.store.ProjectDir("p")
+	if _, err := storage.AcquireFinishClaim(stateDir, "p-9", "sess-hand"); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshRunStates()
+
+	if m.finishClaims["p-9"] == nil {
+		t.Fatal("refreshRunStates must pick the live claim up on the same tick as the run-states")
+	}
+	if fb := m.finishBadge("p-9"); fb != "▶ accepting (claimed)" {
+		t.Errorf("badge = %q, want the hand-claimed acceptance badged as in progress", fb)
+	}
+	task, err := m.store.FindTask("p", "p-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := m.renderTaskDetail(task)
+	if !strings.Contains(detail, "Acceptance (hand-claimed)") {
+		t.Errorf("detail view must carry the claim notice:\n%s", detail)
+	}
+	if !strings.Contains(detail, "sess-han") {
+		t.Errorf("the notice must name the claiming session:\n%s", detail)
+	}
+
+	// A LIVE acceptance process (its .finish.json) wins the tie: that process
+	// holds its own claim, and doubling the badge or the notice would show one
+	// acceptance as two.
+	if err := storage.WriteRunState(stateDir, liveFinish(t, "p-9", liveRunPID(t))); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshRunStates()
+	if fb := m.finishBadge("p-9"); fb != "▶ accepting" {
+		t.Errorf("badge = %q with a live acceptance process, want the plain live badge", fb)
+	}
+	if detail := m.renderTaskDetail(task); strings.Contains(detail, "hand-claimed") {
+		t.Errorf("the claim notice must yield to the live acceptance dashboard:\n%s", detail)
+	}
+	if err := os.Remove(storage.FinishRunPath(stateDir, "p-9")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Expiry: stamps older than the TTL drop the claim on the next tick, and
+	// the board goes quiet about the acceptance on its own.
+	old := time.Now().Add(-storage.FinishClaimTTL - time.Minute).UTC().Format(time.RFC3339)
+	writeClaimFixture(t, stateDir, &storage.FinishClaim{TrackerID: "p-9", Host: storage.Hostname(), Started: old, Refreshed: old})
+	m.refreshRunStates()
+	if m.finishClaims["p-9"] != nil {
+		t.Fatal("an expired claim must not survive the tick")
+	}
+	if fb := m.finishBadge("p-9"); fb != "" {
+		t.Errorf("badge = %q after expiry, want none", fb)
+	}
+	if detail := m.renderTaskDetail(task); strings.Contains(detail, "hand-claimed") {
+		t.Errorf("the claim notice must disappear with the expired claim:\n%s", detail)
+	}
+}
+
+// The detail view's tick-refresh is gated (a static task must not reload every
+// 2s), and a hand-driven acceptance has NO live run-state to open that gate -
+// the claim itself must. Both directions matter: a claim appearing while the
+// view is open has to draw the notice, and the tick that drops an expired
+// claim has to take it off the screen (the live board bug the first visual
+// pass of pm-cli-112 caught: the badge vanished, the open detail view kept
+// showing the notice until a keypress).
+func TestDetailViewTickFollowsTheClaimAlone(t *testing.T) {
+	m := newBoardModel(t, &storage.Task{Meta: storage.TaskMeta{ID: "p-9", Title: "Batch tracker", Status: storage.StatusDoing}})
+	stateDir := m.store.ProjectDir("p")
+	task, err := m.store.FindTask("p", "p-9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.currentView = viewDetail
+	m.detailTask = task
+	m.detailViewport = viewport.New(120, 40)
+	content := m.renderTaskDetail(task)
+	m.detailViewport.SetContent(content)
+	m.detailPlainContent = stripANSI(content)
+	if strings.Contains(m.detailPlainContent, "hand-claimed") {
+		t.Fatal("no claim yet, no notice")
+	}
+
+	tick := func() {
+		t.Helper()
+		nm, _ := m.Update(tickMsg(time.Now()))
+		got, ok := nm.(Model)
+		if !ok {
+			t.Fatalf("Update returned %T", nm)
+		}
+		*m = got
+	}
+
+	// Claim appears while the view is open: the next tick draws the notice.
+	if _, err := storage.AcquireFinishClaim(stateDir, "p-9", "sess-hand"); err != nil {
+		t.Fatal(err)
+	}
+	tick()
+	if !strings.Contains(m.detailPlainContent, "hand-claimed") {
+		t.Fatalf("the tick must draw the claim notice into the open detail view:\n%s", m.detailPlainContent)
+	}
+
+	// Claim expires: the SAME tick that drops it from finishClaims must also
+	// re-render, or the notice outlives the claim on screen.
+	old := time.Now().Add(-storage.FinishClaimTTL - time.Minute).UTC().Format(time.RFC3339)
+	writeClaimFixture(t, stateDir, &storage.FinishClaim{TrackerID: "p-9", Host: storage.Hostname(), Started: old, Refreshed: old})
+	tick()
+	if strings.Contains(m.detailPlainContent, "hand-claimed") {
+		t.Fatalf("the notice must leave the screen on the tick the claim expires:\n%s", m.detailPlainContent)
+	}
+}
