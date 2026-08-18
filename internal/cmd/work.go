@@ -1083,10 +1083,25 @@ func buildClaudeArgsFor(r claudeRun) []string {
 
 // workerAllowedTools is the curated allowlist: file edits (acceptEdits), review
 // subagents, and the bash families a build/test/review/pr loop needs.
+//
+// The `uv run` entries are spelled per subcommand rather than as `Bash(uv:*)`,
+// and that is not fussiness. A uv-managed project (pyproject.toml + uv.lock) has
+// no PATH-visible pytest/ruff/mypy at all: they live in .venv and the only way
+// in is `uv run`. Without these entries the worker's ONLY reachable gate is a
+// `make` target, so it cannot narrow a failure to one test file - measured on
+// platform.orbit (2026-08-18), where every check is `uv run` behind a
+// Makefile. But a blanket `Bash(uv:*)` would also hand it `uv run git push
+// --force` and `uv run gh pr merge`: the disallow patterns below match on the
+// leading tokens, and the PreToolUse guard (worker_guard.go) reads the whole
+// command only for HOOK bypasses, not for force-push or merge. Naming the
+// subcommands keeps the envelope shut. `uv run python` opens no new ground -
+// `Bash(python:*)` is already here.
 const workerAllowedTools = "Edit Write Read Grep Glob Task TodoWrite " +
 	"Bash(git:*) Bash(gh:*) Bash(go:*) Bash(make:*) Bash(yarn:*) Bash(npm:*) Bash(npx:*) Bash(pnpm:*) " +
 	"Bash(node:*) Bash(jest:*) Bash(vitest:*) Bash(eslint:*) Bash(biome:*) Bash(tsc:*) Bash(prettier:*) " +
 	"Bash(cargo:*) Bash(python:*) Bash(python3:*) Bash(pytest:*) Bash(ruff:*) Bash(mypy:*) " +
+	"Bash(uv sync:*) Bash(uv lock:*) Bash(uv run pytest:*) Bash(uv run ruff:*) Bash(uv run mypy:*) " +
+	"Bash(uv run ty:*) Bash(uv run python:*) Bash(uv run alembic:*) Bash(uv run pre-commit:*) " +
 	"Bash(cd:*) Bash(ls:*) Bash(cat:*) Bash(grep:*) Bash(rg:*) Bash(find:*) Bash(echo:*) Bash(sed:*) Bash(awk:*)"
 
 // workerDisallowedTools enforces the autonomy envelope: never force-push, never
