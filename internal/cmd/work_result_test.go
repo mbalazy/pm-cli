@@ -190,6 +190,30 @@ func TestScanStructuredOutputSurvivesHugeLines(t *testing.T) {
 	}
 }
 
+func TestWorkerAllowedToolsReachesUVManagedGates(t *testing.T) {
+	// A uv-managed project keeps pytest/ruff/mypy inside .venv, so `uv run` is
+	// the only way to run one test file instead of the whole Makefile gate.
+	for _, pat := range []string{
+		"Bash(uv sync:*)",
+		"Bash(uv run pytest:*)",
+		"Bash(uv run ruff:*)",
+		"Bash(uv run mypy:*)",
+		"Bash(uv run ty:*)",
+		"Bash(uv run alembic:*)",
+	} {
+		if !strings.Contains(workerAllowedTools, pat) {
+			t.Errorf("allowlist is missing %s", pat)
+		}
+	}
+	// The envelope hole a blanket entry would open: the disallow patterns match
+	// on leading tokens, so `uv run git push --force` and `uv run gh pr merge`
+	// slip past every one of them, and the PreToolUse guard only reads whole
+	// commands for hook bypasses.
+	if strings.Contains(workerAllowedTools, "Bash(uv:*)") || strings.Contains(workerAllowedTools, "Bash(uv run:*)") {
+		t.Error("a blanket uv entry re-opens `uv run git push --force` - name the subcommands instead")
+	}
+}
+
 func TestWorkerDisallowedToolsBlocksHookBypass(t *testing.T) {
 	// The near-miss this list exists for: with git allowed wholesale, the ONE
 	// commit form the envelope permitted was the one the project forbids.
