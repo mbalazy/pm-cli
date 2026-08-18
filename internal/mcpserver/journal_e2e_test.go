@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -242,14 +243,73 @@ func TestE2EJournalListOpenFilterAndLimit(t *testing.T) {
 	}
 
 	text, _ = call(t, sess, "pm_journal_list", map[string]any{"project": "test", "name": "sim-rig", "limit": 1})
-	mustUnmarshal(t, text, &out)
-	if out.Shown != 1 {
-		t.Fatalf("limit ignored: %+v", out)
+	var limitOut journalEntriesOutput
+	mustUnmarshal(t, text, &limitOut)
+	if limitOut.Shown != 1 {
+		t.Fatalf("limit ignored: %+v", limitOut)
 	}
 	// Silent truncation would read as "that is the whole history" - the exact
 	// wrong conclusion for a record whose purpose is showing recurrence.
-	if !strings.Contains(out.Note, "1 of 3") {
-		t.Fatalf("truncation not disclosed: %q", out.Note)
+	if !strings.Contains(limitOut.Note, "1 of 3") {
+		t.Fatalf("truncation not disclosed: %q", limitOut.Note)
+	}
+
+	// A limit far above the hard cap must never bypass it, and the clamp is
+	// disclosed even though the 3 seeded entries stay well under the cap.
+	text, _ = call(t, sess, "pm_journal_list", map[string]any{"project": "test", "name": "sim-rig", "limit": 10000})
+	var cappedOut journalEntriesOutput
+	mustUnmarshal(t, text, &cappedOut)
+	if cappedOut.Shown != 3 || cappedOut.Total != 3 {
+		t.Fatalf("shown=%d total=%d, want 3/3 (all seeded entries, well under the cap)", cappedOut.Shown, cappedOut.Total)
+	}
+	if len(cappedOut.Entries) > maxJournalLimit {
+		t.Fatalf("returned %d entries, must never exceed maxJournalLimit=%d", len(cappedOut.Entries), maxJournalLimit)
+	}
+	if !strings.Contains(cappedOut.Note, fmt.Sprintf("capped at %d", maxJournalLimit)) {
+		t.Fatalf("note should disclose the cap, got %q", cappedOut.Note)
+	}
+
+	// limit == maxJournalLimit exactly is a request AT the ceiling, not above
+	// it - it must not be reported as capped.
+	text, _ = call(t, sess, "pm_journal_list", map[string]any{"project": "test", "name": "sim-rig", "limit": maxJournalLimit})
+	var atCapOut journalEntriesOutput
+	mustUnmarshal(t, text, &atCapOut)
+	if atCapOut.Shown != 3 || atCapOut.Note != "" {
+		t.Fatalf("shown=%d note=%q, want 3 and empty note (limit==cap is not a clamp)", atCapOut.Shown, atCapOut.Note)
+	}
+}
+
+// TestE2EJournalListHardCapTruncates: no limit value can make pm_journal_list
+// return more than maxJournalLimit entries. Seeds more entries than the cap
+// directly via storage.AppendIncident (bypassing per-entry MCP round trips)
+// so the clamp actually has to cut the result down.
+func TestE2EJournalListHardCapTruncates(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	declareJournals(t, store, storage.JournalSubject{Name: "sim-rig"})
+	const seeded = maxJournalLimit + 5
+	for i := 1; i <= seeded; i++ {
+		in := storage.Incident{Symptom: fmt.Sprintf("symptom %d", i)}
+		if err := storage.AppendIncident(store.ProjectDir("test"), "sim-rig", &in); err != nil {
+			t.Fatalf("seed incident %d: %v", i, err)
+		}
+	}
+	sess := startMCP(t, store)
+
+	text, isErr := call(t, sess, "pm_journal_list", map[string]any{"project": "test", "name": "sim-rig", "limit": 10000})
+	if isErr {
+		t.Fatalf("journal list error: %s", text)
+	}
+	var out journalEntriesOutput
+	mustUnmarshal(t, text, &out)
+	if out.Total != seeded {
+		t.Fatalf("total=%d, want %d", out.Total, seeded)
+	}
+	if out.Shown != maxJournalLimit || len(out.Entries) != maxJournalLimit {
+		t.Fatalf("shown=%d len(entries)=%d, want %d (the hard cap) - limit=10000 must never bypass it", out.Shown, len(out.Entries), maxJournalLimit)
+	}
+	wantNote := fmt.Sprintf("%d of %d", maxJournalLimit, seeded)
+	if !strings.Contains(out.Note, wantNote) || !strings.Contains(out.Note, fmt.Sprintf("capped at %d", maxJournalLimit)) {
+		t.Fatalf("note = %q, want it to contain %q and the cap value", out.Note, wantNote)
 	}
 }
 

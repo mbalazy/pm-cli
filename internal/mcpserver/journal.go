@@ -35,10 +35,15 @@ type journalListInput struct {
 	Project string `json:"project" jsonschema:"Project slug or prefix"`
 	Name    string `json:"name,omitempty" jsonschema:"Journal name. Omit to list the journals declared for the project with their entry counts instead of reading one."`
 	Open    bool   `json:"open,omitempty" jsonschema:"Only entries with no fix recorded (the backlog)"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"Max entries to return, newest first (default 20; 0 = default). The result reports total vs shown."`
+	Limit   int    `json:"limit,omitempty" jsonschema:"Max entries to return, newest first (default 20; 0 = default; hard cap 200). The result reports total vs shown."`
 }
 
 const defaultJournalLimit = 20
+
+// maxJournalLimit mirrors maxListLimit's rationale: an unbounded limit param
+// turns the "raise limit" hint on a truncation note into a way to defeat the
+// budget the default exists to enforce.
+const maxJournalLimit = 200
 
 // journalEntriesOutput is the read shape. Stats travel WITH the entries rather
 // than in a separate tool: the reason to read a journal at all is to see
@@ -157,12 +162,26 @@ func registerJournalTools(s *mcp.Server, store storage.TaskStore) {
 
 		shown := newestFirst(incidents, in.Open)
 		limit := in.Limit
+		capped := false
 		if limit <= 0 {
 			limit = defaultJournalLimit
+		} else if limit > maxJournalLimit {
+			limit = maxJournalLimit
+			capped = true
 		}
 		total := len(shown)
+		entryWord := "entries"
+		if in.Open {
+			entryWord = "open entries"
+		}
 		note := ""
-		if total > limit {
+		switch {
+		case capped && total > limit:
+			shown = shown[:limit]
+			note = fmt.Sprintf("%d of %d %s shown (newest first) - limit capped at %d; use `pm journal show %s --limit 0 --project %s` for the full history", len(shown), total, entryWord, maxJournalLimit, subject.Name, slug)
+		case capped:
+			note = fmt.Sprintf("all %d %s shown; limit capped at %d", total, entryWord, maxJournalLimit)
+		case total > limit:
 			shown = shown[:limit]
 			// Silent truncation would read as "that is the whole history",
 			// which is exactly the wrong conclusion for a recurrence record.
