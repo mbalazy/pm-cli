@@ -21,6 +21,10 @@ func TestBashCommandBlocked(t *testing.T) {
 		{"trailing no-verify", `git commit -m "x" --no-verify`},
 		{"short -n on commit", `git commit -m "x" -n`},
 		{"short -n on push", `git push -n origin main`},
+		{"cluster -nm on commit", `git commit -nm "add feature"`},
+		{"cluster -anm on commit", `git commit -anm "add feature"`},
+		{"cluster -nf on push", `git push -nf origin main`},
+		{"attached cluster, no separator", `git commit -nm"add feature"`},
 		{"hooksPath via -c", `git -c core.hooksPath=/dev/null commit -m "x"`},
 		{"hooksPath via config", `git config core.hooksPath /dev/null`},
 		{"hooksPath case", `git -c core.HooksPath=/dev/null commit -m x`},
@@ -79,7 +83,68 @@ func TestBashCommandBlocked(t *testing.T) {
 		{"long message flag", `git commit --message="stop honouring HUSKY=0"`},
 		{"message naming a hook file", `git commit -m "regenerate .husky/pre-commit from the template"`},
 		{"single-quoted message", `git commit -m 'explain why -n is refused'`},
+		{"message describing the -nm cluster bypass", `git commit -m "fix the -nm cluster bypass in worker-guard"`},
 		{"empty", ``},
+	}
+	for _, c := range allowed {
+		if ok, what := bashCommandBlocked(c.cmd); ok {
+			t.Errorf("%s: %q must be allowed, blocked as %s", c.name, c.cmd, what)
+		}
+	}
+}
+
+// TestBashCommandBlockedClusterGuard is the -nm/-anm regression named so
+// `go test -run Guard` picks it up directly, independent of where the cluster
+// cases also live in TestBashCommandBlocked's tables: git's short-option
+// parser splits `-nm "msg"` into `-n` (--no-verify) + `-m <msg>`, and the
+// scoped `-n` pattern used to require a standalone token, so the cluster form
+// slipped through (verified empirically 2026-08-12).
+func TestBashCommandBlockedClusterGuard(t *testing.T) {
+	blocked := []struct{ name, cmd string }{
+		{"cluster -nm on commit", `git commit -nm "add feature"`},
+		{"cluster -anm on commit", `git commit -anm "add feature"`},
+		{"cluster -nf on push", `git push -nf origin main`},
+		{"attached cluster, quoted payload, no separator", `git commit -nm"add feature"`},
+		{"attached cluster, bare payload, no separator", `git commit -nmfix-typo`},
+		{"attached cluster with -a, quoted payload, no separator", `git commit -anm"add feature"`},
+		// Two git segments in one line: the first is a harmless -am, the
+		// second carries the bypass. FindAllString must not merge them into
+		// one span that only the first flag set is checked against.
+		{"second of two chained git segments carries the bypass", `git commit -am "x" && git commit -nm "y"`},
+		// A backslash-newline is the one newline that does not end a command:
+		// the shell deletes it and runs a single `git commit ... -n`, which a
+		// probe repo with a failing pre-commit hook commits through. The
+		// segment boundary stops at a bare newline, so the continuation has to
+		// be joined before the segments are cut.
+		{"continuation before the cluster", "git commit \\\n  -nm \"x\""},
+		{"continuation before a standalone -n", "git commit -m \"x\" \\\n  -n"},
+		{"continuation before -n on push", "git push \\\n  -n origin main"},
+		{"continuation splitting the subcommand itself", "git com\\\nmit -m \"x\" -n"},
+	}
+	for _, c := range blocked {
+		if ok, _ := bashCommandBlocked(c.cmd); !ok {
+			t.Errorf("%s: %q must be blocked", c.name, c.cmd)
+		}
+	}
+
+	allowed := []struct{ name, cmd string }{
+		{"combined short flag without n", `git commit -am "drop the --no-verify escape hatch"`},
+		{"cluster mentioned only in a stripped message", `git commit -m "fix the -nm cluster bypass in worker-guard"`},
+		// The scoped `-n` check is judged per git-commit/push segment, not
+		// against the whole line - an unrelated flag containing `n` in a
+		// command chained ahead of the commit must not trip it, whatever the
+		// separator is (&&, ;, |, or a newline - a worker's Bash call is
+		// routinely a whole multi-line script in one `command` string).
+		{"unrelated -n-bearing flag chained before a commit", `go test ./internal/cmd/ -run Guard -v && git commit -am "fix"`},
+		{"unrelated -n-bearing flag chained after a commit", `git commit -am "fix" && go test -run Guard -v`},
+		{"unrelated -n-bearing flag after a semicolon", `git commit -am "fix"; grep -rn TODO src`},
+		{"unrelated -n-bearing flag after a pipe", `git commit -am "fix" | tee log; grep -rn TODO src`},
+		{"unrelated -n-bearing flag on the next line", "git commit -am \"fix guard\"\ngo test ./internal/cmd/ -run Guard -v"},
+		// Joining continuations must not cost the anti-cry-wolf property: a
+		// message wrapped across lines is joined INTO the payload and blanked
+		// with it, so prose about -n stays an ordinary commit.
+		{"continuation inside the message, prose about -n", "git commit -m \"first line \\\n-n is refused here\""},
+		{"bare newline inside the message, prose about -n", "git commit -m \"first line\nabout -n here\""},
 	}
 	for _, c := range allowed {
 		if ok, what := bashCommandBlocked(c.cmd); ok {
@@ -98,6 +163,10 @@ func TestStripMessagePayload(t *testing.T) {
 		{`git commit --message="HUSKY=0 is banned"`, `git commit --message MSG`},
 		{`git commit -m fix && rm .husky/pre-commit`, `git commit -m MSG && rm .husky/pre-commit`},
 		{`git push --no-verify origin HEAD`, `git push --no-verify origin HEAD`},
+		// Attached form, no separator at all: git's own short-option parser
+		// accepts the value glued directly onto the flag cluster.
+		{`git commit -nm"add feature"`, `git commit -nm MSG`},
+		{`git commit -nmfix-typo`, `git commit -nm MSG`},
 	}
 	for _, c := range cases {
 		if got := stripMessagePayload(c.in); got != c.want {

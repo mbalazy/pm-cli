@@ -57,17 +57,57 @@ var hookBypassPatterns = []struct {
 	{re: regexp.MustCompile(`(?i)\bsed\s[^;&|]*(-i|--in-place)[^;&|]*` + hookDirRef), what: "an in-place sed on the hook directory"},
 	{re: regexp.MustCompile(`(?i)\btee\s[^;&|]*` + hookDirRef), what: "a tee into the hook directory"},
 	{re: regexp.MustCompile(`>\s*[^\s;&|]*` + hookDirRef), what: "a redirect into the hook directory"},
-	{re: regexp.MustCompile(`(^|\s)-n(\s|$)`), what: "-n (short --no-verify)", scoped: true},
+	// Any short-option cluster containing `n`, not just a standalone `-n`: git's
+	// own short-flag parser splits `-nm "msg"` into `-n` (--no-verify) + `-m`, so
+	// `git commit -nm "x"` bypassed a failing pre-commit hook that `git commit -m
+	// "x"` was blocked by (verified empirically 2026-08-12). Long flags start with
+	// `--` and never match (`-` is not in the char class); `-am`, `-u`, `-S` carry
+	// no `n` and stay allowed. Judged per git-commit/push SEGMENT (see
+	// gitCommitOrPushSegments), not against the whole command - an unrelated flag
+	// containing `n` in a command chained ahead of the commit (e.g.
+	// `go test -run Foo && git commit -am x`) must not trip this.
+	{re: regexp.MustCompile(`(^|\s)-[A-Za-z]*n[A-Za-z]*(\s|$)`), what: "-n (short --no-verify, including a combined cluster like -nm)", scoped: true},
 }
 
-var gitCommitOrPush = regexp.MustCompile(`git\s+(commit|push)\b`)
+// gitCommitOrPushSegment matches from a `git commit`/`git push` invocation to
+// the next command separator (`;`, `&&`, `||`, `|`, a newline) or the end of
+// the string - the span a scoped pattern is judged within. The newline matters
+// as much as the shell operators: a worker's Bash call is routinely a whole
+// multi-line script in one `command` string, and a negated Go character class
+// matches `\n` unless it is excluded explicitly - without it, an unrelated
+// flag on a LATER line (`git commit -am "x"` then `go test -run Foo` on the
+// next line) read as part of the same segment.
+var gitCommitOrPushSegment = regexp.MustCompile(`git\s+(?:commit|push)\b[^;&|\n]*`)
+
+// shellLineContinuation is a backslash immediately followed by a newline - the
+// one newline that does NOT end a command. The shell deletes it and joins the
+// two lines into a single word stream, so the segment boundary above has to
+// delete it first, or `git commit -m "x" \` + newline + `-n` reads as a commit
+// whose segment ends before the flag that bypasses the hooks (verified against
+// a probe repo with a failing pre-commit hook 2026-08-12: that form commits).
+// Deleted rather than replaced with a space, exactly as the shell does it, so
+// a continuation splitting a word (`git com\` + newline + `mit -n`) rejoins.
+// Applied before stripMessagePayload, so a continuation inside a commit message
+// is joined into the payload and blanked with it instead of leaking prose.
+var shellLineContinuation = regexp.MustCompile(`\\\r?\n`)
+
+// gitCommitOrPushSegments returns every such span in cmd. A scoped pattern
+// (see hookBypassPatterns) is checked against these, never against the whole
+// command - otherwise a legitimate flag in an unrelated command chained ahead
+// of or after the commit reads as part of it.
+func gitCommitOrPushSegments(cmd string) []string {
+	return gitCommitOrPushSegment.FindAllString(cmd, -1)
+}
 
 // commitMessageArg matches a message flag together with the payload that belongs
 // to it: `--message`, `-m`, and the combined short forms a model writes without
-// thinking (`-am`). The payload is a quoted string when there is one, otherwise
-// a single bare word - and never crosses a command separator, so
+// thinking (`-am`, `-nm`). The payload is a quoted string when there is one,
+// otherwise a single bare word, separated from the flag by `=`, whitespace, or
+// nothing at all - git's own short-option parser accepts an attached value with
+// no separator (`-nm"msg"`, `-amfix-typo`), and a model that learns the spaced
+// form is refused reaches for that next. Never crosses a command separator, so
 // `git commit -m fix && rm .husky/pre-commit` keeps its second half.
-var commitMessageArg = regexp.MustCompile(`(^|\s)(--message|-[A-Za-z]*m)(=|\s+)("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|]+)`)
+var commitMessageArg = regexp.MustCompile(`(^|\s)(--message|-[A-Za-z]*m)(=|\s+)?("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|]+)`)
 
 // stripMessagePayload blanks out commit-message prose before the bypass patterns
 // ever see it. Describing a door is not opening one: `git commit -m "add -n flag
@@ -90,10 +130,16 @@ func bashCommandBlocked(cmd string) (bool, string) {
 	if strings.TrimSpace(cmd) == "" {
 		return false, ""
 	}
+	cmd = shellLineContinuation.ReplaceAllString(cmd, "")
 	cmd = stripMessagePayload(cmd)
-	isCommitOrPush := gitCommitOrPush.MatchString(cmd)
+	segments := gitCommitOrPushSegments(cmd)
 	for _, p := range hookBypassPatterns {
-		if p.scoped && !isCommitOrPush {
+		if p.scoped {
+			for _, seg := range segments {
+				if p.re.MatchString(seg) {
+					return true, p.what
+				}
+			}
 			continue
 		}
 		if p.re.MatchString(cmd) {
