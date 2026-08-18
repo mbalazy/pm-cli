@@ -465,3 +465,100 @@ func TestAcquireWorktreeLockAtomicRace(t *testing.T) {
 		}
 	}
 }
+
+// TestWorktreeLockReleaseVsTakeoverRace reproduces the release TOCTOU: a
+// process cleans up a lock on behalf of a pid that has already died (killRun
+// releasing on a worker's behalf from a DIFFERENT process), and - in the gap
+// between ReleaseWorktreeLock's ownership read and its rename - a rival
+// judges that same dead pid stale and lands its own fresh lock. The real
+// window is a single read-then-rename with nothing externally observable in
+// between, so a live goroutine race is not a reliable way to land inside it -
+// releaseRaceHook forces the exact adversarial ordering deterministically
+// instead (the hook only ever runs from ReleaseWorktreeLock itself, so it
+// cannot re-enter; it self-disarms only as a defensive habit against a future
+// second call site). The assertions that catch a lost lock: the rival's fresh
+// lock must survive ON DISK, release must report that it lost the race rather
+// than claim success, and no scratch litter is left behind - a release that
+// unlinked-by-path instead of verifying what it renamed aside would instead
+// silently delete the rival's winning lock, even though AcquireWorktreeLock
+// had already returned nil to its caller.
+func TestWorktreeLockReleaseVsTakeoverRace(t *testing.T) {
+	const deadPID = 2147483646
+	livePID := os.Getpid()
+
+	dir := t.TempDir()
+	if err := AcquireWorktreeLock(dir, "task-crashed", "run-epic", deadPID); err != nil {
+		t.Fatalf("seed stale lock: %v", err)
+	}
+
+	prev := releaseRaceHook
+	t.Cleanup(func() { releaseRaceHook = prev })
+	releaseRaceHook = func() {
+		releaseRaceHook = func() {} // defensive: must not fire again even if a future call site adds a second invocation
+		if err := AcquireWorktreeLock(dir, "task-new", "work", livePID); err != nil {
+			t.Errorf("rival takeover inside the race window: %v", err)
+		}
+	}
+
+	relErr := ReleaseWorktreeLock(dir, deadPID)
+	if relErr == nil {
+		t.Fatalf("release must report that it lost the race, not silently succeed")
+	}
+
+	lk, err := ReadWorktreeLock(dir)
+	if err != nil {
+		t.Fatalf("read after race: %v", err)
+	}
+	if lk == nil || lk.TaskID != "task-new" || lk.PID != livePID {
+		t.Fatalf("a release racing a concurrent takeover must never erase the rival's fresh lock, got %+v", lk)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != worktreeLockFile {
+			t.Fatalf("scratch file left behind after the race: %s", e.Name())
+		}
+	}
+}
+
+// TestWorktreeLockReleaseVsSamePidRefreshRace covers the half of
+// ReleaseWorktreeLock's post-rename identity check that
+// TestWorktreeLockReleaseVsTakeoverRace cannot reach: a SAME pid re-entering
+// its own lock for a new task (AcquireWorktreeLock's refresh branch, which
+// rewrites Started under an unchanged PID) lands in the release's race window.
+// A PID-only re-check cannot tell this from an untouched lock - it takes the
+// Started comparison too, which in turn depends on AcquireWorktreeLock
+// stamping with enough precision that two refreshes moments apart never read
+// back identical (see the nanosecond-precision comment on AcquireWorktreeLock).
+func TestWorktreeLockReleaseVsSamePidRefreshRace(t *testing.T) {
+	const pid = 999999 // never checked for liveness on the self-refresh path
+	dir := t.TempDir()
+	if err := AcquireWorktreeLock(dir, "task-old", "work", pid); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	prev := releaseRaceHook
+	t.Cleanup(func() { releaseRaceHook = prev })
+	releaseRaceHook = func() {
+		releaseRaceHook = func() {}
+		if err := AcquireWorktreeLock(dir, "task-new", "work", pid); err != nil {
+			t.Fatalf("same-pid refresh inside the race window: %v", err)
+		}
+	}
+
+	relErr := ReleaseWorktreeLock(dir, pid)
+	if relErr == nil {
+		t.Fatalf("release must not silently succeed over a same-pid refresh that landed in the race window")
+	}
+
+	lk, err := ReadWorktreeLock(dir)
+	if err != nil {
+		t.Fatalf("read after race: %v", err)
+	}
+	if lk == nil || lk.TaskID != "task-new" || lk.PID != pid {
+		t.Fatalf("a release racing a concurrent same-pid refresh must never erase the refreshed lock, got %+v", lk)
+	}
+}

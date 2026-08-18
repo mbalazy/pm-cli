@@ -40,9 +40,10 @@ func prepareWorktree(proj *storage.Project, workDir, taskID, kind string) (func(
 	// (executor.seed_exclude, default DefaultSeedExcludes) - they get installed
 	// in place instead (executor.prepare).
 	_ = storage.CopyUntrackedFiles(proj.Path, workDir, proj.GetExecutor().SeedExcludes())
-	// The trailing * also covers the lock's scratch files (.tmp/.steal/.refresh
-	// suffixed) - transient, but a crash can leave one behind and it must not
-	// show up in `git status` or get swept into a worker's `git add`.
+	// The trailing * also covers the lock's scratch files (.tmp/.steal/.refresh/
+	// .release, each followed by a pid and a per-process sequence number) -
+	// transient, but a crash can leave one behind and it must not show up in
+	// `git status` or get swept into a worker's `git add`.
 	storage.ExcludeFromGit(proj.Path, ".pm-executor.lock*")
 
 	pid := os.Getpid()
