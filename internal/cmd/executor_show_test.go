@@ -13,6 +13,14 @@ import (
 // for, minus the client specifics.
 func handoffProject(t *testing.T, playbook string) (*storage.Project, string) {
 	t.Helper()
+	// runExecutorDoctor now also runs checkHooksPath (internal/cmd/executor_doctor.go)
+	// against repo, which is a plain non-git temp dir - normally silent, but
+	// only because `git -C repo ...` fails to find a repository. Without this,
+	// that silence would depend on the calling process's environment (a leaked
+	// GIT_DIR, or a TMPDIR that happens to sit inside a git repo) rather than
+	// on repo's own contents, which is exactly the non-hermeticity this
+	// feature's own tests exist to rule out.
+	hermeticGitEnv(t)
 	repo := t.TempDir()
 	writeFile(t, filepath.Join(repo, ".claude", "evidence-playbook.md"), playbook)
 	skill := filepath.Join(repo, ".claude", "skills", "simulator-verify")

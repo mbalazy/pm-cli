@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -156,6 +158,7 @@ func runExecutorDoctor(proj *storage.Project) []check {
 	out = append(out, checkContextRepos(e)...)
 	out = append(out, checkSlots(e, proj.Path)...)
 	out = append(out, checkHandoff(e, proj)...)
+	out = append(out, checkHooksPath(proj.Path)...)
 	return out
 }
 
@@ -391,6 +394,132 @@ func checkRuntimeDrift(e storage.Executor, projPath, playbookPath, playbook stri
 		}
 	}
 	return out
+}
+
+// checkHooksPath warns when core.hooksPath is configured (in any git scope -
+// repo-local, global, or system) but resolves to a dead hooks directory. A
+// repo where NO scope configures core.hooksPath at all is deliberately
+// silent here: a stock .git/hooks with only *.sample files is normal for
+// most repos and must never warn. But once something IS configured -
+// including a global override this project never opted into - the entire
+// worker-guard investment (and every project hook it protects: secret
+// scanning, lint, formatting) is silently protecting nothing while commits
+// are reported as hook-checked.
+//
+// Resolution goes through `git rev-parse --git-path hooks`, invoked with
+// `-C projPath` exactly like every lookup this function makes: for a
+// relative core.hooksPath, git prints the value already adjusted for
+// projPath's depth below the worktree root (e.g. "../../myhooks" from two
+// levels down), so joining it back onto projPath - not the worktree root -
+// and letting filepath.Join clean the ".." segments away reproduces git's
+// own resolution instead of reimplementing it by hand.
+func checkHooksPath(projPath string) []check {
+	if !isGitRepo(projPath) {
+		return nil
+	}
+	value, err := gitConfigGet(projPath, "core.hooksPath")
+	if err != nil {
+		return nil // not configured in any scope - nothing to check
+	}
+	origin := gitConfigOrigin(projPath, "core.hooksPath")
+	if value == "" {
+		// An explicitly empty value is its own broken state, not "unset":
+		// `git rev-parse --git-path hooks` resolves it to the project
+		// directory itself (the `hooks` path component is replaced by
+		// nothing), which would otherwise make this function report the
+		// project root as the hooks dir - a real executable anywhere at the
+		// root (a `configure` script, a `gradlew`) would then read as a
+		// healthy hook setup.
+		return []check{{levelWarn, "core.hooksPath is configured but empty (" + origin + ") - hooks never run",
+			"set core.hooksPath to a real directory, or unset it to fall back to the default .git/hooks"}}
+	}
+
+	resolved, err := gitRevParseGitPath(projPath, "hooks")
+	if err != nil {
+		return nil
+	}
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(projPath, resolved)
+	}
+	hint := fmt.Sprintf("core.hooksPath = %q (%s) - project hooks (secret scanning, lint, formatting) do not run without a real hook file there", value, origin)
+
+	entries, err := os.ReadDir(resolved)
+	switch {
+	case os.IsNotExist(err):
+		return []check{{levelWarn, "configured git hooks dir does not exist: " + resolved, hint}}
+	case err != nil:
+		return []check{{levelWarn, "configured git hooks dir cannot be read: " + resolved + " (" + err.Error() + ")", hint}}
+	case !hasHookFile(resolved, entries):
+		return []check{{levelWarn, "configured git hooks dir has no hook files: " + resolved, hint}}
+	default:
+		return []check{{levelOK, "git hooks -> " + resolved, ""}}
+	}
+}
+
+// hasHookFile reports whether dir's entries contain a real hook file: not a
+// directory, not one of the *.sample placeholders `git init` seeds the
+// default hooks dir with, and executable - git silently skips a hook file
+// that lost its exec bit, and a hooks dir holding only a README or a stray
+// .DS_Store must not read as healthy.
+//
+// Symlinks are followed rather than judged by their own mode. A symlink's
+// lstat mode is 0777 on every unix, so counting it as a hook unseen would
+// pass a dir whose links all dangle - and linking each hook at a shared
+// script is how most hook managers lay the directory out, i.e. exactly the
+// setup where a broken link is plausible and where git, which tests the hook
+// with access(X_OK) through the link, runs nothing at all. A non-symlink
+// whose mode cannot be read fails open (counts as a hook) rather than turn
+// this heuristic WARN into a false alarm over a filesystem race.
+func hasHookFile(dir string, entries []os.DirEntry) bool {
+	for _, e := range entries {
+		if e.IsDir() || strings.HasSuffix(e.Name(), ".sample") {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(dir, e.Name()))
+		if err != nil {
+			if e.Type()&os.ModeSymlink != 0 {
+				continue // dangling link - git has nothing to run
+			}
+			return true
+		}
+		if info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func gitConfigGet(dir, key string) (string, error) {
+	out, err := exec.Command("git", "-C", dir, "config", "--get", key).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func gitRevParseGitPath(dir, path string) (string, error) {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--git-path", path).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// gitConfigOrigin returns the human-readable origin git attributes the
+// configured value to (e.g. "file:.git/config" or "file:/home/x/.gitconfig").
+// Best-effort: an unresolvable origin degrades to a placeholder rather than
+// failing the whole check.
+func gitConfigOrigin(dir, key string) string {
+	out, err := exec.Command("git", "-C", dir, "config", "--show-origin", "--get", key).Output()
+	if err != nil {
+		return "unknown origin"
+	}
+	origin, _, ok := strings.Cut(strings.TrimRight(string(out), "\n"), "\t")
+	if !ok {
+		return "unknown origin"
+	}
+	return origin
 }
 
 func pathExists(p string) bool {
