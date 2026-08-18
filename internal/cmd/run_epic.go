@@ -967,12 +967,20 @@ func parkedFindings(res *workerResult) []string {
 // same subID are replaced, so re-running the epic refreshes a sub's note instead
 // of stacking duplicates. A non-green outcome tags the line (e.g. "x2 · blocked")
 // so a parked sub reads differently from a landed sub's cross-cutting note.
-func recordSubFeedback(store storage.TaskStore, parent *storage.Task, subID, outcome string, findings []string) error {
+func recordSubFeedback(store storage.TaskStore, parent *storage.Task, subID, outcome string, findings []string, errOut io.Writer) error {
 	// The parent was read at run start and is rewritten after EVERY sub, while
 	// other sessions may be editing it - refresh under the project lock so a
 	// mid-run edit (spec update, note) is never clobbered by a stale copy.
 	if release, err := store.LockProject(parent.Project); err == nil {
 		defer release()
+	} else {
+		// Degrade to an unlocked write rather than dropping the sub's feedback,
+		// but say so - a silent degrade hides that a concurrent session's edit
+		// to the parent may get clobbered. Same wording convention as every
+		// other run-epic message (logIfErr, above): "pm run-epic: " on errOut,
+		// not a bare os.Stderr write, so it lands wherever the run's own output
+		// goes (and is capturable the same way in tests).
+		fmt.Fprintf(errOut, "pm run-epic: project lock unavailable for %q (%v) - recording feedback for %s without it\n", parent.Project, err, subID)
 	}
 	// PRECONDITION, not a best-effort refresh (same rule as Store.MoveTask and
 	// applyWorkerResult): if the parent's file is gone - deleted, or no longer

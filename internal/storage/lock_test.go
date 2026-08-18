@@ -2,12 +2,47 @@ package storage
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+// captureStderr swaps os.Stderr for a pipe for the duration of fn and returns
+// what fn wrote to it, draining concurrently so a write larger than the OS
+// pipe buffer can't deadlock the test. Restore + close go through a deferred
+// sync.Once (mirrors internal/cmd's capturePipe) so a t.Fatal or panic inside
+// fn cannot leave os.Stderr pointing at a dead pipe for every later test in
+// the package.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	drained := make(chan string, 1)
+	go func() {
+		out, _ := io.ReadAll(r)
+		r.Close()
+		drained <- string(out)
+	}()
+	var once sync.Once
+	restore := func() {
+		once.Do(func() {
+			os.Stderr = old
+			w.Close()
+		})
+	}
+	os.Stderr = w
+	defer restore()
+	fn()
+	restore()
+	return <-drained
+}
 
 // TestLockProjectMutualExclusion: a second acquirer must wait until the first
 // releases (flock blocks across fds even in one process).
@@ -342,5 +377,74 @@ func TestUpdateProjectConcurrentWrites(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "custom_key: keep-me") {
 		t.Fatalf("unknown key lost under concurrent writes:\n%s", raw)
+	}
+}
+
+// TestLockDegradeWarnsLoudly: when LockProject fails, the degrade-to-
+// unlocked-write sites must still complete the write (the mitigating context
+// is that this is about observability, not about changing the
+// degrade-vs-fail decision) AND say so on stderr, naming the operation, the
+// project slug and the lock error - a silent degrade used to hide that a
+// concurrent session's edit may get clobbered. Exercises MoveTask and
+// UpdateProject: both route through the shared warnLockDegrade helper that
+// CreateProject and MutateProject also use, so this covers the helper's
+// wording contract without re-deriving a broken lock four times over.
+func TestLockDegradeWarnsLoudly(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses the file-permission check this test relies on")
+	}
+	s := setupLockTestStore(t)
+
+	// Force a genuine LockProject failure without touching the project dir's
+	// own writability (the task/project writes themselves need that): make the
+	// lock file unwritable, which fails LockProject's O_RDWR open but leaves
+	// the directory free for tmp+rename. setupLockTestStore's CreateProject
+	// already took the lock once, so the file exists (0644) - chmod it
+	// directly rather than os.WriteFile, whose perm arg is a no-op on an
+	// existing file.
+	lockPath := filepath.Join(s.ProjectDir("app"), ".pm.lock")
+	if err := os.Chmod(lockPath, 0444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(lockPath, 0644) })
+
+	_, lockErr := s.LockProject("app")
+	if lockErr == nil {
+		t.Fatal("expected LockProject to fail against a read-only lock file")
+	}
+	errText := lockErr.Error()
+
+	task, err := s.FindTask("app", "app-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var moveErr error
+	moveOut := captureStderr(t, func() {
+		moveErr = s.MoveTask(task, StatusDone)
+	})
+	if moveErr != nil {
+		t.Fatalf("MoveTask degraded to unlocked but still failed: %v", moveErr)
+	}
+	if final, err := s.FindTask("app", "app-1"); err != nil || final.Meta.Status != StatusDone {
+		t.Fatalf("MoveTask did not persist despite degrading: task=%+v err=%v", final, err)
+	}
+	wantMove := fmt.Sprintf("pm: project lock unavailable for %q (%v) - moving task app-1 without it\n", "app", errText)
+	if moveOut != wantMove {
+		t.Fatalf("MoveTask warning = %q, want %q", moveOut, wantMove)
+	}
+
+	var updateErr error
+	updateOut := captureStderr(t, func() {
+		updateErr = s.UpdateProject("app", &Project{Name: "Updated"})
+	})
+	if updateErr != nil {
+		t.Fatalf("UpdateProject degraded to unlocked but still failed: %v", updateErr)
+	}
+	if p, err := s.GetProject("app"); err != nil || p.Name != "Updated" {
+		t.Fatalf("UpdateProject did not persist despite degrading: project=%+v err=%v", p, err)
+	}
+	wantUpdate := fmt.Sprintf("pm: project lock unavailable for %q (%v) - updating project without it\n", "app", errText)
+	if updateOut != wantUpdate {
+		t.Fatalf("UpdateProject warning = %q, want %q", updateOut, wantUpdate)
 	}
 }
