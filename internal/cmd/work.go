@@ -496,13 +496,13 @@ type workPlan struct {
 // rather than repeated as a literal because three places now have to agree on
 // it - both commands' flag defaults and what `pm executor show` reports for a
 // project that has not set the field.
-const defaultWorkerTimeout = 60 * time.Minute
+const defaultWorkerTimeout = 120 * time.Minute
 
 // resolveWorkerTimeout applies the run's timeout precedence: an explicit
 // --timeout beats the project's executor.timeout, which beats the flag's own
-// default (60m, the value flagValue already carries when the flag was not
+// default (120m, the value flagValue already carries when the flag was not
 // passed). flagSet is what makes the middle term reachable at all - the flag
-// always has a value, so "the flag says 60m" and "nobody said anything" are the
+// always has a value, so "the flag says 120m" and "nobody said anything" are the
 // same string and only cobra can tell them apart.
 func resolveWorkerTimeout(flagValue time.Duration, flagSet bool, configured storage.Duration) time.Duration {
 	if flagSet || configured <= 0 {

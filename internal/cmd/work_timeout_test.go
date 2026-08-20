@@ -122,7 +122,7 @@ func TestExecutorShowReportsTimeout(t *testing.T) {
 		Name: "App", Path: t.TempDir(),
 		Executor: &storage.Executor{Enabled: true},
 	})
-	if !strings.Contains(unset, "1h0m0s per worker (built-in default") {
+	if !strings.Contains(unset, "2h0m0s per worker (built-in default") {
 		t.Errorf("unset timeout must still report the effective default:\n%s", unset)
 	}
 }

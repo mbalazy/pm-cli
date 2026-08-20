@@ -105,7 +105,7 @@ type Executor struct {
 	Phases                map[string]PhaseBinding `yaml:"phases,omitempty"`
 	Notes                 string                  `yaml:"notes,omitempty"`
 	// Timeout is the wall-clock ceiling for ONE worker in this project, as a
-	// duration string ("90m"). Empty/zero = the command's own default (60m); an
+	// duration string ("90m"). Empty/zero = the command's own default (120m); an
 	// explicit --timeout on the run still wins over both.
 	//
 	// It exists because the ceiling is a property of the PROJECT (how long a real

@@ -37,7 +37,7 @@ executor:
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	// Zero, not a default: the DEFAULT lives in the command (defaultWorkerTimeout)
-	// so "unset" and "set to 60m" stay distinguishable here - which is what lets
+	// so "unset" and "set to 120m" stay distinguishable here - which is what lets
 	// `pm executor show` say where the number came from.
 	if got := p.GetExecutor().Timeout; got != 0 {
 		t.Fatalf("Timeout = %s, want 0 for an unset field", got)
