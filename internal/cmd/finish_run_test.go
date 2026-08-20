@@ -611,3 +611,31 @@ func TestFinishBusyClaimOnThisHostNamesTheReleaseCommand(t *testing.T) {
 		t.Errorf("a claim held elsewhere must not suggest releasing it from here, got: %v", err)
 	}
 }
+
+// pm-cli-117 for the acceptance: the array-shaped envelope decodes, and one
+// without a structured result still recovers through the transcript.
+func TestExecuteFinishArrayEnvelope(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	store, plan, log := finishRunFixture(t)
+	writeTranscript(t, cfg, plan.workDir, "sess-arr", transcriptLine(t, map[string]any{
+		"status": finishPartial, "summary": "one sub still needs a human", "report": "# Report",
+		"subs": []any{map[string]any{"id": "app-9-1", "verdict": "blocked", "visual_claims_open": 1, "pushed_commits": []any{}}},
+	}))
+	fakeClaude(t, "echo '"+arrayEnvelope("")+"'")
+
+	res, err := executeFinish(plan)
+	if err != nil {
+		t.Fatalf("expected recovery, got %v", err)
+	}
+	if res.Status != finishPartial || res.Turns != 7 || res.CostUSD != 1.5 {
+		t.Fatalf("recovered result = %+v", res)
+	}
+	if !strings.Contains(log.String(), "recovered status") {
+		t.Errorf("recovery must be announced: %q", log.String())
+	}
+	run, err := storage.ReadFinishRunState(store.ProjectDir("app"), "app-9")
+	if err != nil || run.Status != storage.RunStatusDone {
+		t.Fatalf("a recovered run is a finished run: %+v err=%v", run, err)
+	}
+}
