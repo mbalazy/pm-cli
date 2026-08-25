@@ -106,12 +106,12 @@ func renderExecutorProfile(slug string, proj *storage.Project) string {
 	fmt.Fprintf(&b, "                done (independent/batch)=%s%s\n", indepDone, indepSuffix)
 	fmt.Fprintf(&b, "  fix_rounds:   %d\n", e.FixRounds)
 	// Printed whether or not it is set, unlike the optional strings above: an
-	// unset ceiling is not "no ceiling", it is 60 minutes, and a reader deciding
+	// unset ceiling is not "no ceiling", it is 120 minutes, and a reader deciding
 	// whether a long sub will survive needs the number either way.
 	if e.Timeout > 0 {
 		fmt.Fprintf(&b, "  timeout:      %s per worker\n", e.Timeout)
 	} else {
-		fmt.Fprintf(&b, "  timeout:      %s per worker (built-in default - set `timeout: 90m` to change it)\n", defaultWorkerTimeout)
+		fmt.Fprintf(&b, "  timeout:      %s per worker (built-in default - set `timeout: 180m` to change it)\n", defaultWorkerTimeout)
 	}
 	if len(e.SeedExclude) > 0 {
 		fmt.Fprintf(&b, "  seed_exclude: %s\n", strings.Join(e.SeedExclude, ", "))
