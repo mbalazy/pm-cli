@@ -30,8 +30,17 @@ import (
 // the harness rather than restated by the model, so honouring it is not a guess.
 // A recovery is always announced on errOut - a silent one would hide the real
 // defect (the worker's turn order) behind pm papering over it.
-func parseWorkerOutput(data []byte, errOut io.Writer, configDir, dir string) (*workerResult, string, error) {
+//
+// The same recovery covers an envelope pm cannot decode at all (pm-cli-117: the
+// CLI switched to a message-array shape and every finished worker read as
+// `failed`). That is why the session id is taken from wherever it survives -
+// the envelope, any message in the array, or pinned, the id pm itself minted -
+// and the announcement names which of the two failures it papered over.
+func parseWorkerOutput(data []byte, errOut io.Writer, configDir, dir, pinned string) (*workerResult, string, error) {
 	res, sessionID, err := parseClaudeResult(data)
+	if sessionID == "" {
+		sessionID = pinned
+	}
 	if err == nil || sessionID == "" {
 		return res, sessionID, err
 	}
@@ -39,16 +48,23 @@ func parseWorkerOutput(data []byte, errOut io.Writer, configDir, dir string) (*w
 	if rec == nil {
 		return res, sessionID, err
 	}
-	var env claudeEnvelope
-	if jsonErr := json.Unmarshal(data, &env); jsonErr == nil {
-		rec.Turns = env.NumTurns
-		rec.CostUSD = env.TotalCostUSD
-	}
+	rec.Turns, rec.CostUSD = envelopeStats(data)
 	rec.Status = normalizeWorkerStatus(rec.Status)
 	if errOut != nil {
-		fmt.Fprintf(errOut, "pm work: envelope carried no structured result - recovered status %q from the worker's last StructuredOutput call in %s (the worker kept talking after emitting it, most likely a late background-task notification)\n", rec.Status, path)
+		fmt.Fprintf(errOut, "pm work: %s - recovered status %q from the worker's last StructuredOutput call in %s\n", recoveryReason(err), rec.Status, path)
 	}
 	return rec, sessionID, nil
+}
+
+// recoveryReason says, for the recovery announcement, which failure the
+// transcript stood in for: an envelope that decoded but carried no structured
+// result (the worker kept talking after emitting it, most likely a late
+// background-task notification), or one pm could not decode at all.
+func recoveryReason(err error) string {
+	if strings.HasPrefix(err.Error(), "parse claude result") {
+		return fmt.Sprintf("could not decode the claude envelope (%v)", err)
+	}
+	return "envelope carried no structured result (the worker kept talking after emitting it, most likely a late background-task notification)"
 }
 
 // transcriptScanCap bounds a single transcript line. Worker transcripts embed

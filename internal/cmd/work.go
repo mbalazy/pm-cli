@@ -1231,7 +1231,13 @@ func runWorker(errOut io.Writer, dir string, args []string, timeout time.Duratio
 // the process group, the stderr tail, the WaitDelay recovery and the
 // last-words death report are all properties of running `claude -p`, not of
 // either contract.
-type envelopeParser[T any] func(data []byte, errOut io.Writer, configDir, dir string) (*T, string, error)
+//
+// pinned is the session id pm minted and passed as `claude --session-id`. The
+// envelope's own id is preferred when the bytes yield one; pinned is the
+// fallback that keeps the transcript recovery reachable when they do not -
+// pm knew the id before the worker ran, so a parse failure never has to
+// re-discover it.
+type envelopeParser[T any] func(data []byte, errOut io.Writer, configDir, dir, pinned string) (*T, string, error)
 
 // runHeadless invokes claude headless in dir under a wall-clock deadline and
 // parses its envelope with parse. label prefixes the progress lines so a reader
@@ -1262,14 +1268,14 @@ func runHeadless[T any](errOut io.Writer, label, dir string, args []string, time
 		// If the envelope made it through first, the run really did finish -
 		// honour the result instead of discarding a completed worker's work.
 		if errors.Is(err, exec.ErrWaitDelay) {
-			if res, sessionID, perr := parse(stdout.Bytes(), errOut, configDir, dir); perr == nil {
+			if res, sessionID, perr := parse(stdout.Bytes(), errOut, configDir, dir, sessionID); perr == nil {
 				fmt.Fprintf(errOut, "%s: worker left background processes holding stdout - killed them after %s\n", label, procWaitDelay)
 				return res, sessionID, nil
 			}
 		}
 		return nil, sessionID, workerDeathError(configDir, dir, sessionID, stderrTail.String(), err)
 	}
-	return parse(stdout.Bytes(), errOut, configDir, dir)
+	return parse(stdout.Bytes(), errOut, configDir, dir, sessionID)
 }
 
 // workerDeathError turns a bare non-zero exit into an error that says what the
@@ -1329,12 +1335,21 @@ func workerEnv(configDir string) []string {
 	return out
 }
 
-// parseClaudeResult extracts the worker result + session id from a
-// `claude -p --output-format json` envelope.
+// parseClaudeResult extracts the worker result + session id from whatever
+// `claude -p --output-format json` wrote (object or message-array shape - see
+// decodeClaudeOutput). The session id is returned on EVERY error path that
+// could yield one: it is what the transcript recovery is keyed on.
 func parseClaudeResult(data []byte) (*workerResult, string, error) {
+	out, err := decodeClaudeOutput(data)
+	if err != nil {
+		return nil, out.SessionID, fmt.Errorf("parse claude result: %w", err)
+	}
 	var env claudeEnvelope
-	if err := json.Unmarshal(data, &env); err != nil {
-		return nil, "", fmt.Errorf("parse claude result: %w", err)
+	if err := json.Unmarshal(out.Result, &env); err != nil {
+		return nil, out.SessionID, fmt.Errorf("parse claude result: %w", err)
+	}
+	if env.SessionID == "" {
+		env.SessionID = out.SessionID
 	}
 	if env.StructuredOutput == nil {
 		return nil, env.SessionID, fmt.Errorf("worker returned no structured result (is_error=%v): %s", env.IsError, strings.TrimSpace(env.Result))

@@ -751,8 +751,11 @@ type finishEnvelope struct {
 // turn used to turn a finished run into "returned no structured result".
 // The recovery is always ANNOUNCED - a silent one would hide the worker's turn
 // order behind pm papering over it.
-func parseFinishOutput(data []byte, errOut io.Writer, configDir, dir string) (*finishResult, string, error) {
+func parseFinishOutput(data []byte, errOut io.Writer, configDir, dir, pinned string) (*finishResult, string, error) {
 	res, sessionID, err := parseFinishResult(data)
+	if sessionID == "" {
+		sessionID = pinned
+	}
 	if err == nil || sessionID == "" {
 		return res, sessionID, err
 	}
@@ -764,21 +767,27 @@ func parseFinishOutput(data []byte, errOut io.Writer, configDir, dir string) (*f
 	if rec == nil {
 		return res, sessionID, err
 	}
-	var env finishEnvelope
-	if json.Unmarshal(data, &env) == nil {
-		rec.Turns = env.NumTurns
-		rec.CostUSD = env.TotalCostUSD
-	}
+	rec.Turns, rec.CostUSD = envelopeStats(data)
 	if errOut != nil {
-		fmt.Fprintf(errOut, "pm finish: envelope carried no structured result - recovered status %q from the acceptance worker's last StructuredOutput call in %s (it kept talking after emitting it, most likely a late background-task notification)\n", rec.Status, path)
+		fmt.Fprintf(errOut, "pm finish: %s - recovered status %q from the acceptance worker's last StructuredOutput call in %s\n", recoveryReason(err), rec.Status, path)
 	}
 	return rec, sessionID, nil
 }
 
+// parseFinishResult decodes the acceptance envelope in either CLI output shape
+// (see decodeClaudeOutput) and, like parseClaudeResult, returns the session id
+// on every error path that could yield one.
 func parseFinishResult(data []byte) (*finishResult, string, error) {
+	out, err := decodeClaudeOutput(data)
+	if err != nil {
+		return nil, out.SessionID, fmt.Errorf("parse claude result: %w", err)
+	}
 	var env finishEnvelope
-	if err := json.Unmarshal(data, &env); err != nil {
-		return nil, "", fmt.Errorf("parse claude result: %w", err)
+	if err := json.Unmarshal(out.Result, &env); err != nil {
+		return nil, out.SessionID, fmt.Errorf("parse claude result: %w", err)
+	}
+	if env.SessionID == "" {
+		env.SessionID = out.SessionID
 	}
 	if env.StructuredOutput == nil {
 		return nil, env.SessionID, fmt.Errorf("acceptance worker returned no structured result (is_error=%v): %s", env.IsError, strings.TrimSpace(env.Result))

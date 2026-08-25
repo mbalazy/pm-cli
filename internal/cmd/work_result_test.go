@@ -63,7 +63,7 @@ func TestParseWorkerOutputRecoversResultFromTranscript(t *testing.T) {
 	}))
 
 	var log bytes.Buffer
-	res, sid, err := parseWorkerOutput([]byte(envelopeNoResult), &log, cfg, dir)
+	res, sid, err := parseWorkerOutput([]byte(envelopeNoResult), &log, cfg, dir, "")
 	if err != nil {
 		t.Fatalf("expected recovery, got error: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestParseWorkerOutputRecoveryTakesLastCallAndNormalizesStatus(t *testing.T)
 		transcriptLine(t, map[string]any{"status": "merged", "summary": "gate green after fix", "branch": "b"}),
 	)
 
-	res, _, err := parseWorkerOutput([]byte(envelopeNoResult), nil, cfg, dir)
+	res, _, err := parseWorkerOutput([]byte(envelopeNoResult), nil, cfg, dir, "")
 	if err != nil {
 		t.Fatalf("expected recovery, got error: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestParseWorkerOutputEnvelopeWinsOverTranscript(t *testing.T) {
 	env := `{"type":"result","is_error":false,"session_id":"sess-1","num_turns":3,"total_cost_usd":0.5,` +
 		`"structured_output":{"status":"verified","summary":"authoritative","branch":"b","commits":[],"unresolved":[]}}`
 	var log bytes.Buffer
-	res, _, err := parseWorkerOutput([]byte(env), &log, cfg, dir)
+	res, _, err := parseWorkerOutput([]byte(env), &log, cfg, dir, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestParseWorkerOutputNoTranscriptKeepsOriginalError(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
 
-	_, sid, err := parseWorkerOutput([]byte(envelopeNoResult), nil, cfg, dir)
+	_, sid, err := parseWorkerOutput([]byte(envelopeNoResult), nil, cfg, dir, "")
 	if err == nil || !strings.Contains(err.Error(), "no structured result") {
 		t.Fatalf("expected the original error, got %v", err)
 	}
@@ -153,7 +153,7 @@ func TestParseWorkerOutputIgnoresStatuslessCall(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
 	writeTranscript(t, cfg, dir, "sess-1", transcriptLine(t, map[string]any{"summary": "no verdict here"}))
 
-	if _, _, err := parseWorkerOutput([]byte(envelopeNoResult), nil, cfg, dir); err == nil {
+	if _, _, err := parseWorkerOutput([]byte(envelopeNoResult), nil, cfg, dir, ""); err == nil {
 		t.Fatal("a call without a status carries no verdict and must not be recovered")
 	}
 }
@@ -165,7 +165,7 @@ func TestParseWorkerOutputFindsTranscriptUnderDefaultConfigDir(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", def)
 	writeTranscript(t, def, dir, "sess-1", transcriptLine(t, map[string]any{"status": "verified", "summary": "s", "branch": "b"}))
 
-	if _, _, err := parseWorkerOutput([]byte(envelopeNoResult), nil, pinned, dir); err != nil {
+	if _, _, err := parseWorkerOutput([]byte(envelopeNoResult), nil, pinned, dir, ""); err != nil {
 		t.Fatalf("must fall back to the default config dir: %v", err)
 	}
 }

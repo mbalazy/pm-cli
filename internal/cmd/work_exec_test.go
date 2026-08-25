@@ -260,3 +260,62 @@ func TestExecuteWorkNoStructuredOutputIsError(t *testing.T) {
 		t.Fatalf("expected 'no structured result' error, got %v", err)
 	}
 }
+
+// pm-cli-117: Claude Code 2.1.237 writes a message ARRAY whose last element is
+// the envelope. The whole path (fake claude -> runHeadless -> parseWorkerOutput
+// -> applyWorkerResult) must record the worker's real outcome.
+func TestExecuteWorkArrayEnvelopeRecordsVerified(t *testing.T) {
+	fakeClaude(t, "echo '"+arrayEnvelope(`,"structured_output":{"status":"verified","summary":"array shape","branch":"feat/x","commits":["abc1234"],"unresolved":[]}`)+"'")
+	store, task, plan, opts := executorFixture(t)
+
+	res, err := executeWork(store, task, plan, opts)
+	if err != nil {
+		t.Fatalf("executeWork: %v", err)
+	}
+	if res.Status != workerVerified || res.Turns != 7 || res.CostUSD != 1.5 {
+		t.Fatalf("result not lifted from the array envelope: %+v", res)
+	}
+	final, _ := store.FindTask("app", "app-1")
+	if len(final.Meta.Sessions) != 1 || final.Meta.Sessions[0] != "sess-arr" {
+		t.Errorf("sessions = %v, want [sess-arr] from the array's messages", final.Meta.Sessions)
+	}
+	if !strings.Contains(final.Meta.Brief, "array shape") {
+		t.Errorf("brief not written: %q", final.Meta.Brief)
+	}
+}
+
+// An envelope pm cannot decode at all, with a finished worker behind it: the
+// session id pm minted reaches the transcript recovery and the sub is NOT
+// recorded as failed (the 2026-08-20 orbit-136 outcome, inverted).
+func TestExecuteWorkUndecodableEnvelopeRecoversFromTranscript(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	fakeClaude(t, "echo '<<a shape pm has never seen>>'")
+	store, task, plan, opts := executorFixture(t)
+	proj, _ := store.GetProject("app")
+	writeTranscript(t, cfg, proj.Path, plan.sessionID, transcriptLine(t, map[string]any{
+		"status": "verified", "summary": "recovered from transcript", "branch": "feat/x", "commits": []string{"abc1234"}, "unresolved": []string{},
+	}))
+
+	res, err := executeWork(store, task, plan, opts)
+	if err != nil {
+		t.Fatalf("executeWork must recover, got %v", err)
+	}
+	if res.Status != workerVerified || res.Summary != "recovered from transcript" {
+		t.Fatalf("result = %+v", res)
+	}
+	final, _ := store.FindTask("app", "app-1")
+	if len(final.Meta.Sessions) != 1 || final.Meta.Sessions[0] != plan.sessionID {
+		t.Errorf("sessions = %v, want the pinned id %q", final.Meta.Sessions, plan.sessionID)
+	}
+	entries, _ := storage.ReadJournal(store.ProjectDir("app"))
+	var end *storage.JournalEntry
+	for i := range entries {
+		if entries[i].Event == storage.JournalEventEnd {
+			end = &entries[i]
+		}
+	}
+	if end == nil || len(end.Subs) != 1 || end.Subs[0].Result != workerVerified {
+		t.Errorf("journal end line must carry the recovered verdict: %+v", end)
+	}
+}
