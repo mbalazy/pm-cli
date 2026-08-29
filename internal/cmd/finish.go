@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -196,7 +197,7 @@ func (p *finishPlan) retarget(dir string, env []string) {
 // the resolved task's own id is what everything downstream uses, since it is
 // the name of the claim file, the run-state and the report.
 func resolveFinishTracker(cmd *cobra.Command, store storage.TaskStore, query string) (*storage.Task, string, error) {
-	slug, err := finishProjectSlug(cmd, store)
+	slug, err := finishProjectSlug(cmd, store, query)
 	if err != nil {
 		return nil, "", err
 	}
@@ -818,15 +819,59 @@ func scanFinishStructuredOutput(r io.Reader) *finishResult {
 	return found
 }
 
-// finishProjectSlug resolves the project the same way the other executor-side
-// commands do: --project, else cwd detection.
-func finishProjectSlug(cmd *cobra.Command, store storage.TaskStore) (string, error) {
+// finishProjectSlug resolves the project: --project, else cwd detection, else
+// the prefix of the tracker id itself. The third step exists because an
+// acceptance rarely stands in the project's checkout - batch-finish-auto puts
+// every sub in a worktree under /tmp, and a claim-refresh loop there used to
+// die with "no project" while the identical command in the main checkout
+// worked (2026-08-29). A task id carries its project (`<prefix>-<n>`), so there
+// is nothing to guess.
+func finishProjectSlug(cmd *cobra.Command, store storage.TaskStore, tracker string) (string, error) {
 	flag, _ := cmd.Flags().GetString("project")
-	var args []string
 	if flag != "" {
-		args = []string{flag}
+		return resolveProjectSlugArg(store, []string{flag})
 	}
-	return resolveProjectSlugArg(store, args)
+	if slug := detectProjectFromCwd(store); slug != "" {
+		return slug, nil
+	}
+	slug, err := projectFromTaskID(store, tracker)
+	if err != nil {
+		return "", err
+	}
+	return slug, nil
+}
+
+// projectFromTaskID finds the project whose id prefix the task id carries.
+// Prefixes may nest (`orb` and `orbit-vps`), so the longest match wins; two
+// projects sharing one prefix cannot be told apart and are refused, since
+// reading a claim from the wrong project's data dir would look like success.
+func projectFromTaskID(store storage.TaskStore, id string) (string, error) {
+	slugs, err := store.ListProjects()
+	if err != nil {
+		return "", err
+	}
+	var best []string
+	bestLen := 0
+	for _, slug := range slugs {
+		prefix := store.ProjectPrefix(slug) + "-"
+		if !strings.HasPrefix(id, prefix) {
+			continue
+		}
+		switch {
+		case len(prefix) > bestLen:
+			best, bestLen = []string{slug}, len(prefix)
+		case len(prefix) == bestLen:
+			best = append(best, slug)
+		}
+	}
+	switch len(best) {
+	case 0:
+		return "", fmt.Errorf("no project (pass --project or run inside a project dir; no project's prefix matches %q)", id)
+	case 1:
+		return best[0], nil
+	}
+	sort.Strings(best)
+	return "", fmt.Errorf("task id %q matches projects %s - pass --project", id, strings.Join(best, ", "))
 }
 
 // finishTarget resolves the project dir AND validates the tracker id every
@@ -835,11 +880,11 @@ func finishProjectSlug(cmd *cobra.Command, store storage.TaskStore) (string, err
 // its own writers, but `pm finish status ../../x` should be refused rather than
 // quietly reading somewhere it has no business.
 func finishTarget(cmd *cobra.Command, store storage.TaskStore, args []string) (string, string, error) {
-	slug, err := finishProjectSlug(cmd, store)
+	tracker := args[0]
+	slug, err := finishProjectSlug(cmd, store, tracker)
 	if err != nil {
 		return "", "", err
 	}
-	tracker := args[0]
 	if err := storage.ValidateTaskID(tracker); err != nil {
 		return "", "", err
 	}
