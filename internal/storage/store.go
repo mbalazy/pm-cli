@@ -17,6 +17,15 @@ import (
 // project with none.
 var ErrAmbiguousTask = errors.New("ambiguous task")
 
+// ErrTaskNotFound and ErrProjectNotFound are wrapped (message unchanged) into
+// the not-found errors of FindTask/FindTaskExact and ResolveProject, so a
+// transport can answer "404" without matching on prose. Sentinel TEXT is the
+// leading phrase the messages always carried.
+var (
+	ErrTaskNotFound    = errors.New("task not found")
+	ErrProjectNotFound = errors.New("project not found")
+)
+
 type Store struct {
 	Root string // ~/.claude/pm
 }
@@ -487,7 +496,7 @@ func (s *Store) ResolveProject(input string) (string, error) {
 
 	switch len(matches) {
 	case 0:
-		return "", fmt.Errorf("project not found: %q", input)
+		return "", fmt.Errorf("%w: %q", ErrProjectNotFound, input)
 	case 1:
 		return matches[0], nil
 	default:
@@ -554,7 +563,7 @@ func (s *Store) FindTask(projectSlug, query string) (*Task, error) {
 		return nil, fmt.Errorf("%w %q: %d matches", ErrAmbiguousTask, query, len(matches))
 	}
 
-	return nil, fmt.Errorf("task not found: %q", query)
+	return nil, fmt.Errorf("%w: %q", ErrTaskNotFound, query)
 }
 
 // FindTaskExact finds a task by exact ID match only (case-insensitive) -
@@ -566,7 +575,7 @@ func (s *Store) FindTaskExact(projectSlug, taskID string) (*Task, error) {
 		return nil, err
 	}
 	if t == nil {
-		return nil, fmt.Errorf("task not found: %q (exact task ID required, e.g. %q)", taskID, s.ProjectPrefix(projectSlug)+"-1")
+		return nil, fmt.Errorf("%w: %q (exact task ID required, e.g. %q)", ErrTaskNotFound, taskID, s.ProjectPrefix(projectSlug)+"-1")
 	}
 	return t, nil
 }
