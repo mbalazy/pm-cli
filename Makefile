@@ -1,7 +1,7 @@
 VERSION ?= 0.54.3
 LDFLAGS = -ldflags "-X github.com/mbalazy/pm/internal/version.Version=$(VERSION)"
 
-.PHONY: install vet staticcheck fmt-check test test-race check build-pm-linux deploy-vps
+.PHONY: install install-full vet staticcheck fmt-check test test-race check build-pm-linux deploy-vps web-install web-check web
 
 # staticcheck lives in GOBIN (go install honnef.co/go/tools/cmd/staticcheck@latest),
 # which may not be on PATH in every invocation context (hooks, CI) - resolve it.
@@ -80,3 +80,28 @@ test-race:
 	go test ./... -race -count=1
 
 check: fmt-check vet staticcheck test
+
+# --- web (the React cockpit under web/, embedded by internal/server) ---
+#
+# Deliberately NOT part of `check` or `install`: the pre-commit hook and the Go
+# build must stay fast and node-free. `go build` works without a bundle (the
+# .gitkeep in internal/server/dist keeps the embed dir present); `pm serve` then
+# shows a placeholder page until `make web` has run.
+
+# npm ci needs web/package-lock.json and installs exactly what it pins.
+web-install:
+	cd web && npm ci
+
+# lint (oxlint + prettier --check), tsc, vitest - the same set CI's web job runs.
+web-check:
+	cd web && npm run lint && npm run typecheck && npm test -- --run
+
+# Build the bundle into internal/server/dist (requires `make web-install` once).
+# Vite empties the dir, which takes the versioned .gitkeep with it - restore it
+# so a build never shows up as a deleted file in git status.
+web:
+	cd web && npm run build
+	touch internal/server/dist/.gitkeep
+
+# Bundle + binary: the one command that ships the cockpit.
+install-full: web install

@@ -30,3 +30,23 @@ jobs:
 
       - name: go test -race ./...
         run: make test-race
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: npm ci
+        run: make web-install
+
+      - name: lint + typecheck + vitest
+        run: make web-check
+
+      - name: vite build
+        run: make web
