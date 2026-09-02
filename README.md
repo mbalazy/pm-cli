@@ -167,6 +167,10 @@ Notable behaviors:
 
 The same rollup is available offline via `pm context [project]` - useful when a long-lived MCP process holds a stale binary. The fuller usage contract the agent needs on top of the tool schemas ships via `pm docs claude` (see [Setup](#setup)).
 
+## The web cockpit (`pm serve`)
+
+`pm serve --addr 127.0.0.1:7070` exposes the same data the MCP server returns, over HTTP, for the React cockpit built into the binary: `GET /api/projects`, `/api/tasks?project=&status=&limit=`, `/api/tasks/{project}/{id}`, `/api/context?project=`, `/api/runs` (`?remote=1` to include the remote runners - one ssh round-trip each, never by default), `/api/focus`, and `/api/events`, a Server-Sent Events feed that says *what changed* (`tasks`/`runs` with the project slug, `ping` while idle) so the page refetches. Every JSON body is the DTO the corresponding MCP tool returns; errors are `{"error": "..."}` with 400/404/500. Read-only and unauthenticated on purpose - bind to localhost and reach it over Tailscale. Anything outside `/api/` serves the bundle (index.html fallback for client-side routes) or a placeholder page until `make web` has built one.
+
 ## The executor
 
 The executor runs pm tasks autonomously through **isolated headless `claude -p` workers**, so a multi-subtask epic executes without blowing one session's context.
@@ -264,6 +268,7 @@ pm executor stats [project]   # journal rollup
 | `pm config show` | print the global config (remote-runner registry) |
 | `pm executor init/show/doctor/stats` | executor profile management |
 | `pm mcp` | run the stdio MCP server |
+| `pm serve` | serve the web cockpit: read-only JSON API + SSE change feed + embedded front end (localhost) |
 | `pm docs claude` / `pm docs authoring` | print the embedded agent guide / task-authoring rules |
 | `pm session-id` | print the current Claude Code session UUID |
 
