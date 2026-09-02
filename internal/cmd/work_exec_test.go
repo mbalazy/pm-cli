@@ -24,7 +24,7 @@ func fakeClaude(t *testing.T, script string) {
 }
 
 func envelope(status, summary string) string {
-	return fmt.Sprintf(`{"type":"result","subtype":"success","is_error":false,"result":"","session_id":"sess-fake","num_turns":3,"total_cost_usd":0.25,"structured_output":{"status":%q,"summary":%q,"branch":"feat/x","commits":["abc1234"],"unresolved":["TODO: sim check"]}}`, status, summary)
+	return fmt.Sprintf(`{"type":"result","subtype":"success","is_error":false,"result":"","session_id":"sess-fake","num_turns":3,"total_cost_usd":0.25,"usage":{"input_tokens":10,"cache_creation_input_tokens":300,"cache_read_input_tokens":4000,"output_tokens":90},"structured_output":{"status":%q,"summary":%q,"branch":"feat/x","commits":["abc1234"],"unresolved":["TODO: sim check"]}}`, status, summary)
 }
 
 // executorFixture: a store with one project backed by a real git repo, one
@@ -239,6 +239,17 @@ func TestExecuteWorkApplyResultErrorStillJournalsEnd(t *testing.T) {
 	}
 	if run.Subs[0].Turns != 3 || run.Subs[0].CostUSD != 0.25 {
 		t.Errorf("run-state sub must carry the worker's real turns/cost, got: %+v", run.Subs[0])
+	}
+	// Same for the envelope's usage - the rate-limit figure (pm-cli-119).
+	want := &storage.TokenUsage{Input: 10, CacheCreation: 300, CacheRead: 4000, Output: 90}
+	if tk := entries[1].Subs[0].Tokens; tk == nil || *tk != *want {
+		t.Errorf("end line must carry the envelope's token usage, got %+v want %+v", tk, want)
+	}
+	if tk := run.Subs[0].Tokens; tk == nil || *tk != *want {
+		t.Errorf("run-state sub must carry the envelope's token usage, got %+v want %+v", tk, want)
+	}
+	if want.TotalInput() != 4310 {
+		t.Errorf("TotalInput = %d, want 4310", want.TotalInput())
 	}
 }
 
