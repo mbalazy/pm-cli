@@ -494,6 +494,12 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 				t.SetStatus(statuses[0])
 			}
 		}
+		// SetStatus took its OWN clock read (it stamps mutations, and this is
+		// still task creation), so realign the pair NewTask wrote from one
+		// read. Without this, a task born on a non-default status can carry a
+		// status_changed a second later than its updated - "the status moved
+		// after the last edit", on a task nobody has edited yet.
+		t.Meta.Updated = t.Meta.StatusChanged
 
 		// Validate status (AddTask also validates, but fail early with a clear MCP error)
 		statuses := store.GetProjectStatuses(slug)

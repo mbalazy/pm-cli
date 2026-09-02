@@ -12,6 +12,7 @@ import (
 type blockerDetail struct {
 	ID            string `json:"id"`
 	Status        string `json:"status"`
+	Updated       string `json:"updated"`
 	WaitingFor    string `json:"waiting_for"`
 	StatusChanged string `json:"status_changed"`
 }
@@ -58,6 +59,12 @@ func TestE2EWaitingForAndStatusChanged(t *testing.T) {
 	}
 	if storage.StampDate(added.StatusChanged) != storage.Today() {
 		t.Errorf("status_changed = %q, want today's stamp", added.StatusChanged)
+	}
+	// Creating ON a non-default status runs NewTask's stamps AND SetStatus's,
+	// two clock reads apart; the handler realigns them, so a brand-new task
+	// never claims its status moved after its last edit.
+	if added.StatusChanged != added.Updated {
+		t.Errorf("new task: status_changed = %q, want it identical to updated %q", added.StatusChanged, added.Updated)
 	}
 
 	// Tri-state part 1: OMITTING waiting_for keeps it. The stamp is back-dated
@@ -118,6 +125,11 @@ func TestE2EWaitingForAndStatusChanged(t *testing.T) {
 	}
 	if viaUpdate.Meta.StatusChanged == agedStamp {
 		t.Error("pm_update_task with a new status must re-stamp status_changed")
+	}
+	// Re-stamped, not wiped: inequality alone would pass on a handler that
+	// cleared the field.
+	if storage.StampDate(viaUpdate.Meta.StatusChanged) != storage.Today() {
+		t.Errorf("status_changed = %q, want today's stamp", viaUpdate.Meta.StatusChanged)
 	}
 
 	// pm_move_task: the stamp lands on disk and comes back out of pm_get_task.
