@@ -3,205 +3,42 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"os"
-	"sort"
-	"strings"
 
 	"github.com/mbalazy/pm/internal/service"
 	"github.com/mbalazy/pm/internal/storage"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// --- Input structs (auto-generate JSON schema via struct tags) ---
-
-type listTasksInput struct {
-	Project string `json:"project,omitempty" jsonschema:"Project slug or prefix (omit for all projects)"`
-	Status  string `json:"status,omitempty" jsonschema:"Filter by status (e.g. todo, doing, done, archived)"`
-	Limit   int    `json:"limit,omitempty" jsonschema:"Max tasks to return, newest first (default 50, hard cap 200). The result reports total vs shown; raise limit (up to 200) or narrow with project/status to see more of a truncated result."`
-}
-
-// defaultListLimit caps unfiltered pm_list_tasks output: without it a full
-// cross-project listing once dumped 74k chars into the calling session's
-// context. Newest-first + an explicit total/shown footer keeps the tool
-// useful while bounding the damage.
-const defaultListLimit = 50
-
-// maxListLimit is a hard ceiling on the `limit` param. Without it, the note
-// telling a caller to "raise limit" when truncated is an invitation to pass
-// something huge and get exactly the context dump defaultListLimit exists to
-// prevent.
-const maxListLimit = 200
-
-type getTaskInput struct {
-	Project string `json:"project" jsonschema:"Project slug or prefix"`
-	TaskID  string `json:"task_id" jsonschema:"Task ID or search query"`
-}
-
-type contextInput struct {
-	Project string `json:"project,omitempty" jsonschema:"Project slug or prefix"`
-	Cwd     string `json:"cwd,omitempty" jsonschema:"Current working directory for auto-detection"`
-}
-
-// The task-mutation argument sets live in internal/service (the MCP schema is
-// generated from those structs, so the descriptions stay one copy shared with
-// every other front end); the aliases keep this file's handlers reading the
-// same as the rest.
+// Every tool's argument set and result shape lives in internal/service (the
+// MCP schemas are generated from those very structs, so the parameter
+// descriptions stay one copy shared with every other front end); the aliases
+// below keep this file's handlers reading the same as before, and let the
+// tests keep their names. Handlers do three things: decode, call the service,
+// encode - a handler that does a fourth is the bug the service layer exists
+// to prevent.
 type (
-	addTaskInput    = service.AddTaskInput
-	updateTaskInput = service.UpdateTaskInput
-	moveTaskInput   = service.MoveTaskInput
-	deleteTaskInput = service.DeleteTaskInput
+	listTasksInput     = service.ListTasksInput
+	getTaskInput       = service.GetTaskInput
+	contextInput       = service.ContextInput
+	addTaskInput       = service.AddTaskInput
+	updateTaskInput    = service.UpdateTaskInput
+	moveTaskInput      = service.MoveTaskInput
+	createProjectInput = service.CreateProjectInput
+	deleteTaskInput    = service.DeleteTaskInput
+	updateProjectInput = service.UpdateProjectInput
+
+	taskSummary = service.TaskSummary
+	taskDetail  = service.TaskDetail
 )
 
-type createProjectInput struct {
-	Slug     string            `json:"slug" jsonschema:"Project slug (directory name, lowercase, no spaces)"`
-	Name     string            `json:"name,omitempty" jsonschema:"Project display name (defaults to slug)"`
-	Path     string            `json:"path,omitempty" jsonschema:"Local filesystem path"`
-	Repo     string            `json:"repo,omitempty" jsonschema:"Repository URL"`
-	Stack    string            `json:"stack,omitempty" jsonschema:"Tech stack description"`
-	Notes    string            `json:"notes,omitempty" jsonschema:"Project notes"`
-	Prefix   string            `json:"prefix,omitempty" jsonschema:"Task ID prefix (defaults to slug)"`
-	Links    map[string]string `json:"links,omitempty" jsonschema:"Links as key=url pairs"`
-	Tags     []string          `json:"tags,omitempty" jsonschema:"Tags"`
-	Statuses []string          `json:"statuses,omitempty" jsonschema:"Custom statuses (default: todo, doing, waiting, done)"`
-}
+const (
+	defaultListLimit = service.DefaultListLimit
+	maxListLimit     = service.MaxListLimit
+	contextBodyLimit = service.ContextBodyLimit
+)
 
-type updateProjectInput struct {
-	Project  string            `json:"project" jsonschema:"Project slug or prefix"`
-	Name     string            `json:"name,omitempty" jsonschema:"Project display name"`
-	Path     string            `json:"path,omitempty" jsonschema:"Local filesystem path"`
-	Repo     string            `json:"repo,omitempty" jsonschema:"Repository URL"`
-	Stack    string            `json:"stack,omitempty" jsonschema:"Tech stack description"`
-	Notes    string            `json:"notes,omitempty" jsonschema:"Project notes"`
-	Prefix   string            `json:"prefix,omitempty" jsonschema:"Task ID prefix"`
-	Links    map[string]string `json:"links,omitempty" jsonschema:"Links to merge (existing links are preserved)"`
-	Tags     []string          `json:"tags,omitempty" jsonschema:"Replace tags (omit to keep current)"`
-	Statuses []string          `json:"statuses,omitempty" jsonschema:"Replace statuses (omit to keep current)"`
-	Archived *bool             `json:"archived,omitempty" jsonschema:"Archive or unarchive the project"`
-}
-
-// --- JSON output helpers ---
-
-type taskSummary struct {
-	ID         string            `json:"id"`
-	Title      string            `json:"title"`
-	Status     string            `json:"status"`
-	Project    string            `json:"project"`
-	Updated    string            `json:"updated"`
-	Branch     string            `json:"branch,omitempty"`
-	Parent     string            `json:"parent,omitempty"`
-	Order      int               `json:"order,omitempty"`
-	Tags       []string          `json:"tags,omitempty"`
-	Links      map[string]string `json:"links,omitempty"`
-	Brief      string            `json:"brief,omitempty"`
-	AC         string            `json:"ac,omitempty"`
-	WaitingFor string            `json:"waiting_for,omitempty"`
-	// StatusChanged is empty on every task written before the field existed -
-	// pm never migrates task files. Empty means UNKNOWN, not "just now": don't
-	// fall back to updated, which moves on any edit.
-	StatusChanged string `json:"status_changed,omitempty"`
-	SessionCount  int    `json:"session_count"`
-}
-
-// listTasksResult wraps pm_list_tasks output with a size-budget footer: total
-// vs shown makes truncation explicit instead of silently dropping tasks.
-type listTasksResult struct {
-	Tasks []taskSummary `json:"tasks"`
-	Total int           `json:"total"`
-	Shown int           `json:"shown"`
-	Note  string        `json:"note,omitempty"`
-}
-
-type taskDetail struct {
-	taskSummary
-	Created    string   `json:"created"`
-	Body       string   `json:"body,omitempty"`
-	Sessions   []string `json:"sessions,omitempty"`
-	DependsOn  []string `json:"depends_on,omitempty"`
-	Mode       string   `json:"mode,omitempty"`
-	Model      string   `json:"model,omitempty"`
-	EpicMode   string   `json:"epic_mode,omitempty"`
-	FinishMode string   `json:"finish_mode,omitempty"`
-}
-
-func toSummary(t *storage.Task) taskSummary {
-	return taskSummary{
-		ID:            t.Meta.ID,
-		Title:         t.Meta.Title,
-		Status:        string(t.Meta.Status),
-		Project:       t.Project,
-		Updated:       t.Meta.Updated,
-		Branch:        t.Meta.Branch,
-		Parent:        t.Meta.Parent,
-		Order:         t.Meta.Order,
-		Tags:          t.Meta.Tags,
-		Links:         t.Meta.Links,
-		Brief:         t.Meta.Brief,
-		AC:            t.Meta.AC,
-		WaitingFor:    t.Meta.WaitingFor,
-		StatusChanged: t.Meta.StatusChanged,
-		SessionCount:  len(t.Meta.Sessions),
-	}
-}
-
-func focusTaskSummaries(store storage.TaskStore) []taskSummary {
-	fp, err := storage.ReadFocusPlan(store.RootDir())
-	if err != nil {
-		// Best-effort supplementary section: never fail the whole pm_context
-		// call over a corrupt focus.yaml, but don't swallow it either.
-		fmt.Fprintf(os.Stderr, "pm: skipping unreadable focus plan: %v\n", err)
-		return nil
-	}
-	if fp.Date != storage.Today() || len(fp.Tasks) == 0 {
-		return nil
-	}
-	allTasks, _ := store.GetAllTasks()
-	lookup := make(map[string]*storage.Task, len(allTasks))
-	for _, t := range allTasks {
-		lookup[t.Meta.ID] = t
-	}
-	var result []taskSummary
-	for _, id := range fp.Tasks {
-		if t, ok := lookup[id]; ok && t.Meta.Status != storage.StatusDone && t.Meta.Status != storage.StatusArchived {
-			s := toSummary(t)
-			// A listing, so the same one-line rule as pm_list_tasks: the focus
-			// plan points at tasks, it is not the place to read them.
-			s.Brief = storage.BriefLine(s.Brief)
-			result = append(result, s)
-		}
-	}
-	return result
-}
-
-// contextBodyLimit caps each doing task's body in pm_context output: a
-// project with a dozen doing tasks carrying full Spec/Log bodies dumps
-// 100k+ chars into the calling session otherwise. The brief stays complete
-// (it is the designed cold-start vehicle); the full body is one pm_get_task
-// away.
-const contextBodyLimit = 2000
-
-func truncateBody(s string, max int) string {
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max]) + "\n… [body truncated - use pm_get_task for the full body]"
-}
-
-func toDetail(t *storage.Task) taskDetail {
-	return taskDetail{
-		taskSummary: toSummary(t),
-		Created:     t.Meta.Created,
-		Body:        t.Body,
-		Sessions:    t.Meta.Sessions,
-		DependsOn:   t.Meta.DependsOn,
-		Mode:        t.Meta.Mode,
-		Model:       t.Meta.Model,
-		EpicMode:    t.Meta.EpicMode,
-		FinishMode:  t.Meta.FinishMode,
-	}
-}
+func toSummary(t *storage.Task) taskSummary { return service.ToSummary(t) }
+func toDetail(t *storage.Task) taskDetail   { return service.ToDetail(t) }
 
 func jsonText(v any) (*mcp.CallToolResult, error) {
 	data, err := json.Marshal(v)
@@ -220,6 +57,17 @@ func toolError(msg string) (*mcp.CallToolResult, error) {
 	}, nil
 }
 
+// respond is the one encode step: a service error becomes a tool error (the
+// message is the whole of what the agent sees), a result becomes JSON text.
+func respond(v any, err error) (*mcp.CallToolResult, any, error) {
+	if err != nil {
+		r, _ := toolError(err.Error())
+		return r, nil, nil
+	}
+	r, jerr := jsonText(v)
+	return r, nil, jerr
+}
+
 // --- Tool registration ---
 
 func registerTools(s *mcp.Server, store storage.TaskStore) {
@@ -228,85 +76,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		Name:        "pm_list_tasks",
 		Description: "List tasks, optionally filtered by project and/or status. Excludes archived unless status=archived. Returns at most `limit` newest tasks (default 50) with total/shown counters; briefs are compressed to one line - use pm_get_task for full detail.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in listTasksInput) (*mcp.CallToolResult, any, error) {
-		var tasks []*storage.Task
-		var err error
-		var allowedStatuses []storage.TaskStatus
-
-		if in.Project != "" {
-			slug, e := store.ResolveProject(in.Project)
-			if e != nil {
-				r, _ := toolError(e.Error())
-				return r, nil, nil
-			}
-			allowedStatuses = store.GetProjectStatuses(slug)
-			tasks, err = store.GetTasks(slug)
-		} else {
-			// Cross-project: validate against the UNION of every project's
-			// statuses + archived, matching how the board's ALL view counts them.
-			allowedStatuses = store.GetAllStatuses()
-			tasks, err = store.GetAllTasks()
-		}
-		if err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
-		}
-
-		var status storage.TaskStatus
-		if in.Status != "" {
-			// A typo'd status used to silently render an empty list; reject it
-			// with the allowed set instead, like pm_update_task/pm_move_task.
-			status = storage.ParseStatus(in.Status)
-			if status != storage.StatusArchived {
-				if err := storage.ValidateStatus(status, allowedStatuses); err != nil {
-					r, _ := toolError(err.Error())
-					return r, nil, nil
-				}
-			}
-		}
-
-		filtered := []taskSummary{}
-		for _, t := range tasks {
-			if in.Status != "" {
-				if t.Meta.Status != status {
-					continue
-				}
-			} else if t.Meta.Status == storage.StatusArchived {
-				continue
-			}
-			s := toSummary(t)
-			// One-line brief in listings; pm_get_task returns the full brief.
-			s.Brief = storage.BriefLine(s.Brief)
-			filtered = append(filtered, s)
-		}
-
-		sort.Slice(filtered, func(i, j int) bool {
-			return filtered[i].Updated > filtered[j].Updated
-		})
-
-		limit := in.Limit
-		capped := false
-		if limit <= 0 {
-			limit = defaultListLimit
-		} else if limit > maxListLimit {
-			limit = maxListLimit
-			capped = true
-		}
-		total := len(filtered)
-		if total > limit {
-			filtered = filtered[:limit]
-		}
-		result := listTasksResult{Tasks: filtered, Total: total, Shown: len(filtered)}
-		switch {
-		case capped && result.Shown < total:
-			result.Note = fmt.Sprintf("%d of %d tasks shown (newest first) - limit capped at %d, narrow with project/status", result.Shown, total, maxListLimit)
-		case capped:
-			result.Note = fmt.Sprintf("all %d tasks shown; limit capped at %d", total, maxListLimit)
-		case result.Shown < total:
-			result.Note = fmt.Sprintf("%d of %d tasks shown (newest first) - narrow with project/status or raise limit", result.Shown, total)
-		}
-
-		r, err := jsonText(result)
-		return r, nil, err
+		return respond(service.ListTasks(store, in))
 	})
 
 	// pm_get_task
@@ -314,18 +84,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		Name:        "pm_get_task",
 		Description: "Get full task details including body content.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in getTaskInput) (*mcp.CallToolResult, any, error) {
-		slug, err := store.ResolveProject(in.Project)
-		if err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
-		}
-		task, err := store.FindTask(slug, in.TaskID)
-		if err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
-		}
-		r, err := jsonText(toDetail(task))
-		return r, nil, err
+		return respond(service.GetTask(store, in))
 	})
 
 	// pm_context
@@ -333,28 +92,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		Name:        "pm_context",
 		Description: "Get project context for session start. Auto-detects project from cwd. Returns project info, active tasks, and task counts. Doing tasks carry their full brief; briefs in the tracker rollup and focus list are compressed to one line and finished trackers omit their children - use pm_get_task for full detail.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in contextInput) (*mcp.CallToolResult, any, error) {
-		// Resolve project
-		projectSlug := ""
-		cwdMissNote := ""
-		if in.Project != "" {
-			slug, err := store.ResolveProject(in.Project)
-			if err != nil {
-				r, _ := toolError(err.Error())
-				return r, nil, nil
-			}
-			projectSlug = slug
-		} else if in.Cwd != "" {
-			slug, err := resolveProjectFromCwd(store, in.Cwd)
-			if err != nil {
-				cwdMissNote = fmt.Sprintf("cwd %q matches no configured project - showing all projects; pass project explicitly or register the path in project.yaml", in.Cwd)
-			}
-			projectSlug = slug
-		}
-
-		if projectSlug != "" {
-			return projectContext(store, projectSlug)
-		}
-		return crossProjectContext(store, cwdMissNote)
+		return respond(service.Context(store, in))
 	})
 
 	// pm_list_projects
@@ -362,56 +100,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		Name:        "pm_list_projects",
 		Description: "List all projects with task counts, as {projects, note}. A project whose project.yaml or task dir fails to read is skipped and named in `note` instead of silently vanishing from `projects`.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, any, error) {
-		projects, err := store.ListProjects()
-		if err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
-		}
-
-		type projectInfo struct {
-			Slug       string         `json:"slug"`
-			Name       string         `json:"name"`
-			Stack      string         `json:"stack,omitempty"`
-			Archived   bool           `json:"archived,omitempty"`
-			TaskCounts map[string]int `json:"task_counts"`
-		}
-
-		// listProjectsResult wraps the array so a broken project can be skipped
-		// with a visible warning instead of silently going missing - the same
-		// shape as listTasksResult.Note, applied here for the same reason.
-		type listProjectsResult struct {
-			Projects []projectInfo `json:"projects"`
-			Note     string        `json:"note,omitempty"`
-		}
-
-		var warnings []string
-		result := []projectInfo{}
-		for _, slug := range projects {
-			proj, err := store.GetProject(slug)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("project %q: failed to read project.yaml: %v", slug, err))
-				continue
-			}
-			pi := projectInfo{
-				Slug:       slug,
-				Name:       proj.Name,
-				Stack:      proj.Stack,
-				Archived:   proj.Archived,
-				TaskCounts: make(map[string]int),
-			}
-			tasks, err := store.GetTasks(slug)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("project %q: failed to read tasks: %v", slug, err))
-				continue
-			}
-			for _, t := range tasks {
-				pi.TaskCounts[string(t.Meta.Status)]++
-			}
-			result = append(result, pi)
-		}
-
-		r, err := jsonText(listProjectsResult{Projects: result, Note: strings.Join(warnings, "; ")})
-		return r, nil, err
+		return respond(service.ListProjects(store))
 	})
 
 	// pm_add_task
@@ -421,11 +110,9 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in addTaskInput) (*mcp.CallToolResult, any, error) {
 		t, err := service.AddTask(store, in)
 		if err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
+			return respond(nil, err)
 		}
-		r, err := jsonText(toDetail(t))
-		return r, nil, err
+		return respond(toDetail(t), nil)
 	})
 
 	// pm_update_task
@@ -435,11 +122,9 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateTaskInput) (*mcp.CallToolResult, any, error) {
 		task, err := service.UpdateTask(store, in)
 		if err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
+			return respond(nil, err)
 		}
-		r, err := jsonText(toDetail(task))
-		return r, nil, err
+		return respond(toDetail(task), nil)
 	})
 
 	// pm_move_task
@@ -447,13 +132,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		Name:        "pm_move_task",
 		Description: "Move a task to a different status.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in moveTaskInput) (*mcp.CallToolResult, any, error) {
-		res, err := service.MoveTask(store, in)
-		if err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
-		}
-		r, err := jsonText(res)
-		return r, nil, err
+		return respond(service.MoveTask(store, in))
 	})
 
 	// pm_create_project
@@ -461,83 +140,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		Name:        "pm_create_project",
 		Description: "Create a new project. Creates project directory and project.yaml.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in createProjectInput) (*mcp.CallToolResult, any, error) {
-		if in.Slug == "" {
-			r, _ := toolError("slug is required")
-			return r, nil, nil
-		}
-		// The slug becomes a directory name via filepath.Join(ProjectDir/
-		// ProjectYAML) - reject anything that could escape the pm root
-		// ("../foo") or isn't canonical (uppercase, spaces).
-		if err := storage.ValidateSlug(in.Slug); err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
-		}
-
-		// Check if project already exists. Case-insensitive: on the default
-		// case-insensitive-but-preserving macOS filesystem, ProjectDir("foo")
-		// and ProjectDir("Foo") are the SAME directory - an exact-case-only
-		// check would miss the collision, MkdirAll would silently succeed
-		// against the existing dir, and writeProject's merge-into-existing-file
-		// logic would splice this project's fields into the other one's
-		// project.yaml. ValidateSlug already forces new slugs to be lowercase,
-		// but an existing slug (e.g. CLI-created, which has no slug validation)
-		// may not be.
-		existing, _ := store.ListProjects()
-		for _, s := range existing {
-			if strings.EqualFold(s, in.Slug) {
-				r, _ := toolError(fmt.Sprintf("project %q already exists (case-insensitive match with %q - this filesystem does not distinguish case)", in.Slug, s))
-				return r, nil, nil
-			}
-		}
-
-		name := in.Slug
-		if in.Name != "" {
-			name = in.Name
-		}
-
-		p := &storage.Project{
-			Name:     name,
-			Prefix:   in.Prefix,
-			Path:     in.Path,
-			Repo:     in.Repo,
-			Stack:    in.Stack,
-			Notes:    in.Notes,
-			Links:    in.Links,
-			Tags:     in.Tags,
-			Statuses: in.Statuses,
-		}
-
-		if err := store.CreateProject(in.Slug, p); err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
-		}
-
-		type projectResult struct {
-			Slug     string            `json:"slug"`
-			Name     string            `json:"name"`
-			Path     string            `json:"path,omitempty"`
-			Repo     string            `json:"repo,omitempty"`
-			Stack    string            `json:"stack,omitempty"`
-			Notes    string            `json:"notes,omitempty"`
-			Prefix   string            `json:"prefix,omitempty"`
-			Links    map[string]string `json:"links,omitempty"`
-			Tags     []string          `json:"tags,omitempty"`
-			Statuses []string          `json:"statuses,omitempty"`
-		}
-
-		r, err := jsonText(projectResult{
-			Slug:     in.Slug,
-			Name:     p.Name,
-			Path:     p.Path,
-			Repo:     p.Repo,
-			Stack:    p.Stack,
-			Notes:    p.Notes,
-			Prefix:   p.Prefix,
-			Links:    p.Links,
-			Tags:     p.Tags,
-			Statuses: p.Statuses,
-		})
-		return r, nil, err
+		return respond(service.CreateProject(store, in))
 	})
 
 	// pm_delete_task
@@ -547,345 +150,34 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in deleteTaskInput) (*mcp.CallToolResult, any, error) {
 		res, err := service.DeleteTask(store, in)
 		if err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
+			return respond(nil, err)
 		}
 		// The wire shape predates the service layer: a string map with a
 		// literal "true", kept byte-for-byte so no client sees a change.
-		r, err := jsonText(map[string]string{
+		return respond(map[string]string{
 			"id":      res.ID,
 			"title":   res.Title,
 			"deleted": "true",
-		})
-		return r, nil, err
+		}, nil)
 	})
+
 	// pm_update_project
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_update_project",
 		Description: "Update project metadata. Links merge (never removed). Tags and statuses replace if provided. Scalar fields overwrite if non-empty. Rejects a statuses replacement that would drop a status current tasks sit on (they'd vanish from every board column) - move or close those tasks first.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateProjectInput) (*mcp.CallToolResult, any, error) {
-		slug, err := store.ResolveProject(in.Project)
-		if err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
-		}
-		// The prefix is the ID source for every auto-minted task
-		// ("<prefix>-<n>"), and AddTask validates the result - so an unsafe
-		// prefix accepted here would lock the project out of task creation,
-		// with every later add failing about an ID nobody typed. Checked
-		// BEFORE the mutation so a rejected call writes nothing.
-		if err := storage.ValidateProjectPrefix(in.Prefix); err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
-		}
-		// The whole read -> patch -> write runs under the project lock, with
-		// the project re-read FRESH inside it: this handler only sets the
-		// fields the caller passed, so a copy read before the lock would
-		// silently revert whatever a parallel session changed meanwhile.
-		proj, err := store.MutateProject(slug, func(proj *storage.Project) error {
-			if in.Name != "" {
-				proj.Name = in.Name
-			}
-			if in.Path != "" {
-				proj.Path = in.Path
-			}
-			if in.Repo != "" {
-				proj.Repo = in.Repo
-			}
-			if in.Stack != "" {
-				proj.Stack = in.Stack
-			}
-			if in.Notes != "" {
-				proj.Notes = in.Notes
-			}
-			if in.Prefix != "" {
-				proj.Prefix = in.Prefix
-			}
-
-			// Links: merge, never remove
-			if len(in.Links) > 0 {
-				if proj.Links == nil {
-					proj.Links = make(map[string]string)
-				}
-				for k, v := range in.Links {
-					proj.Links[k] = v
-				}
-			}
-
-			// Tags: replace if provided
-			if in.Tags != nil {
-				proj.Tags = in.Tags
-			}
-
-			// Statuses: replace if provided. Validated HERE, inside the locked
-			// critical section (GetTasks itself takes no lock, so this doesn't
-			// nest LockProject): a statuses replacement that drops a status
-			// current tasks sit on orphans them - the task vanishes from every
-			// board column, the same bug class 0.29.2 closed for
-			// MoveTask/pm_update_task. Reading tasks here, under the same lock
-			// task-mutation handlers hold around their own writes, closes the
-			// TOCTOU window a pre-lock check would leave open. Enforced here
-			// (handler-level), not in storage - CLI/manual project.yaml edits
-			// stay lenient.
-			if in.Statuses != nil {
-				if err := validateStatusesKeepTasks(store, slug, in.Statuses); err != nil {
-					return err
-				}
-				proj.Statuses = in.Statuses
-			}
-
-			// Archived: set if provided
-			if in.Archived != nil {
-				proj.Archived = *in.Archived
-			}
-			return nil
-		})
-		if err != nil {
-			r, _ := toolError(err.Error())
-			return r, nil, nil
-		}
-
-		type projectResult struct {
-			Slug     string            `json:"slug"`
-			Name     string            `json:"name"`
-			Path     string            `json:"path,omitempty"`
-			Repo     string            `json:"repo,omitempty"`
-			Stack    string            `json:"stack,omitempty"`
-			Notes    string            `json:"notes,omitempty"`
-			Prefix   string            `json:"prefix,omitempty"`
-			Links    map[string]string `json:"links,omitempty"`
-			Tags     []string          `json:"tags,omitempty"`
-			Statuses []string          `json:"statuses,omitempty"`
-			Archived bool              `json:"archived,omitempty"`
-		}
-
-		r, err := jsonText(projectResult{
-			Slug:     slug,
-			Name:     proj.Name,
-			Path:     proj.Path,
-			Repo:     proj.Repo,
-			Stack:    proj.Stack,
-			Notes:    proj.Notes,
-			Prefix:   proj.Prefix,
-			Links:    proj.Links,
-			Tags:     proj.Tags,
-			Statuses: proj.Statuses,
-			Archived: proj.Archived,
-		})
-		return r, nil, err
+		return respond(service.UpdateProject(store, in))
 	})
 
 	registerJournalTools(s, store)
 }
 
-// --- Context helpers ---
+// --- Context helpers kept under their old names for the tests ---
 
 func resolveProjectFromCwd(store storage.TaskStore, cwd string) (string, error) {
 	return storage.ResolveProjectFromCwd(store, cwd)
 }
 
-// validateStatusesKeepTasks rejects a pm_update_project statuses replacement
-// that would drop a status current tasks sit on. Compares against the
-// EFFECTIVE post-update status set, not the raw param: an empty slice is the
-// only way this schema exposes to reset a project back to defaults, and
-// Project.GetStatuses() falls back to DefaultStatuses in that case - without
-// mirroring that fallback here, resetting to [] would falsely flag every task
-// sitting on a plain default status (e.g. "doing") as orphaned. Archived is
-// system-level (never a project status) and excluded. Best-effort: a
-// task-read failure does not block the update.
-func validateStatusesKeepTasks(store storage.TaskStore, slug string, newStatuses []string) error {
-	effective := newStatuses
-	if len(effective) == 0 {
-		effective = make([]string, len(storage.DefaultStatuses))
-		for i, s := range storage.DefaultStatuses {
-			effective[i] = string(s)
-		}
-	}
-	allowed := make(map[string]bool, len(effective))
-	for _, s := range effective {
-		allowed[strings.ToLower(s)] = true
-	}
-	tasks, err := store.GetTasks(slug)
-	if err != nil {
-		return nil
-	}
-	counts := make(map[string]int)
-	for _, t := range tasks {
-		st := string(t.Meta.Status)
-		if st == string(storage.StatusArchived) {
-			continue
-		}
-		if !allowed[st] {
-			counts[st]++
-		}
-	}
-	if len(counts) == 0 {
-		return nil
-	}
-	parts := make([]string, 0, len(counts))
-	for st, n := range counts {
-		parts = append(parts, fmt.Sprintf("%s (%d task(s))", st, n))
-	}
-	sort.Strings(parts)
-	return fmt.Errorf("new statuses would orphan tasks on: %s", strings.Join(parts, ", "))
-}
-
-func projectContext(store storage.TaskStore, slug string) (*mcp.CallToolResult, any, error) {
-	proj, err := store.GetProject(slug)
-	if err != nil {
-		r, _ := toolError(fmt.Sprintf("project %q: failed to read project.yaml: %v", slug, err))
-		return r, nil, nil
-	}
-
-	type projectMeta struct {
-		Slug     string            `json:"slug"`
-		Name     string            `json:"name"`
-		Repo     string            `json:"repo,omitempty"`
-		Stack    string            `json:"stack,omitempty"`
-		Notes    string            `json:"notes,omitempty"`
-		Links    map[string]string `json:"links,omitempty"`
-		Statuses []string          `json:"statuses"`
-	}
-
-	pm := projectMeta{
-		Slug:  slug,
-		Name:  proj.Name,
-		Repo:  proj.Repo,
-		Stack: proj.Stack,
-		Notes: proj.Notes,
-		Links: proj.Links,
-	}
-	for _, s := range proj.GetStatuses() {
-		pm.Statuses = append(pm.Statuses, string(s))
-	}
-
-	tasks, err := store.GetTasks(slug)
-	if err != nil {
-		r, _ := toolError(fmt.Sprintf("project %q: failed to read tasks: %v", slug, err))
-		return r, nil, nil
-	}
-	trackers, suppressed := storage.BuildTrackers(tasks, store.GetLandingStatuses(slug)...)
-	counts := make(map[string]int)
-	doing := []taskDetail{}
-	for _, t := range tasks {
-		counts[string(t.Meta.Status)]++
-		if t.Meta.Status == storage.StatusDoing && !suppressed[t.Meta.ID] {
-			d := toDetail(t)
-			d.Body = truncateBody(d.Body, contextBodyLimit)
-			doing = append(doing, d)
-		}
-	}
-
-	sort.Slice(doing, func(i, j int) bool {
-		return doing[i].Updated > doing[j].Updated
-	})
-
-	result := map[string]any{
-		"project":     pm,
-		"doing_tasks": doing,
-		"task_counts": counts,
-	}
-
-	if len(trackers) > 0 {
-		result["trackers"] = trackers
-	}
-
-	// A POINTER, not the profile. pm_context is the session-start call, so its
-	// output sits in every session's window - the executor/handoff profile is
-	// only worth its size to the session that actually runs or accepts work,
-	// and `pm executor show` charges it to that session alone.
-	if proj.HasExecutor() {
-		result["executor_profile"] = "run `pm executor show " + slug +
-			"` for phase bindings, worktree slot runtimes (ports/device ids), context repos and the handoff playbook"
-	}
-
-	// Journals: counts only, for the same reason as the profile above. A
-	// journal only ever grows, so putting its content here would put an
-	// unbounded, permanently growing payload in every session's window - and
-	// its readers are the sessions about to touch that subsystem, not all of
-	// them. The counts are what makes those sessions ask.
-	if counts, err := storage.JournalCounts(store.ProjectDir(slug), proj); err == nil && len(counts) > 0 {
-		result["journals"] = counts
-		result["journals_note"] = "subsystems this project keeps a running incident record for. Call pm_journal_list with the name BEFORE touching one of them; record what bit you with pm_journal_add."
-	}
-
-	if focus := focusTaskSummaries(store); len(focus) > 0 {
-		result["focus_tasks"] = focus
-	}
-
-	r, err := jsonText(result)
-	return r, nil, err
-}
-
 func crossProjectContext(store storage.TaskStore, note string) (*mcp.CallToolResult, any, error) {
-	projects, err := store.ListActiveProjects()
-	if err != nil {
-		r, _ := toolError(fmt.Sprintf("failed to list projects: %v", err))
-		return r, nil, nil
-	}
-
-	type projectSummary struct {
-		Slug       string            `json:"slug"`
-		Name       string            `json:"name"`
-		Repo       string            `json:"repo,omitempty"`
-		TaskCounts map[string]int    `json:"task_counts"`
-		DoingTasks []taskSummary     `json:"doing_tasks,omitempty"`
-		Trackers   []storage.Tracker `json:"trackers,omitempty"`
-	}
-
-	var warnings []string
-	result := []projectSummary{}
-	for _, slug := range projects {
-		proj, err := store.GetProject(slug)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("project %q: failed to read project.yaml: %v", slug, err))
-			continue
-		}
-		ps := projectSummary{
-			Slug:       slug,
-			Name:       proj.Name,
-			Repo:       proj.Repo,
-			TaskCounts: make(map[string]int),
-		}
-		tasks, err := store.GetTasks(slug)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("project %q: failed to read tasks: %v", slug, err))
-			continue
-		}
-		trackers, suppressed := storage.BuildTrackers(tasks, store.GetLandingStatuses(slug)...)
-		ps.Trackers = trackers
-		for _, t := range tasks {
-			ps.TaskCounts[string(t.Meta.Status)]++
-			if t.Meta.Status == storage.StatusDoing && !suppressed[t.Meta.ID] {
-				s := toSummary(t)
-				// Cross-project view = a scan across every active project, so
-				// briefs compress like any other listing. The project-scoped
-				// branch keeps them whole (see projectContext).
-				s.Brief = storage.BriefLine(s.Brief)
-				ps.DoingTasks = append(ps.DoingTasks, s)
-			}
-		}
-		sort.Slice(ps.DoingTasks, func(i, j int) bool {
-			return ps.DoingTasks[i].Updated > ps.DoingTasks[j].Updated
-		})
-		result = append(result, ps)
-	}
-
-	output := map[string]any{
-		"projects": result,
-	}
-	if focus := focusTaskSummaries(store); len(focus) > 0 {
-		output["focus_tasks"] = focus
-	}
-	noteParts := []string{}
-	if note != "" {
-		noteParts = append(noteParts, note)
-	}
-	noteParts = append(noteParts, warnings...)
-	if len(noteParts) > 0 {
-		output["note"] = strings.Join(noteParts, "; ")
-	}
-
-	r, err := jsonText(output)
-	return r, nil, err
+	return respond(service.CrossProjectContext(store, note))
 }
