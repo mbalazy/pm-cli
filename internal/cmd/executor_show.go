@@ -142,6 +142,15 @@ func renderExecutorProfile(slug string, proj *storage.Project) string {
 		}
 	}
 
+	// Which config dir the WORKERS load - the skill catalogue, user CLAUDE.md
+	// and memory in it ride in every one of their API calls (pm-cli-119).
+	b.WriteString("\n## Worker Claude config dir\n")
+	if wd, pd := proj.ResolveWorkerClaudeConfigDir(), proj.ResolveClaudeConfigDir(); wd != pd {
+		fmt.Fprintf(&b, "  %s  (executor.worker_claude_config_dir - workers only; pm finish stays on %s)\n", wd, pd)
+	} else {
+		fmt.Fprintf(&b, "  %s  (the project's claude_config_dir; set executor.worker_claude_config_dir to give workers a slim one)\n", wd)
+	}
+
 	b.WriteString("\n## Handoff (acceptance)\n")
 	b.WriteString(renderHandoff(e.ResolveHandoff(proj.Path, proj.ResolveClaudeConfigDir())))
 

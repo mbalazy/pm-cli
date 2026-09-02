@@ -7,6 +7,42 @@ import (
 	"testing"
 )
 
+// The worker dir is the slim one (pm-cli-119-1): it wins for workers when set,
+// falls back to the project's dir otherwise, and never touches
+// ResolveClaudeConfigDir itself - that is what pm finish keeps reading.
+func TestResolveWorkerClaudeConfigDir(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	home, _ := os.UserHomeDir()
+
+	t.Run("unset -> the project's claude_config_dir", func(t *testing.T) {
+		p := &Project{ClaudeConfigDir: "/opt/claude-alt"}
+		if got := p.ResolveWorkerClaudeConfigDir(); got != "/opt/claude-alt" {
+			t.Errorf("got %q, want the project dir", got)
+		}
+	})
+	t.Run("unset, no project dir -> default", func(t *testing.T) {
+		p := &Project{}
+		if got, def := p.ResolveWorkerClaudeConfigDir(), filepath.Join(home, ".claude"); got != def {
+			t.Errorf("got %q, want %q", got, def)
+		}
+	})
+	t.Run("set -> the worker dir, tilde expanded, project dir untouched", func(t *testing.T) {
+		p := &Project{ClaudeConfigDir: "/opt/claude-alt", Executor: &Executor{WorkerClaudeConfigDir: "~/.claude-worker"}}
+		if got, want := p.ResolveWorkerClaudeConfigDir(), filepath.Join(home, ".claude-worker"); got != want {
+			t.Errorf("worker dir = %q, want %q", got, want)
+		}
+		if got := p.ResolveClaudeConfigDir(); got != "/opt/claude-alt" {
+			t.Errorf("the project's own dir must not move: %q", got)
+		}
+	})
+	t.Run("nil project -> default", func(t *testing.T) {
+		var p *Project
+		if got, def := p.ResolveWorkerClaudeConfigDir(), filepath.Join(home, ".claude"); got != def {
+			t.Errorf("got %q, want %q", got, def)
+		}
+	})
+}
+
 func TestResolveClaudeConfigDir(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "") // ignore any ambient override
 	home, _ := os.UserHomeDir()
