@@ -25,7 +25,7 @@ func (m Model) renderTaskDetail(t *storage.Task) string {
 		fmt.Fprintf(&head, " (#%s)", t.Meta.ID)
 	}
 	fmt.Fprintln(&head)
-	fmt.Fprintf(&head, "\n**Status:** %s | **Project:** %s | **Updated:** %s\n", t.Meta.Status, t.Project, t.Meta.Updated)
+	fmt.Fprintf(&head, "\n**Status:** %s | **Project:** %s | **Updated:** %s\n", t.Meta.Status, t.Project, storage.StampDate(t.Meta.Updated))
 	if p := m.taskParent(t); p != nil {
 		fmt.Fprintf(&head, "\n**Parent:** %s `#%s` %s  _(press p)_\n", statusGlyph(p.Meta.Status), p.Meta.ID, p.Meta.Title)
 	}

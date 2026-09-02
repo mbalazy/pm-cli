@@ -39,7 +39,7 @@ func (m *Model) saveSession(t *storage.Task, sessionID string) error {
 		}
 	}
 	t.Meta.Sessions = append(t.Meta.Sessions, sessionID)
-	t.Meta.Updated = storage.Today()
+	t.Meta.Updated = storage.Now()
 	return m.store.WriteTask(t)
 }
 

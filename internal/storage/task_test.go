@@ -413,6 +413,14 @@ func TestNewTask(t *testing.T) {
 		if task.Meta.Created != today {
 			t.Errorf("Created = %q, want %q", task.Meta.Created, today)
 		}
+		// Created is a bare date, Updated a full stamp - a swap of the two would
+		// otherwise pass every other assertion here.
+		if _, err := time.Parse(time.RFC3339, task.Meta.Updated); err != nil {
+			t.Errorf("Updated = %q, want an RFC3339 stamp: %v", task.Meta.Updated, err)
+		}
+		if got := StampDate(task.Meta.Updated); got != today {
+			t.Errorf("Updated date = %q, want %q", got, today)
+		}
 	})
 
 	t.Run("empty body", func(t *testing.T) {

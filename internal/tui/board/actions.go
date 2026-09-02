@@ -187,15 +187,15 @@ func (m *Model) doReorder(direction int) {
 	if allZero {
 		for i, t := range tasks {
 			t.Meta.Order = (i + 1) * 10
-			t.Meta.Updated = storage.Today()
+			t.Meta.Updated = storage.Now()
 			trackErr(m.store.WriteTask(t))
 		}
 	}
 
 	// Swap orders
 	a.Meta.Order, b.Meta.Order = b.Meta.Order, a.Meta.Order
-	a.Meta.Updated = storage.Today()
-	b.Meta.Updated = storage.Today()
+	a.Meta.Updated = storage.Now()
+	b.Meta.Updated = storage.Now()
 	trackErr(m.store.WriteTask(a))
 	trackErr(m.store.WriteTask(b))
 

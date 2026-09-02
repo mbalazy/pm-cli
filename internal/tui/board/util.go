@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mbalazy/pm/internal/storage"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -58,12 +59,21 @@ func shortenPath(path string) string {
 	return path
 }
 
+// relativeTime renders a task stamp as "today" / "Nd ago". It goes through
+// storage.ParseStamp because `updated` may be either shape: an RFC3339 stamp
+// on anything written since the switch, a bare date on everything older.
+//
+// The difference is counted in CALENDAR DAYS, both sides truncated to local
+// midnight. Elapsed-hours/24 would read the two shapes differently - a task
+// touched yesterday at 23:00 is 11 hours old ("today") while a legacy bare
+// date for that same yesterday is 34 hours old ("1d ago") - so two tasks last
+// touched on the same day would render differently in one list.
 func relativeTime(dateStr string) string {
-	t, err := time.Parse("2006-01-02", dateStr)
-	if err != nil {
+	t, ok := storage.ParseStamp(dateStr)
+	if !ok {
 		return dateStr
 	}
-	days := int(time.Since(t).Hours() / 24)
+	days := calendarDaysAgo(t)
 	switch {
 	case days <= 0:
 		return "today"
@@ -72,4 +82,20 @@ func relativeTime(dateStr string) string {
 	default:
 		return fmt.Sprintf("%dd ago", days)
 	}
+}
+
+// nowFn is the clock calendarDaysAgo reads, a test seam (like killSignal in
+// run_control.go): a test that has to pin "what day is it" otherwise fails
+// exactly once, on the run that crosses midnight.
+var nowFn = time.Now
+
+// calendarDaysAgo counts whole local calendar days between at and now. Both
+// days are rebuilt in UTC purely as arithmetic: a local day is 23 or 25 hours
+// long across a DST switch, which would round the wrong way.
+func calendarDaysAgo(at time.Time) int {
+	at = at.In(time.Local)
+	stampDay := time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, time.UTC)
+	n := nowFn().In(time.Local)
+	today := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC)
+	return int(today.Sub(stampDay).Hours() / 24)
 }

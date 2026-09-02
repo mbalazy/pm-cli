@@ -1011,7 +1011,7 @@ func recordSubFeedback(store storage.TaskStore, parent *storage.Task, subID, out
 		}
 		parent.Body = storage.ApplySpec(parent.Body, spec)
 	}
-	parent.Meta.Updated = storage.Today()
+	parent.Meta.Updated = storage.Now()
 	return store.WriteTask(parent)
 }
 

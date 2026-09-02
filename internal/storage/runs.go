@@ -387,8 +387,8 @@ func acceptVerdict(st *RunState) string {
 // remote/project/tracker so the order is total and a test can rely on it.
 func SortRunRows(rows []RunRow) {
 	sort.SliceStable(rows, func(i, j int) bool {
-		a, aok := parseRunStamp(rows[i].Updated)
-		b, bok := parseRunStamp(rows[j].Updated)
+		a, aok := ParseStamp(rows[i].Updated)
+		b, bok := ParseStamp(rows[j].Updated)
 		if aok != bok {
 			return aok
 		}
@@ -412,7 +412,7 @@ func latestStamp(stamps []string) string {
 	var best string
 	var bestAt time.Time
 	for _, s := range stamps {
-		at, ok := parseRunStamp(s)
+		at, ok := ParseStamp(s)
 		if !ok {
 			continue
 		}
@@ -421,25 +421,4 @@ func latestStamp(stamps []string) string {
 		}
 	}
 	return best
-}
-
-// parseRunStamp parses the stamp formats pm writes: RFC3339 for anything
-// machine-written, a bare date for a task's `updated`.
-//
-// The date is parsed IN THE LOCAL ZONE, because that is where it was written
-// (storage.Today formats time.Now()). Reading it as UTC midnight would shift a
-// whole day's tasks east of UTC by the offset, so a run that finished at 01:30
-// local - stamped the previous day in UTC - would sort below a tracker whose
-// task file was merely touched today.
-func parseRunStamp(s string) (time.Time, bool) {
-	if s == "" {
-		return time.Time{}, false
-	}
-	if at, err := time.Parse(time.RFC3339, s); err == nil {
-		return at, true
-	}
-	if at, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
-		return at, true
-	}
-	return time.Time{}, false
 }

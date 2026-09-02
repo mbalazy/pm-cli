@@ -664,7 +664,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			task.Meta.Sessions = append(task.Meta.Sessions, in.Sessions...)
 		}
 
-		task.Meta.Updated = storage.Today()
+		task.Meta.Updated = storage.Now()
 		if err := store.WriteTask(task); err != nil {
 			r, _ := toolError(err.Error())
 			return r, nil, nil

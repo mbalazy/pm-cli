@@ -403,7 +403,7 @@ func renderZoomCard(t *storage.Task, width int, selected bool, selectMark, badge
 	// ID (+ subtask marker / tracker badge) + updated date
 	meta := cardIDLine(t, badge)
 	if t.Meta.Updated != "" {
-		meta += "  " + helpStyle.Render(t.Meta.Updated)
+		meta += "  " + helpStyle.Render(storage.StampDate(t.Meta.Updated))
 	}
 	lines = append(lines, cardProjectStyle.Render(meta))
 
