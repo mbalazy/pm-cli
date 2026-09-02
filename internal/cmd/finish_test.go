@@ -405,3 +405,37 @@ func TestFinishStatusReportsAnUnreadableClaimAsAFailure(t *testing.T) {
 		t.Errorf("output %q reports free for a claim `pm finish claim` will refuse", out)
 	}
 }
+
+// An acceptance seldom stands in the project's checkout (batch-finish-auto
+// works in worktrees under /tmp), so with no --project and a cwd that is no
+// project dir the tracker id's own prefix must name the project.
+func TestFinishClaimCmdResolvesProjectFromTaskID(t *testing.T) {
+	store, slug := finishStore(t)
+
+	t.Run("prefix of the tracker id names the project", func(t *testing.T) {
+		out, err := runFinishCmd(t, store, "claim", "proj-100", "--session", "sess-1")
+		if err != nil {
+			t.Fatalf("claim without --project outside a project dir: %v\n%s", err, out)
+		}
+		if _, err := os.Stat(storage.FinishClaimPath(store.ProjectDir(slug), "proj-100")); err != nil {
+			t.Fatalf("claim file not written under project %s: %v", slug, err)
+		}
+	})
+
+	t.Run("an id matching no project still says no project", func(t *testing.T) {
+		_, err := runFinishCmd(t, store, "status", "other-7")
+		if err == nil || !strings.Contains(err.Error(), "no project") {
+			t.Fatalf("want a 'no project' error, got %v", err)
+		}
+	})
+
+	t.Run("two projects with one prefix are refused, not guessed", func(t *testing.T) {
+		if err := store.CreateProject("twin", &storage.Project{Name: "Twin", Path: t.TempDir(), Prefix: "proj"}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := runFinishCmd(t, store, "status", "proj-100")
+		if err == nil || !strings.Contains(err.Error(), "--project") {
+			t.Fatalf("want an ambiguity error naming --project, got %v", err)
+		}
+	})
+}

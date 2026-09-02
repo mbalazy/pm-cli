@@ -15,7 +15,7 @@ Git hooks live in `githooks/` (versioned; `git config core.hooksPath githooks` -
 
 CI (`.github/workflows/ci.yml`) runs on push to `main` and on every PR: `make fmt-check`, `make vet`, `make staticcheck`, `make test-race` - the same Makefile targets used locally, plus the race detector (deliberately not part of `make check`, which stays fast for the local commit-time gate).
 
-IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.54.2**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN).
+IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.54.3**. Binary goes to `~/.local/share/go/bin/pm` (GOBIN).
 
 ## Tests
 
