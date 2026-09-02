@@ -23,6 +23,8 @@ export const keys = {
   task: (slug: string, id: string) => ['task', slug, id] as const,
   context: (slug: string) => ['context', slug] as const,
   runs: () => ['runs'] as const,
+  /** Deliberately NOT under ['runs']: a `runs` event must never trigger an ssh round-trip. */
+  runsRemote: () => ['runs-remote'] as const,
   focus: () => ['focus'] as const,
 }
 
@@ -72,6 +74,20 @@ export function useRuns() {
   return useQuery({
     queryKey: keys.runs(),
     queryFn: () => apiGet<RunsResult>('/api/runs'),
+  })
+}
+
+/**
+ * Local + remote rows (`?remote=1`, one ssh round-trip per runner). Disabled:
+ * nothing fetches it until the caller's `refetch()` - a button, never a poll.
+ */
+export function useRemoteRuns() {
+  return useQuery({
+    queryKey: keys.runsRemote(),
+    queryFn: () => apiGet<RunsResult>('/api/runs?remote=1'),
+    enabled: false,
+    staleTime: Infinity,
+    retry: false,
   })
 }
 

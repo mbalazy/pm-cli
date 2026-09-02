@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -54,6 +55,12 @@ const (
 	defaultPollInterval = 2 * time.Second
 	defaultPingInterval = 15 * time.Second
 )
+
+func init() {
+	// Go's built-in table has no entry for the PWA manifest and would sniff
+	// it as text/plain; browsers want the manifest type to install the app.
+	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
+}
 
 // NewHandler routes /api/* to the JSON endpoints, /api/events to the SSE
 // feed and everything else to the SPA (or the placeholder page when the

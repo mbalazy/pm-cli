@@ -286,11 +286,12 @@ func TestStatic(t *testing.T) {
 
 	t.Run("bundle: files served, unknown routes fall back to index", func(t *testing.T) {
 		static := fstest.MapFS{
-			"index.html":         {Data: []byte("<html>app</html>")},
-			"assets/app-abc.js":  {Data: []byte("console.log(1)")},
-			"favicon.svg":        {Data: []byte("<svg/>")},
-			"assets/sub/x.css":   {Data: []byte("a{}")},
-			"assets/only-a-dir/": {Mode: os.ModeDir},
+			"index.html":           {Data: []byte("<html>app</html>")},
+			"assets/app-abc.js":    {Data: []byte("console.log(1)")},
+			"favicon.svg":          {Data: []byte("<svg/>")},
+			"manifest.webmanifest": {Data: []byte("{}")},
+			"assets/sub/x.css":     {Data: []byte("a{}")},
+			"assets/only-a-dir/":   {Mode: os.ModeDir},
 		}
 		srv := newServer(t, newTestStore(t), Options{Static: static})
 
@@ -301,6 +302,12 @@ func TestStatic(t *testing.T) {
 		status, body, hdr = get(t, srv.URL+"/favicon.svg")
 		if status != 200 || body != "<svg/>" || hdr.Get("Cache-Control") != "no-cache" {
 			t.Fatalf("favicon: %d %q cache=%q", status, body, hdr.Get("Cache-Control"))
+		}
+		// The PWA manifest's type is not in Go's built-in table; sniffed, it
+		// would go out as text/plain and the browser would not install the app.
+		status, _, hdr = get(t, srv.URL+"/manifest.webmanifest")
+		if status != 200 || !strings.HasPrefix(hdr.Get("Content-Type"), "application/manifest+json") {
+			t.Fatalf("manifest: %d content-type=%q", status, hdr.Get("Content-Type"))
 		}
 		for _, path := range []string{"/", "/index.html", "/tasks/test/t-1", "/assets/only-a-dir"} {
 			status, body, hdr := get(t, srv.URL+path)

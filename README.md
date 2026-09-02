@@ -180,6 +180,8 @@ make web-install && make web && make install   # or: make web-install && make in
 pm serve                                        # http://127.0.0.1:7070
 ```
 
+What it does (read-only, no mutations yet): the project's tasks grouped by status, a task detail with the body rendered as markdown under "Spec (current truth)" / "Log (history)" headings, a Runs view (the `pm runs` table; a "fetch remote" button asks the remote runners explicitly - never automatically), and a ⌘K / Ctrl+K command palette (go to project, open task by id or title, runs; with an empty query, the recently opened tasks). Keyboard: `j`/`k` move over the task list, `Enter` opens, `Esc` closes, `?` lists the shortcuts; everything is reachable by mouse too. The page listens to `/api/events` and refetches what changed, so a board edit or a run's heartbeat shows up within a couple of seconds. Under 768 px the sidebar becomes a "Projects" drawer and the detail takes the whole width; a manifest makes it installable on a phone.
+
 Development: run `pm serve` in one terminal and `cd web && npm run dev` in another - Vite proxies `/api` to the server. `make web-check` runs lint, tsc and vitest; `make check` and `make install` stay node-free (a binary built without the bundle serves a placeholder page).
 
 ## The executor
