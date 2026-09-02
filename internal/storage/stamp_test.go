@@ -90,9 +90,11 @@ func TestStampDate(t *testing.T) {
 	}
 }
 
-// An RFC3339 `updated` must survive a write/read round trip as a STRING. Left
-// unquoted, yaml.v3 resolves that shape to !!timestamp, and the whole task
-// file would stop parsing - the failure mode the field type guards against.
+// An RFC3339 `updated` must survive a write/read round trip verbatim. yaml.v3
+// resolves that shape to !!timestamp, so it quotes the value on the way out;
+// the field stays a string, so a hand-written unquoted stamp reads back fine
+// too. What this pins is that the round trip is byte-exact - a stamp turned
+// into a time.Time and reformatted would silently change zone or precision.
 func TestUpdatedStampSurvivesYAMLRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	stamp := "2026-09-02T16:34:40+02:00"
