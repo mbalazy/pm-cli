@@ -41,6 +41,7 @@ func NewRootCmd() *cobra.Command {
 		newRunEpicCmd(store),
 		newFinishCmd(store),
 		newRunsCmd(store),
+		newServeCmd(store),
 		newConfigCmd(store),
 		newExecutorCmd(store),
 		newJournalCmd(store),
