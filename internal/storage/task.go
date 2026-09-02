@@ -54,19 +54,34 @@ func ParseStatus(s string) TaskStatus {
 }
 
 type TaskMeta struct {
-	ID       string            `yaml:"id"`
-	Title    string            `yaml:"title"`
-	Status   TaskStatus        `yaml:"status"`
-	Created  string            `yaml:"created"`
-	Updated  string            `yaml:"updated"`
-	Links    map[string]string `yaml:"links,omitempty"`
-	Branch   string            `yaml:"branch,omitempty"`
-	Parent   string            `yaml:"parent,omitempty"`
-	Tags     []string          `yaml:"tags,omitempty"`
-	Brief    string            `yaml:"brief,omitempty"`
-	AC       string            `yaml:"ac,omitempty"`
-	Order    int               `yaml:"order,omitempty"`
-	Sessions []string          `yaml:"sessions,omitempty"`
+	ID      string     `yaml:"id"`
+	Title   string     `yaml:"title"`
+	Status  TaskStatus `yaml:"status"`
+	Created string     `yaml:"created"`
+	Updated string     `yaml:"updated"`
+	// StatusChanged is an RFC3339 stamp (Now()) of the last time Status
+	// actually CHANGED - the "how long has this been stuck" clock. Updated
+	// cannot answer that: it moves on every edit, so appending a session note
+	// to a task that has been waiting for three weeks resets it to today.
+	//
+	// Stamped by SetStatus, which every status mutation path goes through, and
+	// by NewTask (a fresh task's status age starts at its creation). Files are
+	// NEVER migrated, so tasks written before this field exist carry an EMPTY
+	// value: readers must render that as unknown, never guess it from Updated.
+	StatusChanged string            `yaml:"status_changed,omitempty"`
+	Links         map[string]string `yaml:"links,omitempty"`
+	Branch        string            `yaml:"branch,omitempty"`
+	Parent        string            `yaml:"parent,omitempty"`
+	Tags          []string          `yaml:"tags,omitempty"`
+	Brief         string            `yaml:"brief,omitempty"`
+	AC            string            `yaml:"ac,omitempty"`
+	// WaitingFor is free text naming who or what the task is blocked on
+	// ("review Alex PR #940", "odpowiedź klienta"). Deliberately
+	// unvalidated and never required - not even on the waiting status, where a
+	// forced field would just collect junk. Empty = not recorded.
+	WaitingFor string   `yaml:"waiting_for,omitempty"`
+	Order      int      `yaml:"order,omitempty"`
+	Sessions   []string `yaml:"sessions,omitempty"`
 	// DependsOn lists sub IDs that must be merged/done before this sub runs.
 	// Used by `pm run-epic`: an unsatisfied dependency parks the sub (skipped)
 	// instead of spawning a doomed worker. Empty = no gate (runs by Order).
@@ -211,6 +226,24 @@ type Task struct {
 	Project  string
 }
 
+// SetStatus assigns a status and stamps StatusChanged when - and only when -
+// the status actually changes. It is the ONE place that stamp is written on a
+// mutation, so every path that moves a task (Store.MoveTask, which every TUI /
+// CLI / executor move goes through, and MCP's pm_update_task, which writes the
+// field directly) shares one rule instead of repeating it.
+//
+// The no-op guard is the point of the method: re-writing the stamp on a move
+// to the status a task already holds - `pm mv` to where it already is, an
+// executor parking an already-parked sub - would reset the "stuck since" clock
+// to now and erase exactly the age the field exists to report.
+func (t *Task) SetStatus(s TaskStatus) {
+	if t.Meta.Status == s {
+		return
+	}
+	t.Meta.Status = s
+	t.Meta.StatusChanged = Now()
+}
+
 func (t *Task) Filename() string {
 	slug := Slugify(t.Meta.Title)
 	if t.Meta.ID != "" {
@@ -344,6 +377,10 @@ func NewTask(id, title, project string) *Task {
 			Status:  StatusTodo,
 			Created: Today(),
 			Updated: Now(),
+			// A new task's status age starts now, so a task that has sat on
+			// todo since it was created reports its real age instead of
+			// "unknown" until someone first moves it.
+			StatusChanged: Now(),
 		},
 		Project: project,
 	}

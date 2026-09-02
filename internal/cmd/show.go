@@ -34,6 +34,17 @@ func newShowCmd(store storage.TaskStore) *cobra.Command {
 			fmt.Fprintln(&header)
 			fmt.Fprintf(&header, "\n**Status:** %s | **Project:** %s | **Updated:** %s\n", task.Meta.Status, task.Project, storage.StampDate(task.Meta.Updated))
 
+			// Both are omitted when unset: status_changed is empty on every
+			// task written before the field existed, and a blocker nobody
+			// recorded is not a blocker worth a blank line.
+			if task.Meta.StatusChanged != "" {
+				fmt.Fprintf(&header, "\n**Status since:** %s\n", storage.StampDate(task.Meta.StatusChanged))
+			}
+
+			if task.Meta.WaitingFor != "" {
+				fmt.Fprintf(&header, "\n**Waiting for:** %s\n", task.Meta.WaitingFor)
+			}
+
 			if task.Meta.Branch != "" {
 				fmt.Fprintf(&header, "\n**Branch:** `%s`\n", task.Meta.Branch)
 			}

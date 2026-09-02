@@ -100,6 +100,10 @@ func (m Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				Status:  m.statuses[0],
 				Created: storage.Today(),
 				Updated: storage.Now(),
+				// Same rule as storage.NewTask: a task's status age starts at
+				// creation, so one added here and left on todo reports a real
+				// age instead of "unknown" until its first move.
+				StatusChanged: storage.Now(),
 			},
 		}
 		slug := m.projects[m.activeProject]

@@ -61,6 +61,7 @@ type addTaskInput struct {
 	ID         string            `json:"id,omitempty" jsonschema:"Task ID (auto-generated if omitted; when parent is set, auto-numbers as <parent>-<n>)"`
 	Brief      string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
 	AC         string            `json:"ac,omitempty" jsonschema:"Acceptance criteria (overwrites previous)"`
+	WaitingFor string            `json:"waiting_for,omitempty" jsonschema:"Who or what this task is blocked on - free text (e.g. 'review Alex PR #940', 'client answer'). Set it whenever you put a task on the waiting status, so the blocker is readable without opening the body."`
 	Sessions   []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to attach"`
 }
 
@@ -83,6 +84,7 @@ type updateTaskInput struct {
 	Spec       string            `json:"spec,omitempty" jsonschema:"Replace the current-truth Spec block (between <!-- spec:start --> / <!-- spec:end --> markers): what we're building, current decisions, still-open questions. Editable in place; created at the top of the body if absent. When a decision changes, rewrite the Spec to read as current truth AND append a one-line pointer to the Log via body_append (e.g. 'Q3 resolved -> see Spec'). Nothing is lost; the Spec never rots."`
 	Brief      *string           `json:"brief,omitempty" jsonschema:"Set the short session context summary (overwrites previous). Omit to keep current; pass an empty string to clear."`
 	AC         *string           `json:"ac,omitempty" jsonschema:"Set the acceptance criteria (overwrites previous). Omit to keep current; pass an empty string to clear."`
+	WaitingFor *string           `json:"waiting_for,omitempty" jsonschema:"Set who or what this task is blocked on - free text (e.g. 'review Alex PR #940', 'client answer'). Set it whenever you move a task to the waiting status, and clear it when the block lifts. Omit to keep current; pass an empty string to clear."`
 	Sessions   []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to append (never removes existing)"`
 }
 
@@ -126,19 +128,24 @@ type updateProjectInput struct {
 // --- JSON output helpers ---
 
 type taskSummary struct {
-	ID           string            `json:"id"`
-	Title        string            `json:"title"`
-	Status       string            `json:"status"`
-	Project      string            `json:"project"`
-	Updated      string            `json:"updated"`
-	Branch       string            `json:"branch,omitempty"`
-	Parent       string            `json:"parent,omitempty"`
-	Order        int               `json:"order,omitempty"`
-	Tags         []string          `json:"tags,omitempty"`
-	Links        map[string]string `json:"links,omitempty"`
-	Brief        string            `json:"brief,omitempty"`
-	AC           string            `json:"ac,omitempty"`
-	SessionCount int               `json:"session_count"`
+	ID         string            `json:"id"`
+	Title      string            `json:"title"`
+	Status     string            `json:"status"`
+	Project    string            `json:"project"`
+	Updated    string            `json:"updated"`
+	Branch     string            `json:"branch,omitempty"`
+	Parent     string            `json:"parent,omitempty"`
+	Order      int               `json:"order,omitempty"`
+	Tags       []string          `json:"tags,omitempty"`
+	Links      map[string]string `json:"links,omitempty"`
+	Brief      string            `json:"brief,omitempty"`
+	AC         string            `json:"ac,omitempty"`
+	WaitingFor string            `json:"waiting_for,omitempty"`
+	// StatusChanged is empty on every task written before the field existed -
+	// pm never migrates task files. Empty means UNKNOWN, not "just now": don't
+	// fall back to updated, which moves on any edit.
+	StatusChanged string `json:"status_changed,omitempty"`
+	SessionCount  int    `json:"session_count"`
 }
 
 // listTasksResult wraps pm_list_tasks output with a size-budget footer: total
@@ -164,19 +171,21 @@ type taskDetail struct {
 
 func toSummary(t *storage.Task) taskSummary {
 	return taskSummary{
-		ID:           t.Meta.ID,
-		Title:        t.Meta.Title,
-		Status:       string(t.Meta.Status),
-		Project:      t.Project,
-		Updated:      t.Meta.Updated,
-		Branch:       t.Meta.Branch,
-		Parent:       t.Meta.Parent,
-		Order:        t.Meta.Order,
-		Tags:         t.Meta.Tags,
-		Links:        t.Meta.Links,
-		Brief:        t.Meta.Brief,
-		AC:           t.Meta.AC,
-		SessionCount: len(t.Meta.Sessions),
+		ID:            t.Meta.ID,
+		Title:         t.Meta.Title,
+		Status:        string(t.Meta.Status),
+		Project:       t.Project,
+		Updated:       t.Meta.Updated,
+		Branch:        t.Meta.Branch,
+		Parent:        t.Meta.Parent,
+		Order:         t.Meta.Order,
+		Tags:          t.Meta.Tags,
+		Links:         t.Meta.Links,
+		Brief:         t.Meta.Brief,
+		AC:            t.Meta.AC,
+		WaitingFor:    t.Meta.WaitingFor,
+		StatusChanged: t.Meta.StatusChanged,
+		SessionCount:  len(t.Meta.Sessions),
 	}
 }
 
@@ -478,11 +487,11 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		t := storage.NewTask(id, in.Title, slug)
 
 		if in.Status != "" {
-			t.Meta.Status = storage.ParseStatus(in.Status)
+			t.SetStatus(storage.ParseStatus(in.Status))
 		} else {
 			statuses := store.GetProjectStatuses(slug)
 			if len(statuses) > 0 {
-				t.Meta.Status = statuses[0]
+				t.SetStatus(statuses[0])
 			}
 		}
 
@@ -533,6 +542,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		}
 		t.Meta.Brief = in.Brief
 		t.Meta.AC = in.AC
+		t.Meta.WaitingFor = in.WaitingFor
 		t.Meta.Sessions = in.Sessions
 
 		if err := store.AddTask(slug, t); err != nil {
@@ -547,7 +557,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	// pm_update_task
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_update_task",
-		Description: "Update an existing task. Links merge (never removed). body_append appends to the Log zone (never replaces); spec rewrites the current-truth Spec block in place. Tags replace if provided. Branch/parent/brief/ac are tri-state: omit to keep current, pass an empty string to clear. Title is required-non-empty - an empty/omitted value leaves it untouched.",
+		Description: "Update an existing task. Links merge (never removed). body_append appends to the Log zone (never replaces); spec rewrites the current-truth Spec block in place. Tags replace if provided. Branch/parent/brief/ac/waiting_for are tri-state: omit to keep current, pass an empty string to clear. status_changed is stamped automatically whenever status actually changes. Title is required-non-empty - an empty/omitted value leaves it untouched.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in updateTaskInput) (*mcp.CallToolResult, any, error) {
 		slug, err := store.ResolveProject(in.Project)
 		if err != nil {
@@ -577,7 +587,10 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 					return r, nil, nil
 				}
 			}
-			task.Meta.Status = st
+			// SetStatus, not a bare assignment: this handler writes the task
+			// itself (no MoveTask), so it is the second and last place that
+			// has to stamp status_changed.
+			task.SetStatus(st)
 		}
 		if in.Title != "" {
 			task.Meta.Title = in.Title
@@ -657,6 +670,12 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		// current, empty string clears.
 		if in.AC != nil {
 			task.Meta.AC = *in.AC
+		}
+
+		// WaitingFor: overwrite (the current blocker, not history). Tri-state:
+		// omit keeps current, empty string clears - the block lifted.
+		if in.WaitingFor != nil {
+			task.Meta.WaitingFor = *in.WaitingFor
 		}
 
 		// Sessions: append, never remove

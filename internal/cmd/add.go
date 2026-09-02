@@ -44,7 +44,7 @@ func newAddCmd(store storage.TaskStore) *cobra.Command {
 			t := storage.NewTask("", title, projectSlug)
 
 			if status != "" {
-				t.Meta.Status = storage.ParseStatus(status)
+				t.SetStatus(storage.ParseStatus(status))
 			}
 
 			// Validate status against project's allowed statuses
