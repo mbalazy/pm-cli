@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -268,10 +269,18 @@ func TestStatic(t *testing.T) {
 		}
 	})
 
-	t.Run("embedded default is the placeholder in a test build", func(t *testing.T) {
+	t.Run("embedded default: the bundle when make web has run, else the placeholder", func(t *testing.T) {
+		// A checkout holds only dist/.gitkeep; a tree after `make web` holds
+		// the real index.html. Both are legitimate builds of this package, so
+		// the test asserts whichever one it is running in.
+		_, built := fs.Stat(dist, "dist/index.html")
+		want := "make web"
+		if built == nil {
+			want = `<div id="root">`
+		}
 		srv := newServer(t, newTestStore(t), Options{})
-		if status, body, _ := get(t, srv.URL+"/"); status != 200 || !strings.Contains(body, "make web") {
-			t.Fatalf("%d %q", status, body)
+		if status, body, _ := get(t, srv.URL+"/"); status != 200 || !strings.Contains(body, want) {
+			t.Fatalf("%d %q (want %q)", status, body, want)
 		}
 	})
 

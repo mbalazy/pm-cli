@@ -5,5 +5,6 @@
 /temp/
 # pm serve: the React bundle is built into this dir by `make web`; only the
 # keep-file is versioned (go:embed needs the dir to exist at build time).
+web/node_modules/
 internal/server/dist/*
 !internal/server/dist/.gitkeep

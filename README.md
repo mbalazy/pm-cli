@@ -171,6 +171,17 @@ The same rollup is available offline via `pm context [project]` - useful when a 
 
 `pm serve --addr 127.0.0.1:7070` exposes the same data the MCP server returns, over HTTP, for the React cockpit built into the binary: `GET /api/projects`, `/api/tasks?project=&status=&limit=`, `/api/tasks/{project}/{id}`, `/api/context?project=`, `/api/runs` (`?remote=1` to include the remote runners - one ssh round-trip each, never by default), `/api/focus`, and `/api/events`, a Server-Sent Events feed that says *what changed* (`tasks`/`runs` with the project slug, `ping` while idle) so the page refetches. Every JSON body is the DTO the corresponding MCP tool returns; errors are `{"error": "..."}` with 400/404/500. Read-only and unauthenticated on purpose - bind to localhost and reach it over Tailscale. Anything outside `/api/` serves the bundle (index.html fallback for client-side routes) or a placeholder page until `make web` has built one.
 
+### Web UI
+
+The bundle is a React SPA in `web/` (Vite, TypeScript, Tailwind, TanStack Query + Router; npm). It is **deliberately raw** for now - a project sidebar and the project's tasks grouped by status - until the target views are designed (pm-cli-118-8); the visual pass is a separate task.
+
+```sh
+make web-install && make web && make install   # or: make web-install && make install-full
+pm serve                                        # http://127.0.0.1:7070
+```
+
+Development: run `pm serve` in one terminal and `cd web && npm run dev` in another - Vite proxies `/api` to the server. `make web-check` runs lint, tsc and vitest; `make check` and `make install` stay node-free (a binary built without the bundle serves a placeholder page).
+
 ## The executor
 
 The executor runs pm tasks autonomously through **isolated headless `claude -p` workers**, so a multi-subtask epic executes without blowing one session's context.
@@ -299,6 +310,10 @@ Concurrency model in one paragraph: task writes are atomic (tmp+rename), so the 
 make install               # build + install (VERSION from Makefile, via ldflags)
 make check                 # go vet + staticcheck + go test
 go test ./internal/... -v  # tests directly
+make web-install           # npm ci in web/ (once)
+make web-check             # lint + tsc + vitest for the web UI
+make web                   # build the bundle into internal/server/dist
+make install-full          # web + install
 ```
 
 - Git hooks are versioned in `githooks/` (`git config core.hooksPath githooks`); pre-commit runs gofmt-check + vet + staticcheck + tests.
