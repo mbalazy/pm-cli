@@ -153,7 +153,14 @@ func TestE2EWaitingForAndStatusChanged(t *testing.T) {
 	if isErr {
 		t.Fatalf("get_task error: %s", text)
 	}
-	if strings.Contains(text, "waiting_for") || strings.Contains(text, "status_changed") {
+	// Match the JSON KEYS, not the words: asserting on the bare strings would
+	// fire the day a fixture's body or brief happens to mention either field.
+	if strings.Contains(text, `"waiting_for"`) || strings.Contains(text, `"status_changed"`) {
 		t.Errorf("legacy task must omit both keys, got: %s", text)
+	}
+	var legacy blockerDetail
+	mustUnmarshal(t, text, &legacy)
+	if legacy.WaitingFor != "" || legacy.StatusChanged != "" {
+		t.Errorf("legacy task must report neither field, got %+v", legacy)
 	}
 }

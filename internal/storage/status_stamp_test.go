@@ -69,6 +69,11 @@ func TestNewTaskStampsStatusChanged(t *testing.T) {
 	if got := StampDate(task.Meta.StatusChanged); got != task.Meta.Created {
 		t.Errorf("status_changed date = %q, want the created date %q", got, task.Meta.Created)
 	}
+	// Both stamps come from one clock read: two Now() calls can straddle a
+	// second, leaving a brand-new task whose status moved AFTER its last edit.
+	if task.Meta.StatusChanged != task.Meta.Updated {
+		t.Errorf("status_changed = %q, want it identical to updated %q", task.Meta.StatusChanged, task.Meta.Updated)
+	}
 }
 
 func TestMoveTaskStampsStatusChanged(t *testing.T) {
@@ -115,9 +120,11 @@ func TestMoveTaskStampsStatusChanged(t *testing.T) {
 		}
 	})
 
-	// An edit that is not a status change (a brief, a session note) must leave
-	// the status clock alone: that is exactly why `updated` cannot answer
-	// "waiting since when".
+	// An edit that is not a status change (a brief, a session note) goes
+	// through Store.WriteTask, which holds no status logic at all - this pins
+	// that down, so a later "just stamp it centrally in writeTask" refactor
+	// (which would re-stamp every unrelated edit and destroy the age) fails
+	// here rather than in production data.
 	t.Run("a non-status edit leaves the stamp alone", func(t *testing.T) {
 		store, dir := setupTestStore(t)
 		task := &Task{

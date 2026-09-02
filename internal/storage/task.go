@@ -370,17 +370,21 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 }
 
 func NewTask(id, title, project string) *Task {
+	// ONE clock read for both stamps: two calls to Now() can straddle a second
+	// boundary and leave a brand-new task whose status_changed is LATER than
+	// its updated, which reads as "the status moved after the last edit".
+	now := Now()
 	return &Task{
 		Meta: TaskMeta{
 			ID:      id,
 			Title:   title,
 			Status:  StatusTodo,
 			Created: Today(),
-			Updated: Now(),
+			Updated: now,
 			// A new task's status age starts now, so a task that has sat on
 			// todo since it was created reports its real age instead of
 			// "unknown" until someone first moves it.
-			StatusChanged: Now(),
+			StatusChanged: now,
 		},
 		Project: project,
 	}
