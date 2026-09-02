@@ -84,13 +84,18 @@ func relativeTime(dateStr string) string {
 	}
 }
 
+// nowFn is the clock calendarDaysAgo reads, a test seam (like killSignal in
+// run_control.go): a test that has to pin "what day is it" otherwise fails
+// exactly once, on the run that crosses midnight.
+var nowFn = time.Now
+
 // calendarDaysAgo counts whole local calendar days between at and now. Both
 // days are rebuilt in UTC purely as arithmetic: a local day is 23 or 25 hours
 // long across a DST switch, which would round the wrong way.
 func calendarDaysAgo(at time.Time) int {
 	at = at.In(time.Local)
 	stampDay := time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, time.UTC)
-	n := time.Now()
+	n := nowFn().In(time.Local)
 	today := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC)
 	return int(today.Sub(stampDay).Hours() / 24)
 }

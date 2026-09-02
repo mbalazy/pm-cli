@@ -3,12 +3,26 @@ package storage
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 )
 
+// pinZone forces time.Local for the duration of a test. Without it every
+// local-zone assertion below is a tautology on a UTC machine - which CI is -
+// so the one property these helpers are built around (a stamp means the day
+// its writer saw, not a UTC day) would be defended on no runner at all.
+func pinZone(t *testing.T, loc *time.Location) {
+	t.Helper()
+	prev := time.Local
+	time.Local = loc
+	t.Cleanup(func() { time.Local = prev })
+}
+
 func TestNow(t *testing.T) {
+	pinZone(t, time.FixedZone("TEST", 5*60*60))
+
 	got := Now()
 	at, err := time.Parse(time.RFC3339, got)
 	if err != nil {
@@ -18,14 +32,9 @@ func TestNow(t *testing.T) {
 		t.Errorf("Now() = %q, %v away from the current instant", got, d)
 	}
 	// The local zone, not UTC: StampDate has to report the day the user saw.
-	if _, offset := at.Zone(); offset != nowLocalOffset() {
-		t.Errorf("Now() = %q, want the local zone offset %d", got, nowLocalOffset())
+	if _, offset := at.Zone(); offset != 5*60*60 {
+		t.Errorf("Now() = %q, want the local zone offset %d", got, 5*60*60)
 	}
-}
-
-func nowLocalOffset() int {
-	_, offset := time.Now().Zone()
-	return offset
 }
 
 func TestToday(t *testing.T) {
@@ -35,6 +44,10 @@ func TestToday(t *testing.T) {
 }
 
 func TestParseStamp(t *testing.T) {
+	// A zone that is neither UTC nor the dev machine's, so "bare date is local
+	// midnight" is an assertion rather than a coincidence.
+	pinZone(t, time.FixedZone("TEST", 5*60*60))
+
 	tests := []struct {
 		name string
 		in   string
@@ -46,7 +59,7 @@ func TestParseStamp(t *testing.T) {
 		{"rfc3339 utc", "2026-09-02T14:34:40Z", true,
 			time.Date(2026, 9, 2, 14, 34, 40, 0, time.UTC)},
 		{"bare date is local midnight", "2026-09-02", true,
-			time.Date(2026, 9, 2, 0, 0, 0, 0, time.Local)},
+			time.Date(2026, 9, 2, 0, 0, 0, 0, time.FixedZone("TEST", 5*60*60))},
 		{"empty", "", false, time.Time{}},
 		{"garbage", "not-a-stamp", false, time.Time{}},
 		{"date and time without a zone", "2026-09-02 16:34:40", false, time.Time{}},
@@ -68,6 +81,9 @@ func TestParseStamp(t *testing.T) {
 }
 
 func TestStampDate(t *testing.T) {
+	// +02:00, the zone pm's own stamps are written in here.
+	pinZone(t, time.FixedZone("TEST", 2*60*60))
+
 	tests := []struct {
 		name string
 		in   string
@@ -77,6 +93,9 @@ func TestStampDate(t *testing.T) {
 		// 00:30 local on the 2nd is still the 1st in UTC - the day a human saw
 		// is the local one, which is why ParseStamp does not normalise to UTC.
 		{"just after local midnight", "2026-09-02T00:30:00+02:00", "2026-09-02"},
+		// A foreign offset is converted to the reader's day: 23:30 UTC is
+		// already the 2nd here. Same frame relativeTime counts "today" in.
+		{"foreign offset lands on the local day", "2026-09-01T23:30:00Z", "2026-09-02"},
 		{"bare date passes through", "2026-09-02", "2026-09-02"},
 		{"empty", "", ""},
 		{"garbage is returned verbatim", "whenever", "whenever"},
@@ -133,20 +152,41 @@ func TestUpdatedStampSurvivesYAMLRoundTrip(t *testing.T) {
 	}
 }
 
-// A task file written before the switch holds a bare date. Both shapes have to
-// coexist unmigrated, and a same-day pair has to order by time.
+// Task files are never migrated, so a real column holds both shapes at once.
+// LessByOrder has to order the whole mixture - most recent first - not just
+// the pairs of one shape.
 func TestUpdatedStampsMixOldAndNew(t *testing.T) {
-	old := "2026-09-02"
-	morning := "2026-09-02T09:00:00+02:00"
-	evening := "2026-09-02T21:00:00+02:00"
+	stamps := []string{
+		"2026-09-02T21:00:00+02:00", // today, evening
+		"2026-09-02T09:00:00+02:00", // today, morning
+		"2026-09-02",                // today, written before the switch
+		"2026-09-01T23:00:00+02:00", // yesterday
+		"2026-08-30",                // last week, before the switch
+	}
+	// Fed in reverse, so a comparator that never fires cannot pass.
+	tasks := make([]*Task, 0, len(stamps))
+	for i := len(stamps) - 1; i >= 0; i-- {
+		if _, ok := ParseStamp(stamps[i]); !ok {
+			t.Fatalf("ParseStamp(%q) failed", stamps[i])
+		}
+		// Same ID and order on every task, so LessByOrder falls through to the
+		// stamp tie-break.
+		tasks = append(tasks, &Task{Meta: TaskMeta{ID: "x-1", Updated: stamps[i]}})
+	}
+	sort.SliceStable(tasks, func(i, j int) bool { return LessByOrder(tasks[i], tasks[j]) })
 
-	for _, s := range []string{old, morning, evening} {
-		if _, ok := ParseStamp(s); !ok {
-			t.Fatalf("ParseStamp(%q) failed", s)
+	for i, want := range stamps {
+		if tasks[i].Meta.Updated != want {
+			t.Errorf("position %d = %q, want %q (full order: %v)", i, tasks[i].Meta.Updated, want, stampsOf(tasks))
+			break
 		}
 	}
-	// The string ordering LessByOrder and the board columns rely on.
-	if !(old < morning && morning < evening) {
-		t.Errorf("string order broken: %q %q %q", old, morning, evening)
+}
+
+func stampsOf(tasks []*Task) []string {
+	out := make([]string, len(tasks))
+	for i, t := range tasks {
+		out[i] = t.Meta.Updated
 	}
+	return out
 }

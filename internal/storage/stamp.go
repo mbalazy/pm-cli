@@ -7,8 +7,8 @@ import "time"
 const stampDateLayout = "2006-01-02"
 
 // Today returns the current date as YYYY-MM-DD. It stamps `created`, which
-// never needs sub-day resolution, and drives the date comparisons in focus
-// plans and journals.
+// never needs sub-day resolution, and is what focus plans compare a plan's
+// date against.
 func Today() string {
 	return time.Now().Format(stampDateLayout)
 }
@@ -47,9 +47,16 @@ func ParseStamp(s string) (time.Time, bool) {
 // full timestamp would only make a card or a header wider. An unparsable
 // stamp is returned verbatim - showing what the file holds beats showing
 // nothing.
+//
+// The day is the READER's, not the writer's: a stamp carrying a foreign offset
+// is converted to the local zone first. Every display of `updated` has to
+// answer "which day is this" the same way - a header reading "2026-09-02" next
+// to a list reading "today" would just be two frames on one screen - and
+// "today" can only ever mean the reader's today. For the stamps pm actually
+// writes (Now uses the local zone) the conversion is a no-op.
 func StampDate(s string) string {
 	if at, ok := ParseStamp(s); ok {
-		return at.Format(stampDateLayout)
+		return at.In(time.Local).Format(stampDateLayout)
 	}
 	return s
 }
