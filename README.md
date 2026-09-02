@@ -105,6 +105,8 @@ A task is a markdown file with frontmatter:
 id: my-app-12
 title: Fix login flow
 status: doing
+status_changed: '2026-09-02T11:20:04+02:00'
+waiting_for: 'review Alex PR #940'
 brief: 'Worker merged on feat/fix-login. JWT refresh was the culprit ...'
 ac: |
   - refresh token rotates on use
@@ -132,6 +134,8 @@ Field semantics that make this work across many sessions:
 | Spec zone | rewritten in place | the living document; resolved questions get folded in, not appended |
 | Log zone | append-only | the audit trail; never rewritten |
 | `links` | merge-only | keys are never removed by updates |
+| `waiting_for` | overwrites | who or what the task is blocked on - free text, never validated, never auto-cleared |
+| `status_changed` | stamped by pm | when the status last actually changed; "waiting since when", which `updated` cannot answer (it moves on any edit). Empty on tasks older than the field - unknown, never guessed from `updated` |
 
 ### Projects and statuses
 
@@ -159,7 +163,7 @@ Notable behaviors:
 
 - `pm_context` auto-detects the project from the caller's cwd and returns the rollup: doing tasks (with full briefs), trackers, counts. Bodies cap at 2000 runes with a pointer to `pm_get_task`; finished trackers collapse their children. **The rollup is a summary, not a reading surface** - it runs at every session start, so it is kept cheap by construction.
 - `pm_list_tasks` defaults to the 50 newest with an explicit `{total, shown, note}` wrapper; briefs compress to one line in listings.
-- Update semantics mirror the field rules above: links merge, `body_append` appends to the Log, `spec` rewrites the Spec zone, brief/ac overwrite. Tri-state params (`*string`/`*int`) distinguish "omit" from "clear".
+- Update semantics mirror the field rules above: links merge, `body_append` appends to the Log, `spec` rewrites the Spec zone, brief/ac/waiting_for overwrite. Tri-state params (`*string`/`*int`) distinguish "omit" from "clear". `status_changed` is never a param - pm stamps it whenever a status really changes.
 
 The same rollup is available offline via `pm context [project]` - useful when a long-lived MCP process holds a stale binary. The fuller usage contract the agent needs on top of the tool schemas ships via `pm docs claude` (see [Setup](#setup)).
 

@@ -272,7 +272,10 @@ func (s *Store) MoveTask(t *Task, newStatus TaskStatus) error {
 		return fmt.Errorf("task %s no longer exists or its file no longer parses", t.Meta.ID)
 	}
 	*t = *fresh
-	t.Meta.Status = newStatus
+	// SetStatus, not a bare assignment: it stamps StatusChanged, and it
+	// compares against the FRESH on-disk status, so a move to the status the
+	// task already holds leaves the "stuck since" clock alone.
+	t.SetStatus(newStatus)
 	t.Meta.Updated = Now()
 	return writeTask(t)
 }

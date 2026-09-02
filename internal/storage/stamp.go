@@ -15,7 +15,9 @@ func Today() string {
 
 // Now returns the current local time as an RFC3339 timestamp. It stamps
 // `updated`, where ordering WITHIN a day is what makes "most recent first"
-// mean anything - a bare date leaves every task touched today tied.
+// mean anything - a bare date leaves every task touched today tied - and
+// `status_changed`, where the same resolution is what makes "waiting since
+// this morning" distinguishable from "waiting since last night".
 func Now() string {
 	return time.Now().Format(time.RFC3339)
 }

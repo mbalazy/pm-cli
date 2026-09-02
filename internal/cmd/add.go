@@ -44,7 +44,11 @@ func newAddCmd(store storage.TaskStore) *cobra.Command {
 			t := storage.NewTask("", title, projectSlug)
 
 			if status != "" {
-				t.Meta.Status = storage.ParseStatus(status)
+				t.SetStatus(storage.ParseStatus(status))
+				// SetStatus took its own clock read; realign the pair NewTask
+				// wrote from one read, so a task born on a non-default status
+				// never reports a status change later than its own creation.
+				t.Meta.Updated = t.Meta.StatusChanged
 			}
 
 			// Validate status against project's allowed statuses

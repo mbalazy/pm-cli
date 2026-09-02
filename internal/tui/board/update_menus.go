@@ -93,13 +93,21 @@ func (m Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if id == "" {
 			id = fmt.Sprintf("%d", time.Now().Unix()%100000)
 		}
+		// Same rules as storage.NewTask, which this literal cannot use (it
+		// carries the board's own id and column status): a task's status age
+		// starts at creation, so one added here and left on todo reports a
+		// real age instead of "unknown" until its first move - and both stamps
+		// come from ONE clock read, so status_changed can never land a second
+		// after updated.
+		now := storage.Now()
 		t := &storage.Task{
 			Meta: storage.TaskMeta{
-				ID:      id,
-				Title:   m.addTitle,
-				Status:  m.statuses[0],
-				Created: storage.Today(),
-				Updated: storage.Now(),
+				ID:            id,
+				Title:         m.addTitle,
+				Status:        m.statuses[0],
+				Created:       storage.Today(),
+				Updated:       now,
+				StatusChanged: now,
 			},
 		}
 		slug := m.projects[m.activeProject]
