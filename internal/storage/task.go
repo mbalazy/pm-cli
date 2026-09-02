@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/adrg/frontmatter"
 	"gopkg.in/yaml.v3"
@@ -337,20 +336,14 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmpName, path)
 }
 
-// Today returns the current date as YYYY-MM-DD.
-func Today() string {
-	return time.Now().Format("2006-01-02")
-}
-
 func NewTask(id, title, project string) *Task {
-	now := Today()
 	return &Task{
 		Meta: TaskMeta{
 			ID:      id,
 			Title:   title,
 			Status:  StatusTodo,
-			Created: now,
-			Updated: now,
+			Created: Today(),
+			Updated: Now(),
 		},
 		Project: project,
 	}

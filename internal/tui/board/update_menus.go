@@ -93,14 +93,13 @@ func (m Model) updateAdd(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if id == "" {
 			id = fmt.Sprintf("%d", time.Now().Unix()%100000)
 		}
-		now := storage.Today()
 		t := &storage.Task{
 			Meta: storage.TaskMeta{
 				ID:      id,
 				Title:   m.addTitle,
 				Status:  m.statuses[0],
-				Created: now,
-				Updated: now,
+				Created: storage.Today(),
+				Updated: storage.Now(),
 			},
 		}
 		slug := m.projects[m.activeProject]
@@ -315,7 +314,7 @@ func (m Model) updateSessionMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					t.Meta.Links = nil
 				}
 			}
-			t.Meta.Updated = storage.Today()
+			t.Meta.Updated = storage.Now()
 			if err := m.store.WriteTask(t); err != nil {
 				m.showErrorToast("delete session failed", err)
 			} else {

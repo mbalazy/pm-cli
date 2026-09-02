@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // setupTestStore creates a temp store with a project and optional tasks.
@@ -467,8 +468,13 @@ func TestMoveTask(t *testing.T) {
 		if task.Meta.Status != StatusDoing {
 			t.Errorf("status = %q, want %q", task.Meta.Status, StatusDoing)
 		}
-		if task.Meta.Updated != Today() {
-			t.Errorf("updated = %q, want %q", task.Meta.Updated, Today())
+		// A full RFC3339 stamp now, not a bare date - the exact instant is
+		// untestable, so assert the shape and the day.
+		if _, err := time.Parse(time.RFC3339, task.Meta.Updated); err != nil {
+			t.Errorf("updated = %q, want an RFC3339 stamp: %v", task.Meta.Updated, err)
+		}
+		if got := StampDate(task.Meta.Updated); got != Today() {
+			t.Errorf("updated date = %q, want %q", got, Today())
 		}
 	})
 

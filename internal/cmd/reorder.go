@@ -77,7 +77,7 @@ func newReorderCmd(store storage.TaskStore) *cobra.Command {
 			for i, id := range wantIDs {
 				t := children[id]
 				t.Meta.Order = (i + 1) * 10
-				t.Meta.Updated = storage.Today()
+				t.Meta.Updated = storage.Now()
 				if err := store.WriteTask(t); err != nil {
 					return fmt.Errorf("write %s: %w", id, err)
 				}

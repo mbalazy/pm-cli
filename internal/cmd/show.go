@@ -32,7 +32,7 @@ func newShowCmd(store storage.TaskStore) *cobra.Command {
 				fmt.Fprintf(&header, " (#%s)", task.Meta.ID)
 			}
 			fmt.Fprintln(&header)
-			fmt.Fprintf(&header, "\n**Status:** %s | **Project:** %s | **Updated:** %s\n", task.Meta.Status, task.Project, task.Meta.Updated)
+			fmt.Fprintf(&header, "\n**Status:** %s | **Project:** %s | **Updated:** %s\n", task.Meta.Status, task.Project, storage.StampDate(task.Meta.Updated))
 
 			if task.Meta.Branch != "" {
 				fmt.Fprintf(&header, "\n**Branch:** `%s`\n", task.Meta.Branch)

@@ -10,6 +10,12 @@ func orderTask(id, parent string, order int) *Task {
 	return &Task{Meta: TaskMeta{ID: id, Parent: parent, Order: order}, Project: "test"}
 }
 
+// updatedTask builds two tasks that tie on order and ID, so LessByOrder falls
+// through to the `updated` stamp.
+func updatedTask(id, updated string) *Task {
+	return &Task{Meta: TaskMeta{ID: id, Updated: updated}, Project: "test"}
+}
+
 func TestBuildTrackersSortsChildrenByOrder(t *testing.T) {
 	// Children given out of order, with explicit order values that do NOT match
 	// the numeric ID sequence - the rollup must follow order, not ID.
@@ -100,6 +106,24 @@ func TestLessByOrder(t *testing.T) {
 		{"order asc", orderTask("x-2", "", 10), orderTask("x-1", "", 20), true},
 		{"unset before ordered", orderTask("x-1", "", 0), orderTask("x-2", "", 10), true},
 		{"equal order -> numeric id", orderTask("x-2", "", 10), orderTask("x-10", "", 10), true},
+		// The reason `updated` carries a full timestamp: two tasks touched on the
+		// same day used to tie here, so "most recent first" meant nothing within
+		// a day.
+		{"same day -> later stamp first",
+			updatedTask("x-1", "2026-09-02T21:00:00+02:00"),
+			updatedTask("x-1", "2026-09-02T09:00:00+02:00"), true},
+		{"same day -> earlier stamp last",
+			updatedTask("x-1", "2026-09-02T09:00:00+02:00"),
+			updatedTask("x-1", "2026-09-02T21:00:00+02:00"), false},
+		// A pre-switch task holds a bare date. It sorts below anything stamped
+		// with a time that same day, which is the accepted trade for not
+		// migrating a thousand task files.
+		{"legacy bare date sorts after a same-day stamp",
+			updatedTask("x-1", "2026-09-02"),
+			updatedTask("x-1", "2026-09-02T09:00:00+02:00"), false},
+		{"legacy bare date still beats an older day",
+			updatedTask("x-1", "2026-09-02"),
+			updatedTask("x-1", "2026-09-01T23:00:00+02:00"), true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -273,7 +273,7 @@ func (s *Store) MoveTask(t *Task, newStatus TaskStatus) error {
 	}
 	*t = *fresh
 	t.Meta.Status = newStatus
-	t.Meta.Updated = Today()
+	t.Meta.Updated = Now()
 	return writeTask(t)
 }
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mbalazy/pm/internal/storage"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -58,9 +59,12 @@ func shortenPath(path string) string {
 	return path
 }
 
+// relativeTime renders a task stamp as "today" / "Nd ago". It goes through
+// storage.ParseStamp because `updated` may be either shape: an RFC3339 stamp
+// on anything written since the switch, a bare date on everything older.
 func relativeTime(dateStr string) string {
-	t, err := time.Parse("2006-01-02", dateStr)
-	if err != nil {
+	t, ok := storage.ParseStamp(dateStr)
+	if !ok {
 		return dateStr
 	}
 	days := int(time.Since(t).Hours() / 24)

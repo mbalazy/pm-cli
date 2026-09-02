@@ -1422,7 +1422,7 @@ func applyWorkerResult(errOut io.Writer, store storage.TaskStore, t *storage.Tas
 			return store.MoveTask(t, storage.StatusWaiting)
 		}
 	}
-	t.Meta.Updated = storage.Today()
+	t.Meta.Updated = storage.Now()
 	return store.WriteTask(t)
 }
 
