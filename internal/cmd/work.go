@@ -173,6 +173,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 			if dryRun {
 				fmt.Fprintf(stdout, "# pm work (dry-run)\nproject: %s\ntask: %s\nbranch: %s\nmode: %s\ncwd: %s\n",
 					slug, task.Meta.ID, plan.branch, modeLabel(opts.standalone), plan.workDir)
+				fmt.Fprintf(stdout, "claude config dir: %s\n", plan.proj.ResolveWorkerClaudeConfigDir())
 				if plan.worktree {
 					fmt.Fprintf(stdout, "run: ADDITIONAL worktree - first free of %d slot(s), claimed at run time (lock: %s)\n",
 						len(plan.slots), ".pm-executor.lock")
@@ -738,6 +739,9 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			// prior, possibly killed, run) so nothing bleeds into it. Ignored
 			// deps/configs survive. Base was resolved in planWork (--base >
 			// executor.base_branch > main checkout's current branch).
+			if err := freshenBase(opts.stderr(), dir, plan.base); err != nil {
+				return nil, err
+			}
 			if err := gitFreshBranch(dir, plan.branch, plan.base); err != nil {
 				return nil, fmt.Errorf("prepare fresh branch %s (base %s): %w", plan.branch, plan.base, err)
 			}
@@ -884,7 +888,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// anything outside this process has on it. Publishing it lets the board kill
 	// the worker tree directly when it has to SIGKILL the manager - a signal the
 	// manager cannot forward (see storage.RunState.Kill).
-	res, sessionID, err := runWorker(opts.stderr(), dir, plan.cmdArgs, plan.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env, plan.sessionID,
+	res, sessionID, err := runWorker(opts.stderr(), dir, plan.cmdArgs, plan.timeout, plan.proj.ResolveWorkerClaudeConfigDir(), plan.env, plan.sessionID,
 		func(pgid int) { _ = hbw.Update(func(run *storage.RunState) { run.WorkerPGID = pgid }) })
 	stopHeartbeat()
 	// The worker is gone and the heartbeat died with it, so drop the in-flight
@@ -921,7 +925,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		// transcript instead. Recorded on the run-state by id, which serves both
 		// callers: standalone (one sub) and the epic manager's shared state,
 		// whose journalSubs lifts it from there.
-		deadEffort := recoverWorkerEffort(plan.proj.ResolveClaudeConfigDir(), dir, plan.sessionID)
+		deadEffort := recoverWorkerEffort(plan.proj.ResolveWorkerClaudeConfigDir(), dir, plan.sessionID)
 		if deadEffort != nil {
 			fmt.Fprintf(opts.stderr(), "pm work: %s\n", describeEffort(deadEffort))
 			_ = hbw.Update(func(run *storage.RunState) { setSubEffort(run, task.Meta.ID, deadEffort) })
