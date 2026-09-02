@@ -211,6 +211,19 @@ func TestBuildWorkerSystemPrompt(t *testing.T) {
 		mustContain(t, got, "NEVER merge to main")
 		mustContain(t, got, "status:")
 	})
+	// Retro pm-cli-119: 30% of a worker's API calls carried no tool call at all
+	// and none carried more than one, each re-reading a 100k+ context. The
+	// prompt names both rules, in every mode.
+	t.Run("every mode carries the call discipline", func(t *testing.T) {
+		for _, tc := range []struct {
+			standalone, independent bool
+		}{{true, false}, {false, false}, {false, true}} {
+			got := buildWorkerSystemPrompt(exec, tc.standalone, tc.independent)
+			mustContain(t, got, "## Call discipline")
+			mustContain(t, got, "No prose between tool calls")
+			mustContain(t, got, "Independent tool calls go in ONE message")
+		}
+	})
 	t.Run("epic omits pr generic and says no PR", func(t *testing.T) {
 		got := buildWorkerSystemPrompt(exec, false, false)
 		mustContain(t, got, "do NOT open a pull request")
