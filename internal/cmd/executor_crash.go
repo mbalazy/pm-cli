@@ -69,6 +69,13 @@ func journalTerminalSignal(sig syscall.Signal) {
 		return
 	}
 	e := cj.entry
+	// The template is the run's START line, TS included, and AppendJournal only
+	// stamps an EMPTY TS - so without this reset the killed line carried the
+	// start time, and `pm executor stats` reported pm-cli-118's kill 64 minutes
+	// before it happened (start 14:32:41Z, kill 15:36:28Z, both lines stamped
+	// 14:32:41Z). The kill happens NOW; the identity fields are what pair it
+	// with the start line, not the clock.
+	e.TS = ""
 	e.Error = fmt.Sprintf("manager received %s (signal %d) and re-raised it - the run did not finish; "+
 		"whatever the worker had committed is on its branch", signalName(sig), int(sig))
 	_ = storage.AppendJournal(cj.stateDir, &e)

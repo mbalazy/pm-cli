@@ -58,6 +58,9 @@ type workerResult struct {
 	// journal so retros can weigh outcomes by effort/cost.
 	Turns   int     `json:"turns,omitempty"`
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// Tokens is the envelope's usage object - the unit a subscription's rate
+	// window meters (pm-cli-119). Same standing as Turns/CostUSD.
+	Tokens *storage.TokenUsage `json:"tokens,omitempty"`
 	// Review is the review-phase telemetry the worker guard hook collected while
 	// this worker ran. Same standing as Turns/CostUSD: observed by pm, never
 	// claimed by the worker, and deliberately absent from workerResultSchema.
@@ -67,14 +70,38 @@ type workerResult struct {
 // claudeEnvelope is the `claude -p --output-format json` result envelope. The
 // schema-validated worker result lands in StructuredOutput.
 type claudeEnvelope struct {
-	Type             string        `json:"type"`
-	Subtype          string        `json:"subtype"`
-	IsError          bool          `json:"is_error"`
-	Result           string        `json:"result"`
-	SessionID        string        `json:"session_id"`
-	NumTurns         int           `json:"num_turns"`
-	TotalCostUSD     float64       `json:"total_cost_usd"`
-	StructuredOutput *workerResult `json:"structured_output"`
+	Type             string         `json:"type"`
+	Subtype          string         `json:"subtype"`
+	IsError          bool           `json:"is_error"`
+	Result           string         `json:"result"`
+	SessionID        string         `json:"session_id"`
+	NumTurns         int            `json:"num_turns"`
+	TotalCostUSD     float64        `json:"total_cost_usd"`
+	Usage            *envelopeUsage `json:"usage"`
+	StructuredOutput *workerResult  `json:"structured_output"`
+}
+
+// envelopeUsage is the token accounting the CLI puts on its result envelope
+// (verified on claude 2.1.258 with a one-turn probe, 2026-09-02). Only the four
+// counters pm records are decoded; the rest of the object (service tier,
+// server tool use, thinking breakdown) is ignored.
+type envelopeUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+}
+
+// tokens converts the envelope's usage into pm's record; nil in, nil out, so a
+// CLI that stops sending usage leaves the field absent rather than zero-filled.
+func (u *envelopeUsage) tokens() *storage.TokenUsage {
+	if u == nil {
+		return nil
+	}
+	return &storage.TokenUsage{
+		Input: u.InputTokens, CacheCreation: u.CacheCreationInputTokens,
+		CacheRead: u.CacheReadInputTokens, Output: u.OutputTokens,
+	}
 }
 
 // workerResultSchema constrains the worker's structured output to the contract.
@@ -146,6 +173,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 			if dryRun {
 				fmt.Fprintf(stdout, "# pm work (dry-run)\nproject: %s\ntask: %s\nbranch: %s\nmode: %s\ncwd: %s\n",
 					slug, task.Meta.ID, plan.branch, modeLabel(opts.standalone), plan.workDir)
+				fmt.Fprintf(stdout, "claude config dir: %s\n", plan.proj.ResolveWorkerClaudeConfigDir())
 				if plan.worktree {
 					fmt.Fprintf(stdout, "run: ADDITIONAL worktree - first free of %d slot(s), claimed at run time (lock: %s)\n",
 						len(plan.slots), ".pm-executor.lock")
@@ -711,6 +739,9 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			// prior, possibly killed, run) so nothing bleeds into it. Ignored
 			// deps/configs survive. Base was resolved in planWork (--base >
 			// executor.base_branch > main checkout's current branch).
+			if err := freshenBase(opts.stderr(), dir, plan.base); err != nil {
+				return nil, err
+			}
 			if err := gitFreshBranch(dir, plan.branch, plan.base); err != nil {
 				return nil, fmt.Errorf("prepare fresh branch %s (base %s): %w", plan.branch, plan.base, err)
 			}
@@ -857,7 +888,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// anything outside this process has on it. Publishing it lets the board kill
 	// the worker tree directly when it has to SIGKILL the manager - a signal the
 	// manager cannot forward (see storage.RunState.Kill).
-	res, sessionID, err := runWorker(opts.stderr(), dir, plan.cmdArgs, plan.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env, plan.sessionID,
+	res, sessionID, err := runWorker(opts.stderr(), dir, plan.cmdArgs, plan.timeout, plan.proj.ResolveWorkerClaudeConfigDir(), plan.env, plan.sessionID,
 		func(pgid int) { _ = hbw.Update(func(run *storage.RunState) { run.WorkerPGID = pgid }) })
 	stopHeartbeat()
 	// The worker is gone and the heartbeat died with it, so drop the in-flight
@@ -894,7 +925,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		// transcript instead. Recorded on the run-state by id, which serves both
 		// callers: standalone (one sub) and the epic manager's shared state,
 		// whose journalSubs lifts it from there.
-		deadEffort := recoverWorkerEffort(plan.proj.ResolveClaudeConfigDir(), dir, plan.sessionID)
+		deadEffort := recoverWorkerEffort(plan.proj.ResolveWorkerClaudeConfigDir(), dir, plan.sessionID)
 		if deadEffort != nil {
 			fmt.Fprintf(opts.stderr(), "pm work: %s\n", describeEffort(deadEffort))
 			_ = hbw.Update(func(run *storage.RunState) { setSubEffort(run, task.Meta.ID, deadEffort) })
@@ -926,6 +957,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 					run.Subs[0].Note = err.Error()
 					run.Subs[0].Turns = res.Turns
 					run.Subs[0].CostUSD = res.CostUSD
+					run.Subs[0].Tokens = res.Tokens
 					run.Subs[0].Review = telemetry
 				}
 			})
@@ -934,7 +966,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			// off the claude envelope - unlike the runWorker-failure branch
 			// above, where res is nil and those fields stay zero.
 			journalEnd(storage.RunStatusFailed, err.Error(),
-				storage.JournalSub{Result: "failed", Note: err.Error(), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Review: telemetry})
+				storage.JournalSub{Result: "failed", Note: err.Error(), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Tokens: res.Tokens, Review: telemetry})
 		}
 		return nil, err
 	}
@@ -950,11 +982,12 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 				run.Subs[0].Commits = res.Commits
 				run.Subs[0].Turns = res.Turns
 				run.Subs[0].CostUSD = res.CostUSD
+				run.Subs[0].Tokens = res.Tokens
 				run.Subs[0].Review = telemetry
 			}
 		})
 		journalEnd(storage.RunStatusDone, "",
-			storage.JournalSub{Result: res.Status, Note: strings.TrimSpace(res.Summary), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Review: telemetry})
+			storage.JournalSub{Result: res.Status, Note: strings.TrimSpace(res.Summary), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Tokens: res.Tokens, Review: telemetry})
 	}
 	return res, nil
 }
@@ -1358,6 +1391,7 @@ func parseClaudeResult(data []byte) (*workerResult, string, error) {
 	// output can't carry them - only the harness knows turns/cost).
 	env.StructuredOutput.Turns = env.NumTurns
 	env.StructuredOutput.CostUSD = env.TotalCostUSD
+	env.StructuredOutput.Tokens = env.Usage.tokens()
 	// One place folds the legacy "merged" spelling into "verified", so nothing
 	// downstream (verdict checks, briefs, run-state, journal) has to know two
 	// words for one outcome.

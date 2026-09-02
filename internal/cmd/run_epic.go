@@ -462,8 +462,21 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		if !branchExists(workDir, baseBranch) {
 			return fmt.Errorf("independent mode: base branch %q does not exist at %s", baseBranch, workDir)
 		}
+		// Every sub forks from base: a stale local base is what produced the
+		// false SPEC-CONFLICT of orbit-144 (pm-cli-119-7).
+		if err := freshenBase(errOut, workDir, baseBranch); err != nil {
+			return fmt.Errorf("independent mode: %w", err)
+		}
 		fmt.Fprintf(errOut, "pm run-epic: %s INDEPENDENT - each sub on its own branch off %s (%d sub(s))\n", tracker.Meta.ID, baseBranch, len(subs))
 	} else {
+		// A FRESH integration branch forks from base, so base is brought up to
+		// origin first; a re-run continues the existing branch and must not
+		// have its base moved under it.
+		if !branchExists(workDir, epicBranch) {
+			if err := freshenBase(errOut, workDir, baseBranch); err != nil {
+				return err
+			}
+		}
 		if err := gitEnsureBranch(workDir, epicBranch, baseBranch); err != nil {
 			return fmt.Errorf("create integration branch %s: %w", epicBranch, err)
 		}
@@ -905,11 +918,12 @@ func setSubSession(run *storage.RunState, id, session string) {
 
 // setSubStats records the worker envelope's effort stats on sub id. Called
 // under the run writer's lock.
-func setSubStats(run *storage.RunState, id string, turns int, cost float64, review *storage.ReviewTelemetry) {
+func setSubStats(run *storage.RunState, id string, turns int, cost float64, tokens *storage.TokenUsage, review *storage.ReviewTelemetry) {
 	for i := range run.Subs {
 		if run.Subs[i].ID == id {
 			run.Subs[i].Turns = turns
 			run.Subs[i].CostUSD = cost
+			run.Subs[i].Tokens = tokens
 			run.Subs[i].Review = review
 		}
 	}
@@ -929,7 +943,7 @@ func journalSubs(outcomes []subOutcome, durations map[string]int, run *storage.R
 		out = append(out, storage.JournalSub{
 			ID: o.id, Result: o.result, Note: o.note, Branch: o.branch,
 			DurationS: durations[o.id], Session: sr.Session,
-			Turns: sr.Turns, CostUSD: sr.CostUSD, Review: sr.Review,
+			Turns: sr.Turns, CostUSD: sr.CostUSD, Tokens: sr.Tokens, Review: sr.Review,
 			// Set only for a sub whose worker died without an envelope, where
 			// Turns/CostUSD above are 0 for lack of one (see executeWork).
 			Effort: sr.Effort,
@@ -1134,8 +1148,8 @@ func printEpicPlan(w io.Writer, tracker *storage.Task, epicBranch, base string, 
 	if independent {
 		branchLine = fmt.Sprintf("mode: INDEPENDENT - each sub on its own branch off %s, pushed to origin; no integration branch, no merging, no epic PR", base)
 	}
-	fmt.Fprintf(w, "# pm run-epic (dry-run)\ntracker: %s  %s\n%s\n%s\nready status: %s -> done status: %s\n\nsubs (in Order):\n",
-		tracker.Meta.ID, tracker.Meta.Title, runLine, branchLine, startStatus, doneStatus)
+	fmt.Fprintf(w, "# pm run-epic (dry-run)\ntracker: %s  %s\n%s\n%s\nbase freshness: %s is fetched from origin and fast-forwarded at run start before anything forks from it; a diverged %s aborts the run\nready status: %s -> done status: %s\n\nsubs (in Order):\n",
+		tracker.Meta.ID, tracker.Meta.Title, runLine, branchLine, base, base, startStatus, doneStatus)
 	for _, s := range subs {
 		ready := "skip"
 		if s.Meta.Status == doneStatus || s.Meta.Status == storage.StatusDone {

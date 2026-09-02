@@ -54,6 +54,22 @@ type Executor struct {
 	// LAST so they win over inherited values - which also means a
 	// CLAUDE_CONFIG_DIR key here would override the config-dir pinning.
 	Env map[string]string `yaml:"env,omitempty"`
+	// WorkerClaudeConfigDir is the Claude config dir HEADLESS WORKERS run under
+	// (`pm work`, `pm run-epic` subs) when it should differ from the project's
+	// claude_config_dir. Everything a config dir holds rides in EVERY API call
+	// of every worker and reviewer: retro pm-cli-119 (2026-09-02) measured
+	// ~20k of a worker's 66k-token starting context as the user-scope skill
+	// catalogue (47 skills, 57 KB of descriptions), the user CLAUDE.md and the
+	// auto-memory index - none of which a worker (no MCP, repo skills only)
+	// uses, re-read on each of its ~150 calls. A slim dir with none of them
+	// cuts that on every call; Claude Code has no flag for it
+	// (--setting-sources gates settings.json, not CLAUDE.md or skills).
+	// `pm finish` keeps the project's claude_config_dir ON PURPOSE: the
+	// acceptance skills live in the user scope this dir exists to leave out.
+	// The dir must be logged in once by hand (`CLAUDE_CONFIG_DIR=<dir> claude`);
+	// `pm executor doctor` checks it exists. "~" is expanded; empty = the same
+	// dir as claude_config_dir.
+	WorkerClaudeConfigDir string `yaml:"worker_claude_config_dir,omitempty"`
 	// SeedExclude overrides DefaultSeedExcludes for worktree seeding
 	// (CopyUntrackedFiles): untracked directories that must NOT be copied into a
 	// fresh worktree (dependency/build artifacts). When set it REPLACES the

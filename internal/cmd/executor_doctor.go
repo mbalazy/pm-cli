@@ -159,7 +159,30 @@ func runExecutorDoctor(proj *storage.Project) []check {
 	out = append(out, checkSlots(e, proj.Path)...)
 	out = append(out, checkHandoff(e, proj)...)
 	out = append(out, checkHooksPath(proj.Path)...)
+	out = append(out, checkWorkerConfigDir(e, proj)...)
 	return out
+}
+
+// checkWorkerConfigDir: a declared worker config dir that does not exist is an
+// ERROR - every worker would start in an empty, logged-out config and die on
+// its first call. One that exists but was never used interactively (no
+// .claude.json, the file the CLI writes on first run / login) is a WARN: whether
+// the keychain holds a login for it is not a filesystem fact, but a dir nobody
+// has opened once almost certainly has none.
+func checkWorkerConfigDir(e storage.Executor, proj *storage.Project) []check {
+	if strings.TrimSpace(e.WorkerClaudeConfigDir) == "" {
+		return nil
+	}
+	dir := proj.ResolveWorkerClaudeConfigDir()
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return []check{{Level: levelError, Msg: "executor.worker_claude_config_dir does not exist: " + dir,
+			Hint: "mkdir it, then log in once: CLAUDE_CONFIG_DIR=" + dir + " claude"}}
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".claude.json")); err != nil {
+		return []check{{Level: levelWarn, Msg: "executor.worker_claude_config_dir has no .claude.json yet: " + dir,
+			Hint: "run CLAUDE_CONFIG_DIR=" + dir + " claude once interactively (login + onboarding) or the first worker fails on its first call"}}
+	}
+	return nil
 }
 
 // checkLandingStatuses reports landing statuses the project's `statuses` list

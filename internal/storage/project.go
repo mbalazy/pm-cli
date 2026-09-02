@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -53,6 +54,21 @@ func (p *Project) ResolveClaudeConfigDir() string {
 		return DefaultClaudeConfigDir()
 	}
 	return expandTilde(p.ClaudeConfigDir)
+}
+
+// ResolveWorkerClaudeConfigDir is the config dir a HEADLESS WORKER runs under:
+// executor.worker_claude_config_dir when set, else the project's
+// claude_config_dir (ResolveClaudeConfigDir). Only pm work / pm run-epic use
+// it - pm finish always takes ResolveClaudeConfigDir, because the acceptance
+// skills live in the user scope the worker dir exists to leave out.
+func (p *Project) ResolveWorkerClaudeConfigDir() string {
+	if p == nil {
+		return DefaultClaudeConfigDir()
+	}
+	if d := strings.TrimSpace(p.GetExecutor().WorkerClaudeConfigDir); d != "" {
+		return expandTilde(d)
+	}
+	return p.ResolveClaudeConfigDir()
 }
 
 func (p *Project) GetStatuses() []TaskStatus {

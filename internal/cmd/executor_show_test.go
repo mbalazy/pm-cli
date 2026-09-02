@@ -75,6 +75,8 @@ func TestRenderExecutorProfile(t *testing.T) {
 		"SIM_UDID=C0F4EFDF-BE65",
 		"Reference repos (READ-ONLY)",
 		"backend",
+		"## Worker Claude config dir",
+		"set executor.worker_claude_config_dir to give workers a slim one",
 		"## Handoff (acceptance)",
 		"evidence-playbook.md  [ok]",
 		"runtime skill: /simulator-verify",

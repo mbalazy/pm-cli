@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -167,6 +168,74 @@ func gitAheadCount(dir, branch, base string) (int, error) {
 		return 0, fmt.Errorf("rev-list %s..%s: unparseable count %q", base, branch, out)
 	}
 	return n, nil
+}
+
+// baseFetchTimeout caps the fetch freshenBase does before a run forks from the
+// base branch: a wedged network degrades to "run on what is local", never to a
+// hung manager.
+const baseFetchTimeout = 2 * time.Minute
+
+// freshenBase brings the local base branch up to origin before anything forks
+// from it. Retro pm-cli-119: independent-mode runs forked from a LOCAL
+// `development` nothing had pulled - 10 commits behind origin on run
+// orbit-144, where a sub then "proved" the spec's code did not exist (a
+// false SPEC-CONFLICT, re-run needed, ~$25); orbit-117-4 found its base
+// stale and rebased itself mid-task. Rules:
+//   - no remote, base unknown, fetch fails or times out: nil, said on w - an
+//     offline run is still a run, on the base it has;
+//   - local base strictly BEHIND origin/<base>: fast-forward it (merge
+//     --ff-only when it is checked out, branch -f otherwise) and say what moved;
+//   - local base DIVERGED (commits on both sides): an error naming both SHAs and
+//     the two ways out. Never pick one silently - the local commits may be
+//     somebody's unpushed work.
+func freshenBase(w io.Writer, dir, base string) error {
+	if base == "" || !gitHasRemote(dir) || !branchExists(dir, base) {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), baseFetchTimeout)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "git", "-C", dir, "fetch", "--quiet", "origin", base).CombinedOutput(); err != nil {
+		fmt.Fprintf(w, "pm: could not fetch origin/%s (%s) - running on the local %s as is\n", base, strings.TrimSpace(string(out)), base)
+		return nil
+	}
+	remote := "origin/" + base
+	if exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", remote).Run() != nil {
+		return nil // base has no counterpart on origin
+	}
+	behind, err := gitAheadCount(dir, remote, base) // origin commits the local base lacks
+	if err != nil || behind == 0 {
+		return nil
+	}
+	ahead, err := gitAheadCount(dir, base, remote) // local commits origin lacks
+	if err != nil {
+		return nil
+	}
+	localSHA, remoteSHA := gitShortSHA(dir, base), gitShortSHA(dir, remote)
+	if ahead > 0 {
+		return fmt.Errorf("base branch %s has diverged from %s (%d local commit(s) origin lacks, %d origin commit(s) missing locally; %s vs %s) - reconcile before the run: `git -C %s rebase %s %s` keeps the local commits, `git -C %s branch -f %s %s` drops them",
+			base, remote, ahead, behind, localSHA, remoteSHA, dir, remote, base, dir, base, remote)
+	}
+	var c *exec.Cmd
+	if cur, _ := gitCurrentBranch(dir); cur == base {
+		c = exec.Command("git", "-C", dir, "merge", "--ff-only", "--quiet", remote)
+	} else {
+		c = exec.Command("git", "-C", dir, "branch", "-f", base, remote)
+	}
+	if out, err := c.CombinedOutput(); err != nil {
+		return fmt.Errorf("fast-forward %s to %s (%d commit(s) behind): %s", base, remote, behind, strings.TrimSpace(string(out)))
+	}
+	fmt.Fprintf(w, "pm: fast-forwarded %s %s..%s (%d commit(s) behind origin)\n", base, localSHA, remoteSHA, behind)
+	return nil
+}
+
+// gitShortSHA is the abbreviated hash of ref, "?" when git cannot resolve it
+// (only ever printed, never compared).
+func gitShortSHA(dir, ref string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--short", ref).Output()
+	if err != nil {
+		return "?"
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // gitHasRemote reports whether the repo has at least one configured remote.
