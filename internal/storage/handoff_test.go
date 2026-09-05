@@ -181,14 +181,18 @@ func TestResolveHandoffRuntimeSkillScripts(t *testing.T) {
 		}
 	})
 
-	t.Run("the runtime skill never falls back to the global root", func(t *testing.T) {
+	t.Run("the runtime skill falls back to the global root only FLAGGED", func(t *testing.T) {
+		// 0.49.1 made this repo-only; pm-cli-123 allows the global fallback
+		// for machine-knowledge drivers (web-verify) but the flag is what keeps
+		// doctor the portability check - see TestResolveHandoffRuntimeSkillGlobalFallback.
 		global := t.TempDir()
-		writeHandoffFile(t, filepath.Join(global, "skills", "elsewhere", "SKILL.md"), "# elsewhere")
+		md := filepath.Join(global, "skills", "elsewhere", "SKILL.md")
+		writeHandoffFile(t, md, "# elsewhere")
 
 		e := Executor{Handoff: Handoff{RuntimeSkill: "elsewhere"}}
-		if got := e.ResolveHandoff(repo, global); got.SkillPath != "" {
-			t.Errorf("a runtime skill living only in the global root must stay NOT FOUND "+
-				"(doctor is the portability check - the repo may be synced to a machine without it), got %q", got.SkillPath)
+		got := e.ResolveHandoff(repo, global)
+		if got.SkillPath != md || !got.RuntimeSkillGlobal {
+			t.Errorf("a runtime skill living only in the global root resolves there WITH RuntimeSkillGlobal set, got path=%q global=%v", got.SkillPath, got.RuntimeSkillGlobal)
 		}
 	})
 }
@@ -266,4 +270,47 @@ func TestResolveHandoffSkillWithoutScriptsDir(t *testing.T) {
 	if got.ScriptsDir != "" || len(got.Scripts) != 0 {
 		t.Errorf("expected no scripts, got dir=%q scripts=%v", got.ScriptsDir, got.Scripts)
 	}
+}
+
+func TestResolveHandoffRuntimeSkillGlobalFallback(t *testing.T) {
+	t.Run("falls back to the pinned Claude config dir and FLAGS it", func(t *testing.T) {
+		configDir := t.TempDir() // e.g. ~/.claude-alt on a pinned project
+		md := filepath.Join(configDir, "skills", "web-verify", "SKILL.md")
+		writeHandoffFile(t, md, "# web-verify")
+		writeHandoffFile(t, filepath.Join(configDir, "skills", "web-verify", "scripts", "web-ui.mjs"), "")
+
+		got := Executor{Handoff: Handoff{RuntimeSkill: "web-verify"}}.ResolveHandoff(t.TempDir(), configDir)
+		if got.SkillPath != md {
+			t.Errorf("SkillPath = %q, want the global skill %q", got.SkillPath, md)
+		}
+		if !got.RuntimeSkillGlobal {
+			t.Error("RuntimeSkillGlobal must be true when the repo has no such skill - doctor's WARN hangs on it")
+		}
+		if len(got.Scripts) != 1 || got.Scripts[0] != "web-ui.mjs" {
+			t.Errorf("Scripts = %v, want the global skill's inventory derived like a repo-local one", got.Scripts)
+		}
+		if got.GlobalRoot != configDir {
+			t.Errorf("GlobalRoot = %q, want %q", got.GlobalRoot, configDir)
+		}
+	})
+
+	t.Run("a repo-local skill wins and is not flagged", func(t *testing.T) {
+		configDir := t.TempDir()
+		writeHandoffFile(t, filepath.Join(configDir, "skills", "verify", "SKILL.md"), "# global")
+		repo := t.TempDir()
+		local := filepath.Join(repo, ".claude", "skills", "verify", "SKILL.md")
+		writeHandoffFile(t, local, "# local")
+
+		got := Executor{Handoff: Handoff{RuntimeSkill: "verify"}}.ResolveHandoff(repo, configDir)
+		if got.SkillPath != local || got.RuntimeSkillGlobal {
+			t.Errorf("got path=%q global=%v, want the project-local %q unflagged", got.SkillPath, got.RuntimeSkillGlobal, local)
+		}
+	})
+
+	t.Run("missing everywhere stays pathless and unflagged", func(t *testing.T) {
+		got := Executor{Handoff: Handoff{RuntimeSkill: "ghost"}}.ResolveHandoff(t.TempDir(), t.TempDir())
+		if got.SkillPath != "" || got.RuntimeSkillGlobal {
+			t.Errorf("got %+v, want no path and no global flag", got)
+		}
+	})
 }

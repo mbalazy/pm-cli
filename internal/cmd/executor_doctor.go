@@ -344,8 +344,16 @@ func checkHandoff(e storage.Executor, proj *storage.Project) []check {
 			"name the skill that drives the real runtime (simulator/device/browser)"})
 	case h.SkillPath == "":
 		out = append(out, check{levelError,
-			fmt.Sprintf("handoff.runtime_skill %q not found under .claude/skills or .claude/commands", h.RuntimeSkill),
+			fmt.Sprintf("handoff.runtime_skill %q not found under .claude/skills or .claude/commands, nor under %s (skills/ or commands/)", h.RuntimeSkill, h.GlobalRoot),
 			"fix the name or add the skill"})
+	case h.RuntimeSkillGlobal:
+		// Legitimate for a machine-knowledge driver (web-verify), but never
+		// silent: a repo that is synced to another machine takes no global
+		// skill with it, and this is where that shows up before it costs an
+		// acceptance (the 0.49.1 rule, kept as a warning instead of a refusal).
+		out = append(out, check{levelWarn,
+			fmt.Sprintf("runtime skill /%s -> %s (%d script(s)) - resolved in %s, NOT in the repo", h.RuntimeSkill, h.SkillPath, len(h.Scripts), h.GlobalRoot),
+			"a global runtime skill is machine knowledge: every machine that accepts this project needs it under its claude_config_dir; a repo-local .claude/skills/<name> is what travels with the repo"})
 	default:
 		out = append(out, check{levelOK,
 			fmt.Sprintf("runtime skill /%s -> %s (%d script(s))", h.RuntimeSkill, h.SkillPath, len(h.Scripts)), ""})

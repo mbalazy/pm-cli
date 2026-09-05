@@ -203,6 +203,10 @@ func renderHandoff(h storage.ResolvedHandoff) string {
 		b.WriteString("  runtime skill: (unset)\n")
 	} else {
 		renderSkillLoc(&b, "runtime skill:", h.RuntimeSkill, h.SkillPath)
+		if h.RuntimeSkillGlobal {
+			b.WriteString("  ^ resolved in the pinned Claude config dir, not in the repo - a machine\n")
+			b.WriteString("    syncing this repo needs the skill installed there too (see doctor).\n")
+		}
 		if len(h.Scripts) > 0 {
 			fmt.Fprintf(&b, "  scripts:       %s\n", h.ScriptsDir)
 			for _, s := range h.Scripts {
