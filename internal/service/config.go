@@ -57,7 +57,8 @@ func cockpitResult(c *storage.CockpitConfig) *ConfigResult {
 				Sort:      c.Sidebar.Sort,
 				Width:     c.Sidebar.Width,
 			},
-			Git: GitResult{AllBranches: c.Git.AllBranches},
+			Git:    GitResult{AllBranches: c.Git.AllBranches},
+			Report: ReportResult{Model: c.Report.Model, Language: c.Report.Language},
 		},
 	}
 }
@@ -81,6 +82,13 @@ type UpdateSettingsInput struct {
 	Sidebar              *SidebarPatch      `json:"sidebar,omitempty"`
 	Groups               []ConfigGroupPatch `json:"groups,omitempty"`
 	Git                  *GitPatch          `json:"git,omitempty"`
+	Report               *ReportPatch       `json:"report,omitempty"`
+}
+
+// ReportPatch patches cockpit.report.
+type ReportPatch struct {
+	Model    *string `json:"model,omitempty"`
+	Language *string `json:"language,omitempty"`
 }
 
 // RefreshPatch patches cockpit.refresh. EverySeconds 0 switches the
@@ -201,6 +209,14 @@ func UpdateSettings(store storage.TaskStore, in UpdateSettingsInput) (*ConfigRes
 		if in.Git != nil && in.Git.AllBranches != nil {
 			c.Git.AllBranches = *in.Git.AllBranches
 		}
+		if in.Report != nil {
+			if in.Report.Model != nil {
+				c.Report.Model = strings.TrimSpace(*in.Report.Model)
+			}
+			if in.Report.Language != nil {
+				c.Report.Language = strings.TrimSpace(*in.Report.Language)
+			}
+		}
 		// The storage validation runs again inside SaveConfig; a failure
 		// there (a cross-field rule this patch check missed) is a
 		// caller's mistake too, not a broken file.
@@ -263,6 +279,9 @@ func validateSettingsPatch(in UpdateSettingsInput) error {
 		if w := in.Sidebar.Width; w != nil && *w < 0 {
 			return fmt.Errorf("sidebar.width must be >= 0, got %d", *w)
 		}
+	}
+	if in.Report != nil && in.Report.Model != nil && strings.TrimSpace(*in.Report.Model) == "" {
+		return fmt.Errorf("report.model must not be empty")
 	}
 	for _, g := range in.Groups {
 		if err := storage.ValidateSlug(g.Slug); err != nil {

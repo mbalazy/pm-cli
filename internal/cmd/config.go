@@ -106,6 +106,7 @@ func renderCockpitConfig(b *strings.Builder, c *storage.CockpitConfig) {
 	fmt.Fprintf(b, "  sidebar: %s · repos %s · sort %s · width %s\n",
 		c.Sidebar.Variant, onOff(c.Sidebar.ShowRepos), c.Sidebar.Sort, widthOrDefault(c.Sidebar.Width))
 	fmt.Fprintf(b, "  git: all branches %s\n", onOff(c.Git.AllBranches))
+	fmt.Fprintf(b, "  report: %s · model %s · language %s\n", onOff(c.Sources["report"]), c.Report.Model, c.Report.Language)
 }
 
 // toggles renders a toggle map in the closed list's order, "name" for on and
