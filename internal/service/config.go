@@ -59,8 +59,21 @@ func cockpitResult(c *storage.CockpitConfig) *ConfigResult {
 			},
 			Git:    GitResult{AllBranches: c.Git.AllBranches},
 			Report: ReportResult{Model: c.Report.Model, Language: c.Report.Language},
+			Slack:  slackResult(&c.Slack),
 		},
 	}
+}
+
+func slackResult(c *storage.SlackSourceConfig) SlackResult {
+	out := SlackResult{Workspaces: []SlackWorkspace{}}
+	for _, sv := range c.Servers {
+		src := sv.Command
+		if sv.ClaudeServer != "" {
+			src = "claude_server " + sv.ClaudeServer
+		}
+		out.Workspaces = append(out.Workspaces, SlackWorkspace{Workspace: sv.Workspace, Source: src, HasMe: sv.Me != ""})
+	}
+	return out
 }
 
 // --- settings write (pm-cli-118-18) ---

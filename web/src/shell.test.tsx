@@ -313,6 +313,7 @@ const config = (sidebar: Record<string, unknown>) => ({
     sidebar: { variant: 'columns', show_repos: true, sort: 'worst', width: 0, ...sidebar },
     git: { all_branches: false },
     report: { model: 'haiku', language: 'pl' },
+    slack: { workspaces: [] },
   },
 })
 const settingsConfig = {

@@ -107,6 +107,22 @@ func renderCockpitConfig(b *strings.Builder, c *storage.CockpitConfig) {
 		c.Sidebar.Variant, onOff(c.Sidebar.ShowRepos), c.Sidebar.Sort, widthOrDefault(c.Sidebar.Width))
 	fmt.Fprintf(b, "  git: all branches %s\n", onOff(c.Git.AllBranches))
 	fmt.Fprintf(b, "  report: %s · model %s · language %s\n", onOff(c.Sources["report"]), c.Report.Model, c.Report.Language)
+	if len(c.Slack.Servers) == 0 {
+		fmt.Fprintf(b, "  slack: %s · no servers (cockpit.slack.servers)\n", onOff(c.Sources["slack"]))
+	} else {
+		fmt.Fprintf(b, "  slack: %s · %d server(s)\n", onOff(c.Sources["slack"]), len(c.Slack.Servers))
+		for _, sv := range c.Slack.Servers {
+			src := sv.Command
+			if sv.ClaudeServer != "" {
+				src = "claude_server " + sv.ClaudeServer
+			}
+			me := sv.Me
+			if me == "" {
+				me = "(no me - mentions/DMs skipped)"
+			}
+			fmt.Fprintf(b, "    %s: %s · me %s\n", sv.Workspace, src, me)
+		}
+	}
 }
 
 // toggles renders a toggle map in the closed list's order, "name" for on and

@@ -409,6 +409,14 @@ export function SettingsPage() {
         label="Slack per project"
         note="workspace label + channels whose messages count as the project's changes; mentions and DMs are always in the feed, project-less"
       >
+        <p className="text-xs text-gray-500">
+          workspaces with an MCP server (cockpit.slack.servers in config.yaml, hand-edited):{' '}
+          {cockpit.slack.workspaces.length === 0
+            ? 'none - the slack source has nothing to run'
+            : cockpit.slack.workspaces
+                .map((w) => `${w.workspace} (${w.source}${w.has_me ? '' : ', no me'})`)
+                .join(' · ')}
+        </p>
         <table className="w-full text-sm">
           <tbody>
             {slackRows(projects.data?.projects).map((r) => (
