@@ -518,7 +518,12 @@ describe('today', () => {
     renderAt('/')
     await screen.findByRole('region', { name: 'Needs me' })
     const chips = screen.getAllByRole('navigation', { name: 'Group filter' })[0]
-    await user.click(within(chips).getByRole('link', { name: /ACME/ }))
+    // The phone strip (the first nav, compact) also links to the group page itself.
+    expect(within(chips).getByRole('link', { name: 'open ALPHA' })).toHaveAttribute(
+      'href',
+      '/g/alpha?tab=overview',
+    )
+    await user.click(within(chips).getByRole('link', { name: 'ACME' }))
     const waiting = await screen.findByRole('region', { name: 'Waiting on' })
     await vi.waitFor(() => expect(within(waiting).queryByText('Second')).toBeNull())
     expect(within(waiting).getByText('Acme-api thing')).toBeInTheDocument()
@@ -605,6 +610,24 @@ describe('mutations go through the dialog', () => {
     await vi.waitFor(() => expect(posts).toHaveLength(1))
     expect(posts[0].path).toBe('/api/tasks/alpha/alpha-2')
     expect(posts[0].body).toEqual({ status: 'waiting', waiting_for: 'review by Marta' })
+  })
+
+  it('Esc inside a detail dialog closes the dialog only - the task stays open', async () => {
+    vi.stubGlobal('fetch', fakeFetch(api))
+    const user = userEvent.setup()
+    renderAt('/p/alpha/t/alpha-1')
+    const article = await screen.findByRole('article')
+    await user.click(within(article).getByRole('button', { name: 'write brief' }))
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    expect(dialog).toHaveAttribute('open')
+    await user.keyboard('{Escape}')
+    await vi.waitFor(() => expect(dialog).not.toHaveAttribute('open'))
+    // Still the detail (memory history: assert the screen, not window.location).
+    expect(screen.getByRole('article')).toBeInTheDocument()
+    expect(
+      within(screen.getByRole('article')).getByRole('heading', { level: 1 }),
+    ).toHaveTextContent('First')
+    expect(posts).toHaveLength(0)
   })
 
   it('the detail edits brief and status through the same dialog, and shows the server error', async () => {
@@ -753,6 +776,8 @@ describe('palette', () => {
     await user.keyboard('{Meta>}k{/Meta}')
     const dialog = screen.getByRole('dialog', { name: 'Command palette' })
     expect(dialog).toHaveAttribute('open')
+    // The field has the focus at once: what is typed next filters (ux-audit F-03).
+    expect(within(dialog).getByRole('combobox')).toHaveFocus()
     expect(within(dialog).getByText('go to project Alpha')).toBeInTheDocument()
     expect(within(dialog).getByText('runs')).toBeInTheDocument()
 
