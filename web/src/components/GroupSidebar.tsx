@@ -1,7 +1,18 @@
 import { Link } from '@tanstack/react-router'
-import { Activity, Newspaper, Play, Settings2, type LucideProps } from 'lucide-react'
+import {
+  Activity,
+  CircleDashed,
+  CircleX,
+  Eye,
+  Hourglass,
+  Newspaper,
+  Play,
+  Settings2,
+  type LucideProps,
+} from 'lucide-react'
 
 import { cn } from '@/components/ui/cn'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 import type { GroupSummary } from '../api/types'
 import { COUNTER_COLUMNS, severityGlyph } from '../lib/glyphs'
@@ -22,6 +33,22 @@ interface Props {
   asleep: string[]
   /** Called after any link is followed (a phone drawer closes itself). */
   onNavigate?: () => void
+}
+
+/** The four counter columns as icons (the text glyphs of lib/glyphs stay the
+ *  vocabulary everywhere else); each header cell and each count carries the
+ *  column's description as an instant tooltip. */
+const COUNTER_ICON: Record<string, React.ComponentType<LucideProps>> = {
+  failed: CircleX,
+  visual: Eye,
+  waiting: Hourglass,
+  quiet: CircleDashed,
+}
+const COUNTER_TONE: Record<string, string> = {
+  failed: 'sev-crit',
+  visual: 'sev-warn',
+  waiting: 'sev-info',
+  quiet: 'sev-none',
 }
 
 const SCREEN_ICON: Record<string, React.ComponentType<LucideProps>> = {
@@ -78,15 +105,27 @@ export function GroupSidebar({ groups, layout, asleep, onNavigate }: Props) {
               <tr>
                 <th className="w-5" />
                 <th />
-                {COUNTER_COLUMNS.map((c) => (
-                  <th
-                    key={c.key}
-                    className="w-6 pb-0.5 text-right text-[0.6875rem] font-normal text-ink-3"
-                    title={c.title}
-                  >
-                    {c.glyph}
-                  </th>
-                ))}
+                {COUNTER_COLUMNS.map((c) => {
+                  const Icon = COUNTER_ICON[c.key]
+                  return (
+                    <th key={c.key} className="w-6 pb-1 text-right font-normal">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            className={cn('inline-flex cursor-help', COUNTER_TONE[c.key])}
+                            aria-label={c.title}
+                            role="img"
+                          >
+                            <Icon aria-hidden="true" className="size-3.5" strokeWidth={1.75} />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">
+                          {c.glyph} {c.title}
+                        </TooltipContent>
+                      </Tooltip>
+                    </th>
+                  )
+                })}
               </tr>
             </thead>
           )}
@@ -96,6 +135,19 @@ export function GroupSidebar({ groups, layout, asleep, onNavigate }: Props) {
             ))}
           </tbody>
         </table>
+        {layout.showCounts && groups.length > 0 && (
+          <p className="mt-2 flex flex-wrap gap-x-2 gap-y-0.5 px-2 text-[0.6875rem] text-ink-3">
+            {COUNTER_COLUMNS.map((c) => {
+              const Icon = COUNTER_ICON[c.key]
+              return (
+                <span key={c.key} className="inline-flex items-center gap-0.5" title={c.title}>
+                  <Icon aria-hidden="true" className="size-3" strokeWidth={1.75} />
+                  {c.key}
+                </span>
+              )
+            })}
+          </p>
+        )}
         {groups.length === 0 && <p className="px-2 text-xs text-ink-3">no active projects</p>}
         {asleep.length > 0 && (
           <p className="mt-2 px-2 text-xs text-ink-3" title={asleep.join(', ')}>
@@ -154,9 +206,15 @@ function GroupRows({
                 'num w-6 py-0.5 text-right',
                 n === 0 ? 'text-ink-3/60' : `sev-${tone[i]} font-medium`,
               )}
-              title={COUNTER_COLUMNS[i].title}
             >
-              {n === 0 ? '·' : n}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="cursor-help">{n === 0 ? '·' : n}</span>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  {group.name}: {n} {COUNTER_COLUMNS[i].title}
+                </TooltipContent>
+              </Tooltip>
             </td>
           ))}
       </tr>
