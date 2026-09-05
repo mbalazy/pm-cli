@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 
 import type { TaskSummary } from '../api/types'
 import type { StatusGroup } from '../lib/groupByStatus'
+import { SectionHead } from './SectionHead'
 
 // Presentation only: already-grouped, already-sorted tasks, one section per
 // status; each row links to the task. The keyboard selection is a prop -
@@ -18,13 +19,11 @@ export function TaskList({ groups, selectedId }: Props) {
     <div className="space-y-6">
       {groups.map((g) => (
         <section key={g.status} aria-label={g.status}>
-          <h2 className="mb-2 border-b font-semibold">
-            {g.status} <span className="font-normal text-gray-500">({g.tasks.length})</span>
-          </h2>
+          <SectionHead title={g.status} count={`(${g.tasks.length})`} />
           {g.tasks.length === 0 ? (
-            <p className="text-sm text-gray-400">no tasks</p>
+            <p className="px-2 py-1 text-sm text-ink-3">no tasks</p>
           ) : (
-            <ul className="space-y-1">
+            <ul>
               {g.tasks.map((t) => (
                 <TaskRow key={t.id} task={t} selected={t.id === selectedId} />
               ))}
@@ -42,20 +41,16 @@ function TaskRow({ task, selected }: { task: TaskSummary; selected: boolean }) {
     if (selected) ref.current?.scrollIntoView?.({ block: 'nearest' })
   }, [selected])
   return (
-    <li
-      ref={ref}
-      aria-current={selected ? 'true' : undefined}
-      className={`rounded px-1 ${selected ? 'bg-yellow-100' : ''}`}
-    >
+    <li ref={ref} aria-current={selected ? 'true' : undefined} className="ledger-row px-2 py-1">
       <Link
         to="/p/$slug/t/$id"
         params={{ slug: task.project, id: task.id }}
-        className="flex flex-wrap items-baseline gap-2 hover:underline"
+        className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 hover:underline"
       >
-        <code className="text-sm text-gray-500">{task.id}</code>
+        <span className="id">{task.id}</span>
         <span>{task.title}</span>
         {task.tags?.map((tag) => (
-          <span key={tag} className="rounded bg-gray-100 px-1 text-xs text-gray-600">
+          <span key={tag} className="chip">
             {tag}
           </span>
         ))}

@@ -36,14 +36,14 @@ export function BoardPane({ slug }: { slug: string }) {
     },
   })
 
-  if (tasks.isPending || projects.isPending) return <p>loading…</p>
-  if (tasks.isError) return <p className="text-red-700">error: {tasks.error.message}</p>
-  if (projects.isError) return <p className="text-red-700">error: {projects.error.message}</p>
-  if (!project) return <p className="text-red-700">error: no such project: {slug}</p>
+  if (tasks.isPending || projects.isPending) return <p className="text-ink-3">loading…</p>
+  if (tasks.isError) return <p className="text-crit">error: {tasks.error.message}</p>
+  if (projects.isError) return <p className="text-crit">error: {projects.error.message}</p>
+  if (!project) return <p className="text-crit">error: no such project: {slug}</p>
 
   return (
     <div className={openId ? 'hidden md:block' : ''}>
-      {tasks.data.note && <p className="mb-2 text-sm text-gray-500">{tasks.data.note}</p>}
+      {tasks.data.note && <p className="mb-2 text-xs text-ink-3 italic">{tasks.data.note}</p>}
       <TaskList groups={groups} selectedId={selectedId} />
     </div>
   )

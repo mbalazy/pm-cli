@@ -1,4 +1,5 @@
 import { Link, Outlet, useNavigate, useParams, useSearch } from '@tanstack/react-router'
+import { Monitor, Moon, Search, Sun } from 'lucide-react'
 import { useState } from 'react'
 
 import { useAttention, useConfig, useProjects, useTasks } from '../api/queries'
@@ -9,13 +10,14 @@ import { HelpDialog } from '../components/HelpDialog'
 import { Palette } from '../components/Palette'
 import { useRecentTasks } from '../hooks/useRecentTasks'
 import { useShortcuts } from '../hooks/useShortcuts'
+import { useTheme } from '../hooks/useTheme'
 import { groupHotkeys, parseGroupFilter } from '../lib/groupFilter'
 import { paletteItems, type PaletteItem } from '../lib/paletteItems'
 import { SCREENS } from '../lib/screens'
 import { groupMembers } from '../lib/groupView'
 import { asleepProjects, sidebarLayout, sortGroups } from '../lib/sidebarView'
 
-// The shell: the group sidebar (a chip strip on a phone), the page, the
+// The shell: the group sidebar (a top bar on a phone), the page, the
 // palette, the help dialog and the live feed. Composition only - hooks in,
 // components out. The sidebar's shape is the server's config (/api/config).
 
@@ -35,6 +37,7 @@ export function RootLayout() {
   const attention = useAttention()
   const config = useConfig()
   const { recent } = useRecentTasks()
+  const theme = useTheme()
   useLiveInvalidation()
 
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -69,31 +72,42 @@ export function RootLayout() {
     config.data?.cockpit.groups,
   )
   const asleep = asleepProjects(projects.data?.projects)
-  const columns = layout.width ?? (layout.variant === 'rail' ? '3.5rem' : '15rem')
+  const columns = layout.width ?? (layout.variant === 'rail' ? '3rem' : '15rem')
+  const ThemeIcon = theme.choice === 'dark' ? Moon : theme.choice === 'light' ? Sun : Monitor
 
   return (
     <div
       className="min-h-screen md:grid"
       style={{ gridTemplateColumns: `${columns} minmax(0, 1fr)` }}
     >
-      <div className="space-y-2 border-b p-2 md:hidden">
-        <nav aria-label="Screens" className="flex flex-wrap gap-3 text-sm">
-          {SCREENS.map((s) => (
-            <Link
-              key={s.to}
-              to={s.to}
-              className="underline"
-              activeProps={{ className: 'font-bold' }}
-            >
-              {s.label}
-            </Link>
-          ))}
-          <button type="button" className="ml-auto underline" onClick={() => setPaletteOpen(true)}>
-            ⌘K
+      {/* The phone bar: masthead, screens, the group strip. */}
+      <div className="sticky top-0 z-20 border-b border-rule bg-paper/95 backdrop-blur-sm md:hidden">
+        <div className="flex items-center gap-1 px-3 pt-2 pb-1">
+          <span className="display mr-2 text-lg">pm</span>
+          <nav aria-label="Screens" className="flex gap-0.5 text-sm">
+            {SCREENS.map((s) => (
+              <Link
+                key={s.to}
+                to={s.to}
+                className="rounded-sm px-2 py-1 text-ink-2"
+                activeProps={{ className: 'text-ink font-medium bg-paper-2' }}
+                activeOptions={{ exact: s.to === '/' }}
+              >
+                {s.label}
+              </Link>
+            ))}
+          </nav>
+          <button
+            type="button"
+            className="ml-auto flex size-9 items-center justify-center rounded-sm text-ink-2"
+            aria-label="Command palette"
+            onClick={() => setPaletteOpen(true)}
+          >
+            <Search aria-hidden="true" className="size-4" strokeWidth={1.75} />
           </button>
-        </nav>
+        </div>
         {attention.data && (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto px-3 pb-2 [scrollbar-width:none]">
             <GroupChips
               compact
               groups={groups}
@@ -103,23 +117,36 @@ export function RootLayout() {
           </div>
         )}
       </div>
-      <aside className="hidden border-r md:block">
-        {attention.isPending && <p className="p-3 text-sm">loading…</p>}
+
+      <aside className="hidden border-r border-rule bg-paper-2/40 md:flex md:flex-col md:sticky md:top-0 md:h-screen md:overflow-y-auto">
+        <div className="display px-4 pt-4 text-xl">pm</div>
+        {attention.isPending && <p className="p-3 text-sm text-ink-3">loading…</p>}
         {attention.isError && (
-          <p className="p-3 text-sm text-red-700">error: {attention.error.message}</p>
+          <p className="p-3 text-sm text-crit">error: {attention.error.message}</p>
         )}
-        {config.isError && (
-          <p className="p-3 text-sm text-red-700">config: {config.error.message}</p>
-        )}
+        {config.isError && <p className="p-3 text-sm text-crit">config: {config.error.message}</p>}
         {attention.data && <GroupSidebar groups={groups} layout={layout} asleep={asleep} />}
-        {layout.variant !== 'rail' && (
-          <p className="p-3 text-xs text-gray-400">
-            <kbd>?</kbd> shortcuts · <kbd>⌘K</kbd> palette
-          </p>
-        )}
+        <div className="mt-auto flex items-center gap-2 px-3 py-3 text-xs text-ink-3">
+          {layout.variant !== 'rail' && (
+            <span>
+              <kbd>?</kbd> shortcuts · <kbd>⌘K</kbd> palette
+            </span>
+          )}
+          <button
+            type="button"
+            className="ml-auto flex size-7 items-center justify-center rounded-sm text-ink-3 hover:bg-paper-3 hover:text-ink"
+            title={`theme: ${theme.choice} (click to change)`}
+            aria-label={`theme: ${theme.choice}`}
+            onClick={theme.cycle}
+          >
+            <ThemeIcon aria-hidden="true" className="size-4" strokeWidth={1.75} />
+          </button>
+        </div>
       </aside>
-      <main className="min-w-0 p-4">
-        <Outlet />
+      <main className="min-w-0 px-3 py-4 md:px-8 md:py-6">
+        <div className="mx-auto max-w-6xl">
+          <Outlet />
+        </div>
       </main>
       <Palette
         open={paletteOpen}

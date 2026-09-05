@@ -9,6 +9,7 @@ import { useConfirmedAction } from '../hooks/useConfirmedAction'
 import { useRecentTasks } from '../hooks/useRecentTasks'
 import { useShortcuts } from '../hooks/useShortcuts'
 import { subjectOfTask } from '../lib/confirmText'
+import { groupOf } from '../lib/groupView'
 import { relativeTime } from '../lib/relativeTime'
 import { splitSpecLog } from '../lib/splitSpecLog'
 
@@ -26,8 +27,8 @@ export function TaskPage({ slug, id }: { slug: string; id: string }) {
     if (loaded) push({ project: loaded.project, id: loaded.id, title: loaded.title })
   }, [loaded, push])
 
-  if (task.isPending) return <p>loading…</p>
-  if (task.isError) return <p className="text-red-700">error: {task.error.message}</p>
+  if (task.isPending) return <p className="text-ink-3">loading…</p>
+  if (task.isError) return <p className="text-crit">error: {task.error.message}</p>
 
   const { spec, log } = splitSpecLog(task.data.body ?? '')
   const t = task.data
@@ -42,6 +43,7 @@ export function TaskPage({ slug, id }: { slug: string; id: string }) {
         log={log}
         onBack={back}
         statuses={statuses}
+        group={projects.data ? groupOf(projects.data.projects, slug) : undefined}
         onEdit={(kind, status) => action.ask({ kind, subject: subjectOfTask(t), status })}
       />
       <ConfirmDialog

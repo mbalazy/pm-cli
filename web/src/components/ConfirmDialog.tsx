@@ -1,3 +1,4 @@
+import { TriangleAlert } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 
 import type { RunFlags } from '../api/types'
@@ -58,7 +59,7 @@ export function ConfirmDialog({
         // A real <dialog> cancels on Esc by itself; jsdom's does not.
         if (e.key === 'Escape') onCancel()
       }}
-      className="m-auto w-[min(32rem,90vw)] rounded border p-4 shadow-lg backdrop:bg-black/30"
+      className="dialog-in m-auto w-[min(34rem,92vw)] rounded-md border border-rule-strong bg-paper p-0 text-ink shadow-2xl"
     >
       {text && (
         <form
@@ -67,18 +68,20 @@ export function ConfirmDialog({
             e.preventDefault()
             if (!busy) onConfirm()
           }}
-          className="space-y-3 text-sm"
+          className="space-y-3 p-5 text-sm"
         >
-          <h2 className="font-semibold">{text.heading}</h2>
-          {text.project && (
-            <p className="text-gray-600">
-              <span className="rounded bg-gray-100 px-1 text-xs">{text.project}</span>
-            </p>
-          )}
-          <p>{text.sentence}</p>
+          <header className="space-y-1 border-b border-rule pb-3">
+            <h2 className="display text-lg leading-snug">{text.heading}</h2>
+            {text.project && (
+              <p>
+                <span className="chip">{text.project}</span>
+              </p>
+            )}
+          </header>
+          <p className="text-[0.9375rem]">{text.sentence}</p>
           {text.field && (
             <label className="block">
-              <span className="text-xs text-gray-500">{text.field.label}</span>
+              <span className="kicker">{text.field.label}</span>
               {text.field.kind === 'textarea' ? (
                 <textarea
                   ref={fieldRef as React.RefObject<HTMLTextAreaElement>}
@@ -91,8 +94,8 @@ export function ConfirmDialog({
                     }
                   }}
                   placeholder={text.field.placeholder}
-                  rows={6}
-                  className="mt-1 w-full rounded border p-2 font-mono text-xs"
+                  rows={7}
+                  className="field mt-1 w-full font-mono text-xs leading-relaxed"
                 />
               ) : (
                 <input
@@ -100,7 +103,7 @@ export function ConfirmDialog({
                   value={value}
                   onChange={(e) => onChange(e.target.value)}
                   placeholder={text.field.placeholder}
-                  className="mt-1 w-full rounded border p-1"
+                  className="field mt-1 w-full"
                 />
               )}
             </label>
@@ -111,12 +114,13 @@ export function ConfirmDialog({
                 <label key={f.key} className="flex items-center gap-2">
                   <input
                     type="checkbox"
+                    className="accent-ink"
                     checked={flags?.[f.key] === true}
                     disabled={f.disabled !== undefined}
                     onChange={(e) => onFlagsChange?.({ ...flags, [f.key]: e.target.checked })}
                   />
                   {f.label}
-                  {f.disabled && <span className="text-xs text-gray-400">({f.disabled})</span>}
+                  {f.disabled && <span className="text-xs text-ink-3">({f.disabled})</span>}
                 </label>
               ))}
             </fieldset>
@@ -124,34 +128,36 @@ export function ConfirmDialog({
           {(text.preview !== undefined || text.loading) && (
             <pre
               aria-label="command preview"
-              className="overflow-x-auto rounded bg-gray-100 p-2 font-mono text-xs whitespace-pre-wrap"
+              className="overflow-x-auto rounded-sm bg-paper-2 p-2.5 font-mono text-xs leading-relaxed whitespace-pre-wrap text-ink"
             >
               {text.loading ? 'loading the preview…' : text.preview || '(no command)'}
             </pre>
           )}
           {text.warnings?.map((w) => (
-            <p key={w} role="alert" className="text-amber-700">
-              ⚠ {w}
+            <p key={w} role="alert" className="flex items-start gap-1.5 text-warn">
+              <TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+              {w}
             </p>
           ))}
           {text.warning && (
-            <p role="alert" className="text-amber-700">
-              ⚠ {text.warning}
+            <p role="alert" className="flex items-start gap-1.5 text-warn">
+              <TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+              {text.warning}
             </p>
           )}
-          {error && <p className="text-red-700">error: {error}</p>}
-          <div className="flex gap-2">
+          {error && <p className="text-crit">error: {error}</p>}
+          <div className="flex items-center gap-2 border-t border-rule pt-3">
             <button
               type="submit"
               disabled={busy || text.loading}
-              className="rounded border px-2 font-semibold disabled:text-gray-400"
+              className="rounded-sm bg-ink px-3 py-1 font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {busy ? 'working…' : text.confirmLabel}
             </button>
-            <button type="button" onClick={onCancel} className="rounded border px-2">
+            <button type="button" onClick={onCancel} className="ghost-btn py-0.5 text-sm">
               cancel
             </button>
-            <span className="ml-auto text-xs text-gray-400">
+            <span className="ml-auto text-xs text-ink-3">
               {text.field?.kind === 'textarea' ? '⌘⏎ confirm' : '⏎ confirm'} · Esc cancel
             </span>
           </div>

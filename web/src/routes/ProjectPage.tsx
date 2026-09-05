@@ -14,8 +14,8 @@ export function ProjectPage({ slug }: { slug: string }) {
   const { id: openId } = useParams({ strict: false })
 
   if (!openId) {
-    if (projects.isPending) return <p>loading…</p>
-    if (projects.isError) return <p className="text-red-700">error: {projects.error.message}</p>
+    if (projects.isPending) return <p className="text-ink-3">loading…</p>
+    if (projects.isError) return <p className="text-crit">error: {projects.error.message}</p>
     return (
       <Navigate
         to="/g/$group"
@@ -28,9 +28,9 @@ export function ProjectPage({ slug }: { slug: string }) {
 
   const project = projects.data?.projects.find((p) => p.slug === slug)
   return (
-    <div className="md:grid md:grid-cols-2 md:gap-6">
-      <div className="hidden md:block">
-        <h1 className="mb-4 text-xl font-bold">{project?.name ?? slug}</h1>
+    <div className="md:grid md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] md:gap-8">
+      <div className="hidden md:block md:border-r md:border-rule md:pr-6">
+        <h1 className="display mb-4 text-xl">{project?.name ?? slug}</h1>
         <BoardPane slug={slug} />
       </div>
       <div className="min-w-0">

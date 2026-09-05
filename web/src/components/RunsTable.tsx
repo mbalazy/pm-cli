@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import type { RunRow } from '../api/types'
 import { acceptCellText, runCellText } from '../lib/runCells'
 import type { RunTimes } from '../lib/runsView'
+import { toneClass } from './tone'
 
 // The `pm runs` table plus the cockpit's columns: a fixed-width glyph first,
 // then PROJECT / TRACKER / TITLE / RUN / ACCEPTANCE and the three times
@@ -16,56 +17,67 @@ export interface RunsTableRow {
   times: RunTimes
 }
 
+/** The glyph's ink: the severity glyphs of lib/glyphs, ▶ for a live run. */
+function glyphTone(glyph: string): string {
+  switch (glyph) {
+    case '✗':
+      return toneClass('crit')
+    case '▲':
+      return toneClass('warn')
+    case '●':
+    case '▶':
+      return toneClass('info')
+    default:
+      return toneClass(undefined)
+  }
+}
+
 export function RunsTable({ rows }: { rows: RunsTableRow[] }) {
-  if (rows.length === 0) return <p className="text-gray-500">no runs</p>
+  if (rows.length === 0) return <p className="px-2 py-1 text-sm text-ink-3">no runs</p>
   return (
     <div className="overflow-x-auto">
-      <table aria-label="Runs" className="w-full text-left text-sm">
+      <table aria-label="Runs" className="ledger-table">
         <thead>
-          <tr className="border-b text-gray-500">
-            <th className="w-5 py-1" aria-label="state" />
-            <th className="py-1 pr-3">PROJECT</th>
-            <th className="py-1 pr-3">TRACKER</th>
-            <th className="py-1 pr-3">TITLE</th>
-            <th className="py-1 pr-3">RUN</th>
-            <th className="py-1 pr-3">ACCEPTANCE</th>
-            <th className="py-1 pr-3" title="how long the run ran">
-              DURATION
-            </th>
-            <th className="py-1 pr-3" title="since the run ended">
-              ENDED
-            </th>
-            <th className="py-1" title="since the manager's last heartbeat (live runs)">
-              HEARTBEAT
-            </th>
+          <tr>
+            <th className="w-5" aria-label="state" />
+            <th>Project</th>
+            <th>Tracker</th>
+            <th>Title</th>
+            <th>Run</th>
+            <th>Acceptance</th>
+            <th title="how long the run ran">Duration</th>
+            <th title="since the run ended">Ended</th>
+            <th title="since the manager's last heartbeat (live runs)">Heartbeat</th>
           </tr>
         </thead>
         <tbody>
           {rows.map(({ row: r, glyph, times }, i) => (
-            <tr key={`${r.remote ?? ''}/${r.project}/${r.tracker ?? i}`} className="border-b">
-              <td className="w-5 py-1 text-center">{glyph}</td>
-              <td className="py-1 pr-3">{r.remote ? `${r.remote}/${r.project}` : r.project}</td>
-              <td className="py-1 pr-3">
+            <tr key={`${r.remote ?? ''}/${r.project}/${r.tracker ?? i}`}>
+              <td className={`w-5 text-center font-mono ${glyphTone(glyph)}`}>{glyph}</td>
+              <td className="whitespace-nowrap">
+                <span className="chip">{r.remote ? `${r.remote}/${r.project}` : r.project}</span>
+              </td>
+              <td className="whitespace-nowrap">
                 {r.tracker && !r.remote ? (
                   <Link
                     to="/p/$slug/t/$id"
                     params={{ slug: r.project, id: r.tracker }}
                     className="hover:underline"
                   >
-                    <code>{r.tracker}</code>
+                    <code className="id text-ink">{r.tracker}</code>
                   </Link>
                 ) : (
-                  <code>{r.tracker}</code>
+                  <code className="id text-ink">{r.tracker}</code>
                 )}
               </td>
-              <td className="py-1 pr-3">
-                {r.note ? <i className="text-gray-500">{r.note}</i> : r.title}
+              <td className="min-w-[16rem]">
+                {r.note ? <i className="text-ink-3">{r.note}</i> : r.title}
               </td>
-              <td className="py-1 pr-3 whitespace-nowrap">{runCellText(r.run)}</td>
-              <td className="py-1 pr-3">{acceptCellText(r.acceptance)}</td>
-              <td className="py-1 pr-3 tabular-nums">{times.duration}</td>
-              <td className="py-1 pr-3 tabular-nums">{times.sinceEnd}</td>
-              <td className="py-1 tabular-nums">{times.heartbeat}</td>
+              <td className="whitespace-nowrap">{runCellText(r.run)}</td>
+              <td className="whitespace-nowrap">{acceptCellText(r.acceptance)}</td>
+              <td className="num text-ink-2">{times.duration}</td>
+              <td className="num text-ink-2">{times.sinceEnd}</td>
+              <td className="num text-ink-2">{times.heartbeat}</td>
             </tr>
           ))}
         </tbody>

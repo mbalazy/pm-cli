@@ -1,7 +1,10 @@
+import { Link } from '@tanstack/react-router'
+import { ArrowLeft, ExternalLink } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import type { TaskDetail as TaskDetailDto } from '../api/types'
+import { SectionHead } from './SectionHead'
 
 // Presentation only. The relative times and the Spec/Log split arrive as
 // props: "how long ago" needs a clock and the split is a lib rule, neither
@@ -18,6 +21,8 @@ interface Props {
   onBack?: () => void
   /** The project's status list, for the status select. */
   statuses?: string[]
+  /** The group the task's repo belongs to - the project chip links to its board. */
+  group?: string
   /** Asks to edit a field; the status edit names the chosen status. */
   onEdit?: (kind: 'edit_brief' | 'edit_waiting_for' | 'set_status', status?: string) => void
 }
@@ -30,20 +35,36 @@ export function TaskDetail({
   log,
   onBack,
   statuses = [],
+  group,
   onEdit,
 }: Props) {
-  const editBtn = 'ml-2 rounded border px-1 text-xs font-normal'
+  const projectChip = group ? (
+    <Link
+      to="/g/$group"
+      params={{ group }}
+      search={{ tab: 'board', repo: task.project }}
+      className="chip hover:text-ink hover:underline"
+      title="open the project's board"
+    >
+      {task.project}
+    </Link>
+  ) : (
+    <span className="chip">{task.project}</span>
+  )
   return (
-    <article className="space-y-4">
+    <article className="space-y-6">
       {onBack && (
-        <button type="button" onClick={onBack} className="text-sm underline md:hidden">
-          ← back to list
+        <button type="button" onClick={onBack} className="ghost-btn md:hidden">
+          <ArrowLeft aria-hidden="true" className="size-3" />
+          back to {task.project}
         </button>
       )}
-      <header>
-        <h1 className="text-xl font-bold">{task.title}</h1>
-        <p className="flex flex-wrap items-baseline gap-x-1 text-sm text-gray-600">
-          <code>#{task.id}</code> · {task.project} ·{' '}
+      <header className="space-y-2 border-b-2 border-ink pb-3">
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-ink-2">
+          <code className="id">#{task.id}</code>
+          <span aria-hidden="true">·</span>
+          {projectChip}
+          <span aria-hidden="true">·</span>
           {onEdit && statuses.length > 0 ? (
             <label>
               <span className="sr-only">status</span>
@@ -51,62 +72,79 @@ export function TaskDetail({
                 aria-label="status"
                 value={task.status}
                 onChange={(e) => onEdit('set_status', e.target.value)}
-                className="rounded border px-1 font-bold"
+                className="field h-7 py-0 font-medium text-ink"
               >
-                {[...statuses, ...(statuses.includes(task.status) ? [] : [task.status])].map(
-                  (s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ),
-                )}
+                {[
+                  ...statuses,
+                  ...(statuses.includes(task.status) ? [] : [task.status]),
+                  // archive is system-level, never in a project's list, always a legal target
+                  ...(task.status === 'archived' ? [] : ['archived']),
+                ].map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
               </select>
             </label>
           ) : (
-            <b>{task.status}</b>
+            <b className="text-ink">{task.status}</b>
           )}
-          {task.waiting_for && <> · waiting for: {task.waiting_for}</>}
+          {task.waiting_for && <span>· waiting for: {task.waiting_for}</span>}
           {onEdit && (
-            <button type="button" className={editBtn} onClick={() => onEdit('edit_waiting_for')}>
+            <button type="button" className="ghost-btn" onClick={() => onEdit('edit_waiting_for')}>
               {task.waiting_for ? 'edit reason' : 'set reason'}
             </button>
           )}
         </p>
-        <p className="text-sm text-gray-600">
+        <h1 className="display text-[1.55rem] leading-tight text-balance">{task.title}</h1>
+        <p className="num text-ink-3">
           updated {updatedText} · status changed {statusChangedText || 'unknown'}
         </p>
       </header>
 
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
         {task.branch && (
           <>
-            <dt className="text-gray-500">branch</dt>
+            <dt className="kicker pt-0.5">branch</dt>
             <dd>
-              <code>{task.branch}</code>
+              <code className="id text-ink">{task.branch}</code>
             </dd>
           </>
         )}
         {task.parent && (
           <>
-            <dt className="text-gray-500">parent</dt>
+            <dt className="kicker pt-0.5">parent</dt>
             <dd>
-              <code>{task.parent}</code>
+              <code className="id text-ink">{task.parent}</code>
             </dd>
           </>
         )}
         {task.tags && task.tags.length > 0 && (
           <>
-            <dt className="text-gray-500">tags</dt>
-            <dd>{task.tags.join(', ')}</dd>
+            <dt className="kicker pt-0.5">tags</dt>
+            <dd className="flex flex-wrap gap-1">
+              {task.tags.map((t) => (
+                <span key={t} className="chip">
+                  {t}
+                </span>
+              ))}
+            </dd>
           </>
         )}
         {task.links && Object.keys(task.links).length > 0 && (
           <>
-            <dt className="text-gray-500">links</dt>
-            <dd className="space-x-2">
+            <dt className="kicker pt-0.5">links</dt>
+            <dd className="flex flex-wrap gap-x-3 gap-y-1">
               {Object.entries(task.links).map(([name, url]) => (
-                <a key={name} href={url} className="underline" target="_blank" rel="noreferrer">
+                <a
+                  key={name}
+                  href={url}
+                  className="inline-flex items-center gap-1 underline decoration-rule-strong underline-offset-2 hover:decoration-ink"
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   {name}
+                  <ExternalLink aria-hidden="true" className="size-3 text-ink-3" />
                 </a>
               ))}
             </dd>
@@ -114,13 +152,13 @@ export function TaskDetail({
         )}
         {task.depends_on && task.depends_on.length > 0 && (
           <>
-            <dt className="text-gray-500">depends on</dt>
-            <dd>{task.depends_on.join(', ')}</dd>
+            <dt className="kicker pt-0.5">depends on</dt>
+            <dd className="id text-ink">{task.depends_on.join(', ')}</dd>
           </>
         )}
         {task.mode && (
           <>
-            <dt className="text-gray-500">mode</dt>
+            <dt className="kicker pt-0.5">mode</dt>
             <dd>{task.mode}</dd>
           </>
         )}
@@ -128,22 +166,21 @@ export function TaskDetail({
 
       {task.ac && (
         <section>
-          <h2 className="font-semibold">Acceptance criteria</h2>
-          <p className="whitespace-pre-wrap text-sm">{task.ac}</p>
+          <SectionHead title="Acceptance criteria" />
+          <p className="max-w-[72ch] text-sm whitespace-pre-wrap">{task.ac}</p>
         </section>
       )}
       {(task.brief || onEdit) && (
         <section>
-          <h2 className="font-semibold">
-            Brief
+          <SectionHead title="Brief">
             {onEdit && (
-              <button type="button" className={editBtn} onClick={() => onEdit('edit_brief')}>
+              <button type="button" className="ghost-btn" onClick={() => onEdit('edit_brief')}>
                 {task.brief ? 'edit brief' : 'write brief'}
               </button>
             )}
-          </h2>
+          </SectionHead>
           {task.brief && (
-            <div className="markdown text-sm">
+            <div className="markdown">
               <Markdown remarkPlugins={[remarkGfm]}>{task.brief}</Markdown>
             </div>
           )}
@@ -151,16 +188,16 @@ export function TaskDetail({
       )}
       {spec !== null && (
         <section>
-          <h2 className="font-semibold">Spec (current truth)</h2>
-          <div className="markdown text-sm">
+          <SectionHead title="Spec (current truth)" />
+          <div className="markdown">
             <Markdown remarkPlugins={[remarkGfm]}>{spec}</Markdown>
           </div>
         </section>
       )}
       {log !== '' && (
         <section>
-          <h2 className="font-semibold">Log (history, append-only)</h2>
-          <div className="markdown text-sm">
+          <SectionHead title="Log (history, append-only)" />
+          <div className="markdown">
             <Markdown remarkPlugins={[remarkGfm]}>{log}</Markdown>
           </div>
         </section>

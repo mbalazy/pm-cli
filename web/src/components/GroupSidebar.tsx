@@ -1,14 +1,19 @@
 import { Link } from '@tanstack/react-router'
+import { Activity, Newspaper, Play, Settings2, type LucideProps } from 'lucide-react'
+
+import { cn } from '@/components/ui/cn'
 
 import type { GroupSummary } from '../api/types'
 import { COUNTER_COLUMNS, severityGlyph } from '../lib/glyphs'
 import { SCREENS } from '../lib/screens'
 import type { SidebarLayout } from '../lib/sidebarView'
 import { groupTarget, repoTarget } from '../lib/sidebarView'
+import { Glyph } from './Glyph'
 
 // Presentation only: the screen navigation and the group list with the four
-// counter columns. Which groups, in what order, with what counts, and which
-// variant to draw are all decided upstream (the API and lib/sidebarView).
+// counter columns - the ledger's index column. Which groups, in what order,
+// with what counts, and which variant to draw are all decided upstream (the
+// API and lib/sidebarView).
 
 interface Props {
   groups: GroupSummary[]
@@ -19,41 +24,66 @@ interface Props {
   onNavigate?: () => void
 }
 
+const SCREEN_ICON: Record<string, React.ComponentType<LucideProps>> = {
+  '/': Newspaper,
+  '/changes': Activity,
+  '/runs': Play,
+  '/settings': Settings2,
+}
+
 export function GroupSidebar({ groups, layout, asleep, onNavigate }: Props) {
   const rail = layout.variant === 'rail'
   return (
-    <div className="p-2 text-sm">
-      <nav aria-label="Screens" className="mb-3">
-        <ul className={rail ? 'space-y-1 text-center' : 'space-y-0.5'}>
-          {SCREENS.map((s) => (
-            <li key={s.to}>
-              <Link
-                to={s.to}
-                onClick={onNavigate}
-                title={rail ? `${s.label} (${s.key})` : undefined}
-                className="block rounded px-2 py-0.5 hover:underline"
-                activeProps={{ className: 'font-bold' }}
-                activeOptions={{ exact: s.to === '/' }}
-              >
-                {rail ? s.key : s.label}{' '}
-                {!rail && <kbd className="text-xs text-gray-400">{s.key}</kbd>}
-              </Link>
-            </li>
-          ))}
+    <div className={cn('flex flex-col gap-5 py-3 text-sm', rail ? 'px-1' : 'px-2')}>
+      <nav aria-label="Screens">
+        <ul className="space-y-px">
+          {SCREENS.map((s) => {
+            const Icon = SCREEN_ICON[s.to]
+            return (
+              <li key={s.to}>
+                <Link
+                  to={s.to}
+                  onClick={onNavigate}
+                  title={rail ? `${s.label} (${s.key})` : undefined}
+                  className={cn(
+                    'flex items-center gap-2 rounded-sm py-1 text-ink-2 hover:text-ink',
+                    rail ? 'justify-center px-0' : 'px-2',
+                    'border-l-2 border-transparent',
+                  )}
+                  activeProps={{ className: 'text-ink border-ink! font-medium bg-paper-2' }}
+                  activeOptions={{ exact: s.to === '/' }}
+                >
+                  {Icon && (
+                    <Icon aria-hidden="true" className="size-4 shrink-0" strokeWidth={1.75} />
+                  )}
+                  {rail ? (
+                    <span className="sr-only">{s.label}</span>
+                  ) : (
+                    <>
+                      <span>{s.label}</span>
+                      <kbd className="ml-auto text-[0.6875rem] text-ink-3">{s.key}</kbd>
+                    </>
+                  )}
+                </Link>
+              </li>
+            )
+          })}
         </ul>
       </nav>
       <nav aria-label="Projects">
-        {!rail && (
-          <h2 className="mb-1 px-2 text-xs uppercase text-gray-500">Projects · worst first</h2>
-        )}
-        <table aria-label="Groups" className="w-full">
+        {!rail && <h2 className="kicker mb-1.5 px-2">Projects · worst first</h2>}
+        <table aria-label="Groups" className="w-full border-collapse">
           {layout.showCounts && (
             <thead>
-              <tr className="text-xs text-gray-400">
+              <tr>
                 <th className="w-5" />
                 <th />
                 {COUNTER_COLUMNS.map((c) => (
-                  <th key={c.key} className="w-6 text-right font-normal" title={c.title}>
+                  <th
+                    key={c.key}
+                    className="w-6 pb-0.5 text-right text-[0.6875rem] font-normal text-ink-3"
+                    title={c.title}
+                  >
                     {c.glyph}
                   </th>
                 ))}
@@ -66,9 +96,9 @@ export function GroupSidebar({ groups, layout, asleep, onNavigate }: Props) {
             ))}
           </tbody>
         </table>
-        {groups.length === 0 && <p className="px-2 text-xs text-gray-400">no active projects</p>}
+        {groups.length === 0 && <p className="px-2 text-xs text-ink-3">no active projects</p>}
         {asleep.length > 0 && (
-          <p className="mt-2 px-2 text-xs text-gray-400" title={asleep.join(', ')}>
+          <p className="mt-2 px-2 text-xs text-ink-3" title={asleep.join(', ')}>
             {rail ? `zz ${asleep.length}` : `asleep (${asleep.length}) hidden`}
           </p>
         )}
@@ -88,13 +118,18 @@ function GroupRows({
 }) {
   const target = groupTarget(group)
   const counts = [group.failed, group.visual, group.waiting, group.quiet]
+  const tone = ['crit', 'warn', 'info', 'none']
   return (
     <>
-      <tr data-severity={group.worst}>
-        <td className="w-5 text-center" aria-label={`worst: ${group.worst}`}>
-          {severityGlyph(group.worst)}
+      <tr data-severity={group.worst} className="group/row">
+        <td className="w-5 py-0.5 text-center">
+          <Glyph
+            glyph={severityGlyph(group.worst)}
+            severity={group.worst}
+            label={`worst: ${group.worst}`}
+          />
         </td>
-        <td className={layout.showNames ? '' : 'hidden'}>
+        <td className={layout.showNames ? 'max-w-0 py-0.5' : 'hidden'}>
           <Link
             to={target.to}
             params={target.params}
@@ -115,7 +150,10 @@ function GroupRows({
           counts.map((n, i) => (
             <td
               key={COUNTER_COLUMNS[i].key}
-              className={`w-6 text-right tabular-nums ${n === 0 ? 'text-gray-300' : ''}`}
+              className={cn(
+                'num w-6 py-0.5 text-right',
+                n === 0 ? 'text-ink-3/60' : `sev-${tone[i]} font-medium`,
+              )}
               title={COUNTER_COLUMNS[i].title}
             >
               {n === 0 ? '·' : n}
@@ -125,13 +163,13 @@ function GroupRows({
       {layout.showRepos &&
         group.projects.length > 1 &&
         group.projects.map((slug) => (
-          <tr key={slug} className="text-xs text-gray-500">
+          <tr key={slug} className="text-xs text-ink-3">
             <td />
-            <td colSpan={layout.showCounts ? 5 : 1}>
+            <td colSpan={layout.showCounts ? 5 : 1} className="max-w-0">
               <Link
                 {...repoTarget(group.slug, slug)}
                 onClick={onNavigate}
-                className="block truncate pl-3 hover:underline"
+                className="block truncate pl-3 hover:text-ink hover:underline"
               >
                 · {slug}
               </Link>
