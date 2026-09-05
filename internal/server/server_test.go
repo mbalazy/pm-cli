@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mbalazy/pm/internal/feed"
+	"github.com/mbalazy/pm/internal/service"
 	"github.com/mbalazy/pm/internal/storage"
 )
 
@@ -600,9 +601,16 @@ func (s *fakeFeedSource) Fetch(ctx context.Context, from, to time.Time, projects
 	return s.events, nil
 }
 
+// postJSON POSTs as the cockpit does - with the client header.
 func postJSON(t *testing.T, url, body string, want int) map[string]any {
 	t.Helper()
-	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(ClientHeader, ClientValue)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,6 +625,138 @@ func postJSON(t *testing.T, url, body string, want int) map[string]any {
 	}
 	return m
 }
+
+// Every mutation is the service function the MCP tool runs, behind one
+// header check; the tests cover each endpoint's success, its 400/404, the
+// 403 without the header, and the round-trips through storage.
+func TestMutations(t *testing.T) {
+	store := newTestStore(t)
+	srv := newServer(t, store, Options{})
+
+	t.Run("no client header is a 403 before the body is read", func(t *testing.T) {
+		for _, path := range []string{"/api/tasks/test/t-1", "/api/focus/toggle", "/api/projects/test", "/api/changes/seen", "/api/changes/refresh"} {
+			resp, err := http.Post(srv.URL+path, "application/json", strings.NewReader("{}"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(b), ClientHeader) {
+				t.Fatalf("POST %s without header = %d %s", path, resp.StatusCode, b)
+			}
+		}
+		if task, _ := store.FindTaskExact("test", "t-1"); task.Meta.Status != storage.StatusDoing {
+			t.Fatal("a refused POST must change nothing")
+		}
+	})
+
+	t.Run("update task: status + waiting_for, tri-state clear, Log append", func(t *testing.T) {
+		m := postJSON(t, srv.URL+"/api/tasks/test/t-1", `{"status":"waiting","waiting_for":"review","body_append":"a note"}`, 200)
+		if m["status"] != "waiting" || m["waiting_for"] != "review" || m["id"] != "t-1" {
+			t.Fatalf("result = %v", m)
+		}
+		if m["status_changed"] == "" || m["status_changed"] == nil {
+			t.Fatalf("a real status change is stamped: %v", m)
+		}
+		task, err := store.FindTaskExact("test", "t-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.Meta.Status != storage.StatusWaiting || task.Meta.WaitingFor != "review" || !strings.Contains(task.Body, "a note") {
+			t.Fatalf("task = %+v / %q", task.Meta, task.Body)
+		}
+		// Tri-state: an empty string clears, an omitted field keeps.
+		m = postJSON(t, srv.URL+"/api/tasks/test/t-1", `{"waiting_for":"","brief":"where we are"}`, 200)
+		if _, has := m["waiting_for"]; has {
+			t.Fatalf("waiting_for must be cleared: %v", m)
+		}
+		if m["brief"] != "where we are" || m["status"] != "waiting" {
+			t.Fatalf("result = %v", m)
+		}
+	})
+
+	t.Run("update task: bad status 400, unknown field 400, missing task 404, path wins over body", func(t *testing.T) {
+		m := postJSON(t, srv.URL+"/api/tasks/test/t-1", `{"status":"bogus"}`, 400)
+		if !strings.Contains(m["error"].(string), "bogus") {
+			t.Fatalf("error = %v", m)
+		}
+		m = postJSON(t, srv.URL+"/api/tasks/test/t-1", `{"stauts":"todo"}`, 400)
+		if !strings.Contains(m["error"].(string), "stauts") {
+			t.Fatalf("error = %v", m)
+		}
+		postJSON(t, srv.URL+"/api/tasks/test/t-999", `{"status":"todo"}`, 404)
+		postJSON(t, srv.URL+"/api/tasks/nope/t-1", `{"status":"todo"}`, 404)
+		m = postJSON(t, srv.URL+"/api/tasks/test/t-2", `{"task_id":"t-1","project":"other","brief":"b2"}`, 200)
+		if m["id"] != "t-2" || m["project"] != "test" {
+			t.Fatalf("the path must name the task, not the body: %v", m)
+		}
+	})
+
+	t.Run("focus toggle round-trips through focus.yaml", func(t *testing.T) {
+		m := postJSON(t, srv.URL+"/api/focus/toggle", `{"task_id":"t-2"}`, 200)
+		if m["focused"] != true || m["date"] != storage.Today() {
+			t.Fatalf("result = %v", m)
+		}
+		fp, err := storage.ReadFocusPlan(store.RootDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(fp.Tasks) != 1 || fp.Tasks[0] != "t-2" {
+			t.Fatalf("plan = %v", fp)
+		}
+		f := getJSON(t, srv.URL+"/api/focus", 200)
+		if len(f["tasks"].([]any)) != 1 {
+			t.Fatalf("GET /api/focus = %v", f)
+		}
+		m = postJSON(t, srv.URL+"/api/focus/toggle", `{"task_id":"t-2"}`, 200)
+		if m["focused"] != false || len(m["task_ids"].([]any)) != 0 {
+			t.Fatalf("result = %v", m)
+		}
+		postJSON(t, srv.URL+"/api/focus/toggle", `{"task_id":"t-999"}`, 404)
+		postJSON(t, srv.URL+"/api/focus/toggle", `{}`, 400)
+	})
+
+	t.Run("project notes", func(t *testing.T) {
+		m := postJSON(t, srv.URL+"/api/projects/test", `{"notes":"cycle 15: batches accepted"}`, 200)
+		if m["notes"] != "cycle 15: batches accepted" {
+			t.Fatalf("result = %v", m)
+		}
+		p, err := store.GetProject("test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Notes != "cycle 15: batches accepted" {
+			t.Fatalf("project = %+v", p)
+		}
+		postJSON(t, srv.URL+"/api/projects/nope", `{"notes":"x"}`, 404)
+		postJSON(t, srv.URL+"/api/projects/test", `{"prefix":"bad prefix"}`, 400)
+	})
+
+	t.Run("HTTP and the service (what MCP runs) leave identical tasks", func(t *testing.T) {
+		viaHTTP, viaService := newTestStore(t), newTestStore(t)
+		srv2 := newServer(t, viaHTTP, Options{})
+		postJSON(t, srv2.URL+"/api/tasks/test/t-1", `{"status":"waiting","waiting_for":"client","brief":"b","body_append":"note","links":{"pr":"https://x/1"}}`, 200)
+		if _, err := service.UpdateTask(viaService, service.UpdateTaskInput{
+			Project: "test", TaskID: "t-1", Status: "waiting", WaitingFor: ptr("client"), Brief: ptr("b"),
+			BodyAppend: "note", Links: map[string]string{"pr": "https://x/1"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		a, _ := viaHTTP.FindTaskExact("test", "t-1")
+		b, _ := viaService.FindTaskExact("test", "t-1")
+		// Stamps are wall-clock; everything else must match byte for byte.
+		a.Meta.Updated, b.Meta.Updated = "", ""
+		a.Meta.StatusChanged, b.Meta.StatusChanged = "", ""
+		a.FilePath, b.FilePath = "", ""
+		ja, _ := json.Marshal(a)
+		jb, _ := json.Marshal(b)
+		if string(ja) != string(jb) {
+			t.Fatalf("HTTP:\n%s\nservice:\n%s", ja, jb)
+		}
+	})
+}
+
+func ptr(s string) *string { return &s }
 
 // /api/changes reads the cache; POST /api/changes/refresh runs the sources
 // and publishes an SSE `changes` event; POST /api/changes/seen moves the
