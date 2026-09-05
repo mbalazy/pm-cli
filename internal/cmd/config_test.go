@@ -143,7 +143,8 @@ func TestConfigShowRendersCockpit(t *testing.T) {
 		t.Fatalf("config show: %v", err)
 	}
 	for _, want := range []string{
-		"groups (2)",
+		"groups (2, manual sidebar order)",
+		"-  orbit: orbit",
 		"orbit: orbit",
 		"acme: ACME",
 		"cutoff hour: 20:00",

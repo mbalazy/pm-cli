@@ -30,19 +30,25 @@ import (
 // Each command has its own cap in the feed; this is the outer wall.
 const refreshTimeout = 5 * time.Minute
 
-// changeBus fans the "the feed changed" signal out to every open SSE
-// stream. A slow or gone subscriber never blocks a publisher: the send is
-// non-blocking on a buffered channel, and a client that missed one signal
-// refetches on the next.
+// changeBus fans a server-side signal ("the feed changed", "the settings
+// changed") out to every open SSE stream. A slow or gone subscriber never
+// blocks a publisher: the send is non-blocking on a buffered channel, and a
+// client that missed one signal refetches on the next.
 type changeBus struct {
 	mu   sync.Mutex
-	subs map[chan string]struct{}
+	subs map[chan busEvent]struct{}
 }
 
-func newChangeBus() *changeBus { return &changeBus{subs: map[chan string]struct{}{}} }
+// busEvent is one SSE frame to emit: the event name and its data line.
+type busEvent struct {
+	event string
+	data  string
+}
 
-func (b *changeBus) subscribe() (<-chan string, func()) {
-	ch := make(chan string, 8)
+func newChangeBus() *changeBus { return &changeBus{subs: map[chan busEvent]struct{}{}} }
+
+func (b *changeBus) subscribe() (<-chan busEvent, func()) {
+	ch := make(chan busEvent, 8)
 	b.mu.Lock()
 	b.subs[ch] = struct{}{}
 	b.mu.Unlock()
@@ -53,12 +59,12 @@ func (b *changeBus) subscribe() (<-chan string, func()) {
 	}
 }
 
-func (b *changeBus) publish(data string) {
+func (b *changeBus) publish(event, data string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for ch := range b.subs {
 		select {
-		case ch <- data:
+		case ch <- busEvent{event: event, data: data}:
 		default:
 		}
 	}
@@ -117,7 +123,7 @@ func (h *handler) runRefresh(ctx context.Context) (*feed.Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	h.bus.publish(changesEventData(res.Sources))
+	h.bus.publish("changes", changesEventData(res.Sources))
 	return res, nil
 }
 
@@ -153,7 +159,7 @@ func (h *handler) seen(w http.ResponseWriter, r *http.Request) {
 		writeResult(w, nil, err)
 		return
 	}
-	h.bus.publish(`{"sources":[]}`)
+	h.bus.publish("changes", `{"sources":[]}`)
 	writeJSON(w, http.StatusOK, seenResult{Seen: at.Format(time.RFC3339)})
 }
 

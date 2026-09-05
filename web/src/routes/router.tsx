@@ -11,6 +11,8 @@ import { GroupPage } from './GroupPage'
 import { ProjectPage } from './ProjectPage'
 import { RootLayout } from './RootLayout'
 import { RunsPage } from './RunsPage'
+import { ChangesPage } from './ChangesPage'
+import { SettingsPage } from './SettingsPage'
 import { TaskPage } from './TaskPage'
 import { TodayPage } from './TodayPage'
 
@@ -71,18 +73,21 @@ const runsRoute = createRoute({
   component: RunsPage,
 })
 
-// Screens 2 and 4 of the cockpit land in pm-cli-118-18; the routes exist so
-// the sidebar and the 2 / , keys already lead somewhere honest.
-const changesRoute = createRoute({
+// The Changes screen (pm-cli-118-18): the group filter in the URL like home.
+export const changesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/changes',
-  component: () => <p className="text-gray-500">Changes - coming in pm-cli-118-18.</p>,
+  validateSearch: (search: Record<string, unknown>): { g?: string } => {
+    const g = parseGroupFilter(search)
+    return g === '' ? {} : { g }
+  },
+  component: () => <ChangesPage group={changesRoute.useSearch().g ?? ''} />,
 })
 
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
-  component: () => <p className="text-gray-500">Settings - coming in pm-cli-118-18.</p>,
+  component: SettingsPage,
 })
 
 const routeTree = rootRoute.addChildren([

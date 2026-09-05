@@ -63,7 +63,11 @@ export function RootLayout() {
   }
 
   const layout = sidebarLayout(config.data?.cockpit.sidebar)
-  const groups = sortGroups(attention.data?.groups ?? [], config.data?.cockpit.sidebar.sort)
+  const groups = sortGroups(
+    attention.data?.groups ?? [],
+    config.data?.cockpit.sidebar.sort,
+    config.data?.cockpit.groups,
+  )
   const asleep = asleepProjects(projects.data?.projects)
   const columns = layout.width ?? (layout.variant === 'rail' ? '3.5rem' : '15rem')
 

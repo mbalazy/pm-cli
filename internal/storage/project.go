@@ -40,6 +40,13 @@ type Project struct {
 	// and CLI ignore the field and preserve it on write.
 	Group    string    `yaml:"group,omitempty"`
 	Executor *Executor `yaml:"executor,omitempty"`
+	// Slack maps this project onto Slack for the cockpit's change feed
+	// (pm-cli-118-19 reads it, the settings screen of 118-18 edits it): the
+	// workspace label (which MCP server instance to ask) and the channels
+	// whose messages count as this project's changes. Mentions and DMs are
+	// never mapped - the feed carries them always, project-less. Nil = the
+	// project has no Slack side. The TUI and CLI ignore it and preserve it.
+	Slack *SlackConfig `yaml:"slack,omitempty"`
 	// Journals declares which subsystems this project keeps a running record
 	// of (see journal.go). This list IS the whole of the journal mechanism's
 	// project-awareness: pm never infers a subject, so nothing in the code
@@ -151,7 +158,16 @@ var knownProjectKeys = map[string]bool{
 	"name": true, "prefix": true, "path": true, "repo": true, "stack": true,
 	"links": true, "tags": true, "statuses": true, "notes": true,
 	"archived": true, "executor": true, "claude_config_dir": true,
-	"journals": true, "group": true,
+	"journals": true, "group": true, "slack": true,
+}
+
+// SlackConfig is a project's Slack mapping (Project.Slack).
+type SlackConfig struct {
+	// Workspace names the Slack workspace (the label of one MCP server
+	// instance in the feed's slack source); empty = the source's first.
+	Workspace string `yaml:"workspace,omitempty"`
+	// Channels are channel names, with or without the leading '#'.
+	Channels []string `yaml:"channels,omitempty"`
 }
 
 // writeProject persists a project WITHOUT destroying what a plain struct

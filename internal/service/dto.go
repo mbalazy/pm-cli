@@ -242,6 +242,14 @@ type ProjectResult struct {
 	Statuses []string          `json:"statuses,omitempty"`
 	Archived bool              `json:"archived,omitempty"`
 	Group    string            `json:"group,omitempty"`
+	Slack    *SlackMapping     `json:"slack,omitempty"`
+}
+
+// SlackMapping is storage.SlackConfig with json tags: a project's Slack
+// workspace label and channels (the change feed's slack source reads it).
+type SlackMapping struct {
+	Workspace string   `json:"workspace,omitempty"`
+	Channels  []string `json:"channels"`
 }
 
 // ConfigResult is Config's shape: the resolved `cockpit:` block of the
@@ -263,13 +271,23 @@ type CockpitResult struct {
 	Sections             map[string]bool `json:"sections"`
 	Sources              map[string]bool `json:"sources"`
 	Sidebar              SidebarResult   `json:"sidebar"`
+	Git                  GitResult       `json:"git"`
 }
 
-// ConfigGroup is one named group (cockpit.groups.<slug>), sorted by slug.
+// ConfigGroup is one configured group (cockpit.groups.<slug>). The list is
+// in the sidebar's MANUAL order (storage.CockpitConfig.GroupOrder) - a JSON
+// object could not carry it, which is why `groups` is an array.
 type ConfigGroup struct {
 	Slug string `json:"slug"`
 	// Name is the resolved display name - the slug when none is configured.
 	Name string `json:"name"`
+	// Order is the configured place (0 = unplaced, after the placed ones).
+	Order int `json:"order"`
+}
+
+// GitResult is storage.GitConfig with json tags.
+type GitResult struct {
+	AllBranches bool `json:"all_branches"`
 }
 
 // RefreshResult is the change feed's schedule as the SPA reads it.

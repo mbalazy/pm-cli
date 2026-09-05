@@ -43,10 +43,15 @@ describe('sidebarLayout', () => {
 
 describe('sortGroups', () => {
   const groups = [g('a', '2026-09-01T00:00:00Z'), g('b'), g('c', '2026-09-05T00:00:00Z')]
-  it('keeps the API order for worst and for manual (no key order in JSON)', () => {
+  it('keeps the API order for worst; manual follows the config array, the rest after', () => {
     expect(sortGroups(groups, 'worst')).toBe(groups)
-    expect(sortGroups(groups, 'manual')).toBe(groups)
     expect(sortGroups(groups, undefined)).toBe(groups)
+    expect(sortGroups(groups, 'manual', undefined).map((x) => x.slug)).toEqual(['a', 'b', 'c'])
+    const cfg = [
+      { slug: 'c', name: 'C', order: 1 },
+      { slug: 'b', name: 'b', order: 2 },
+    ]
+    expect(sortGroups(groups, 'manual', cfg).map((x) => x.slug)).toEqual(['c', 'b', 'a'])
   })
   it('last_activity puts the freshest first and the unknown last', () => {
     expect(sortGroups(groups, 'last_activity').map((x) => x.slug)).toEqual(['c', 'a', 'b'])

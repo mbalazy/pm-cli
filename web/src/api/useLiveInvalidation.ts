@@ -4,7 +4,8 @@ import { useEffect } from 'react'
 import { keys } from './queries'
 
 // /api/events says WHAT changed (`tasks`/`runs` + the project slug, or
-// `changes` after the feed refreshed), never what to; the client answers by invalidating the queries that read it, and
+// `changes` after the feed refreshed, `settings` after config.yaml was
+// written), never what to; the client answers by invalidating the queries that read it, and
 // react-query refetches the ones on screen. EventSource reconnects on its
 // own after a drop - nothing here retries.
 
@@ -49,6 +50,14 @@ export function useLiveInvalidation(url = '/api/events') {
     es.addEventListener('changes', () => {
       void client.invalidateQueries({ queryKey: keys.changes() })
       void client.invalidateQueries({ queryKey: ['attention'] })
+    })
+    // The settings screen (or another tab of it) wrote config.yaml: the
+    // sidebar shape, the sections and the thresholds are all downstream.
+    es.addEventListener('settings', () => {
+      void client.invalidateQueries({ queryKey: keys.config() })
+      void client.invalidateQueries({ queryKey: ['attention'] })
+      void client.invalidateQueries({ queryKey: keys.projects() })
+      void client.invalidateQueries({ queryKey: keys.groups() })
     })
     return () => es.close()
   }, [client, url])

@@ -1,10 +1,10 @@
 // Package server is `pm serve`: the cockpit's HTTP face over the same
 // internal/service functions the MCP server calls, plus an SSE change feed,
 // the change feed's endpoints and scheduler (changes.go), and the embedded
-// React bundle. Read-only over pm's DATA - every task or project mutation
-// still goes through MCP or the CLI; the only writes are the feed's own
-// cache and seen mark - and unauthenticated, because it binds to localhost
-// (remote access is Tailscale's job, not this package's).
+// React bundle. Mutations (task edits, focus, project notes and settings,
+// the cockpit block of config.yaml) are the service's functions behind the
+// client header (pm-cli-118-16/-18); unauthenticated, because it binds to
+// localhost (remote access is Tailscale's job, not this package's).
 //
 // stdlib net/http only (Go 1.22+ method+pattern routing); no framework.
 package server
@@ -127,6 +127,7 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux.HandleFunc("POST /api/tasks/{project}/{id}", requireClient(h.updateTask))
 	mux.HandleFunc("POST /api/focus/toggle", requireClient(h.toggleFocus))
 	mux.HandleFunc("POST /api/projects/{slug}", requireClient(h.updateProject))
+	mux.HandleFunc("POST /api/settings", requireClient(h.updateSettings))
 	mux.HandleFunc("GET /api/events", h.events)
 	// Anything else under /api/ is unknown, never the SPA: a typo'd endpoint
 	// answering with index.html would read as "the server is fine, the data
@@ -234,6 +235,9 @@ type apiProject struct {
 	Links           map[string]string `json:"links,omitempty"`
 	Statuses        []string          `json:"statuses"`
 	LandingStatuses []string          `json:"landing_statuses"`
+	// Slack is the project's Slack mapping (project.yaml `slack`), edited
+	// on the settings screen; absent when the project has none.
+	Slack *service.SlackMapping `json:"slack,omitempty"`
 }
 
 type apiProjectsResult struct {
@@ -255,6 +259,7 @@ func (h *handler) projects(w http.ResponseWriter, r *http.Request) {
 		// leaves the row with the counts it has.
 		if proj, err := h.store.GetProject(pi.Slug); err == nil {
 			p.Path, p.Repo, p.Notes, p.Tags, p.Links = proj.Path, proj.Repo, proj.Notes, proj.Tags, proj.Links
+			p.Slack = service.SlackOf(proj)
 		}
 		for _, s := range h.store.GetProjectStatuses(pi.Slug) {
 			p.Statuses = append(p.Statuses, string(s))
@@ -275,8 +280,9 @@ func (h *handler) groups(w http.ResponseWriter, r *http.Request) {
 }
 
 // config is the resolved cockpit block of config.yaml - the SPA shapes its
-// sidebar and sections from it. Read-only here; the settings screen
-// (pm-cli-118-18) adds the write.
+// sidebar and sections from it, and the settings screen edits it through
+// updateSettings below. Read on every call, so a write (from the screen or
+// by hand) is visible on the next request without a restart.
 func (h *handler) config(w http.ResponseWriter, r *http.Request) {
 	res, err := service.Config(h.store)
 	writeResult(w, res, err)
@@ -410,7 +416,9 @@ func (h *handler) toggleFocus(w http.ResponseWriter, r *http.Request) {
 
 // updateProject is pm_update_project over HTTP: POST /api/projects/{slug}
 // with service.UpdateProjectInput fields (the slug comes from the path). The
-// cockpit sends `notes` ("where we left off", v1 = hand-written).
+// cockpit sends `notes` ("where we left off", v1 = hand-written) and, from
+// the settings screen, `group`, `archived` and `slack` - the per-project
+// settings, which live in project.yaml and not in the global block.
 func (h *handler) updateProject(w http.ResponseWriter, r *http.Request) {
 	var in service.UpdateProjectInput
 	if !decodeBody(w, r, &in) {
@@ -421,6 +429,26 @@ func (h *handler) updateProject(w http.ResponseWriter, r *http.Request) {
 	writeResult(w, res, err)
 }
 
+// updateSettings is the settings screen's write: POST /api/settings with a
+// service.UpdateSettingsInput PATCH of the cockpit block (only what changed;
+// absent = keep). config.yaml is written back with its comments and unknown
+// keys kept, the resolved block is answered, and every open SSE stream gets
+// `event: settings` so other tabs re-read /api/config and the queue. No
+// lock: the file is edited by one person, and the scheduler only reads it.
+func (h *handler) updateSettings(w http.ResponseWriter, r *http.Request) {
+	var in service.UpdateSettingsInput
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	res, err := service.UpdateSettings(h.store, in)
+	if err != nil {
+		writeResult(w, nil, err)
+		return
+	}
+	h.bus.publish("settings", "{}")
+	writeJSON(w, http.StatusOK, res)
+}
+
 // --- SPA ---
 
 const placeholderPage = `<!doctype html>
@@ -429,7 +457,7 @@ const placeholderPage = `<!doctype html>
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:40em;margin:4em auto;padding:0 1em;color:#333}code{background:#eee;padding:.1em .3em;border-radius:3px}</style>
 <h1>pm serve</h1>
 <p>The server is up, but the front end is not built into this binary.</p>
-<p>Run <code>make web</code> and rebuild, or use the JSON API directly: <code>/api/projects</code>, <code>/api/groups</code>, <code>/api/tasks</code>, <code>/api/context</code>, <code>/api/runs</code>, <code>/api/focus</code>, <code>/api/attention</code>, <code>/api/changes</code>, <code>/api/events</code>.</p>
+<p>Run <code>make web</code> and rebuild, or use the JSON API directly: <code>/api/projects</code>, <code>/api/groups</code>, <code>/api/tasks</code>, <code>/api/context</code>, <code>/api/runs</code>, <code>/api/focus</code>, <code>/api/attention</code>, <code>/api/changes</code>, <code>/api/config</code>, <code>/api/events</code>.</p>
 `
 
 // static serves the bundle with client-side routing: a path that names a

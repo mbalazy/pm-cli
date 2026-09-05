@@ -870,3 +870,102 @@ func TestSchedulerHonoursTheWindow(t *testing.T) {
 		t.Errorf("manual refresh outside the window: calls = %d", src.calls)
 	}
 }
+
+// The settings screen's writes (pm-cli-118-18): the cockpit block through
+// POST /api/settings, the per-project fields through POST /api/projects.
+func TestSettings(t *testing.T) {
+	store := newTestStore(t)
+	srv := newServer(t, store, Options{PollInterval: 20 * time.Millisecond, PingInterval: time.Minute})
+	if err := os.WriteFile(store.ConfigPath(), []byte("# mine\ncockpit:\n  # owl\n  cutoff_hour: 20\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	events, cancel := sseClient(t, srv.URL+"/api/events")
+	defer cancel()
+
+	t.Run("no header 403, unknown field 400, bad value 400 with the field named, nothing written", func(t *testing.T) {
+		resp, err := http.Post(srv.URL+"/api/settings", "application/json", strings.NewReader(`{"cutoff_hour":9}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("no header = %d", resp.StatusCode)
+		}
+		m := postJSON(t, srv.URL+"/api/settings", `{"cutof_hour":9}`, 400)
+		if !strings.Contains(m["error"].(string), "cutof_hour") {
+			t.Fatalf("error = %v", m)
+		}
+		m = postJSON(t, srv.URL+"/api/settings", `{"refresh":{"every_seconds":30}}`, 400)
+		if !strings.Contains(m["error"].(string), "every_seconds") {
+			t.Fatalf("error = %v", m)
+		}
+		raw, _ := os.ReadFile(store.ConfigPath())
+		if string(raw) != "# mine\ncockpit:\n  # owl\n  cutoff_hour: 20\n" {
+			t.Fatalf("a rejected patch must write nothing:\n%s", raw)
+		}
+	})
+
+	t.Run("a patch is written with the comments kept, answered resolved, visible on the next GET, announced on SSE", func(t *testing.T) {
+		m := postJSON(t, srv.URL+"/api/settings", `{"sidebar":{"variant":"plain"},"sections":{"recent":true},"groups":[{"slug":"acme","name":"ACME","order":1}],"git":{"all_branches":true}}`, 200)
+		c := m["cockpit"].(map[string]any)
+		if c["cutoff_hour"] != float64(20) || c["sidebar"].(map[string]any)["variant"] != "plain" {
+			t.Fatalf("result = %v", c)
+		}
+		groups := c["groups"].([]any)
+		if len(groups) != 1 || groups[0].(map[string]any)["name"] != "ACME" || groups[0].(map[string]any)["order"] != float64(1) {
+			t.Fatalf("groups = %v", groups)
+		}
+		if c["git"].(map[string]any)["all_branches"] != true {
+			t.Fatalf("git = %v", c["git"])
+		}
+		waitFor(t, events, "settings {}")
+		raw, _ := os.ReadFile(store.ConfigPath())
+		for _, want := range []string{"# mine", "# owl", "cutoff_hour: 20", "variant: plain", "recent: true", "name: ACME"} {
+			if !strings.Contains(string(raw), want) {
+				t.Errorf("config.yaml lacks %q:\n%s", want, raw)
+			}
+		}
+		g := getJSON(t, srv.URL+"/api/config", 200)
+		if g["cockpit"].(map[string]any)["sidebar"].(map[string]any)["variant"] != "plain" {
+			t.Fatalf("the next GET must see the write: %v", g)
+		}
+	})
+
+	t.Run("project settings: group, archived and slack through POST /api/projects, comments kept", func(t *testing.T) {
+		path := filepath.Join(store.Root, "test", "project.yaml")
+		raw, _ := os.ReadFile(path)
+		if err := os.WriteFile(path, append([]byte("# project comment\n"), raw...), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		m := postJSON(t, srv.URL+"/api/projects/test", `{"group":"acme","slack":{"workspace":"acme","channels":[" #acme-api-dev ",""]}}`, 200)
+		if m["group"] != "acme" {
+			t.Fatalf("result = %v", m)
+		}
+		slack := m["slack"].(map[string]any)
+		if slack["workspace"] != "acme" || len(slack["channels"].([]any)) != 1 || slack["channels"].([]any)[0] != "#acme-api-dev" {
+			t.Fatalf("slack = %v", slack)
+		}
+		raw, _ = os.ReadFile(path)
+		for _, want := range []string{"# project comment", "group: acme", "workspace: acme", "- '#acme-api-dev'"} {
+			if !strings.Contains(string(raw), want) {
+				t.Errorf("project.yaml lacks %q:\n%s", want, raw)
+			}
+		}
+		p := getJSON(t, srv.URL+"/api/projects", 200)
+		row := p["projects"].([]any)[0].(map[string]any)
+		if row["group"] != "acme" || row["slack"].(map[string]any)["workspace"] != "acme" {
+			t.Fatalf("projects row = %v", row)
+		}
+		// An empty mapping removes the key; archiving puts the project to sleep.
+		m = postJSON(t, srv.URL+"/api/projects/test", `{"slack":{"workspace":"","channels":[]},"archived":true}`, 200)
+		if _, has := m["slack"]; has || m["archived"] != true {
+			t.Fatalf("result = %v", m)
+		}
+		raw, _ = os.ReadFile(path)
+		if strings.Contains(string(raw), "slack:") || !strings.Contains(string(raw), "archived: true") {
+			t.Fatalf("project.yaml = \n%s", raw)
+		}
+		postJSON(t, srv.URL+"/api/projects/test", `{"group":"Bad Group"}`, 400)
+		postJSON(t, srv.URL+"/api/projects/nope", `{"archived":false}`, 404)
+	})
+}

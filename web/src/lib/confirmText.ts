@@ -19,6 +19,8 @@ export interface ActionSubject {
   since?: string
   /** A project's notes ("where we left off"), for edit_notes. */
   notes?: string
+  /** move_repo: the group the project moves to ('' = its own). */
+  group?: string
 }
 
 /** A task detail as an action subject (the detail carries `id`, a row `task_id`). */
@@ -49,6 +51,9 @@ export type PendingKind =
   | 'edit_waiting_for'
   | 'set_status'
   | 'edit_notes'
+  | 'sleep_project'
+  | 'wake_project'
+  | 'move_repo'
 
 export interface PendingAction {
   kind: PendingKind
@@ -83,7 +88,10 @@ export function isPendingKind(k: string): k is PendingKind {
     k === 'edit_brief' ||
     k === 'edit_waiting_for' ||
     k === 'set_status' ||
-    k === 'edit_notes'
+    k === 'edit_notes' ||
+    k === 'sleep_project' ||
+    k === 'wake_project' ||
+    k === 'move_repo'
   )
 }
 
@@ -183,6 +191,28 @@ export function describeAction(p: PendingAction, value: string, focused?: boolea
         warning: waiting && !value.trim() ? NO_REASON : undefined,
       }
     }
+    case 'sleep_project':
+      return {
+        ...base,
+        sentence: `Puts project ${s.project} to sleep (archived: true in project.yaml).`,
+        confirmLabel: 'sleep',
+        warning:
+          'an asleep project leaves every group, the home queue, the sidebar and the change feed until woken here',
+      }
+    case 'wake_project':
+      return {
+        ...base,
+        sentence: `Wakes project ${s.project} (archived: false) - it rejoins its group and the home queue.`,
+        confirmLabel: 'wake',
+      }
+    case 'move_repo':
+      return {
+        ...base,
+        sentence: s.group
+          ? `Moves ${s.project} into group ${s.group} (group: ${s.group} in its project.yaml).`
+          : `Takes ${s.project} out of its group - it becomes a group of its own.`,
+        confirmLabel: s.group ? `move to ${s.group}` : 'leave group',
+      }
   }
 }
 
@@ -210,7 +240,13 @@ export function requestFor(p: PendingAction, value: string): MutationRequest {
     case 'edit_waiting_for':
       return { kind: 'task', project: s.project, taskId, body: { waiting_for: v } }
     case 'edit_notes':
-      return { kind: 'project', project: s.project, notes: value }
+      return { kind: 'project', project: s.project, body: { notes: value } }
+    case 'sleep_project':
+      return { kind: 'project', project: s.project, body: { archived: true } }
+    case 'wake_project':
+      return { kind: 'project', project: s.project, body: { archived: false } }
+    case 'move_repo':
+      return { kind: 'project', project: s.project, body: { group: s.group ?? '' } }
     case 'set_status':
       return {
         kind: 'task',

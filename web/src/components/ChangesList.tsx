@@ -1,8 +1,8 @@
 import type { ChangeEvent } from '../api/types'
-import { severityGlyph } from '../lib/glyphs'
+import { EventRow } from './EventRow'
 
-// The change feed as a plain list (the full Changes screen is pm-cli-118-18;
-// this is the group tab's view). Events arrive filtered and ordered.
+// The change feed as a plain list (the group tab's view; the full Changes
+// screen is routes/ChangesPage). Events arrive filtered and ordered.
 
 interface Props {
   events: ChangeEvent[]
@@ -24,23 +24,7 @@ export function ChangesList({ events, cutoff, timeText }: Props) {
       ) : (
         <ul className="space-y-0.5 text-sm">
           {events.map((e) => (
-            <li
-              key={e.id}
-              className={`flex flex-wrap items-baseline gap-x-2 px-1 ${e.seen ? 'text-gray-500' : ''}`}
-            >
-              <span className="inline-block w-4 text-center">{severityGlyph(e.severity)}</span>
-              <span className="rounded bg-gray-100 px-1 text-xs text-gray-600">{e.source}</span>
-              <span className="rounded bg-gray-100 px-1 text-xs text-gray-600">{e.project}</span>
-              {e.task_id && <code className="text-gray-500">{e.task_id}</code>}
-              <span>{e.title}</span>
-              {e.detail && <span className="text-gray-500">{e.detail}</span>}
-              {e.url && (
-                <a href={e.url} target="_blank" rel="noreferrer" className="text-xs underline">
-                  open
-                </a>
-              )}
-              <span className="ml-auto tabular-nums text-gray-500">{timeText(e.ts)}</span>
-            </li>
+            <EventRow key={e.id} event={e} timeText={timeText(e.ts)} />
           ))}
         </ul>
       )}

@@ -142,6 +142,14 @@ export interface Project {
   /** The project's status list, in column order. */
   statuses: string[]
   landing_statuses: string[]
+  /** project.yaml `slack` - the change feed's Slack mapping; absent = none. */
+  slack?: SlackMapping
+}
+
+/** service.SlackMapping - a project's Slack workspace label + channels. */
+export interface SlackMapping {
+  workspace?: string
+  channels: string[]
 }
 
 /** server.apiProjectsResult */
@@ -327,9 +335,17 @@ export interface SidebarConfig {
   width: number
 }
 
+/** service.ConfigGroup - one configured group, listed in the MANUAL sidebar order. */
+export interface ConfigGroup {
+  slug: string
+  name: string
+  /** 0 = unplaced (after every placed group). */
+  order: number
+}
+
 /** service.CockpitResult - the resolved `cockpit:` block (defaults applied server-side). */
 export interface CockpitConfig {
-  groups: { slug: string; name: string }[]
+  groups: ConfigGroup[]
   doing_idle_days: number
   waiting_highlight_days: number
   stuck_project_days: number
@@ -338,6 +354,33 @@ export interface CockpitConfig {
   sections: Record<string, boolean>
   sources: Record<string, boolean>
   sidebar: SidebarConfig
+  git: { all_branches: boolean }
+}
+
+/** service.UpdateSettingsInput - POST /api/settings: a PATCH, absent = keep. */
+export interface SettingsPatch {
+  doing_idle_days?: number
+  waiting_highlight_days?: number
+  stuck_project_days?: number
+  cutoff_hour?: number
+  refresh?: { every_seconds?: number; window?: string }
+  sections?: Record<string, boolean>
+  sources?: Record<string, boolean>
+  sidebar?: { variant?: string; show_repos?: boolean; sort?: string; width?: number }
+  /** Merged by slug: name null keeps, '' clears; order 0 unplaces. */
+  groups?: { slug: string; name?: string; order?: number }[]
+  git?: { all_branches?: boolean }
+}
+
+/** The fields POST /api/projects/{slug} accepts from the cockpit (service.UpdateProjectInput subset). */
+export interface UpdateProjectBody {
+  /** Empty = KEEP (the API treats empty notes as "leave"). */
+  notes?: string
+  /** '' = leave the group (the project becomes its own). */
+  group?: string
+  archived?: boolean
+  /** An empty workspace with no channels removes the mapping. */
+  slack?: SlackMapping
 }
 
 /** service.ConfigResult - GET /api/config */
@@ -369,4 +412,6 @@ export interface ProjectResult {
   notes?: string
   statuses?: string[]
   group?: string
+  archived?: boolean
+  slack?: SlackMapping
 }
