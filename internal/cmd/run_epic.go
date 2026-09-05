@@ -54,6 +54,7 @@ type subOutcome struct {
 func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 	var (
 		model       string
+		effort      string
 		maxTurns    int
 		yolo        bool
 		timeout     time.Duration
@@ -84,7 +85,9 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := epicOptions{
-				model: model, maxTurns: maxTurns, yolo: yolo,
+				model: model, modelSet: cmd.Flags().Changed("model"),
+				effort: effort, effortSet: cmd.Flags().Changed("effort"),
+				maxTurns: maxTurns, yolo: yolo,
 				timeout: timeout, timeoutSet: cmd.Flags().Changed("timeout"),
 				base: base, noPR: noPR, allowDirty: allowDirty,
 				additional: additional, slotPin: slotPin, independent: independent,
@@ -106,7 +109,8 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&model, "model", "opus", "model for the workers")
+	cmd.Flags().StringVar(&model, "model", "opus", "model for the workers; beats executor.model, a sub's own `model:` beats both")
+	cmd.Flags().StringVar(&effort, "effort", "", "Claude effort level for the workers (low|medium|high|xhigh|max); beats executor.effort, empty = Claude's default")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 150, "max agent turns per worker")
 	cmd.Flags().BoolVar(&yolo, "yolo", false, "bypass all permission checks in the workers")
 	cmd.Flags().DurationVar(&timeout, "timeout", defaultWorkerTimeout, "max wall-clock time per worker (overrides the project's executor.timeout)")
@@ -130,7 +134,13 @@ func newRunEpicCmd(store storage.TaskStore) *cobra.Command {
 // plus the command's output writers (so RunE, planEpic and executeEpic can be
 // driven by a test without capturing the process streams).
 type epicOptions struct {
+	// model/effort are the flag values; the Set flags say whether they were
+	// passed, so executor.model / executor.effort can beat a flag DEFAULT but
+	// never an explicit one (resolved once in planEpic, see epicPlan.model).
 	model       string
+	modelSet    bool
+	effort      string
+	effortSet   bool
 	maxTurns    int
 	yolo        bool
 	timeout     time.Duration
@@ -206,7 +216,14 @@ type epicPlan struct {
 	// (--timeout > executor.timeout > the flag default), see resolveWorkerTimeout.
 	// Resolved once for the whole run so subs cannot disagree about it.
 	timeout time.Duration
-	slots   []storage.ResolvedWorktree
+	// model/effort are the run-level worker settings resolved the same way
+	// (--flag > executor.model / executor.effort > default), with the source
+	// that won for the dry-run; a sub's own `model:` still overrides per sub.
+	model        string
+	modelSource  string
+	effort       string
+	effortSource string
+	slots        []storage.ResolvedWorktree
 	// workDir is where the run will happen - the main checkout, or (additional
 	// mode) a PROVISIONAL description of the slot pool for the dry-run display;
 	// the real slot is claimed in executeEpic.
@@ -275,7 +292,17 @@ func planEpic(store storage.TaskStore, args []string, opts epicOptions) (*epicPl
 	statuses := store.GetProjectStatuses(slug)
 	doneStatus, doneNote := resolveEpicDoneStatus(exc, independentMode, statuses)
 
+	// Worker model + effort for the RUN (a sub's own `model:` is applied per
+	// sub in executeEpic). Resolved here so --dry-run names the source, and so
+	// an invalid effort level fails the plan instead of every worker spawn.
+	model, modelSource := resolveWorkerModel(opts.model, opts.modelSet, "", exc.Model)
+	effort, effortSource, err := resolveWorkerEffort(opts.effort, opts.effortSet, exc.Effort)
+	if err != nil {
+		return nil, err
+	}
+
 	return &epicPlan{
+		model: model, modelSource: modelSource, effort: effort, effortSource: effortSource,
 		tracker:        tracker,
 		slug:           slug,
 		proj:           proj,
@@ -398,6 +425,8 @@ func printEpicDryRun(plan *epicPlan, opts epicOptions) error {
 		fmt.Fprintf(opts.stdout(), "\nbaseline (once per run, injected into every worker prompt): %s\n", bl)
 	}
 	fmt.Fprintf(opts.stdout(), "\nper-worker timeout: %s\n", describeTimeout(plan.timeout, opts.timeoutSet, plan.exc.Timeout))
+	fmt.Fprintf(opts.stdout(), "worker model: %s (%s; a sub's own `model:` still overrides)\nworker effort: %s\n",
+		plan.model, plan.modelSource, describeEffortLevel(plan.effort, plan.effortSource))
 	fmt.Fprintf(opts.stdout(), "acceptance after the run: %s\n", describeAutoFinish(plan, opts))
 	return plan.doneStatusGate
 }
@@ -502,7 +531,11 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	}
 
 	workOpts := workOptions{
-		standalone: false, model: opts.model, maxTurns: opts.maxTurns, yolo: opts.yolo,
+		// model/effort come from the PLAN, resolved once against executor.model /
+		// executor.effort, and are marked as set so the sub's own planWork keeps
+		// them (a sub's `model:` frontmatter is applied below, per sub).
+		standalone: false, model: plan.model, modelSet: true, effort: plan.effort, effortSet: true,
+		maxTurns: opts.maxTurns, yolo: opts.yolo,
 		// timeout comes from the PLAN, already resolved against the project's
 		// executor.timeout, and is marked as set so the sub's own planWork keeps
 		// the manager's number instead of resolving it a second time.
@@ -592,7 +625,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	epicStart := time.Now()
 	start := storage.JournalEntry{
 		Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID, RunID: runID,
-		PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Independent: independentMode, Branch: journalBranch,
+		PID: os.Getpid(), Model: plan.model, Additional: opts.additional, Yolo: opts.yolo, Independent: independentMode, Branch: journalBranch,
 		WorkDir: journalDir, Baseline: baselineUsed,
 	}
 	_ = storage.AppendJournal(stateDir, &start)
@@ -683,7 +716,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	rw.Read(func(run *storage.RunState) { jSubs = journalSubs(outcomes, subDurations, run) })
 	_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 		Event: storage.JournalEventEnd, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID, RunID: runID,
-		PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Independent: independentMode, Branch: journalBranch,
+		PID: os.Getpid(), Model: plan.model, Additional: opts.additional, Yolo: opts.yolo, Independent: independentMode, Branch: journalBranch,
 		WorkDir: journalDir, Baseline: baselineUsed,
 		Status: runStatus, Error: abortReason, DurationS: int(time.Since(epicStart).Seconds()),
 		Subs: jSubs,

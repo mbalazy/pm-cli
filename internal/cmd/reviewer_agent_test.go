@@ -332,7 +332,7 @@ func TestReviewPromptNamesTheReviewerType(t *testing.T) {
 }
 
 func TestBuildClaudeArgsCarriesTheAgentDefinition(t *testing.T) {
-	args := buildClaudeArgs("p", "sp", "sess", "opus", 10, false, guardOptions{reviewModel: "sonnet"}, "", false)
+	args := buildClaudeArgs("p", "sp", "sess", "opus", "", 10, false, guardOptions{reviewModel: "sonnet"}, "", false)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--agents") {
 		t.Fatalf("argv must carry --agents: %v", args)
