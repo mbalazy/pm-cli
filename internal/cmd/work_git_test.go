@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -176,6 +177,112 @@ func TestGitCleanWorktreePreservesCommitsAndIgnored(t *testing.T) {
 // TestGitAheadCountAndPushIfAhead covers the independent-mode push gate: a sub
 // branch is pushed only when it carries commits its base does not, and a repo
 // without a remote reports that instead of failing the run.
+// freshenBase (pm-cli-119-7): the local base is brought up to origin before a
+// run forks from it - fast-forward when strictly behind (both the checked-out
+// and the not-checked-out case), a loud error when diverged, silence when
+// there is nothing to do or no remote at all.
+func TestFreshenBase(t *testing.T) {
+	// origin (bare) <- A (the run's checkout) and B (somebody else's push).
+	origin := t.TempDir()
+	gitT(t, origin, "init", "-q", "--bare")
+	clone := func(t *testing.T) string {
+		dir := filepath.Join(t.TempDir(), "clone")
+		gitT(t, t.TempDir(), "clone", "-q", origin, dir)
+		gitT(t, dir, "config", "user.email", "t@t")
+		gitT(t, dir, "config", "user.name", "t")
+		return dir
+	}
+	commit := func(t *testing.T, dir, name string) {
+		writeFile(t, filepath.Join(dir, name), name)
+		gitT(t, dir, "add", name)
+		gitT(t, dir, "commit", "-q", "-m", name)
+	}
+	a := clone(t)
+	gitT(t, a, "checkout", "-q", "-b", "main")
+	commit(t, a, "one")
+	gitT(t, a, "push", "-q", "-u", "origin", "main")
+	b := clone(t)
+	gitT(t, b, "checkout", "-q", "main")
+	gitT(t, b, "config", "user.email", "t@t")
+	gitT(t, b, "config", "user.name", "t")
+
+	sha := func(dir, ref string) string { return gitShortSHA(dir, ref) }
+
+	t.Run("up to date -> nothing said, nothing moved", func(t *testing.T) {
+		var out bytes.Buffer
+		before := sha(a, "main")
+		if err := freshenBase(&out, a, "main"); err != nil {
+			t.Fatal(err)
+		}
+		if out.Len() != 0 || sha(a, "main") != before {
+			t.Errorf("nothing should happen when local == origin, got %q, main %s->%s", out.String(), before, sha(a, "main"))
+		}
+	})
+
+	t.Run("behind, checked out -> fast-forwarded", func(t *testing.T) {
+		commit(t, b, "two")
+		gitT(t, b, "push", "-q", "origin", "main")
+		var out bytes.Buffer
+		if err := freshenBase(&out, a, "main"); err != nil {
+			t.Fatal(err)
+		}
+		if sha(a, "main") != sha(b, "main") {
+			t.Errorf("main not fast-forwarded: %s vs origin %s", sha(a, "main"), sha(b, "main"))
+		}
+		if !strings.Contains(out.String(), "fast-forwarded main") || !strings.Contains(out.String(), "1 commit(s) behind") {
+			t.Errorf("the move must be said: %q", out.String())
+		}
+	})
+
+	t.Run("behind, NOT checked out -> branch moved without touching the tree", func(t *testing.T) {
+		gitT(t, a, "checkout", "-q", "-b", "elsewhere")
+		commit(t, b, "three")
+		gitT(t, b, "push", "-q", "origin", "main")
+		var out bytes.Buffer
+		if err := freshenBase(&out, a, "main"); err != nil {
+			t.Fatal(err)
+		}
+		if sha(a, "main") != sha(b, "main") {
+			t.Errorf("main not moved: %s vs origin %s", sha(a, "main"), sha(b, "main"))
+		}
+		if cur, _ := gitCurrentBranch(a); cur != "elsewhere" {
+			t.Errorf("the checked-out branch must stay put, now on %q", cur)
+		}
+		gitT(t, a, "checkout", "-q", "main")
+	})
+
+	t.Run("diverged -> error naming both SHAs, nothing moved", func(t *testing.T) {
+		commit(t, a, "local-only")
+		commit(t, b, "four")
+		gitT(t, b, "push", "-q", "origin", "main")
+		before := sha(a, "main")
+		var out bytes.Buffer
+		err := freshenBase(&out, a, "main")
+		if err == nil {
+			t.Fatal("a diverged base must abort the run, not be resolved silently")
+		}
+		for _, want := range []string{"diverged", before, sha(b, "main"), "rebase", "branch -f"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error should carry %q: %v", want, err)
+			}
+		}
+		if sha(a, "main") != before {
+			t.Errorf("a diverged base must not be moved: %s -> %s", before, sha(a, "main"))
+		}
+	})
+
+	t.Run("no remote -> silent no-op", func(t *testing.T) {
+		dir := t.TempDir()
+		gitInitRepo(t, dir)
+		gitT(t, dir, "checkout", "-q", "-b", "main")
+		commit(t, dir, "solo")
+		var out bytes.Buffer
+		if err := freshenBase(&out, dir, "main"); err != nil || out.Len() != 0 {
+			t.Errorf("no remote: want silence, got err=%v out=%q", err, out.String())
+		}
+	})
+}
+
 func TestGitAheadCountAndPushIfAhead(t *testing.T) {
 	repo := t.TempDir()
 	gitInitRepo(t, repo)

@@ -337,7 +337,7 @@ func TestWorkerGuardSettingsIsValidAndAttached(t *testing.T) {
 	// Both modes carry it: --yolo waives permission prompts, not the project's
 	// hooks.
 	for _, yolo := range []bool{false, true} {
-		args := strings.Join(buildClaudeArgs("p", "sp", "sess", "opus", 10, yolo, guardOptions{telemetryPath: "/tmp/t.jsonl", diffBase: "abc123", reviewModel: "sonnet"}, "", false), " ")
+		args := strings.Join(buildClaudeArgs("p", "sp", "sess", "opus", "", 10, yolo, guardOptions{telemetryPath: "/tmp/t.jsonl", diffBase: "abc123", reviewModel: "sonnet"}, "", false), " ")
 		if !strings.Contains(args, "--settings") || !strings.Contains(args, "worker-guard") {
 			t.Errorf("yolo=%v: worker argv must attach the guard, got %s", yolo, args)
 		}

@@ -110,7 +110,9 @@ func driveSubFlow(store storage.TaskStore, workDir, slug string, tracker, sub *s
 
 	// Stamp the worker's envelope stats onto the sub's run-state entry so the
 	// dashboard and the journal (journalSubs) can weigh the outcome by effort.
-	_ = rw.Update(func(run *storage.RunState) { setSubStats(run, sub.Meta.ID, res.Turns, res.CostUSD, res.Review) })
+	_ = rw.Update(func(run *storage.RunState) {
+		setSubStats(run, sub.Meta.ID, res.Turns, res.CostUSD, res.Tokens, res.Review)
+	})
 
 	note := flow.note(dir, branch, briefReason(res))
 

@@ -774,7 +774,8 @@ func TestRenderJournalStats(t *testing.T) {
 			Event: storage.JournalEventEnd, Kind: "run-epic", TaskID: "app-9", PID: 200,
 			Status: "done", DurationS: 3600,
 			Subs: []storage.JournalSub{
-				{ID: "app-9-1", Result: "merged", DurationS: 1000, Turns: 60, CostUSD: 2},
+				{ID: "app-9-1", Result: "merged", DurationS: 1000, Turns: 60, CostUSD: 2,
+					Tokens: &storage.TokenUsage{Input: 500, CacheCreation: 1_500_000, CacheRead: 18_000_000, Output: 120_000}},
 				{ID: "app-9-2", Result: "skipped"},
 			},
 		},
@@ -796,6 +797,9 @@ func TestRenderJournalStats(t *testing.T) {
 		"## Subs: 2",
 		"turns     60 total, 60.0 avg (1 sub(s))",
 		"cost      $2.00 total, $2.00 avg (1 sub(s))",
+		// The rate-limit figure next to the dollar one (pm-cli-119): total read,
+		// cache share, per-sub average, output - over the subs that carried usage.
+		"tokens    19.5M read total (92% cache reads), 19.5M avg per sub; 120k written (1 sub(s) carried usage)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\n---\n%s", want, out)

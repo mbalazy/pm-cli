@@ -639,3 +639,13 @@ func TestExecuteFinishArrayEnvelope(t *testing.T) {
 		t.Fatalf("a recovered run is a finished run: %+v err=%v", run, err)
 	}
 }
+
+// TestFinishClaudeArgsKeepsEveryTool: the worker's --tools cut must not reach
+// the acceptance - its procedure lives in skills that may reach for any
+// built-in tool, and a tool absent from --tools does not exist at all.
+func TestFinishClaudeArgsKeepsEveryTool(t *testing.T) {
+	joined := strings.Join(buildClaudeArgsFor(finishClaudeRun("p", "sp", "sess", finishOptions{model: "opus", maxTurns: 10, yolo: true})), " ")
+	if strings.Contains(joined, "--tools") || strings.Contains(joined, "--effort") {
+		t.Errorf("the acceptance run must carry neither --tools nor --effort, got: %s", joined)
+	}
+}

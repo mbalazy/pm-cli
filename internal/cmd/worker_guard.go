@@ -257,7 +257,14 @@ var budgetedToolNames = map[string]bool{"Read": true, "Grep": true, "Glob": true
 // $3+ each with the same diff packet in hand - the budget trims that tail
 // without removing a reviewer or a round. A var, not a flag or a project.yaml
 // knob (the value is compiled into the hook; tests shrink it in-process).
-var reviewerToolBudget = 25
+//
+// 25 -> 12 (retro pm-cli-119, 2026-09-02): with the whole diff in the packet
+// the budget had become the norm, not the tail - all 4 reviewers of run
+// pm-cli-118 hit it (26/24/26/26 calls), each at 41-48 API calls on a 60-107k
+// context = 2.6-3.8M tokens, a quarter of the sub's total; orbit logged
+// 47 refusals across 33 subs. The greps they spent it on (`Updated`,
+// `AddTask\(`) were reads of what the packet already showed.
+var reviewerToolBudget = 12
 
 // toolBudgetDenyMessage names the legitimate move, like every other refusal in
 // this file: finish the report, don't hunt for the next door.

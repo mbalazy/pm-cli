@@ -186,6 +186,31 @@ func TestDoctorRigSkill(t *testing.T) {
 	})
 }
 
+// A declared worker config dir (pm-cli-119-1) is a filesystem fact doctor can
+// check: missing = ERROR (every worker would die on its first call), present
+// but never opened (no .claude.json) = WARN, present and initialised = silent.
+func TestDoctorWorkerConfigDir(t *testing.T) {
+	proj, _ := handoffProject(t, "x")
+	missing := filepath.Join(t.TempDir(), "nope")
+	proj.Executor.WorkerClaudeConfigDir = missing
+	if levelOf(t, runExecutorDoctor(proj), "worker_claude_config_dir does not exist") != levelError {
+		t.Error("a missing worker config dir must be an ERROR")
+	}
+
+	fresh := t.TempDir()
+	proj.Executor.WorkerClaudeConfigDir = fresh
+	if levelOf(t, runExecutorDoctor(proj), "has no .claude.json yet") != levelWarn {
+		t.Error("an uninitialised worker config dir must be a WARN")
+	}
+
+	writeFile(t, filepath.Join(fresh, ".claude.json"), "{}")
+	for _, c := range runExecutorDoctor(proj) {
+		if strings.Contains(c.Msg, "worker_claude_config_dir") {
+			t.Errorf("an initialised worker config dir must be silent, got %+v", c)
+		}
+	}
+}
+
 func TestDoctorDeadContextRepoIsError(t *testing.T) {
 	proj, _ := handoffProject(t, "x")
 	proj.Executor.ContextRepos = map[string]string{"backend": "/definitely/not/here"}

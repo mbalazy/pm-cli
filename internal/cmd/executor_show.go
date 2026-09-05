@@ -105,6 +105,20 @@ func renderExecutorProfile(slug string, proj *storage.Project) string {
 	fmt.Fprintf(&b, "  statuses:     start=%s wip=%s done=%s\n", e.StartStatus, e.WipStatus, e.DoneStatus)
 	fmt.Fprintf(&b, "                done (independent/batch)=%s%s\n", indepDone, indepSuffix)
 	fmt.Fprintf(&b, "  fix_rounds:   %d\n", e.FixRounds)
+	// Worker model/effort: printed with their fallbacks spelled out, because
+	// "unset" here means a concrete thing (opus / Claude's own effort default)
+	// and a reader budgeting a batch needs the number, not the absence.
+	if e.Model != "" {
+		fmt.Fprintf(&b, "  model:        %s (workers; a sub's `model:` and --model still win)\n", e.Model)
+	} else {
+		fmt.Fprintf(&b, "  model:        %s (built-in default - set `model: sonnet` to change it)\n", defaultWorkerModel)
+	}
+	if e.Effort != "" {
+		fmt.Fprintf(&b, "  effort:       %s (workers; --effort still wins)\n", e.Effort)
+	} else {
+		fmt.Fprintf(&b, "  effort:       unset (Claude's default - set `effort: medium` to change it)\n")
+	}
+	fmt.Fprintf(&b, "  review_model: %s\n", orUnset(e.ReviewModel))
 	// Printed whether or not it is set, unlike the optional strings above: an
 	// unset ceiling is not "no ceiling", it is 120 minutes, and a reader deciding
 	// whether a long sub will survive needs the number either way.
@@ -140,6 +154,15 @@ func renderExecutorProfile(slug string, proj *storage.Project) string {
 		for _, name := range sortedKeys(e.ContextRepos) {
 			fmt.Fprintf(&b, "  %-10s %s\n", name, e.ContextRepos[name])
 		}
+	}
+
+	// Which config dir the WORKERS load - the skill catalogue, user CLAUDE.md
+	// and memory in it ride in every one of their API calls (pm-cli-119).
+	b.WriteString("\n## Worker Claude config dir\n")
+	if wd, pd := proj.ResolveWorkerClaudeConfigDir(), proj.ResolveClaudeConfigDir(); wd != pd {
+		fmt.Fprintf(&b, "  %s  (executor.worker_claude_config_dir - workers only; pm finish stays on %s)\n", wd, pd)
+	} else {
+		fmt.Fprintf(&b, "  %s  (the project's claude_config_dir; set executor.worker_claude_config_dir to give workers a slim one)\n", wd)
 	}
 
 	b.WriteString("\n## Handoff (acceptance)\n")

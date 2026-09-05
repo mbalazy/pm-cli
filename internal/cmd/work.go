@@ -58,6 +58,9 @@ type workerResult struct {
 	// journal so retros can weigh outcomes by effort/cost.
 	Turns   int     `json:"turns,omitempty"`
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// Tokens is the envelope's usage object - the unit a subscription's rate
+	// window meters (pm-cli-119). Same standing as Turns/CostUSD.
+	Tokens *storage.TokenUsage `json:"tokens,omitempty"`
 	// Review is the review-phase telemetry the worker guard hook collected while
 	// this worker ran. Same standing as Turns/CostUSD: observed by pm, never
 	// claimed by the worker, and deliberately absent from workerResultSchema.
@@ -67,14 +70,38 @@ type workerResult struct {
 // claudeEnvelope is the `claude -p --output-format json` result envelope. The
 // schema-validated worker result lands in StructuredOutput.
 type claudeEnvelope struct {
-	Type             string        `json:"type"`
-	Subtype          string        `json:"subtype"`
-	IsError          bool          `json:"is_error"`
-	Result           string        `json:"result"`
-	SessionID        string        `json:"session_id"`
-	NumTurns         int           `json:"num_turns"`
-	TotalCostUSD     float64       `json:"total_cost_usd"`
-	StructuredOutput *workerResult `json:"structured_output"`
+	Type             string         `json:"type"`
+	Subtype          string         `json:"subtype"`
+	IsError          bool           `json:"is_error"`
+	Result           string         `json:"result"`
+	SessionID        string         `json:"session_id"`
+	NumTurns         int            `json:"num_turns"`
+	TotalCostUSD     float64        `json:"total_cost_usd"`
+	Usage            *envelopeUsage `json:"usage"`
+	StructuredOutput *workerResult  `json:"structured_output"`
+}
+
+// envelopeUsage is the token accounting the CLI puts on its result envelope
+// (verified on claude 2.1.258 with a one-turn probe, 2026-09-02). Only the four
+// counters pm records are decoded; the rest of the object (service tier,
+// server tool use, thinking breakdown) is ignored.
+type envelopeUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+}
+
+// tokens converts the envelope's usage into pm's record; nil in, nil out, so a
+// CLI that stops sending usage leaves the field absent rather than zero-filled.
+func (u *envelopeUsage) tokens() *storage.TokenUsage {
+	if u == nil {
+		return nil
+	}
+	return &storage.TokenUsage{
+		Input: u.InputTokens, CacheCreation: u.CacheCreationInputTokens,
+		CacheRead: u.CacheReadInputTokens, Output: u.OutputTokens,
+	}
 }
 
 // workerResultSchema constrains the worker's structured output to the contract.
@@ -95,6 +122,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 		epic       bool
 		dryRun     bool
 		model      string
+		effort     string
 		maxTurns   int
 		yolo       bool
 		allowDirty bool
@@ -119,15 +147,15 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Task frontmatter `model:` wins over the flag DEFAULT, but an
-			// explicitly passed --model always wins over the frontmatter.
-			if task.Meta.Model != "" && !cmd.Flags().Changed("model") {
-				model = task.Meta.Model
-			}
 			warnInertFlags(stderr, "pm work", additional, slotPin, base)
+			// model/effort are resolved in planWork (flag > task `model:` >
+			// executor.model > default), where the profile is at hand.
 			opts := workOptions{
 				standalone: !epic,
 				model:      model,
+				modelSet:   cmd.Flags().Changed("model"),
+				effort:     effort,
+				effortSet:  cmd.Flags().Changed("effort"),
 				maxTurns:   maxTurns,
 				yolo:       yolo,
 				allowDirty: allowDirty,
@@ -146,6 +174,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 			if dryRun {
 				fmt.Fprintf(stdout, "# pm work (dry-run)\nproject: %s\ntask: %s\nbranch: %s\nmode: %s\ncwd: %s\n",
 					slug, task.Meta.ID, plan.branch, modeLabel(opts.standalone), plan.workDir)
+				fmt.Fprintf(stdout, "claude config dir: %s\n", plan.proj.ResolveWorkerClaudeConfigDir())
 				if plan.worktree {
 					fmt.Fprintf(stdout, "run: ADDITIONAL worktree - first free of %d slot(s), claimed at run time (lock: %s)\n",
 						len(plan.slots), ".pm-executor.lock")
@@ -167,6 +196,7 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 					fmt.Fprintf(stdout, "baseline (captured before worker, injected into prompt): %s\n", plan.baselineCmd)
 				}
 				fmt.Fprintf(stdout, "timeout: %s\n", describeTimeout(plan.timeout, opts.timeoutSet, plan.proj.GetExecutor().Timeout))
+				fmt.Fprintf(stdout, "model: %s (%s)\neffort: %s\n", plan.opts.model, plan.modelSource, describeEffortLevel(plan.opts.effort, plan.effortSource))
 				fmt.Fprintf(stdout, "\n$ claude %s\n\n", strings.Join(quoteArgs(plan.cmdArgs), " "))
 				fmt.Fprintf(stdout, "=== SYSTEM PROMPT ===\n%s\n\n=== PROMPT ===\n%s\n", plan.sysPrompt, plan.prompt)
 				return nil
@@ -203,7 +233,8 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 
 	cmd.Flags().BoolVar(&epic, "epic", false, "epic mode: commit on the current branch, no PR (called by the manager)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "assemble and print the worker prompt + command without invoking claude")
-	cmd.Flags().StringVar(&model, "model", "opus", "model for the worker (alias or full name)")
+	cmd.Flags().StringVar(&model, "model", "opus", "model for the worker (alias or full name); beats the task's `model:` and executor.model")
+	cmd.Flags().StringVar(&effort, "effort", "", "Claude effort level for the worker (low|medium|high|xhigh|max); beats executor.effort, empty = Claude's default")
 	cmd.Flags().IntVar(&maxTurns, "max-turns", 150, "max agent turns for the worker")
 	cmd.Flags().BoolVar(&yolo, "yolo", false, "bypass all permission checks instead of the curated allowlist")
 	cmd.Flags().BoolVar(&allowDirty, "allow-dirty", false, "skip the clean-working-tree precondition (standalone)")
@@ -380,7 +411,15 @@ func resolveWorkBranch(t *storage.Task) string {
 // worker only commits on the already-checked-out branch).
 type workOptions struct {
 	standalone bool
+	// model/effort as the CALLER holds them: the flag value plus whether the
+	// flag was passed. planWork resolves the final pair (see resolveWorkerModel
+	// / resolveWorkerEffort) and stores it back into plan.opts with the Set
+	// flags on, so a plan re-rendered later (retarget, baseline) never resolves
+	// twice. The epic manager passes its already-resolved pair the same way.
 	model      string
+	modelSet   bool
+	effort     string
+	effortSet  bool
 	maxTurns   int
 	yolo       bool
 	allowDirty bool
@@ -467,7 +506,12 @@ type workPlan struct {
 	// the options the plan was assembled with. Together they let retarget()
 	// rebuild prompt+argv after the standalone slot claim lands.
 	buildPrompt func(dir string) string
-	opts        workOptions
+	// opts carries the RESOLVED model/effort (modelSet/effortSet true); the
+	// two sources say which of flag / task / executor profile / default won,
+	// for the dry-run.
+	opts         workOptions
+	modelSource  string
+	effortSource string
 	// baselineCmd = executor.baseline to capture in executeWork right before the
 	// worker (standalone runs only - epic subs receive the manager's shared
 	// capture via opts.baseline instead, already baked into prompt/cmdArgs).
@@ -509,6 +553,55 @@ func resolveWorkerTimeout(flagValue time.Duration, flagSet bool, configured stor
 		return flagValue
 	}
 	return configured.Duration()
+}
+
+// defaultWorkerModel is the built-in worker model when neither a flag, the
+// task nor the project profile names one.
+const defaultWorkerModel = "opus"
+
+// resolveWorkerModel picks the worker's model and names the source that won:
+// an explicit --model beats everything, then the task's own `model:`
+// frontmatter, then executor.model, then the built-in default. The flag's
+// DEFAULT value is deliberately not a source - it is what the caller holds
+// when nothing was passed, and a project profile has to be able to beat it.
+func resolveWorkerModel(flagValue string, flagSet bool, taskModel, profileModel string) (model, source string) {
+	switch {
+	case flagSet:
+		return flagValue, "--model"
+	case taskModel != "":
+		return taskModel, "task model:"
+	case profileModel != "":
+		return profileModel, "executor.model"
+	default:
+		return defaultWorkerModel, "built-in default"
+	}
+}
+
+// resolveWorkerEffort is the same ladder for `claude --effort`, minus the
+// per-task rung, and validates the winner: an invalid level is a plan error
+// (dry-run fails), never a spawn that dies after prepare + baseline ran.
+func resolveWorkerEffort(flagValue string, flagSet bool, profileEffort string) (effort, source string, err error) {
+	switch {
+	case flagSet:
+		effort, source = flagValue, "--effort"
+	case profileEffort != "":
+		effort, source = profileEffort, "executor.effort"
+	default:
+		return "", "unset", nil
+	}
+	if err := storage.ValidateEffort(effort); err != nil {
+		return "", "", fmt.Errorf("%s: %w", source, err)
+	}
+	return effort, source, nil
+}
+
+// describeEffortLevel renders the resolved effort for the dry-runs; "unset" means
+// no --effort is passed and Claude runs at its own default.
+func describeEffortLevel(effort, source string) string {
+	if effort == "" {
+		return "unset (Claude's default)"
+	}
+	return fmt.Sprintf("%s (%s)", effort, source)
 }
 
 // describeTimeout renders the resolved ceiling AND which of the three sources
@@ -595,6 +688,18 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 	branch := resolveWorkBranch(task)
 	sessionID := storage.NewSessionID()
 
+	// Model + effort: resolved ONCE here and pinned into opts, so every later
+	// re-render of the argv (retarget, baseline, diff base) reuses the pair.
+	var modelSource, effortSource string
+	opts.model, modelSource = resolveWorkerModel(opts.model, opts.modelSet, task.Meta.Model, exec.Model)
+	opts.modelSet = true
+	var err2 error
+	opts.effort, effortSource, err2 = resolveWorkerEffort(opts.effort, opts.effortSet, exec.Effort)
+	if err2 != nil {
+		return nil, err2
+	}
+	opts.effortSet = true
+
 	// An isolated "additional" worktree slot is opt-in PER RUN via --additional;
 	// the default is the main checkout (unchanged pre-worktree behaviour). No
 	// side effects here - the slot is claimed + locked in acquireWorktreeSlot at
@@ -653,7 +758,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		reviewModel:   exec.ResolveReviewModel(),
 		fixRounds:     exec.FixRounds,
 	}
-	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.maxTurns, opts.yolo, guard, workDir, false)
+	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.effort, opts.maxTurns, opts.yolo, guard, workDir, false)
 
 	// Standalone only: the epic manager runs prepare ITSELF, once per run,
 	// right after claiming the slot - not per sub (5 subs must not mean 5
@@ -674,7 +779,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs,
 		workDir: workDir, worktree: opts.additional, base: base, env: env, slots: slots,
 		prepare: prepare, baselineCmd: baselineCmd, guard: guard,
-		buildPrompt: buildPrompt, opts: opts,
+		buildPrompt: buildPrompt, opts: opts, modelSource: modelSource, effortSource: effortSource,
 		timeout: resolveWorkerTimeout(opts.timeout, opts.timeoutSet, exec.Timeout),
 	}, nil
 }
@@ -688,7 +793,7 @@ func (p *workPlan) retarget(dir string, env []string) {
 	p.workDir = dir
 	p.env = env
 	p.prompt = p.buildPrompt(dir)
-	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.maxTurns, p.opts.yolo, p.guard, dir, false)
+	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.effort, p.opts.maxTurns, p.opts.yolo, p.guard, dir, false)
 }
 
 // workerHeartbeatInterval is how often a live worker's run-state is re-stamped.
@@ -711,6 +816,9 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			// prior, possibly killed, run) so nothing bleeds into it. Ignored
 			// deps/configs survive. Base was resolved in planWork (--base >
 			// executor.base_branch > main checkout's current branch).
+			if err := freshenBase(opts.stderr(), dir, plan.base); err != nil {
+				return nil, err
+			}
 			if err := gitFreshBranch(dir, plan.branch, plan.base); err != nil {
 				return nil, fmt.Errorf("prepare fresh branch %s (base %s): %w", plan.branch, plan.base, err)
 			}
@@ -750,7 +858,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		fmt.Fprintf(opts.stderr(), "pm work: baseline in %s: %s\n", dir, plan.baselineCmd)
 		if section := captureBaseline(opts.stderr(), dir, plan.baselineCmd); section != "" {
 			plan.prompt += "\n" + section
-			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.guard, dir, false)
+			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false)
 			baselineUsed = plan.baselineCmd
 		}
 	}
@@ -800,7 +908,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		// by the manager instead). Best-effort like the run-state writes.
 		start := storage.JournalEntry{
 			Event: storage.JournalEventStart, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
-			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
+			PID: os.Getpid(), Model: plan.opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
 			WorkDir: journalDir, Baseline: baselineUsed,
 		}
 		_ = storage.AppendJournal(stateDir, &start)
@@ -820,7 +928,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		sub.DurationS = int(time.Since(workStart).Seconds())
 		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
-			PID: os.Getpid(), Model: opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
+			PID: os.Getpid(), Model: plan.opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
 			WorkDir: journalDir, Baseline: baselineUsed,
 			Status: status, DurationS: sub.DurationS, Error: errMsg,
 			Subs: []storage.JournalSub{sub},
@@ -847,7 +955,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// before the cap existed.
 	if sha := gitHeadSHA(dir); sha != "" && sha != plan.guard.diffBase {
 		plan.guard.diffBase = sha
-		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, opts.model, opts.maxTurns, opts.yolo, plan.guard, dir, false)
+		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false)
 	}
 	stopHeartbeat := hbw.Heartbeat(workerHeartbeatInterval)
 	// Stopping is idempotent, so the defer only matters if runWorker panics -
@@ -857,7 +965,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// anything outside this process has on it. Publishing it lets the board kill
 	// the worker tree directly when it has to SIGKILL the manager - a signal the
 	// manager cannot forward (see storage.RunState.Kill).
-	res, sessionID, err := runWorker(opts.stderr(), dir, plan.cmdArgs, plan.timeout, plan.proj.ResolveClaudeConfigDir(), plan.env, plan.sessionID,
+	res, sessionID, err := runWorker(opts.stderr(), dir, plan.cmdArgs, plan.timeout, plan.proj.ResolveWorkerClaudeConfigDir(), plan.env, plan.sessionID,
 		func(pgid int) { _ = hbw.Update(func(run *storage.RunState) { run.WorkerPGID = pgid }) })
 	stopHeartbeat()
 	// The worker is gone and the heartbeat died with it, so drop the in-flight
@@ -894,7 +1002,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		// transcript instead. Recorded on the run-state by id, which serves both
 		// callers: standalone (one sub) and the epic manager's shared state,
 		// whose journalSubs lifts it from there.
-		deadEffort := recoverWorkerEffort(plan.proj.ResolveClaudeConfigDir(), dir, plan.sessionID)
+		deadEffort := recoverWorkerEffort(plan.proj.ResolveWorkerClaudeConfigDir(), dir, plan.sessionID)
 		if deadEffort != nil {
 			fmt.Fprintf(opts.stderr(), "pm work: %s\n", describeEffort(deadEffort))
 			_ = hbw.Update(func(run *storage.RunState) { setSubEffort(run, task.Meta.ID, deadEffort) })
@@ -926,6 +1034,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 					run.Subs[0].Note = err.Error()
 					run.Subs[0].Turns = res.Turns
 					run.Subs[0].CostUSD = res.CostUSD
+					run.Subs[0].Tokens = res.Tokens
 					run.Subs[0].Review = telemetry
 				}
 			})
@@ -934,7 +1043,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 			// off the claude envelope - unlike the runWorker-failure branch
 			// above, where res is nil and those fields stay zero.
 			journalEnd(storage.RunStatusFailed, err.Error(),
-				storage.JournalSub{Result: "failed", Note: err.Error(), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Review: telemetry})
+				storage.JournalSub{Result: "failed", Note: err.Error(), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Tokens: res.Tokens, Review: telemetry})
 		}
 		return nil, err
 	}
@@ -950,11 +1059,12 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 				run.Subs[0].Commits = res.Commits
 				run.Subs[0].Turns = res.Turns
 				run.Subs[0].CostUSD = res.CostUSD
+				run.Subs[0].Tokens = res.Tokens
 				run.Subs[0].Review = telemetry
 			}
 		})
 		journalEnd(storage.RunStatusDone, "",
-			storage.JournalSub{Result: res.Status, Note: strings.TrimSpace(res.Summary), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Review: telemetry})
+			storage.JournalSub{Result: res.Status, Note: strings.TrimSpace(res.Summary), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Tokens: res.Tokens, Review: telemetry})
 	}
 	return res, nil
 }
@@ -976,8 +1086,18 @@ type claudeRun struct {
 	sysPrompt string
 	sessionID string
 	model     string
-	maxTurns  int
-	yolo      bool
+	// effort is the `--effort` level; empty passes no flag (Claude's default).
+	effort   string
+	maxTurns int
+	yolo     bool
+	// tools, when set, is the `--tools` list: the ONLY built-in tools the
+	// process gets, and therefore the only tool schemas in its context.
+	// Workers pass workerTools; the acceptance passes nothing (it invokes
+	// skills and MCP that may reach for anything). Distinct from
+	// allowedTools, which is a PERMISSION list - a tool absent from --tools
+	// does not exist, one absent from allowedTools prompts (and, headless,
+	// is refused).
+	tools string
 	// schema validates the run's structured output. It is a parameter rather
 	// than a constant inside buildClaudeArgsFor because the two contracts are
 	// different shapes: an acceptance forced into workerResultSchema would have
@@ -1007,11 +1127,12 @@ type claudeRun struct {
 // buildClaudeArgs assembles the `claude -p` argv for a worker run. workDir is
 // the repo the worker runs in (its .mcp.json, when present, is the one MCP
 // config a worker keeps); workers never keep user-scope MCP.
-func buildClaudeArgs(prompt, sysPrompt, sessionID, model string, maxTurns int, yolo bool, guard guardOptions, workDir string, userMCP bool) []string {
+func buildClaudeArgs(prompt, sysPrompt, sessionID, model, effort string, maxTurns int, yolo bool, guard guardOptions, workDir string, userMCP bool) []string {
 	return buildClaudeArgsFor(claudeRun{
 		prompt: prompt, sysPrompt: sysPrompt, sessionID: sessionID,
-		model: model, maxTurns: maxTurns, yolo: yolo,
+		model: model, effort: effort, maxTurns: maxTurns, yolo: yolo,
 		schema: workerResultSchema,
+		tools:  workerTools,
 		// The reviewer agent type is defined by pm, never by a file in the
 		// project repo: `pm work` requires a clean tree, so a `.claude/agents/`
 		// file written per run would dirty it on every single one.
@@ -1036,6 +1157,20 @@ func buildClaudeArgsFor(r claudeRun) []string {
 	}
 	if r.sessionID != "" {
 		args = append(args, "--session-id", r.sessionID)
+	}
+	if r.effort != "" {
+		args = append(args, "--effort", r.effort)
+	}
+	// Tool set: every built-in tool's schema rides in EVERY API call whether
+	// the worker can use it or not. Retro 2026-09-05 measured the unused ones
+	// (WebSearch, WebFetch, NotebookEdit, the plan-mode pair, ...) at ~11k
+	// tokens per call - 13% of the worker's 82k fixed prefix - against zero
+	// uses across 30 subs. Unknown names are ignored by claude (probed on
+	// 2.1.261), so listing both spellings of the subagent tool is safe, and
+	// the structured-output tool is implicit (the probe with --json-schema
+	// still returned structured_output under this list).
+	if r.tools != "" {
+		args = append(args, "--tools", r.tools)
 	}
 	// MCP scope: without this a headless worker inherits the USER's whole MCP
 	// menu - measured on run pm-cli-100 as ~180 deferred tool names plus their
@@ -1127,6 +1262,15 @@ const workerAllowedTools = "Edit Write Read Grep Glob Task TodoWrite " +
 //     `git commit -m x --no-verify` runs under every pattern below. That hole is
 //     closed by the PreToolUse guard (see worker_guard.go), which reads the whole
 //     command; these patterns are the cheap first line, not the wall.
+//
+// workerTools is the `--tools` list a worker process is built with: what the
+// inner loop actually uses (edit, read, search, shell, the reviewer spawn,
+// the todo list, the project's skills). `Agent` and `Task` are the same
+// subagent tool under its current and pre-2.1 names - the guard's matcher
+// already accepts both. Anything not here does not exist for the worker, so
+// its schema is not paid for on every call (see buildClaudeArgsFor).
+const workerTools = "Bash,Edit,Write,Read,Grep,Glob,Agent,Task,TodoWrite,Skill"
+
 const workerDisallowedTools = "Bash(git push --force:*) Bash(git push -f:*) Bash(git push --force-with-lease:*) " +
 	"Bash(git reset --hard:*) Bash(gh pr merge:*) Bash(git merge:*) " +
 	"Bash(git commit --no-verify:*) Bash(git commit -n:*) Bash(git push --no-verify:*) " +
@@ -1358,6 +1502,7 @@ func parseClaudeResult(data []byte) (*workerResult, string, error) {
 	// output can't carry them - only the harness knows turns/cost).
 	env.StructuredOutput.Turns = env.NumTurns
 	env.StructuredOutput.CostUSD = env.TotalCostUSD
+	env.StructuredOutput.Tokens = env.Usage.tokens()
 	// One place folds the legacy "merged" spelling into "verified", so nothing
 	// downstream (verdict checks, briefs, run-state, journal) has to know two
 	// words for one outcome.

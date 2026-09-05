@@ -102,6 +102,15 @@ type journalStats struct {
 	SubDuration numStat
 	Turns       numStat
 	Cost        numStat
+	// TokensIn / TokensCacheRead / TokensOut sum the envelope usage of the subs
+	// that carry one (TokenSubs is their count, the denominator). Kept apart
+	// from Cost because they answer a different question: cost is what the
+	// run billed, tokens are what a subscription's rate window METERED - and
+	// the cache-read share says which of the two a run was heavy in.
+	TokenSubs       int
+	TokensIn        int
+	TokensCacheRead int
+	TokensOut       int
 	// EffortSubs / EffortTurns / EffortTokens cover the subs whose worker died
 	// before sending a result envelope: they contribute 0 to Turns and Cost
 	// because no envelope exists to read those off, which used to make an hour of
@@ -389,6 +398,12 @@ func (s *journalStats) addSubs(subs []storage.JournalSub) {
 		s.SubDuration.add(float64(sub.DurationS))
 		s.Turns.add(float64(sub.Turns))
 		s.Cost.add(sub.CostUSD)
+		if tk := sub.Tokens; tk != nil {
+			s.TokenSubs++
+			s.TokensIn += tk.TotalInput()
+			s.TokensCacheRead += tk.CacheRead
+			s.TokensOut += tk.Output
+		}
 		if e := sub.Effort; e != nil {
 			s.EffortSubs++
 			s.EffortTurns += e.Turns
@@ -564,6 +579,16 @@ func renderJournalStats(slug, path string, st journalStats) string {
 		st.Turns.Total, st.Turns.avg(), st.Turns.Samples)
 	fmt.Fprintf(&b, "  cost      $%.2f total, $%.2f avg (%d sub(s))\n",
 		st.Cost.Total, st.Cost.avg(), st.Cost.Samples)
+	if st.TokenSubs > 0 {
+		// Tokens READ is the rate-limit figure; the cache share is what tells a
+		// long run from an expensive one (retro pm-cli-119: 95-96% of ~49M).
+		share := 0.0
+		if st.TokensIn > 0 {
+			share = 100 * float64(st.TokensCacheRead) / float64(st.TokensIn)
+		}
+		fmt.Fprintf(&b, "  tokens    %s read total (%.0f%% cache reads), %s avg per sub; %s written (%d sub(s) carried usage)\n",
+			fmtTokens(st.TokensIn), share, fmtTokens(st.TokensIn/st.TokenSubs), fmtTokens(st.TokensOut), st.TokenSubs)
+	}
 	if st.EffortSubs > 0 {
 		// The line that stops the cost total being read as a total. These subs
 		// died before their envelope, so they are worth $0.00 and 0 turns above
@@ -582,6 +607,18 @@ func renderJournalStats(slug, path string, st journalStats) string {
 // push the sub histogram off the screen. The count line says how many were held
 // back, and the journal itself holds all of them.
 const deathReasonsShown = 5
+
+// fmtTokens prints a token count the way people say it: 48.7M, 266k, 981.
+func fmtTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.0fk", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
 
 // renderDeaths prints why the abnormal ends happened, newest last. Nothing is
 // printed when nothing said why - which is what every journal line written before

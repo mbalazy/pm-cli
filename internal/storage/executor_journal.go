@@ -56,6 +56,10 @@ type JournalSub struct {
 	Session   string  `json:"session,omitempty"`    // worker session id -> transcript .jsonl
 	Turns     int     `json:"turns,omitempty"`      // claude envelope num_turns (0 for skips, and for a worker that died before sending one)
 	CostUSD   float64 `json:"cost_usd,omitempty"`   // claude envelope total_cost_usd (same two zeros)
+	// Tokens is the envelope's usage object - what the run cost in the unit a
+	// subscription window meters. Nil when no envelope arrived and on every
+	// line written before 0.55.0. See TokenUsage.
+	Tokens *TokenUsage `json:"tokens,omitempty"`
 	// Effort carries what a dead worker's transcript still establishes, for
 	// exactly the subs where the two fields above are 0 because no envelope
 	// arrived. Nil on a normal outcome and on every line written before it

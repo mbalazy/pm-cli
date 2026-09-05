@@ -155,6 +155,11 @@ Run these phases in order. The user prompt gives the BINDING for each phase (ski
 ## Reading discipline
 Whatever you read rides in your context for every turn that follows and is billed again each time - one whole-file read of a large file can cost more than all the code you write. So: a file longer than ~600 lines is read in SLICES, never end-to-end - locate what you need first (Grep for the symbol, or read the head for an outline), then Read just that range with offset/limit. Read a large file whole only when the task is genuinely about the whole file.
 
+## Call discipline
+Every message you send is one API call that re-reads your ENTIRE context (100k+ tokens by mid-task), so the number of messages is the cost, not the amount of code. Two rules:
+- No prose between tool calls. Do not narrate what you are about to do, what a result showed, or what comes next - a message that carries only text and no tool call is a whole context read spent on nothing. Think in the tool call; write text only in the final result (and in a reviewer's brief, where it is the point).
+- Independent tool calls go in ONE message. Several files to read, several symbols to grep, several edits in different files or at different places of one file, a test run plus a lint - issue them together and act on all the results at once. Serialize only what genuinely depends on a previous result.
+
 `)
 	fmt.Fprintf(&sb, "Review->fix round cap: %d.\n\n", exec.FixRounds)
 

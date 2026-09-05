@@ -42,6 +42,35 @@ func TestJournalTerminalSignalWritesAKilledLine(t *testing.T) {
 	}
 }
 
+// TestJournalTerminalSignalStampsTheKillNotTheStart: the armed template is the
+// run's start line WITH its TS, and AppendJournal stamps only an empty TS - so
+// the killed line used to inherit the start time (pm-cli-118: start and kill
+// both journaled as 14:32:41Z, the kill really at 15:36:28Z). The kill is now.
+func TestJournalTerminalSignalStampsTheKillNotTheStart(t *testing.T) {
+	dir := t.TempDir()
+	start := armedStart()
+	start.TS = "2026-09-02T14:32:41Z"
+	defer armCrashJournal(dir, start)()
+
+	journalTerminalSignal(syscall.SIGTERM)
+
+	entries, err := storage.ReadJournal(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("want exactly one line, got %d (err %v)", len(entries), err)
+	}
+	e := entries[0]
+	if e.TS == start.TS {
+		t.Fatalf("killed line carries the START stamp %s - it must be stamped when the signal arrives", e.TS)
+	}
+	ts, perr := time.Parse(time.RFC3339, e.TS)
+	if perr != nil {
+		t.Fatalf("killed ts %q is not RFC3339: %v", e.TS, perr)
+	}
+	if d := time.Since(ts); d < 0 || d > time.Minute {
+		t.Errorf("killed ts %s is not 'now' (off by %s)", e.TS, d)
+	}
+}
+
 // TestJournalTerminalSignalOnlyOnce: the handler can fire again (a second
 // Ctrl-C), and the run must not gain two terminal lines from one death.
 func TestJournalTerminalSignalOnlyOnce(t *testing.T) {

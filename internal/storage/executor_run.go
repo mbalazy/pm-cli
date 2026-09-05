@@ -94,6 +94,9 @@ type SubRun struct {
 	// Worker run stats from the claude envelope (0 for skips/manual).
 	Turns   int     `json:"turns,omitempty"`
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// Tokens is the envelope's usage object (nil without an envelope). See
+	// TokenUsage for why it exists next to CostUSD.
+	Tokens *TokenUsage `json:"tokens,omitempty"`
 	// Effort is what the worker's transcript still says when there was no
 	// envelope to read those two fields off - i.e. the worker died mid-run. Nil
 	// whenever the envelope arrived (then Turns/CostUSD are the real thing) and
