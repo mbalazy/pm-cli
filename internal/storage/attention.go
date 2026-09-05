@@ -382,6 +382,12 @@ func needsMeRows(v *projectView, now time.Time) []AttentionRow {
 	trackers, _ := BuildTrackers(v.tasks, v.landing...)
 	var rows []AttentionRow
 	for _, tr := range trackers {
+		// A tracker the human closed (done / archived) is out whatever its
+		// run-state files say: the files are the machine's memory of the last
+		// run, the status is the human's decision, and the decision wins.
+		if closedByHuman(TaskStatus(tr.Status)) {
+			continue
+		}
 		run := v.runs[tr.ID]
 		accept := v.accepts[tr.ID]
 		claim := v.claims[tr.ID]
@@ -487,6 +493,14 @@ func needsMeRows(v *projectView, now time.Time) []AttentionRow {
 	return rows
 }
 
+// closedByHuman: the two statuses only a person sets on a tracker to say
+// "this is over" - done (the project's own terminal status) and archived
+// (system-level). Landing statuses (merged / pushed) are the executor's and
+// do not count: a tracker on them is still waiting for its acceptance.
+func closedByHuman(s TaskStatus) bool {
+	return s == StatusDone || s == StatusArchived
+}
+
 func errSuffix(msg string) string {
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
@@ -523,6 +537,9 @@ func landedNoPRRows(v *projectView, now time.Time) []AttentionRow {
 	for _, t := range v.tasks {
 		if t.Meta.Parent == "" || !accepted[t.Meta.Parent] {
 			continue
+		}
+		if parent, ok := v.byID[t.Meta.Parent]; ok && closedByHuman(parent.Meta.Status) {
+			continue // the human closed the tracker: its leftovers are not a to-do
 		}
 		if !onStatus(t.Meta.Status, v.landing) || t.Meta.Links["pr"] != "" {
 			continue
