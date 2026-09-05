@@ -5,7 +5,8 @@ import type { TaskDetail as TaskDetailDto } from '../api/types'
 
 // Presentation only. The relative times and the Spec/Log split arrive as
 // props: "how long ago" needs a clock and the split is a lib rule, neither
-// belongs in a component.
+// belongs in a component. The edits (brief, waiting reason, status) only
+// ASK - the route opens the confirmation dialog and sends the request.
 
 interface Props {
   task: TaskDetailDto
@@ -15,9 +16,23 @@ interface Props {
   spec: string | null
   log: string
   onBack?: () => void
+  /** The project's status list, for the status select. */
+  statuses?: string[]
+  /** Asks to edit a field; the status edit names the chosen status. */
+  onEdit?: (kind: 'edit_brief' | 'edit_waiting_for' | 'set_status', status?: string) => void
 }
 
-export function TaskDetail({ task, updatedText, statusChangedText, spec, log, onBack }: Props) {
+export function TaskDetail({
+  task,
+  updatedText,
+  statusChangedText,
+  spec,
+  log,
+  onBack,
+  statuses = [],
+  onEdit,
+}: Props) {
+  const editBtn = 'ml-2 rounded border px-1 text-xs font-normal'
   return (
     <article className="space-y-4">
       {onBack && (
@@ -27,9 +42,35 @@ export function TaskDetail({ task, updatedText, statusChangedText, spec, log, on
       )}
       <header>
         <h1 className="text-xl font-bold">{task.title}</h1>
-        <p className="text-sm text-gray-600">
-          <code>#{task.id}</code> · {task.project} · <b>{task.status}</b>
+        <p className="flex flex-wrap items-baseline gap-x-1 text-sm text-gray-600">
+          <code>#{task.id}</code> · {task.project} ·{' '}
+          {onEdit && statuses.length > 0 ? (
+            <label>
+              <span className="sr-only">status</span>
+              <select
+                aria-label="status"
+                value={task.status}
+                onChange={(e) => onEdit('set_status', e.target.value)}
+                className="rounded border px-1 font-bold"
+              >
+                {[...statuses, ...(statuses.includes(task.status) ? [] : [task.status])].map(
+                  (s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ),
+                )}
+              </select>
+            </label>
+          ) : (
+            <b>{task.status}</b>
+          )}
           {task.waiting_for && <> · waiting for: {task.waiting_for}</>}
+          {onEdit && (
+            <button type="button" className={editBtn} onClick={() => onEdit('edit_waiting_for')}>
+              {task.waiting_for ? 'edit reason' : 'set reason'}
+            </button>
+          )}
         </p>
         <p className="text-sm text-gray-600">
           updated {updatedText} · status changed {statusChangedText || 'unknown'}
@@ -91,12 +132,21 @@ export function TaskDetail({ task, updatedText, statusChangedText, spec, log, on
           <p className="whitespace-pre-wrap text-sm">{task.ac}</p>
         </section>
       )}
-      {task.brief && (
+      {(task.brief || onEdit) && (
         <section>
-          <h2 className="font-semibold">Brief</h2>
-          <div className="markdown text-sm">
-            <Markdown remarkPlugins={[remarkGfm]}>{task.brief}</Markdown>
-          </div>
+          <h2 className="font-semibold">
+            Brief
+            {onEdit && (
+              <button type="button" className={editBtn} onClick={() => onEdit('edit_brief')}>
+                {task.brief ? 'edit brief' : 'write brief'}
+              </button>
+            )}
+          </h2>
+          {task.brief && (
+            <div className="markdown text-sm">
+              <Markdown remarkPlugins={[remarkGfm]}>{task.brief}</Markdown>
+            </div>
+          )}
         </section>
       )}
       {spec !== null && (

@@ -1,6 +1,13 @@
-// The one fetch wrapper. Every data endpoint is a GET returning JSON (the
-// change feed's refresh and seen mark are the two POSTs); every error is
-// `{"error": "..."}` with 400 (caller's mistake), 404 (not there) or 500.
+// The one fetch wrapper. Data endpoints are GETs returning JSON; mutations
+// are POSTs (pm-cli-118-14/-16) and every one of them carries the client
+// header - the server refuses a POST without it (403), which is what keeps a
+// stray form or curl from mutating by accident. Every error is
+// `{"error": "..."}` with 400 (caller's mistake), 403 (no client header),
+// 404 (not there) or 500.
+
+/** The header every POST carries (server.ClientHeader / ClientValue). */
+export const CLIENT_HEADER = 'X-PM-Client'
+export const CLIENT_VALUE = 'cockpit'
 
 export class ApiError extends Error {
   readonly status: number
@@ -21,7 +28,11 @@ export async function apiGet<T>(path: string): Promise<T> {
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   return request<T>(path, {
     method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      [CLIENT_HEADER]: CLIENT_VALUE,
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
 }

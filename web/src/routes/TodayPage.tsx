@@ -1,12 +1,16 @@
 import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 
-import { useAttention, useChanges, useConfig, useRefreshChanges } from '../api/queries'
+import { useAttention, useChanges, useConfig, useFocus, useRefreshChanges } from '../api/queries'
 import type { AttentionRow } from '../api/types'
 import { AttentionSection } from '../components/AttentionSection'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { GroupChips } from '../components/GroupChips'
+import { Toast } from '../components/Toast'
+import { useConfirmedAction } from '../hooks/useConfirmedAction'
 import { useShortcuts } from '../hooks/useShortcuts'
 import { capSection, rowKey } from '../lib/attentionView'
+import { isPendingKind } from '../lib/confirmText'
 import { groupHotkeys, groupSearch } from '../lib/groupFilter'
 import { refreshTimes } from '../lib/refreshTimes'
 import { openTarget } from '../lib/rowActions'
@@ -22,6 +26,8 @@ export function TodayPage({ group }: { group: string }) {
   const changes = useChanges()
   const config = useConfig()
   const refresh = useRefreshChanges()
+  const focus = useFocus()
+  const action = useConfirmedAction()
   const navigate = useNavigate()
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [selectedKey, setSelectedKey] = useState<string>()
@@ -46,6 +52,9 @@ export function TodayPage({ group }: { group: string }) {
     open: () => {
       if (selected) void navigate(openTarget(selected))
     },
+    focus: () => {
+      if (selected?.actions.includes('focus_toggle')) onAction('focus_toggle', selected)
+    },
     group: (letter) => {
       const slug = hotkeys.get(letter)
       if (slug !== undefined) void navigate({ to: '/', search: groupSearch(slug) })
@@ -59,8 +68,12 @@ export function TodayPage({ group }: { group: string }) {
       else next.add(name)
       return next
     })
-  // Mutations land in pm-cli-118-16/-21; this build only renders the buttons.
-  const onAction = (_action: string, _row: AttentionRow) => {}
+  // Every action the API lists and this build knows opens the dialog; the
+  // run-control actions (pm-cli-118-21) stay disabled in the row itself.
+  const onAction = (kind: string, row: AttentionRow) => {
+    if (!isPendingKind(kind)) return
+    action.ask({ kind, subject: row }, focus.data?.task_ids.includes(row.task_id ?? ''))
+  }
 
   const today = new Date()
   const dateText = today.toLocaleDateString(undefined, {
@@ -123,6 +136,17 @@ export function TodayPage({ group }: { group: string }) {
       {attention.data && sections.length === 0 && (
         <p className="text-gray-500">every section is switched off in config.yaml</p>
       )}
+      <ConfirmDialog
+        open={action.pending !== null}
+        text={action.text}
+        value={action.value}
+        onChange={action.setValue}
+        onConfirm={action.confirm}
+        onCancel={action.cancel}
+        busy={action.busy}
+        error={action.error}
+      />
+      <Toast message={action.toast.message} error={action.toast.error} />
     </div>
   )
 }

@@ -3,7 +3,8 @@ import type { AttentionRow } from '../api/types'
 // The closed action vocabulary of an attention row (storage.AttentionRow
 // .actions). The API decides WHICH actions a row carries; this table only
 // says how each one is worded and whether this build can perform it yet -
-// the mutation subs (pm-cli-118-16, -21) flip `enabled` as they land.
+// the mutation subs flip `pending` as they land (batch 1, pm-cli-118-16, is
+// in; run control, -21, is not).
 
 export type RowAction =
   | 'open'
@@ -32,10 +33,10 @@ const META: Record<RowAction, ActionMeta> = {
   rerun_finish: { label: 'rerun acceptance', pending: 'pm-cli-118-21' },
   resume_run: { label: 'resume run', pending: 'pm-cli-118-21' },
   kill: { label: 'kill', pending: 'pm-cli-118-21' },
-  focus_toggle: { label: 'focus', pending: 'pm-cli-118-16' },
-  set_waiting_for: { label: 'reason', pending: 'pm-cli-118-16' },
-  back_to_todo: { label: 'back to todo', pending: 'pm-cli-118-16' },
-  mark_seen: { label: 'seen', pending: 'pm-cli-118-16' },
+  focus_toggle: { label: 'focus', pending: '' },
+  set_waiting_for: { label: 'waiting…', pending: '' },
+  back_to_todo: { label: 'back to todo', pending: '' },
+  mark_seen: { label: 'seen', pending: '' },
   sleep_project: { label: 'sleep', pending: 'pm-cli-118-21' },
   open_pr: { label: 'PR', pending: 'needs the task link' },
 }
