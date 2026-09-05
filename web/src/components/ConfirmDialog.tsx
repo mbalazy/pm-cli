@@ -145,11 +145,16 @@ export function ConfirmDialog({
               {text.warning}
             </p>
           )}
+          {text.blocked && (
+            <p role="alert" className="text-crit">
+              start is disabled: {text.blocked}
+            </p>
+          )}
           {error && <p className="text-crit">error: {error}</p>}
           <div className="flex items-center gap-2 border-t border-rule pt-3">
             <button
               type="submit"
-              disabled={busy || text.loading}
+              disabled={busy || text.loading || text.blocked !== undefined}
               className="rounded-sm bg-ink px-3 py-1 font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {busy ? 'working…' : text.confirmLabel}
