@@ -7,7 +7,9 @@ describe('rowActions', () => {
     expect(actionMeta('open')).toEqual({ label: 'open', pending: '' })
     expect(actionMeta('focus_toggle').pending).toBe('')
     expect(actionMeta('mark_seen').pending).toBe('')
-    expect(actionMeta('kill').pending).toBe('pm-cli-118-21')
+    expect(actionMeta('kill').pending).toBe('')
+    expect(actionMeta('release_claim').label).toBe('release claim')
+    expect(actionMeta('open_pr').pending).not.toBe('')
     expect(actionMeta('teleport')).toEqual({ label: 'teleport', pending: 'unknown action' })
   })
   it('open goes to the task, or to the project when the row has none', () => {

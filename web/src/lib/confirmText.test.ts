@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import type { MutationRequest } from '../api/mutations'
 import {
   describeAction,
+  flagOptions,
+  previewOf,
   initialValue,
   isPendingKind,
   requestFor,
@@ -128,11 +130,13 @@ describe('requestFor', () => {
       body: { notes: 'new' },
     })
   })
-  it('isPendingKind knows the batch-1 actions only', () => {
+  it('isPendingKind knows the mutation kinds, not open/report', () => {
     expect(isPendingKind('focus_toggle')).toBe(true)
     expect(isPendingKind('mark_seen')).toBe(true)
-    expect(isPendingKind('kill')).toBe(false)
+    expect(isPendingKind('kill')).toBe(true)
+    expect(isPendingKind('release_claim')).toBe(true)
     expect(isPendingKind('open')).toBe(false)
+    expect(isPendingKind('report')).toBe(false)
   })
 })
 
@@ -167,5 +171,57 @@ describe('project settings actions', () => {
     }
     expect(describeAction(leave, '').confirmLabel).toBe('leave group')
     expect(requestFor(leave, '')).toEqual({ kind: 'project', project: 'acme-api', body: { group: '' } })
+  })
+})
+
+describe('run actions', () => {
+  const plan = {
+    action: 'resume_run',
+    project: 'atlas',
+    task_id: 'atlas-1',
+    kind: 'run-epic',
+    argv: ['run-epic', 'atlas', 'atlas-1', '--yolo'],
+    cwd: '/r',
+    log: '/l',
+    warnings: ['dirty tree'],
+    additional_avail: true,
+  }
+  it('the preview is the plan, the flags depend on the action, the request carries the flags', () => {
+    const p = {
+      kind: 'resume_run' as const,
+      subject: { project: 'atlas', task_id: 'atlas-1', title: 'Epic' },
+    }
+    const t = describeAction(p, '', undefined, plan)
+    expect(t.preview).toBe('cd /r && pm run-epic atlas atlas-1 --yolo')
+    expect(t.warnings).toEqual(['dirty tree'])
+    expect(t.flags?.map((f) => f.key)).toEqual(['yolo', 'additional'])
+    expect(t.loading).toBe(false)
+    expect(describeAction(p, '').loading).toBe(true)
+    expect(requestFor(p, '', { yolo: true })).toEqual({
+      kind: 'run',
+      project: 'atlas',
+      taskId: 'atlas-1',
+      action: 'resume_run',
+      flags: { yolo: true },
+    })
+    expect(flagOptions('rerun_finish', { ...plan, additional_avail: false })[0].disabled).toMatch(
+      /no worktree/,
+    )
+    expect(flagOptions('claim')).toEqual([])
+    expect(flagOptions('kill')).toEqual([])
+    expect(previewOf({ ...plan, argv: undefined, target: 'nothing is running' })).toBe(
+      'nothing is running',
+    )
+    expect(
+      describeAction({ kind: 'kill', subject: p.subject }, '', undefined, {
+        ...plan,
+        action: 'kill',
+        argv: undefined,
+        pid: 0,
+      }).sentence,
+    ).toMatch(/already gone/)
+    expect(describeAction({ kind: 'rerun_finish', subject: p.subject }, '').sentence).toMatch(
+      /never --sim/,
+    )
   })
 })

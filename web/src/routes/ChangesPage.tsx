@@ -162,6 +162,8 @@ export function ChangesPage({ group }: { group: string }) {
         onChange={action.setValue}
         onConfirm={action.confirm}
         onCancel={action.cancel}
+        flags={action.flags}
+        onFlagsChange={action.setFlags}
         busy={action.busy}
         error={action.error}
       />
