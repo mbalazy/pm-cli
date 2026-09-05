@@ -243,3 +243,45 @@ type ProjectResult struct {
 	Archived bool              `json:"archived,omitempty"`
 	Group    string            `json:"group,omitempty"`
 }
+
+// ConfigResult is Config's shape: the resolved `cockpit:` block of the
+// global config, read by the SPA. Every field carries its default when the
+// file lacks it, so a reader never has to know the defaults.
+type ConfigResult struct {
+	Cockpit CockpitResult `json:"cockpit"`
+}
+
+// CockpitResult mirrors storage.CockpitConfig with json tags and durations
+// as seconds - a storage.Duration would marshal as nanoseconds.
+type CockpitResult struct {
+	Groups               []ConfigGroup   `json:"groups"`
+	DoingIdleDays        int             `json:"doing_idle_days"`
+	WaitingHighlightDays int             `json:"waiting_highlight_days"`
+	StuckProjectDays     int             `json:"stuck_project_days"`
+	CutoffHour           int             `json:"cutoff_hour"`
+	Refresh              RefreshResult   `json:"refresh"`
+	Sections             map[string]bool `json:"sections"`
+	Sources              map[string]bool `json:"sources"`
+	Sidebar              SidebarResult   `json:"sidebar"`
+}
+
+// ConfigGroup is one named group (cockpit.groups.<slug>), sorted by slug.
+type ConfigGroup struct {
+	Slug string `json:"slug"`
+	// Name is the resolved display name - the slug when none is configured.
+	Name string `json:"name"`
+}
+
+// RefreshResult is the change feed's schedule as the SPA reads it.
+type RefreshResult struct {
+	EverySeconds int    `json:"every_seconds"`
+	Window       string `json:"window"`
+}
+
+// SidebarResult is storage.SidebarConfig with json tags.
+type SidebarResult struct {
+	Variant   string `json:"variant"`
+	ShowRepos bool   `json:"show_repos"`
+	Sort      string `json:"sort"`
+	Width     int    `json:"width"`
+}

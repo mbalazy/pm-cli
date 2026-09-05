@@ -111,6 +111,7 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/projects", h.projects)
 	mux.HandleFunc("GET /api/groups", h.groups)
+	mux.HandleFunc("GET /api/config", h.config)
 	mux.HandleFunc("GET /api/tasks", h.tasks)
 	mux.HandleFunc("GET /api/tasks/{project}/{id}", h.task)
 	mux.HandleFunc("GET /api/context", h.context)
@@ -229,6 +230,14 @@ func (h *handler) projects(w http.ResponseWriter, r *http.Request) {
 // active projects' `group` fields, named by the global config.
 func (h *handler) groups(w http.ResponseWriter, r *http.Request) {
 	res, err := service.ListGroups(h.store)
+	writeResult(w, res, err)
+}
+
+// config is the resolved cockpit block of config.yaml - the SPA shapes its
+// sidebar and sections from it. Read-only here; the settings screen
+// (pm-cli-118-18) adds the write.
+func (h *handler) config(w http.ResponseWriter, r *http.Request) {
+	res, err := service.Config(h.store)
 	writeResult(w, res, err)
 }
 
