@@ -4,8 +4,25 @@ import type { Project, TaskSummary } from '../api/types'
 import { paletteItems, projectPath, taskPath } from './paletteItems'
 
 const projects: Project[] = [
-  { slug: 'alpha', name: 'Alpha App', task_counts: {}, statuses: [], landing_statuses: [] },
-  { slug: 'old', name: 'Old', task_counts: {}, statuses: [], landing_statuses: [], archived: true },
+  {
+    slug: 'alpha',
+    name: 'Alpha App',
+    group: 'alpha',
+    group_name: 'alpha',
+    task_counts: {},
+    statuses: [],
+    landing_statuses: [],
+  },
+  {
+    slug: 'old',
+    name: 'Old',
+    group: 'old',
+    group_name: 'old',
+    task_counts: {},
+    statuses: [],
+    landing_statuses: [],
+    archived: true,
+  },
 ]
 const tasks: TaskSummary[] = [
   {

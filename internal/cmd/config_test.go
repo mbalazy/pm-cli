@@ -112,3 +112,46 @@ func TestConfigShowEmptyRegistry(t *testing.T) {
 		t.Errorf("output does not report an empty registry:\n%s", out)
 	}
 }
+
+// The cockpit block prints as resolved: defaults when the file has none, the
+// file's values over them when it does.
+func TestConfigShowRendersCockpit(t *testing.T) {
+	store, _ := tempStore(t)
+
+	out, err := runConfigCmd(t, store, "show")
+	if err != nil {
+		t.Fatalf("config show: %v", err)
+	}
+	for _, want := range []string{
+		"## Cockpit",
+		"none named",
+		"doing idle 7d",
+		"cutoff hour: 18:00",
+		"every 30m0s within 07:00-20:00",
+		"needs_me landed_no_pr focus in_progress waiting changes stuck_projects -new_since_cutoff -recent",
+		"pm git github -slack -report",
+		"sidebar: columns · repos on · sort worst · width default",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+
+	writeStoreConfig(t, store, "cockpit:\n  groups:\n    acme: {name: ACME}\n    orbit: {}\n  cutoff_hour: 20\n  sections:\n    recent: true\n  sidebar:\n    width: 240\n")
+	out, err = runConfigCmd(t, store, "show")
+	if err != nil {
+		t.Fatalf("config show: %v", err)
+	}
+	for _, want := range []string{
+		"groups (2)",
+		"orbit: orbit",
+		"acme: ACME",
+		"cutoff hour: 20:00",
+		"stuck_projects -new_since_cutoff recent",
+		"width 240px",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}

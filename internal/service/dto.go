@@ -196,11 +196,22 @@ type CrossProjectContextResult struct {
 
 // ProjectInfo is one project's row in ListProjects.
 type ProjectInfo struct {
-	Slug       string         `json:"slug"`
-	Name       string         `json:"name"`
-	Stack      string         `json:"stack,omitempty"`
-	Archived   bool           `json:"archived,omitempty"`
+	Slug     string `json:"slug"`
+	Name     string `json:"name"`
+	Stack    string `json:"stack,omitempty"`
+	Archived bool   `json:"archived,omitempty"`
+	// Group is the cockpit group slug (project.yaml `group`, else the project's
+	// own slug - never empty); GroupName is its display name from the global
+	// config's cockpit.groups (else the slug).
+	Group      string         `json:"group"`
+	GroupName  string         `json:"group_name"`
 	TaskCounts map[string]int `json:"task_counts"`
+}
+
+// ListGroupsResult is ListGroups' shape: the cockpit's project groups,
+// derived from the active projects' `group` fields.
+type ListGroupsResult struct {
+	Groups []storage.ProjectGroup `json:"groups"`
 }
 
 // ListProjectsResult wraps the array so a broken project can be skipped
@@ -224,4 +235,5 @@ type ProjectResult struct {
 	Tags     []string          `json:"tags,omitempty"`
 	Statuses []string          `json:"statuses,omitempty"`
 	Archived bool              `json:"archived,omitempty"`
+	Group    string            `json:"group,omitempty"`
 }

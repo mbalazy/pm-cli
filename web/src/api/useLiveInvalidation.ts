@@ -35,8 +35,10 @@ export function useLiveInvalidation(url = '/api/events') {
       // ['task', slug] is a prefix of every ['task', slug, id].
       void client.invalidateQueries({ queryKey: ['task', slug] })
       void client.invalidateQueries({ queryKey: keys.context(slug) })
-      // The sidebar counts live here and move with every task edit.
+      // The sidebar counts live here and move with every task edit; the
+      // groups move with a project.yaml edit, which the same event covers.
       void client.invalidateQueries({ queryKey: keys.projects() })
+      void client.invalidateQueries({ queryKey: keys.groups() })
     })
     es.addEventListener('runs', () => {
       void client.invalidateQueries({ queryKey: keys.runs() })

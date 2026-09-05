@@ -51,6 +51,7 @@ describe('useLiveInvalidation', () => {
       ['task', 'alpha'],
       ['context', 'alpha'],
       ['projects'],
+      ['groups'],
     ])
 
     spy.mockClear()

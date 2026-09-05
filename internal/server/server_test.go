@@ -103,9 +103,17 @@ func TestProjects(t *testing.T) {
 		t.Fatalf("projects = %v", projects)
 	}
 	p := projects[0].(map[string]any)
-	wantKeys(t, p, "slug", "name", "path", "tags", "statuses", "landing_statuses", "task_counts")
+	wantKeys(t, p, "slug", "name", "path", "tags", "statuses", "landing_statuses", "task_counts", "group", "group_name")
 	if p["slug"] != "test" || p["path"] != "/home/user/test" {
 		t.Fatalf("row = %v", p)
+	}
+	// No group declared and no config: the project is its own group, and
+	// archived is omitted (false) rather than emitted.
+	if p["group"] != "test" || p["group_name"] != "test" {
+		t.Fatalf("group = %v / %v", p["group"], p["group_name"])
+	}
+	if _, has := p["archived"]; has {
+		t.Fatalf("archived must be omitted when false: %v", p)
 	}
 	if st := p["statuses"].([]any); len(st) != 4 || st[0] != "todo" {
 		t.Fatalf("statuses = %v", st)
@@ -115,6 +123,67 @@ func TestProjects(t *testing.T) {
 	}
 	if counts := p["task_counts"].(map[string]any); counts["doing"] != float64(1) || counts["todo"] != float64(2) {
 		t.Fatalf("task_counts = %v", counts)
+	}
+}
+
+// /api/projects carries the group per row and /api/groups the groups
+// themselves; an archived project drops out of the groups but stays a row.
+func TestProjectsGroups(t *testing.T) {
+	store := newTestStore(t)
+	for _, slug := range []string{"acme-api", "acme-zap"} {
+		dir := filepath.Join(store.Root, slug)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := storage.WriteProject(filepath.Join(dir, "project.yaml"), &storage.Project{Name: slug, Group: "acme", Archived: slug == "acme-zap"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  groups:\n    acme: {name: ACME}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := newServer(t, store, Options{})
+
+	m := getJSON(t, srv.URL+"/api/projects", 200)
+	rows := map[string]map[string]any{}
+	for _, row := range m["projects"].([]any) {
+		r := row.(map[string]any)
+		rows[r["slug"].(string)] = r
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows = %v", rows)
+	}
+	if r := rows["acme-api"]; r["group"] != "acme" || r["group_name"] != "ACME" {
+		t.Fatalf("acme-api = %v", r)
+	}
+	if r := rows["acme-zap"]; r["archived"] != true || r["group"] != "acme" {
+		t.Fatalf("acme-zap = %v", r)
+	}
+
+	g := getJSON(t, srv.URL+"/api/groups", 200)
+	groups := g["groups"].([]any)
+	if len(groups) != 2 {
+		t.Fatalf("groups = %v", groups)
+	}
+	acme := groups[0].(map[string]any)
+	if acme["slug"] != "acme" || acme["name"] != "ACME" {
+		t.Fatalf("acme = %v", acme)
+	}
+	if members := acme["projects"].([]any); len(members) != 1 || members[0] != "acme-api" {
+		t.Fatalf("acme members = %v (archived acme-zap must be out)", members)
+	}
+	if test := groups[1].(map[string]any); test["slug"] != "test" || test["name"] != "test" {
+		t.Fatalf("test = %v", test)
+	}
+
+	// A broken config is a 500 with the file named - never a sidebar of
+	// slug-named groups pretending that is the setting.
+	if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  sections:\n    typo: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := getJSON(t, srv.URL+"/api/groups", 500)
+	if !strings.Contains(e["error"].(string), "typo") {
+		t.Fatalf("error = %v", e)
 	}
 }
 

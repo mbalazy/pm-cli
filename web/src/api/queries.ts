@@ -1,12 +1,13 @@
 // react-query hooks, one per endpoint. The KEYS are a contract shared with the
 // live feed (118-9 invalidates by them) - keep them exactly as listed:
-//   ['projects'] ['tasks', slug] ['task', slug, id] ['context', slug] ['runs'] ['focus']
+//   ['projects'] ['groups'] ['tasks', slug] ['task', slug, id] ['context', slug] ['runs'] ['focus']
 import { useQuery } from '@tanstack/react-query'
 
 import { apiGet, query } from './client'
 import type {
   CrossProjectContextResult,
   FocusResult,
+  GroupsResult,
   ListTasksResult,
   ProjectContextResult,
   ProjectsResult,
@@ -19,6 +20,7 @@ export const MAX_LIST_LIMIT = 200
 
 export const keys = {
   projects: () => ['projects'] as const,
+  groups: () => ['groups'] as const,
   tasks: (slug: string) => ['tasks', slug] as const,
   task: (slug: string, id: string) => ['task', slug, id] as const,
   context: (slug: string) => ['context', slug] as const,
@@ -32,6 +34,14 @@ export function useProjects() {
   return useQuery({
     queryKey: keys.projects(),
     queryFn: () => apiGet<ProjectsResult>('/api/projects'),
+  })
+}
+
+/** The cockpit's project groups (sidebar input); archived projects are in none. */
+export function useGroups() {
+  return useQuery({
+    queryKey: keys.groups(),
+    queryFn: () => apiGet<GroupsResult>('/api/groups'),
   })
 }
 
