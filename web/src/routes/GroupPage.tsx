@@ -116,7 +116,11 @@ export function GroupPage({ group, tab, repo }: Props) {
         {members.length > 1 && (
           <ul aria-label="Repos" className="flex flex-wrap gap-1 text-xs">
             {members.map((m) => (
-              <li key={m.slug} className="rounded border px-2 py-0.5">
+              <li
+                key={m.slug}
+                className="max-w-[28rem] truncate rounded border px-2 py-0.5"
+                title={m.stack}
+              >
                 <Link
                   to="/g/$group"
                   params={{ group }}
