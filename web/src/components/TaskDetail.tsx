@@ -74,13 +74,16 @@ export function TaskDetail({
                 onChange={(e) => onEdit('set_status', e.target.value)}
                 className="field h-7 py-0 font-medium text-ink"
               >
-                {[...statuses, ...(statuses.includes(task.status) ? [] : [task.status])].map(
-                  (s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ),
-                )}
+                {[
+                  ...statuses,
+                  ...(statuses.includes(task.status) ? [] : [task.status]),
+                  // archive is system-level, never in a project's list, always a legal target
+                  ...(task.status === 'archived' ? [] : ['archived']),
+                ].map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
               </select>
             </label>
           ) : (
