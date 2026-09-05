@@ -35,11 +35,12 @@ export function useShortcuts(handlers: ShortcutHandlers) {
       const action = shortcutFor(e)
       if (action === null) return
       // A dialog owns the keyboard: while one is open, and for the very key
-      // that closed it (React flushes the close before the event reaches the
-      // window, so `dialog[open]` alone let Esc fall through to "close the
-      // task" - ux-audit F-05).
-      const inDialog = e.target instanceof Element && e.target.closest('dialog') !== null
-      if (action !== 'palette' && (inDialog || document.querySelector('dialog[open]'))) return
+      // that closes it. This listener runs in the CAPTURE phase for that
+      // reason: on the bubble phase React had already flushed the close AND
+      // unmounted the dialog's form, so neither `dialog[open]` nor the
+      // (detached) target's ancestry showed a dialog, and Esc fell through
+      // to "close the task" (ux-audit F-05).
+      if (action !== 'palette' && document.querySelector('dialog[open]')) return
       if (action === 'groupPrefix') {
         if (ref.current.group) {
           armedAt = Date.now()
@@ -52,7 +53,7 @@ export function useShortcuts(handlers: ShortcutHandlers) {
       e.preventDefault()
       fn()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [])
 }

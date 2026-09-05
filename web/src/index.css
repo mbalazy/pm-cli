@@ -251,15 +251,16 @@
     .ledger-row:not([aria-current='true']):hover {
       background: var(--paper-2);
     }
-    /* Row actions are ghosts until the row is hovered, focused or selected. */
-    .ledger-row .row-actions {
-      opacity: 0.55;
-      transition: opacity 120ms var(--ease-out-quart);
+    /* Row actions are ghosts until the row is hovered, focused or selected -
+       dimmed by colour, not opacity: --ink-3 still reads at 4.5:1, an
+       opacity-blended --ink-2 did not (ux-audit F-01, 2.45:1). */
+    .ledger-row .row-actions .ghost-btn {
+      color: var(--ink-3);
     }
-    .ledger-row:hover .row-actions,
-    .ledger-row:focus-within .row-actions,
-    .ledger-row[aria-current='true'] .row-actions {
-      opacity: 1;
+    .ledger-row:hover .row-actions .ghost-btn,
+    .ledger-row:focus-within .row-actions .ghost-btn,
+    .ledger-row[aria-current='true'] .row-actions .ghost-btn {
+      color: var(--ink-2);
     }
   }
   /* A chip: project, source, tag - mono, quiet. */
