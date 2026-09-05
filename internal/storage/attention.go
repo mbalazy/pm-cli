@@ -81,6 +81,10 @@ const (
 	ActionMarkSeen      = "mark_seen"
 	ActionSleepProject  = "sleep_project"
 	ActionOpenPR        = "open_pr"
+	// ActionReleaseClaim drops an acceptance claim the COCKPIT itself holds
+	// (a claim whose session carries the cockpit prefix, on this host) -
+	// the one claim a web button may release without taking it from anyone.
+	ActionReleaseClaim = "release_claim"
 )
 
 // Flags a row may carry.
@@ -421,6 +425,10 @@ func needsMeRows(v *projectView, now time.Time) []AttentionRow {
 			if accept != nil && accept.IsLive() {
 				r.Actions = append(r.Actions, ActionKill)
 			}
+			if CockpitOwnsClaim(claim) {
+				r.Reason = "claimed from the cockpit (this machine) - release it when done"
+				r.Actions = append(r.Actions, ActionReleaseClaim)
+			}
 			rows = append(rows, r)
 			continue
 		}
@@ -597,6 +605,17 @@ func taskActions(t *Task) []string {
 		acts = append(acts, ActionOpenPR)
 	}
 	return acts
+}
+
+// CockpitClaimPrefix is the session prefix of a claim the web cockpit
+// takes (`cockpit-<host>`); runctl writes it, this reads it.
+const CockpitClaimPrefix = "cockpit-"
+
+// CockpitOwnsClaim reports whether a live claim was taken by the cockpit on
+// THIS host - the one claim a web button may release without taking a run
+// from another session.
+func CockpitOwnsClaim(c *FinishClaim) bool {
+	return c != nil && c.Host == hostname() && strings.HasPrefix(c.Session, CockpitClaimPrefix)
 }
 
 // --- in_progress ---

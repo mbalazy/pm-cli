@@ -626,7 +626,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	start := storage.JournalEntry{
 		Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID, RunID: runID,
 		PID: os.Getpid(), Model: plan.model, Additional: opts.additional, Yolo: opts.yolo, Independent: independentMode, Branch: journalBranch,
-		WorkDir: journalDir, Baseline: baselineUsed,
+		WorkDir: journalDir, Baseline: baselineUsed, Source: storage.LaunchSource(),
 	}
 	_ = storage.AppendJournal(stateDir, &start)
 	// From here until the end line below, a catchable signal (a terminal's Ctrl-C,

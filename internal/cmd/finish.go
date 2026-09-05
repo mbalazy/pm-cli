@@ -478,7 +478,7 @@ func executeFinish(plan *finishPlan) (*finishResult, error) {
 	journalBase := func() *storage.JournalEntry {
 		return &storage.JournalEntry{
 			Kind: storage.RunKindFinish, Project: plan.slug, TaskID: tracker, RunID: runID,
-			PID: os.Getpid(), Model: plan.opts.model, Yolo: plan.opts.yolo,
+			PID: os.Getpid(), Model: plan.opts.model, Yolo: plan.opts.yolo, Source: storage.LaunchSource(),
 		}
 	}
 	start := journalBase()

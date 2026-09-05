@@ -90,6 +90,10 @@ type journalStats struct {
 	Entries int
 	Runs    int // starts seen (one per run)
 	Kinds   map[string]*kindStats
+	// Sources counts starts by who launched them (JournalEntry.Source):
+	// "cockpit" for the web, "" for the CLI and the board - the split the
+	// cockpit's run control (pm-cli-118-21) was required to make visible.
+	Sources map[string]int
 	Crashes int // runs with no orderly end: a reconciled `crashed` line, or a start with no terminal partner at all
 	Running int // starts with no terminal partner, holder pid still alive
 	// Deaths are the runs that ended by signal or crash AND said why (the
@@ -199,6 +203,7 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int, time.Time)
 		Entries:    len(entries),
 		Kinds:      make(map[string]*kindStats),
 		SubResults: make(map[string]int),
+		Sources:    make(map[string]int),
 	}
 
 	// open[key]     = start lines still awaiting a terminal line.
@@ -232,6 +237,7 @@ func aggregateJournal(entries []storage.JournalEntry, alive func(int, time.Time)
 		case storage.JournalEventStart:
 			st.Runs++
 			st.kind(e.Kind).Runs++
+			st.Sources[e.Source]++
 			open[key]++
 			startTS[key] = append(startTS[key], e.TS)
 		case storage.JournalEventEnd, storage.JournalEventKilled, storage.JournalEventCrashed:
@@ -551,6 +557,19 @@ func renderJournalStats(slug, path string, st journalStats) string {
 		if st.Running > 0 {
 			fmt.Fprintf(&b, "     running %d (no terminal line yet, pid still alive)\n", st.Running)
 		}
+	}
+	if n := len(st.Sources); n > 1 || (n == 1 && st.Sources[""] == 0) {
+		// Only worth a line once something other than the CLI/board has
+		// launched a run; "" is those two (they set no source).
+		parts := make([]string, 0, n)
+		for _, src := range orderedKeys(st.Sources, nil, true) {
+			label := src
+			if label == "" {
+				label = "cli/board"
+			}
+			parts = append(parts, fmt.Sprintf("%d %s", st.Sources[src], label))
+		}
+		fmt.Fprintf(&b, "  launched from: %s\n", strings.Join(parts, ", "))
 	}
 	renderDeaths(&b, st.Deaths)
 
