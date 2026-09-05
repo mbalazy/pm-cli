@@ -296,6 +296,40 @@ func TestAttentionLandedNoPR(t *testing.T) {
 	}
 }
 
+// A tracker the human moved to done or archived leaves needs_me whatever
+// its run-state files say, and its children leave landed_no_pr - the
+// status is the decision, the files are only the machine's memory
+// (orbit-108 on 2026-09-05: done in pm, still "acceptance failed"
+// in the queue because of a finish.json from a month earlier).
+func TestAttentionClosedTrackerLeavesQueue(t *testing.T) {
+	store := attentionStore(t)
+	close := func(id string, st TaskStatus) {
+		task, err := store.FindTaskExact("acme-api", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		task.Meta.Status = st
+		if err := store.WriteTask(task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close("acme-api-1", StatusDone)     // the failed run
+	close("acme-api-2", StatusArchived) // the visual-claims acceptance (child acme-api-2-1 in landed_no_pr)
+	a := build(t, store, "", AttentionOptions{})
+	if got := ids(a.Section(SectionNeedsMe).Rows); strings.Join(got, ",") != "acme-api-3,acme-zap-1,acme-zap-2" {
+		t.Errorf("needs_me with closed trackers = %v", got)
+	}
+	if got := ids(a.Section(SectionLandedNoPR).Rows); strings.Join(got, ",") != "acme-zap-1-1" {
+		t.Errorf("landed_no_pr with an archived parent = %v", got)
+	}
+	// A landing status is the executor's, not the human's: the row stays.
+	close("acme-api-3", StatusMerged)
+	a = build(t, store, "", AttentionOptions{})
+	if got := ids(a.Section(SectionNeedsMe).Rows); !strings.Contains(strings.Join(got, ","), "acme-api-3") {
+		t.Errorf("a merged tracker left needs_me: %v", got)
+	}
+}
+
 func TestAttentionGroupsSumAcrossRepos(t *testing.T) {
 	a := build(t, attentionStore(t), "", AttentionOptions{})
 	var acme, solo *GroupSummary
