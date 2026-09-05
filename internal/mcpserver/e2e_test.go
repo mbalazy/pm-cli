@@ -1682,3 +1682,51 @@ func TestE2ECrossProjectContextCompressesBriefs(t *testing.T) {
 		t.Errorf("cross-project brief = %q, want the compressed first line", got)
 	}
 }
+
+// TestE2EContextCarriesAttention: the cross-project pm_context carries the
+// attention block (needs_me / waiting / stuck_projects / counts / wip) and
+// the project-scoped one carries it narrowed to the project.
+func TestE2EContextCarriesAttention(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	w := &storage.Task{
+		Meta:     storage.TaskMeta{ID: "t-7", Title: "Blocked", Status: storage.StatusWaiting, WaitingFor: "client", Created: "2025-01-01", Updated: "2025-01-01T10:00:00+01:00", StatusChanged: "2025-01-01T10:00:00+01:00"},
+		FilePath: filepath.Join(store.Root, "test", "t-7.md"), Project: "test",
+	}
+	if err := storage.WriteTask(w); err != nil {
+		t.Fatal(err)
+	}
+	sess := startMCP(t, store)
+
+	var out struct {
+		Attention struct {
+			WIP          int                    `json:"wip"`
+			NeedsMe      []storage.AttentionRow `json:"needs_me"`
+			Waiting      []storage.AttentionRow `json:"waiting"`
+			WaitingTotal int                    `json:"waiting_total"`
+			Counts       map[string]int         `json:"counts"`
+		} `json:"attention"`
+	}
+	text, isErr := call(t, sess, "pm_context", nil)
+	if isErr {
+		t.Fatalf("pm_context error: %s", text)
+	}
+	mustUnmarshal(t, text, &out)
+	if out.Attention.WaitingTotal != 1 || len(out.Attention.Waiting) != 1 || out.Attention.Waiting[0].TaskID != "t-7" || out.Attention.Waiting[0].Reason != "waiting for client" {
+		t.Fatalf("attention = %+v", out.Attention)
+	}
+	if out.Attention.Waiting[0].AgeSeconds == nil {
+		t.Fatal("age from status_changed must be known")
+	}
+	if _, ok := out.Attention.Counts["focus"]; !ok || len(out.Attention.NeedsMe) != 0 {
+		t.Fatalf("attention = %+v", out.Attention)
+	}
+
+	text, isErr = call(t, sess, "pm_context", map[string]any{"project": "test"})
+	if isErr {
+		t.Fatalf("pm_context error: %s", text)
+	}
+	mustUnmarshal(t, text, &out)
+	if out.Attention.WaitingTotal != 1 {
+		t.Fatalf("project-scoped attention = %+v", out.Attention)
+	}
+}

@@ -1,10 +1,12 @@
 // react-query hooks, one per endpoint. The KEYS are a contract shared with the
 // live feed (118-9 invalidates by them) - keep them exactly as listed:
 //   ['projects'] ['groups'] ['tasks', slug] ['task', slug, id] ['context', slug] ['runs'] ['focus']
+//   ['attention', project, group]
 import { useQuery } from '@tanstack/react-query'
 
 import { apiGet, query } from './client'
 import type {
+  Attention,
   CrossProjectContextResult,
   FocusResult,
   GroupsResult,
@@ -28,6 +30,7 @@ export const keys = {
   /** Deliberately NOT under ['runs']: a `runs` event must never trigger an ssh round-trip. */
   runsRemote: () => ['runs-remote'] as const,
   focus: () => ['focus'] as const,
+  attention: (project = '', group = '') => ['attention', project, group] as const,
 }
 
 export function useProjects() {
@@ -105,5 +108,13 @@ export function useFocus() {
   return useQuery({
     queryKey: keys.focus(),
     queryFn: () => apiGet<FocusResult>('/api/focus'),
+  })
+}
+
+/** The attention queue (home screen), optionally scoped to one project or one group. */
+export function useAttention(project = '', group = '') {
+  return useQuery({
+    queryKey: keys.attention(project, group),
+    queryFn: () => apiGet<Attention>(`/api/attention${query({ project, group })}`),
   })
 }

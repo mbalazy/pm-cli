@@ -110,6 +110,7 @@ func ProjectContext(store storage.TaskStore, slug string) (*ProjectContextResult
 	}
 
 	result.FocusTasks = FocusTaskSummaries(store)
+	result.Attention, result.AttentionNote = contextAttention(store, AttentionInput{Project: slug})
 	return result, nil
 }
 
@@ -167,6 +168,11 @@ func CrossProjectContext(store storage.TaskStore, note string) (*CrossProjectCon
 	noteParts := []string{}
 	if note != "" {
 		noteParts = append(noteParts, note)
+	}
+	var attentionNote string
+	output.Attention, attentionNote = contextAttention(store, AttentionInput{})
+	if attentionNote != "" {
+		noteParts = append(noteParts, attentionNote)
 	}
 	noteParts = append(noteParts, warnings...)
 	if len(noteParts) > 0 {

@@ -89,6 +89,7 @@ func NewHandler(store storage.TaskStore, opts Options) http.Handler {
 	mux.HandleFunc("GET /api/context", h.context)
 	mux.HandleFunc("GET /api/runs", h.runs)
 	mux.HandleFunc("GET /api/focus", h.focus)
+	mux.HandleFunc("GET /api/attention", h.attention)
 	mux.HandleFunc("GET /api/events", h.events)
 	// Anything else under /api/ is unknown, never the SPA: a typo'd endpoint
 	// answering with index.html would read as "the server is fine, the data
@@ -278,6 +279,15 @@ func (h *handler) focus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// attention is the home screen's queue: the whole storage.Attention, scoped
+// by ?project= or ?group=. Computed on every call - it reads only local
+// files, and the SSE feed tells the client when to ask again.
+func (h *handler) attention(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	res, err := service.Attention(h.store, service.AttentionInput{Project: q.Get("project"), Group: q.Get("group")})
+	writeResult(w, res, err)
+}
+
 // --- SPA ---
 
 const placeholderPage = `<!doctype html>
@@ -286,7 +296,7 @@ const placeholderPage = `<!doctype html>
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:40em;margin:4em auto;padding:0 1em;color:#333}code{background:#eee;padding:.1em .3em;border-radius:3px}</style>
 <h1>pm serve</h1>
 <p>The server is up, but the front end is not built into this binary.</p>
-<p>Run <code>make web</code> and rebuild, or use the JSON API directly: <code>/api/projects</code>, <code>/api/groups</code>, <code>/api/tasks</code>, <code>/api/context</code>, <code>/api/runs</code>, <code>/api/focus</code>, <code>/api/events</code>.</p>
+<p>Run <code>make web</code> and rebuild, or use the JSON API directly: <code>/api/projects</code>, <code>/api/groups</code>, <code>/api/tasks</code>, <code>/api/context</code>, <code>/api/runs</code>, <code>/api/focus</code>, <code>/api/attention</code>, <code>/api/events</code>.</p>
 `
 
 // static serves the bundle with client-side routing: a path that names a

@@ -31,6 +31,7 @@ func NewRootCmd() *cobra.Command {
 		newAddCmd(store),
 		newListCmd(store),
 		newContextCmd(store),
+		newTodayCmd(store),
 		newShowCmd(store),
 		newMvCmd(store),
 		newReorderCmd(store),

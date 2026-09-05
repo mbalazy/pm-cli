@@ -39,9 +39,12 @@ export function useLiveInvalidation(url = '/api/events') {
       // groups move with a project.yaml edit, which the same event covers.
       void client.invalidateQueries({ queryKey: keys.projects() })
       void client.invalidateQueries({ queryKey: keys.groups() })
+      // ['attention'] is a prefix of every scoped ['attention', p, g].
+      void client.invalidateQueries({ queryKey: ['attention'] })
     })
     es.addEventListener('runs', () => {
       void client.invalidateQueries({ queryKey: keys.runs() })
+      void client.invalidateQueries({ queryKey: ['attention'] })
     })
     return () => es.close()
   }, [client, url])
