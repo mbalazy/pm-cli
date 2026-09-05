@@ -1,6 +1,8 @@
 /// <reference types="vitest/config" />
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
+import { fileURLToPath, URL } from 'node:url'
+
 import { defineConfig } from 'vite'
 
 // The bundle lands in the Go package that embeds it (internal/server, `all:dist`),
@@ -8,6 +10,8 @@ import { defineConfig } from 'vite'
 // there - `make web` puts it back after the build.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // `@/` = src/, the alias shadcn's copied components import through.
+  resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   build: {
     outDir: '../internal/server/dist',
     emptyOutDir: true,

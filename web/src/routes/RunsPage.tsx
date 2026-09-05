@@ -1,3 +1,4 @@
+import { Cloud } from 'lucide-react'
 import { useState } from 'react'
 
 import { useAttention, useRemoteRuns, useRuns } from '../api/queries'
@@ -59,47 +60,67 @@ export function RunsPage({ projects, heading = 'Runs' }: Props) {
   }
 
   return (
-    <div>
-      <div className="mb-3 flex flex-wrap items-baseline gap-3">
-        {heading && <h1 className="text-xl font-bold">{heading}</h1>}
-        <span className="text-sm text-gray-500">
-          {rows.length}
-          {rows.length !== total && ` of ${total}`}
-        </span>
-        <span role="group" aria-label="sort" className="flex gap-1 text-sm">
-          {RUN_SORTS.map((s) => (
+    <div className="space-y-4">
+      <header
+        className={
+          heading ? 'space-y-3 border-b-2 border-ink pb-3' : 'space-y-3 border-b border-rule pb-3'
+        }
+      >
+        {heading && (
+          <div className="flex flex-wrap items-baseline gap-x-4">
+            <h1 className="masthead">{heading}</h1>
+            <span className="num text-ink-2">
+              {rows.length}
+              {rows.length !== total && ` of ${total}`}
+            </span>
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+          {!heading && (
+            <span className="num text-ink-2">
+              {rows.length}
+              {rows.length !== total && ` of ${total}`}
+            </span>
+          )}
+          <span role="group" aria-label="sort" className="flex items-center gap-1">
+            <span className="kicker mr-1">sort</span>
+            {RUN_SORTS.map((s) => (
+              <button
+                key={s}
+                type="button"
+                aria-pressed={sort === s}
+                className="pill"
+                onClick={() => setSort(s)}
+              >
+                {sortLabel[s]}
+              </button>
+            ))}
+          </span>
+          <button
+            type="button"
+            aria-pressed={unfinishedOnly}
+            className="pill"
+            onClick={() => setUnfinishedOnly((v) => !v)}
+            title="unfinished = a live run, or a row the attention queue puts in front of you"
+          >
+            {unfinishedOnly ? 'unfinished only' : 'all runs'}
+          </button>
+          <span className="flex items-center gap-2">
             <button
-              key={s}
               type="button"
-              aria-pressed={sort === s}
-              className={`rounded border px-2 ${sort === s ? 'font-bold' : ''}`}
-              onClick={() => setSort(s)}
+              className="ghost-btn"
+              disabled={remote.isFetching}
+              onClick={() => void remote.refetch()}
             >
-              {sortLabel[s]}
+              <Cloud aria-hidden="true" className="size-3" strokeWidth={1.75} />
+              fetch remote
             </button>
-          ))}
-        </span>
-        <button
-          type="button"
-          aria-pressed={unfinishedOnly}
-          className={`rounded border px-2 text-sm ${unfinishedOnly ? 'font-bold' : ''}`}
-          onClick={() => setUnfinishedOnly((v) => !v)}
-          title="unfinished = a live run, or a row the attention queue puts in front of you"
-        >
-          {unfinishedOnly ? 'unfinished only' : 'all runs'}
-        </button>
-        <button
-          type="button"
-          className="rounded border px-2 text-sm"
-          disabled={remote.isFetching}
-          onClick={() => void remote.refetch()}
-        >
-          fetch remote
-        </button>
-        <span className="text-sm text-gray-500">remote: {remoteState}</span>
-      </div>
-      {runs.isPending && <p>loading…</p>}
-      {runs.isError && <p className="text-red-700">error: {runs.error.message}</p>}
+            <span className="text-xs text-ink-3">remote: {remoteState}</span>
+          </span>
+        </div>
+      </header>
+      {runs.isPending && <p className="text-ink-3">loading…</p>}
+      {runs.isError && <p className="text-crit">error: {runs.error.message}</p>}
       {runs.data && <RunsTable rows={table} />}
     </div>
   )

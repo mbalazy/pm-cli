@@ -1,4 +1,5 @@
 import { useNavigate } from '@tanstack/react-router'
+import { CheckCheck, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 
 import { useRowMutation } from '../api/mutations'
@@ -8,6 +9,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog'
 import { EventRow } from '../components/EventRow'
 import { GroupChips } from '../components/GroupChips'
 import { ReportPanel } from '../components/ReportPanel'
+import { SectionHead } from '../components/SectionHead'
 import { SourceChips } from '../components/SourceChips'
 import { Toast } from '../components/Toast'
 import { useConfirmedAction } from '../hooks/useConfirmedAction'
@@ -69,42 +71,52 @@ export function ChangesPage({ group }: { group: string }) {
     })
 
   return (
-    <div className="space-y-4">
-      <header className="space-y-2">
-        <div className="flex flex-wrap items-baseline gap-3">
-          <h1 className="text-xl font-bold">Changes</h1>
+    <div className="space-y-7">
+      <header className="space-y-3 border-b-2 border-ink pb-3">
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+          <h1 className="masthead">Changes</h1>
           {changes.data && (
-            <span className="text-sm text-gray-600">{cutoffText(changes.data.cutoff, now)}</span>
+            <span className="display text-lg text-ink-2">
+              {cutoffText(changes.data.cutoff, now)}
+            </span>
           )}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-ink-2">
           {cfg && (
-            <span className="text-xs text-gray-400">
+            <span className="num">
               refresh every {Math.round(cfg.refresh.every_seconds / 60)} min, {cfg.refresh.window}
               {times.refreshed && ` · refreshed ${times.refreshed}`}
               {times.next && ` · next ${times.next}`}
             </span>
           )}
-          <span className="ml-auto flex gap-2">
+          <span className="ml-auto flex gap-1">
             <button
               type="button"
-              className="rounded border px-2 text-sm"
+              className="ghost-btn"
               disabled={refresh.isPending || !changes.isSuccess}
               onClick={() => refresh.mutate()}
             >
+              <RefreshCw
+                aria-hidden="true"
+                className={refresh.isPending ? 'size-3 animate-spin' : 'size-3'}
+                strokeWidth={1.75}
+              />
               {refresh.isPending ? 'refreshing…' : 'refresh now'}
             </button>
             <button
               type="button"
-              className="rounded border px-2 text-sm"
+              className="ghost-btn"
               disabled={!changes.data || changes.data.unseen === 0}
               onClick={() => markSeen()}
             >
+              <CheckCheck aria-hidden="true" className="size-3" strokeWidth={1.75} />
               mark all seen
               {changes.data && changes.data.unseen > 0 ? ` (${changes.data.unseen})` : ''}
             </button>
           </span>
         </div>
         {refresh.isError && (
-          <p className="text-sm text-red-700">refresh failed: {refresh.error.message}</p>
+          <p className="text-sm text-crit">refresh failed: {refresh.error.message}</p>
         )}
         {changes.data && (
           <SourceChips
@@ -143,27 +155,22 @@ export function ChangesPage({ group }: { group: string }) {
       />
 
       <section aria-label="Feed">
-        <h2 className="mb-1 flex flex-wrap items-baseline gap-2 border-b">
-          <span className="font-semibold">Raw feed</span>
-          <span className="text-sm text-gray-500">
-            {shown.length}
-            {shown.length !== all.length && ` of ${all.length}`}
-          </span>
-          <span className="text-xs text-gray-400">
-            deterministic, zero tokens · unseen rows are highlighted
-          </span>
-        </h2>
-        {changes.isPending && <p>loading…</p>}
-        {changes.isError && <p className="text-red-700">error: {changes.error.message}</p>}
+        <SectionHead
+          title="Raw feed"
+          count={`${shown.length}${shown.length !== all.length ? ` of ${all.length}` : ''}`}
+          why="deterministic, zero tokens · unseen rows are highlighted"
+        />
+        {changes.isPending && <p className="text-ink-3">loading…</p>}
+        {changes.isError && <p className="text-crit">error: {changes.error.message}</p>}
         {changes.data && shown.length === 0 && (
-          <p className="text-sm text-gray-500">
+          <p className="px-2 py-1 text-sm text-ink-3">
             {all.length === 0
               ? 'Nothing changed since the cutoff (or nothing fetched yet - refresh now).'
               : 'Nothing matches the filters.'}
           </p>
         )}
         {changes.data && shown.length > 0 && (
-          <ul className="space-y-0.5 text-sm">
+          <ul className="text-sm">
             {shown.map((e) => (
               <EventRow
                 key={e.id}

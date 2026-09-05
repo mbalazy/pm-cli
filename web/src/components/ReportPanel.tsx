@@ -1,4 +1,5 @@
 import { Link } from '@tanstack/react-router'
+import { Sparkles } from 'lucide-react'
 
 import type { ReportSuggestion } from '../api/types'
 import { canDo, type ReportView } from '../lib/reportView'
@@ -7,7 +8,8 @@ import { canDo, type ReportView } from '../lib/reportView'
 // cost in small print, and the open suggestions - each with "do" (the
 // mapped action, through the page's dialog) and "dismiss". The state and
 // the wording are lib/reportView's; the page owns the writing and the
-// dismissing.
+// dismissing. Drawn as the paper's editorial column: a rule on the left,
+// serif head, measured prose.
 
 interface Props {
   view: ReportView
@@ -18,29 +20,34 @@ interface Props {
 
 export function ReportPanel({ view, onWrite, onDo, onDismiss }: Props) {
   return (
-    <section aria-label="Report" data-state={view.state} className="rounded border p-3 text-sm">
-      <h2 className="mb-1 flex flex-wrap items-baseline gap-2">
-        <span className="font-semibold">Report</span>
-        <span className="text-xs text-gray-400">
+    <section
+      aria-label="Report"
+      data-state={view.state}
+      className="border-l-2 border-ink pl-4 text-sm"
+    >
+      <h2 className="mb-0.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+        <span className="display text-[1.05rem]">Report</span>
+        <span className="text-xs text-ink-3 italic">
           written by an LLM from the raw feed below, one per period · optional, costs tokens
         </span>
         {view.canWrite && (
-          <button type="button" className="ml-auto rounded border px-2 text-xs" onClick={onWrite}>
+          <button type="button" className="ghost-btn ml-auto" onClick={onWrite}>
+            <Sparkles aria-hidden="true" className="size-3" strokeWidth={1.75} />
             {view.state === 'done' || view.state === 'error' ? 'write again' : 'write now'}
           </button>
         )}
       </h2>
-      <p className="text-xs text-gray-500">
+      <p className="text-xs text-ink-2">
         {view.status}
-        {view.cost && <span className="ml-2 text-gray-400">· {view.cost}</span>}
+        {view.cost && <span className="num ml-2 text-ink-3">· {view.cost}</span>}
       </p>
       {view.error && (
-        <p role="alert" className="mt-1 text-red-700">
+        <p role="alert" className="mt-1 text-crit">
           {view.error}
         </p>
       )}
       {view.paragraphs.length > 0 && (
-        <div className="mt-2 space-y-2">
+        <div className="mt-3 max-w-[68ch] space-y-2 text-[0.9375rem] leading-relaxed">
           {view.paragraphs.map((p, i) => (
             <p key={i} className="whitespace-pre-wrap">
               {p}
@@ -49,50 +56,43 @@ export function ReportPanel({ view, onWrite, onDo, onDismiss }: Props) {
         </div>
       )}
       {(view.open.length > 0 || view.dismissedCount > 0) && (
-        <div className="mt-2">
-          <h3 className="text-xs uppercase text-gray-500">
+        <div className="mt-3">
+          <h3 className="kicker mb-1">
             Suggestions
             {view.dismissedCount > 0 && (
-              <span className="ml-1 normal-case text-gray-400">
-                ({view.dismissedCount} dismissed)
-              </span>
+              <span className="ml-1 normal-case text-ink-3">({view.dismissedCount} dismissed)</span>
             )}
           </h3>
-          <ul className="space-y-0.5">
+          <ul>
             {view.open.map((s) => (
-              <li key={s.id} className="flex flex-wrap items-baseline gap-2">
+              <li
+                key={s.id}
+                className="ledger-row flex flex-wrap items-baseline gap-x-2 gap-y-0.5 px-2 py-1"
+              >
                 {s.project ? (
                   <Link
                     to="/p/$slug/t/$id"
                     params={{ slug: s.project, id: s.task_id }}
-                    className="font-mono text-gray-600 hover:underline"
+                    className="id hover:underline"
                   >
                     {s.task_id}
                   </Link>
                 ) : (
-                  <code className="text-gray-600">{s.task_id}</code>
+                  <code className="id">{s.task_id}</code>
                 )}
-                {s.action && (
-                  <span className="rounded bg-gray-100 px-1 text-xs">
-                    {s.action.replace('_', ' ')}
-                  </span>
-                )}
+                {s.action && <span className="chip">{s.action.replace('_', ' ')}</span>}
                 <span>{s.text}</span>
-                <span className="ml-auto flex gap-1">
+                <span className="row-actions ml-auto flex gap-1">
                   <button
                     type="button"
-                    className="rounded border px-1 text-xs disabled:text-gray-300"
+                    className="ghost-btn"
                     disabled={!canDo(s)}
                     title={canDo(s) ? undefined : 'no known action on a known task'}
                     onClick={() => onDo(s)}
                   >
                     do
                   </button>
-                  <button
-                    type="button"
-                    className="rounded border px-1 text-xs"
-                    onClick={() => onDismiss(s)}
-                  >
+                  <button type="button" className="ghost-btn" onClick={() => onDismiss(s)}>
                     dismiss
                   </button>
                 </span>

@@ -1,6 +1,8 @@
 import { useQueries } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 
+import { cn } from '@/components/ui/cn'
+
 import {
   contextQuery,
   tasksQuery,
@@ -67,10 +69,10 @@ export function GroupPage({ group, tab, repo }: Props) {
     void navigate({ to: '/g/$group', params: { group }, search: { tab: t, repo } })
   useShortcuts({ tabPrev: () => go(stepTab(tab, -1)), tabNext: () => go(stepTab(tab, 1)) })
 
-  if (projects.isPending) return <p>loading…</p>
-  if (projects.isError) return <p className="text-red-700">error: {projects.error.message}</p>
+  if (projects.isPending) return <p className="text-ink-3">loading…</p>
+  if (projects.isError) return <p className="text-crit">error: {projects.error.message}</p>
   if (members.length === 0)
-    return <p className="text-red-700">error: no active project in group {group}</p>
+    return <p className="text-crit">error: no active project in group {group}</p>
 
   const summary = attention.data?.groups.find((g) => g.slug === group)
   const lastActivity = summary?.last_activity ? relativeTime(summary.last_activity) : ''
@@ -104,37 +106,37 @@ export function GroupPage({ group, tab, repo }: Props) {
   const board = activeRepo(members, repo)
 
   return (
-    <div className="space-y-4">
-      <header className="space-y-1">
-        <div className="flex flex-wrap items-baseline gap-3">
-          <h1 className="text-xl font-bold">{name}</h1>
-          <span className="text-sm text-gray-600">
+    <div className="space-y-6">
+      <header className="space-y-3">
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+          <h1 className="masthead">{name}</h1>
+          <span className="text-sm text-ink-2">
             {members.length === 1 ? '1 repo' : `group · ${members.length} repos`}
             {lastActivity && ` · last activity ${lastActivity}`}
           </span>
         </div>
         {members.length > 1 && (
-          <ul aria-label="Repos" className="flex flex-wrap gap-1 text-xs">
+          <ul aria-label="Repos" className="flex flex-wrap gap-1.5 text-xs">
             {members.map((m) => (
-              <li
-                key={m.slug}
-                className="max-w-[28rem] truncate rounded border px-2 py-0.5"
-                title={m.stack}
-              >
+              <li key={m.slug} className="pill max-w-[28rem] truncate" title={m.stack}>
                 <Link
                   to="/g/$group"
                   params={{ group }}
                   search={{ tab: 'board', repo: m.slug }}
-                  className="hover:underline"
+                  className="font-mono hover:underline"
                 >
                   {m.slug}
                 </Link>
-                {m.stack && <span className="text-gray-500"> · {m.stack}</span>}
+                {m.stack && <span className="text-ink-3"> · {m.stack}</span>}
               </li>
             ))}
           </ul>
         )}
-        <nav aria-label="Tabs" role="tablist" className="flex gap-1 border-b text-sm">
+        <nav
+          aria-label="Tabs"
+          role="tablist"
+          className="flex items-end gap-0 border-b-2 border-ink text-sm"
+        >
           {GROUP_TABS.map((t) => (
             <Link
               key={t}
@@ -143,22 +145,27 @@ export function GroupPage({ group, tab, repo }: Props) {
               to="/g/$group"
               params={{ group }}
               search={{ tab: t, repo }}
-              className={`px-3 py-1 ${t === tab ? 'border-b-2 border-black font-semibold' : 'text-gray-500'}`}
+              className={cn(
+                '-mb-0.5 border-b-2 px-3 py-1.5 capitalize transition-colors',
+                t === tab
+                  ? 'display border-ink text-base text-ink'
+                  : 'border-transparent text-ink-2 hover:text-ink',
+              )}
             >
               {t}
             </Link>
           ))}
-          <span className="ml-auto text-xs text-gray-400">
+          <span className="ml-auto pb-1.5 text-xs text-ink-3">
             <kbd>[</kbd> <kbd>]</kbd>
           </span>
         </nav>
       </header>
 
       {tab === 'overview' && (
-        <div className="space-y-6">
+        <div className="space-y-8">
           <LeftOff members={members} onEdit={editNotes} />
-          {attention.isError && <p className="text-red-700">error: {attention.error.message}</p>}
-          <div className="grid gap-6 wide:grid-cols-2">
+          {attention.isError && <p className="text-crit">error: {attention.error.message}</p>}
+          <div className="grid gap-8 wide:grid-cols-2">
             {needsMe && (
               <AttentionSection
                 section={needsMe}
@@ -189,7 +196,7 @@ export function GroupPage({ group, tab, repo }: Props) {
       )}
 
       {tab === 'board' && (
-        <div className="space-y-3">
+        <div className="space-y-4">
           {members.length > 1 && (
             <nav aria-label="Repo" className="flex flex-wrap gap-1 text-sm">
               {members.map((m) => (
@@ -198,7 +205,8 @@ export function GroupPage({ group, tab, repo }: Props) {
                   to="/g/$group"
                   params={{ group }}
                   search={{ tab: 'board', repo: m.slug }}
-                  className={`rounded border px-2 ${m.slug === board ? 'font-bold' : ''}`}
+                  className="pill font-mono"
+                  data-on={m.slug === board}
                   activeOptions={{ includeSearch: true }}
                 >
                   {m.slug}
@@ -214,8 +222,8 @@ export function GroupPage({ group, tab, repo }: Props) {
 
       {tab === 'changes' && (
         <>
-          {changes.isPending && <p>loading…</p>}
-          {changes.isError && <p className="text-red-700">error: {changes.error.message}</p>}
+          {changes.isPending && <p className="text-ink-3">loading…</p>}
+          {changes.isError && <p className="text-crit">error: {changes.error.message}</p>}
           {changes.data && (
             <ChangesList
               events={filterChanges(changes.data.events, group)}

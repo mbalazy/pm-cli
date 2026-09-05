@@ -18,7 +18,7 @@ const GLYPH: Record<SourceChip['state'], string> = { ok: '', never: '·', error:
 export function SourceChips({ chips, counts, selected, onToggle }: Props) {
   return (
     <div role="group" aria-label="Sources" className="flex flex-wrap items-center gap-1 text-sm">
-      <span className="text-xs text-gray-500">sources:</span>
+      <span className="kicker mr-1">sources</span>
       {chips.map((c) => {
         const on = selected.size === 0 || selected.has(c.name)
         return (
@@ -27,17 +27,18 @@ export function SourceChips({ chips, counts, selected, onToggle }: Props) {
             type="button"
             aria-pressed={on}
             data-state={c.state}
+            data-tone={c.state === 'error' ? 'crit' : undefined}
             title={c.text}
             onClick={() => onToggle(c.name)}
-            className={`rounded border px-2 py-0.5 text-xs ${on ? 'font-bold' : 'text-gray-400'} ${c.state === 'error' ? 'border-red-400 text-red-700' : ''}`}
+            className="pill"
           >
-            {c.name} {counts.get(c.name) ?? 0}
-            {GLYPH[c.state] && <span className="ml-1">{GLYPH[c.state]}</span>}
+            {c.name} <span className="num text-[0.7rem] opacity-80">{counts.get(c.name) ?? 0}</span>
+            {GLYPH[c.state] && <span className="ml-0.5">{GLYPH[c.state]}</span>}
           </button>
         )
       })}
       {chips.some((c) => c.state === 'error') && (
-        <ul className="w-full text-xs text-red-700">
+        <ul className="w-full text-xs text-crit">
           {chips
             .filter((c) => c.state === 'error')
             .map((c) => (

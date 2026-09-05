@@ -1,4 +1,5 @@
 import { useNavigate } from '@tanstack/react-router'
+import { RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 
 import { useAttention, useChanges, useConfig, useFocus, useRefreshChanges } from '../api/queries'
@@ -15,9 +16,10 @@ import { groupHotkeys, groupSearch } from '../lib/groupFilter'
 import { refreshTimes } from '../lib/refreshTimes'
 import { openTarget } from '../lib/rowActions'
 
-// The home screen: the attention queue in the API's section order, narrowed
-// to one group when the URL says so. Composition only: hooks in, components
-// out; the cap, the ages, the glyphs and the hotkeys are lib rules.
+// The home screen - the front page: a masthead with the date, then the
+// attention queue in the API's section order, narrowed to one group when
+// the URL says so. Composition only: hooks in, components out; the cap, the
+// ages, the glyphs and the hotkeys are lib rules.
 
 export function TodayPage({ group }: { group: string }) {
   const attention = useAttention('', group)
@@ -84,13 +86,20 @@ export function TodayPage({ group }: { group: string }) {
   })
 
   return (
-    <div className="space-y-6">
-      <header className="space-y-2">
-        <div className="flex flex-wrap items-baseline gap-3">
-          <h1 className="text-xl font-bold">Today</h1>
-          <span className="text-sm text-gray-600">{dateText}</span>
+    <div className="space-y-7">
+      <header className="space-y-3 border-b-2 border-ink pb-3">
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+          <h1 className="masthead">Today</h1>
+          <span className="display text-lg text-ink-2">{dateText}</span>
+          {attention.data && (
+            <span className="num ml-auto text-ink-2" title="doing tasks touched this week">
+              WIP {attention.data.wip}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-2">
           {times.refreshed && (
-            <span className="text-sm text-gray-500">
+            <span className="num">
               refreshed {times.refreshed}
               {times.next && ` · next ${times.next}`}
             </span>
@@ -98,20 +107,20 @@ export function TodayPage({ group }: { group: string }) {
           {changes.isSuccess && (
             <button
               type="button"
-              className="rounded border px-2 text-sm"
+              className="ghost-btn"
               disabled={refresh.isPending}
               onClick={() => refresh.mutate()}
             >
+              <RefreshCw
+                aria-hidden="true"
+                className={refresh.isPending ? 'size-3 animate-spin' : 'size-3'}
+                strokeWidth={1.75}
+              />
               {refresh.isPending ? 'refreshing…' : 'refresh now'}
             </button>
           )}
           {refresh.isError && (
-            <span className="text-sm text-red-700">refresh failed: {refresh.error.message}</span>
-          )}
-          {attention.data && (
-            <span className="ml-auto text-sm text-gray-600" title="doing tasks touched this week">
-              WIP {attention.data.wip}
-            </span>
+            <span className="text-crit">refresh failed: {refresh.error.message}</span>
           )}
         </div>
         {all.data && (
@@ -120,11 +129,12 @@ export function TodayPage({ group }: { group: string }) {
           </div>
         )}
       </header>
-      {attention.isPending && <p>loading…</p>}
-      {attention.isError && <p className="text-red-700">error: {attention.error.message}</p>}
-      {capped.map(({ section, capped: c }) => (
+      {attention.isPending && <p className="text-ink-3">loading…</p>}
+      {attention.isError && <p className="text-crit">error: {attention.error.message}</p>}
+      {capped.map(({ section, capped: c }, i) => (
         <AttentionSection
           key={section.name}
+          index={i}
           section={section}
           capped={c}
           expanded={expanded.has(section.name)}
@@ -134,7 +144,7 @@ export function TodayPage({ group }: { group: string }) {
         />
       ))}
       {attention.data && sections.length === 0 && (
-        <p className="text-gray-500">every section is switched off in config.yaml</p>
+        <p className="text-ink-3">every section is switched off in config.yaml</p>
       )}
       <ConfirmDialog
         open={action.pending !== null}

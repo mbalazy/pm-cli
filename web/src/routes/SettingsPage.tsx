@@ -65,8 +65,8 @@ export function SettingsPage() {
       { onSuccess: () => notify(`saved ${row.slug}`) },
     )
 
-  if (config.isPending) return <p>loading…</p>
-  if (config.isError) return <p className="text-red-700">config: {config.error.message}</p>
+  if (config.isPending) return <p className="text-ink-3">loading…</p>
+  if (config.isError) return <p className="text-crit">config: {config.error.message}</p>
   if (!form || !cockpit) return null
   const set = (patch: Partial<SettingsForm>) => setForm({ ...form, ...patch })
   const rows = groupRows(groups.data?.groups, form, cockpit.groups)
@@ -76,9 +76,9 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-2">
-      <header className="flex flex-wrap items-baseline gap-3">
-        <h1 className="text-xl font-bold">Settings</h1>
-        <span className="text-sm text-gray-500">
+      <header className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b-2 border-ink pb-3">
+        <h1 className="masthead">Settings</h1>
+        <span className="text-sm text-ink-2">
           saved to &lt;pm-root&gt;/config.yaml (global) and project.yaml (per project)
         </span>
       </header>
@@ -99,6 +99,7 @@ export function SettingsPage() {
               <label key={s.name} className="flex items-center gap-1">
                 <input
                   type="checkbox"
+                  className="accent-ink"
                   checked={form.sources[s.name] === true}
                   onChange={(e) =>
                     set({ sources: { ...form.sources, [s.name]: e.target.checked } })
@@ -111,6 +112,7 @@ export function SettingsPage() {
           <label className="flex items-center gap-1">
             <input
               type="checkbox"
+              className="accent-ink"
               checked={form.git_all_branches}
               onChange={(e) => set({ git_all_branches: e.target.checked })}
             />
@@ -123,7 +125,7 @@ export function SettingsPage() {
               aria-label="report model"
               value={form.report_model}
               onChange={(e) => set({ report_model: e.target.value })}
-              className="w-24 rounded border px-1"
+              className="field w-24"
             />
             language
             <input
@@ -131,9 +133,9 @@ export function SettingsPage() {
               aria-label="report language"
               value={form.report_language}
               onChange={(e) => set({ report_language: e.target.value })}
-              className="w-14 rounded border px-1"
+              className="field w-14"
             />
-            <span className="text-xs text-gray-500">
+            <span className="text-xs text-ink-2">
               the LLM report costs tokens: one per period, written after the first refresh
             </span>
           </div>
@@ -151,7 +153,7 @@ export function SettingsPage() {
               aria-label="cutoff hour"
               value={form.cutoff_hour}
               onChange={(e) => set({ cutoff_hour: num(e.target.value, 0) })}
-              className="w-16 rounded border px-1"
+              className="field w-16"
             />
             :00
           </label>
@@ -169,7 +171,7 @@ export function SettingsPage() {
               aria-label="refresh every minutes"
               value={form.refresh_minutes}
               onChange={(e) => set({ refresh_minutes: num(e.target.value, 0) })}
-              className="w-16 rounded border px-1"
+              className="field w-16"
             />
             min, within
             <input
@@ -178,7 +180,7 @@ export function SettingsPage() {
               value={form.window}
               onChange={(e) => set({ window: e.target.value })}
               placeholder="07:00-20:00"
-              className="w-28 rounded border px-1"
+              className="field w-28"
             />
           </div>
         </SettingsGroup>
@@ -200,7 +202,7 @@ export function SettingsPage() {
                   aria-label={label}
                   value={form[key]}
                   onChange={(e) => set({ [key]: num(e.target.value, 1) })}
-                  className="w-16 rounded border px-1"
+                  className="field w-16"
                 />
                 d
               </label>
@@ -212,7 +214,7 @@ export function SettingsPage() {
           label='"Needs me" order'
           note="fixed in v1 - the aggregation's rule, not a setting"
         >
-          <span className="rounded bg-gray-100 px-1 text-xs">{NEEDS_ME_ORDER}</span>
+          <span className="chip">{NEEDS_ME_ORDER}</span>
         </SettingsGroup>
 
         <SettingsGroup label="Home sections" note="in the order the home screen shows them">
@@ -221,6 +223,7 @@ export function SettingsPage() {
               <label key={name} className="flex items-center gap-1">
                 <input
                   type="checkbox"
+                  className="accent-ink"
                   checked={form.sections[name] === true}
                   onChange={(e) =>
                     set({ sections: { ...form.sections, [name]: e.target.checked } })
@@ -240,7 +243,7 @@ export function SettingsPage() {
                 aria-label="sidebar variant"
                 value={form.sidebar.variant}
                 onChange={(e) => set({ sidebar: { ...form.sidebar, variant: e.target.value } })}
-                className="rounded border px-1"
+                className="field"
               >
                 {SIDEBAR_VARIANTS.map((v) => (
                   <option key={v} value={v}>
@@ -252,6 +255,7 @@ export function SettingsPage() {
             <label className="flex items-center gap-1">
               <input
                 type="checkbox"
+                className="accent-ink"
                 checked={form.sidebar.show_repos}
                 onChange={(e) =>
                   set({ sidebar: { ...form.sidebar, show_repos: e.target.checked } })
@@ -265,7 +269,7 @@ export function SettingsPage() {
                 aria-label="sidebar sort"
                 value={form.sidebar.sort}
                 onChange={(e) => set({ sidebar: { ...form.sidebar, sort: e.target.value } })}
-                className="rounded border px-1"
+                className="field"
               >
                 {SIDEBAR_SORTS.map((v) => (
                   <option key={v} value={v}>
@@ -284,7 +288,7 @@ export function SettingsPage() {
                 onChange={(e) =>
                   set({ sidebar: { ...form.sidebar, width: num(e.target.value, 0) } })
                 }
-                className="w-16 rounded border px-1"
+                className="field w-16"
               />
               px (0 = default)
             </label>
@@ -296,19 +300,19 @@ export function SettingsPage() {
           note="name and manual order live in config.yaml (Save above); moving a repo writes group: into its project.yaml"
         >
           <table className="w-full text-sm">
-            <thead className="text-xs text-gray-500">
+            <thead className="text-xs text-ink-2">
               <tr>
-                <th className="text-left font-normal">group</th>
-                <th className="text-left font-normal">name</th>
-                <th className="text-left font-normal">order</th>
-                <th className="text-left font-normal">repos</th>
+                <th>group</th>
+                <th>name</th>
+                <th>order</th>
+                <th>repos</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.slug} className="align-top">
-                  <td className="pr-2 font-mono">{r.slug}</td>
-                  <td className="pr-2">
+                  <td className="id text-ink">{r.slug}</td>
+                  <td>
                     <input
                       type="text"
                       aria-label={`name of ${r.slug}`}
@@ -325,10 +329,10 @@ export function SettingsPage() {
                           },
                         })
                       }
-                      className="w-40 rounded border px-1"
+                      className="field w-40"
                     />
                   </td>
-                  <td className="pr-2">
+                  <td>
                     <input
                       type="number"
                       min={0}
@@ -345,14 +349,14 @@ export function SettingsPage() {
                           },
                         })
                       }
-                      className="w-14 rounded border px-1"
+                      className="field w-14"
                     />
                   </td>
                   <td>
                     <ul className="flex flex-wrap gap-2">
                       {r.members.map((slug) => (
                         <li key={slug} className="flex items-center gap-1">
-                          <span className="font-mono">{slug}</span>
+                          <span className="id text-ink">{slug}</span>
                           <select
                             aria-label={`group of ${slug}`}
                             value={r.slug}
@@ -366,7 +370,7 @@ export function SettingsPage() {
                                 },
                               })
                             }
-                            className="rounded border text-xs"
+                            className="field h-6 min-h-0 py-0 text-xs"
                           >
                             {groupSlugs.map((g) => (
                               <option key={g} value={g}>
@@ -380,7 +384,7 @@ export function SettingsPage() {
                         </li>
                       ))}
                       {r.members.length === 0 && (
-                        <li className="text-xs text-gray-400">no active repo</li>
+                        <li className="text-xs text-ink-3">no active repo</li>
                       )}
                     </ul>
                   </td>
@@ -394,14 +398,12 @@ export function SettingsPage() {
           <button
             type="submit"
             disabled={save.isPending || !dirty}
-            className="rounded border px-3 font-semibold disabled:text-gray-300"
+            className="rounded-sm bg-ink px-4 py-1 text-sm font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-40"
           >
             {save.isPending ? 'saving…' : 'Save'}
           </button>
-          {dirty && <span className="text-xs text-amber-700">unsaved changes</span>}
-          {save.isError && (
-            <span className="text-sm text-red-700">error: {save.error.message}</span>
-          )}
+          {dirty && <span className="text-xs text-warn">unsaved changes</span>}
+          {save.isError && <span className="text-sm text-crit">error: {save.error.message}</span>}
         </div>
       </form>
 
@@ -409,7 +411,7 @@ export function SettingsPage() {
         label="Slack per project"
         note="workspace label + channels whose messages count as the project's changes; mentions and DMs are always in the feed, project-less"
       >
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-ink-2">
           workspaces with an MCP server (cockpit.slack.servers in config.yaml, hand-edited):{' '}
           {cockpit.slack.workspaces.length === 0
             ? 'none - the slack source has nothing to run'
@@ -417,7 +419,7 @@ export function SettingsPage() {
                 .map((w) => `${w.workspace} (${w.source}${w.has_me ? '' : ', no me'})`)
                 .join(' · ')}
         </p>
-        <table className="w-full text-sm">
+        <table className="ledger-table">
           <tbody>
             {slackRows(projects.data?.projects).map((r) => (
               <SlackRowEditor
@@ -436,11 +438,11 @@ export function SettingsPage() {
       >
         <ul className="flex flex-wrap gap-2">
           {asleep.map((p) => (
-            <li key={p.slug} className="flex items-center gap-1 rounded border px-2">
+            <li key={p.slug} className="pill gap-2">
               <span className="font-mono">{p.slug}</span>
               <button
                 type="button"
-                className="text-xs underline"
+                className="text-xs underline decoration-rule-strong underline-offset-2 hover:decoration-ink"
                 onClick={() =>
                   action.ask({ kind: 'wake_project', subject: { project: p.slug, title: p.name } })
                 }
@@ -449,19 +451,17 @@ export function SettingsPage() {
               </button>
             </li>
           ))}
-          {asleep.length === 0 && <li className="text-xs text-gray-400">none asleep</li>}
+          {asleep.length === 0 && <li className="text-xs text-ink-3">none asleep</li>}
         </ul>
         <details>
-          <summary className="cursor-pointer text-xs text-gray-500">
-            put a project to sleep…
-          </summary>
+          <summary className="cursor-pointer text-xs text-ink-2">put a project to sleep…</summary>
           <ul className="mt-1 flex flex-wrap gap-2">
             {awake.map((p) => (
-              <li key={p.slug} className="flex items-center gap-1 rounded border px-2">
+              <li key={p.slug} className="pill gap-2">
                 <span className="font-mono">{p.slug}</span>
                 <button
                   type="button"
-                  className="text-xs underline"
+                  className="text-xs underline decoration-rule-strong underline-offset-2 hover:decoration-ink"
                   onClick={() =>
                     action.ask({
                       kind: 'sleep_project',
@@ -481,9 +481,7 @@ export function SettingsPage() {
         label="Remote pm"
         note="runs only, on demand (the Runs screen's fetch remote); full projects from a VPS: later"
       >
-        <span className="rounded bg-gray-100 px-1 text-xs">
-          remotes: in config.yaml, hand-edited (pm config show)
-        </span>
+        <span className="chip">remotes: in config.yaml, hand-edited (pm config show)</span>
       </SettingsGroup>
 
       <ConfirmDialog
@@ -509,34 +507,29 @@ function SlackRowEditor({ row, onSave }: { row: SlackRow; onSave: (r: SlackRow) 
   const dirty = edit.workspace !== row.workspace || edit.channels !== row.channels
   return (
     <tr>
-      <td className="pr-2 font-mono">{row.slug}</td>
-      <td className="pr-2">
+      <td className="id text-ink">{row.slug}</td>
+      <td>
         <input
           type="text"
           aria-label={`slack workspace of ${row.slug}`}
           value={edit.workspace}
           placeholder="workspace"
           onChange={(e) => setEdit({ ...edit, workspace: e.target.value })}
-          className="w-28 rounded border px-1"
+          className="field w-28"
         />
       </td>
-      <td className="pr-2">
+      <td>
         <input
           type="text"
           aria-label={`slack channels of ${row.slug}`}
           value={edit.channels}
           placeholder="#channel, #other"
           onChange={(e) => setEdit({ ...edit, channels: e.target.value })}
-          className="w-full rounded border px-1"
+          className="field w-full"
         />
       </td>
       <td>
-        <button
-          type="button"
-          disabled={!dirty}
-          className="rounded border px-2 text-xs disabled:text-gray-300"
-          onClick={() => onSave(edit)}
-        >
+        <button type="button" disabled={!dirty} className="ghost-btn" onClick={() => onSave(edit)}>
           save
         </button>
       </td>

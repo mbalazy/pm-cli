@@ -26,8 +26,8 @@ export function TaskPage({ slug, id }: { slug: string; id: string }) {
     if (loaded) push({ project: loaded.project, id: loaded.id, title: loaded.title })
   }, [loaded, push])
 
-  if (task.isPending) return <p>loading…</p>
-  if (task.isError) return <p className="text-red-700">error: {task.error.message}</p>
+  if (task.isPending) return <p className="text-ink-3">loading…</p>
+  if (task.isError) return <p className="text-crit">error: {task.error.message}</p>
 
   const { spec, log } = splitSpecLog(task.data.body ?? '')
   const t = task.data
