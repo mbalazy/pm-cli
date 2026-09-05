@@ -268,8 +268,23 @@ const config = (sidebar: Record<string, unknown>) => ({
     sections: {},
     sources: {},
     sidebar: { variant: 'columns', show_repos: true, sort: 'worst', width: 0, ...sidebar },
+    git: { all_branches: false },
   },
 })
+const settingsConfig = {
+  cockpit: {
+    ...config({}).cockpit,
+    groups: [{ slug: 'acme', name: 'ACME', order: 1 }],
+    sections: { needs_me: true, waiting: true, recent: false },
+    sources: { pm: true, git: true, github: false, slack: false, report: false },
+  },
+}
+const groupsApi = {
+  groups: [
+    { slug: 'alpha', name: 'alpha', projects: ['alpha'] },
+    { slug: 'acme', name: 'ACME', projects: ['acme-api', 'acme-zap'] },
+  ],
+}
 const changes = {
   cutoff: '2026-01-01T18:00:00Z',
   events: [
@@ -297,7 +312,11 @@ const changes = {
     },
   ],
   unseen: 2,
-  sources: [{ name: 'pm', enabled: true, events: 1, last_fetch: '2026-01-02T09:30:00Z' }],
+  sources: [
+    { name: 'pm', enabled: true, events: 1, last_fetch: '2026-01-02T09:30:00Z' },
+    { name: 'git', enabled: true, events: 1, error: 'gh: not logged in' },
+    { name: 'slack', enabled: false, events: 0 },
+  ],
 }
 
 const focusPlan = { date: '2026-01-02', task_ids: [] as string[], tasks: [] as unknown[] }
@@ -319,6 +338,7 @@ const api = {
   ]),
   '/api/config': config({}),
   '/api/changes': changes,
+  '/api/groups': groupsApi,
 }
 
 afterEach(() => {
@@ -780,5 +800,164 @@ describe('group page', () => {
     expect(list).toHaveTextContent('Acme-api thing')
     expect(list).toHaveTextContent('moved')
     expect(list).not.toHaveTextContent('alpha event')
+  })
+})
+
+describe('changes screen', () => {
+  it('lists every event with source chips and states; a source chip and a group chip narrow the list', async () => {
+    vi.stubGlobal('fetch', fakeFetch(api))
+    const user = userEvent.setup()
+    renderAt('/changes')
+    const feed = await screen.findByRole('region', { name: 'Feed' })
+    expect(await within(feed).findAllByRole('listitem')).toHaveLength(2)
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Changes')
+    // The source with an error says so; the disabled one is marked off.
+    const sources = screen.getByRole('group', { name: 'Sources' })
+    expect(within(sources).getByRole('button', { name: /^git/ })).toHaveAttribute(
+      'data-state',
+      'error',
+    )
+    expect(within(sources).getByRole('button', { name: /^slack/ })).toHaveAttribute(
+      'data-state',
+      'off',
+    )
+    expect(within(sources).getByText('git: error: gh: not logged in')).toBeInTheDocument()
+    // The report panel holds its place, off.
+    expect(screen.getByRole('region', { name: 'Report' })).toHaveTextContent('report is off')
+    // Toggle git off: only the pm event stays.
+    await user.click(within(sources).getByRole('button', { name: /^git/ }))
+    expect(within(feed).getAllByRole('listitem')).toHaveLength(1)
+    expect(within(feed).getByText('Acme-api thing')).toBeInTheDocument()
+    await user.click(within(sources).getByRole('button', { name: /^git/ }))
+    expect(within(feed).getAllByRole('listitem')).toHaveLength(2)
+    // The group chip narrows via the URL.
+    // The phone bar carries the same chips (jsdom hides nothing); the page's are the last.
+    const chips = screen.getAllByRole('navigation', { name: 'Group filter' }).at(-1)!
+    await user.click(within(chips).getByRole('link', { name: /ALPHA/ }))
+    await vi.waitFor(() => expect(within(feed).getAllByRole('listitem')).toHaveLength(1))
+    expect(within(feed).getByText('alpha event')).toBeInTheDocument()
+  })
+
+  it('mark all seen asks first, then posts the seen mark with the client header; a row seen carries its stamp', async () => {
+    vi.stubGlobal('fetch', fakeFetch(api))
+    const user = userEvent.setup()
+    renderAt('/changes')
+    const feed = await screen.findByRole('region', { name: 'Feed' })
+    await within(feed).findAllByRole('listitem')
+    await user.click(screen.getByRole('button', { name: /mark all seen/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    expect(dialog).toHaveAttribute('open')
+    expect(posts).toHaveLength(0)
+    await user.click(within(dialog).getByRole('button', { name: 'mark seen' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toEqual({ path: '/api/changes/seen', header: 'cockpit', body: undefined })
+    await vi.waitFor(() => expect(dialog).not.toHaveAttribute('open'))
+    await user.click(
+      within(within(feed).getAllByRole('listitem')[1]).getByRole('button', { name: 'seen' }),
+    )
+    await user.click(within(dialog).getByRole('button', { name: 'mark seen' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(2))
+    expect(posts[1].body).toEqual({ ts: '2026-01-02T09:10:00Z' })
+  })
+})
+
+describe('settings screen', () => {
+  const settingsApi = { ...api, '/api/config': settingsConfig }
+  it('renders every group with the API values; Save is disabled until something changes and then posts only the diff', async () => {
+    vi.stubGlobal('fetch', fakeFetch(settingsApi))
+    const user = userEvent.setup()
+    renderAt('/settings')
+    const form = await screen.findByRole('form', { name: 'Cockpit settings' })
+    expect(within(form).getByRole('checkbox', { name: 'pm' })).toBeChecked()
+    expect(within(form).getByRole('checkbox', { name: 'github (gh)' })).not.toBeChecked()
+    expect(within(form).getByRole('spinbutton', { name: 'cutoff hour' })).toHaveValue(18)
+    expect(within(form).getByRole('spinbutton', { name: 'refresh every minutes' })).toHaveValue(30)
+    expect(within(form).getByRole('textbox', { name: 'refresh window' })).toHaveValue('07:00-20:00')
+    expect(within(form).getByRole('spinbutton', { name: 'doing idle' })).toHaveValue(7)
+    expect(within(form).getByRole('checkbox', { name: 'Needs me' })).toBeChecked()
+    expect(within(form).getByRole('checkbox', { name: 'Recently touched' })).not.toBeChecked()
+    expect(within(form).getByRole('combobox', { name: 'sidebar variant' })).toHaveValue('columns')
+    // Groups: the configured ACME with its name and order, alpha unconfigured, members listed.
+    expect(within(form).getByRole('textbox', { name: 'name of acme' })).toHaveValue('ACME')
+    expect(within(form).getByRole('spinbutton', { name: 'order of acme' })).toHaveValue(1)
+    expect(within(form).getByRole('textbox', { name: 'name of alpha' })).toHaveValue('')
+    expect(within(form).getByRole('combobox', { name: 'group of acme-api' })).toHaveValue('acme')
+    const save = within(form).getByRole('button', { name: 'Save' })
+    expect(save).toBeDisabled()
+
+    await user.click(within(form).getByRole('checkbox', { name: 'Recently touched' }))
+    await user.selectOptions(
+      within(form).getByRole('combobox', { name: 'sidebar variant' }),
+      'rail',
+    )
+    const hour = within(form).getByRole('spinbutton', { name: 'cutoff hour' })
+    await user.clear(hour)
+    await user.type(hour, '20')
+    await user.clear(within(form).getByRole('textbox', { name: 'name of alpha' }))
+    await user.type(within(form).getByRole('textbox', { name: 'name of alpha' }), 'Alpha!')
+    expect(save).toBeEnabled()
+    await user.click(save)
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toEqual({
+      path: '/api/settings',
+      header: 'cockpit',
+      body: {
+        cutoff_hour: 20,
+        sections: { recent: true },
+        sidebar: { variant: 'rail' },
+        groups: [{ slug: 'alpha', name: 'Alpha!' }],
+      },
+    })
+    expect(await screen.findByRole('status')).toHaveTextContent('saved')
+  })
+
+  it('sleeping a project needs the dialog; a Slack row saves to its project', async () => {
+    vi.stubGlobal('fetch', fakeFetch(settingsApi))
+    const user = userEvent.setup()
+    renderAt('/settings')
+    const asleep = await screen.findByRole('region', { name: 'Asleep projects' })
+    expect(asleep).toHaveTextContent('none asleep')
+    await user.click(within(asleep).getByText('put a project to sleep…'))
+    await user.click(within(asleep).getAllByRole('button', { name: 'sleep' })[1])
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    expect(dialog).toHaveAttribute('open')
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(/leaves every group/)
+    expect(posts).toHaveLength(0)
+    await user.click(within(dialog).getByRole('button', { name: 'sleep' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toEqual({
+      path: '/api/projects/acme-api',
+      header: 'cockpit',
+      body: { archived: true },
+    })
+
+    const slack = screen.getByRole('region', { name: 'Slack per project' })
+    const channels = within(slack).getByRole('textbox', { name: 'slack channels of alpha' })
+    await user.type(channels, '#dev, product')
+    await user.type(within(slack).getByRole('textbox', { name: 'slack workspace of alpha' }), 'atlas')
+    await user.click(within(channels.closest('tr')!).getByRole('button', { name: 'save' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(2))
+    expect(posts[1]).toEqual({
+      path: '/api/projects/alpha',
+      header: 'cockpit',
+      body: { slack: { workspace: 'atlas', channels: ['#dev', 'product'] } },
+    })
+  })
+
+  it('moving a repo between groups goes through the dialog and writes group: to the repo', async () => {
+    vi.stubGlobal('fetch', fakeFetch(settingsApi))
+    const user = userEvent.setup()
+    renderAt('/settings')
+    const form = await screen.findByRole('form', { name: 'Cockpit settings' })
+    await user.selectOptions(within(form).getByRole('combobox', { name: 'group of alpha' }), 'acme')
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    expect(within(dialog).getByText(/Moves alpha into group acme/)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'move to acme' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toEqual({
+      path: '/api/projects/alpha',
+      header: 'cockpit',
+      body: { group: 'acme' },
+    })
   })
 })

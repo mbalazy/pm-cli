@@ -122,12 +122,50 @@ describe('requestFor', () => {
     expect(describeAction(p, '').field?.kind).toBe('textarea')
     expect(describeAction(p, '').warning).toMatch(/NOT saved/)
     expect(describeAction(p, 'x').warning).toBeUndefined()
-    expect(requestFor(p, 'new')).toEqual({ kind: 'project', project: 'acme-api', notes: 'new' })
+    expect(requestFor(p, 'new')).toEqual({
+      kind: 'project',
+      project: 'acme-api',
+      body: { notes: 'new' },
+    })
   })
   it('isPendingKind knows the batch-1 actions only', () => {
     expect(isPendingKind('focus_toggle')).toBe(true)
     expect(isPendingKind('mark_seen')).toBe(true)
     expect(isPendingKind('kill')).toBe(false)
     expect(isPendingKind('open')).toBe(false)
+  })
+})
+
+describe('project settings actions', () => {
+  it('sleep warns and sends archived; wake and move_repo send their field', () => {
+    const sleep = { kind: 'sleep_project' as const, subject: { project: 'orbit2', title: 'Orbit2' } }
+    expect(describeAction(sleep, '').warning).toMatch(/leaves every group/)
+    expect(requestFor(sleep, '')).toEqual({
+      kind: 'project',
+      project: 'orbit2',
+      body: { archived: true },
+    })
+    const wake = { kind: 'wake_project' as const, subject: { project: 'orbit2', title: 'Orbit2' } }
+    expect(requestFor(wake, '')).toEqual({
+      kind: 'project',
+      project: 'orbit2',
+      body: { archived: false },
+    })
+    const move = {
+      kind: 'move_repo' as const,
+      subject: { project: 'acme-api', title: 'ACME-API', group: 'acme' },
+    }
+    expect(describeAction(move, '').confirmLabel).toBe('move to acme')
+    expect(requestFor(move, '')).toEqual({
+      kind: 'project',
+      project: 'acme-api',
+      body: { group: 'acme' },
+    })
+    const leave = {
+      kind: 'move_repo' as const,
+      subject: { project: 'acme-api', title: 'ACME-API', group: '' },
+    }
+    expect(describeAction(leave, '').confirmLabel).toBe('leave group')
+    expect(requestFor(leave, '')).toEqual({ kind: 'project', project: 'acme-api', body: { group: '' } })
   })
 })

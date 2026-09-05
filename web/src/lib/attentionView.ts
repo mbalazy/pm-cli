@@ -60,6 +60,9 @@ const META: Record<string, SectionMeta> = {
   },
 }
 
+/** The home sections in display order (storage.CockpitSections) - the settings screen's list. */
+export const SECTION_ORDER: readonly string[] = Object.keys(META)
+
 export function sectionMeta(name: string): SectionMeta {
   return META[name] ?? { title: name, why: '', empty: 'Nothing here.' }
 }

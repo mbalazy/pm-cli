@@ -64,9 +64,11 @@ export function ConfirmDialog({
           className="space-y-3 text-sm"
         >
           <h2 className="font-semibold">{text.heading}</h2>
-          <p className="text-gray-600">
-            <span className="rounded bg-gray-100 px-1 text-xs">{text.project}</span>
-          </p>
+          {text.project && (
+            <p className="text-gray-600">
+              <span className="rounded bg-gray-100 px-1 text-xs">{text.project}</span>
+            </p>
+          )}
           <p>{text.sentence}</p>
           {text.field && (
             <label className="block">

@@ -13,9 +13,11 @@ interface Props {
   hotkeys: Map<string, string>
   /** Smaller chips without the hint text (the phone bar). */
   compact?: boolean
+  /** The screen the chips filter: home by default, or the Changes screen. */
+  to?: '/' | '/changes'
 }
 
-export function GroupChips({ groups, active, hotkeys, compact }: Props) {
+export function GroupChips({ groups, active, hotkeys, compact, to = '/' }: Props) {
   const letterOf = new Map<string, string>()
   for (const [letter, slug] of hotkeys) letterOf.set(slug, letter)
   const chip = 'rounded border px-2 py-0.5 text-xs whitespace-nowrap hover:underline'
@@ -23,7 +25,7 @@ export function GroupChips({ groups, active, hotkeys, compact }: Props) {
     <nav aria-label="Group filter" className="flex flex-wrap items-center gap-1">
       {!compact && <span className="text-xs text-gray-500">show only:</span>}
       <Link
-        to="/"
+        to={to}
         search={groupSearch('')}
         className={`${chip} ${active === '' ? 'font-bold' : ''}`}
         activeOptions={{ exact: true, includeSearch: true }}
@@ -33,7 +35,7 @@ export function GroupChips({ groups, active, hotkeys, compact }: Props) {
       {groups.map((g) => (
         <Link
           key={g.slug}
-          to="/"
+          to={to}
           search={groupSearch(g.slug)}
           className={`${chip} ${active === g.slug ? 'font-bold' : ''}`}
           activeOptions={{ exact: true, includeSearch: true }}
@@ -42,7 +44,9 @@ export function GroupChips({ groups, active, hotkeys, compact }: Props) {
           {severityGlyph(g.worst)} {g.name}
         </Link>
       ))}
-      {!compact && <span className="text-xs text-gray-400">one click, home stays</span>}
+      {!compact && to === '/' && (
+        <span className="text-xs text-gray-400">one click, home stays</span>
+      )}
     </nav>
   )
 }

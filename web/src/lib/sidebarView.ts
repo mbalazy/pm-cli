@@ -1,4 +1,5 @@
-import type { GroupSummary, Project, SidebarConfig } from '../api/types'
+import type { ConfigGroup, GroupSummary, Project, SidebarConfig } from '../api/types'
+import { manualSidebarOrder } from './settingsView'
 
 // The sidebar's shape is CONFIG (cockpit.sidebar, read off /api/config), not
 // a UI toggle. This file turns the config into the flags the component
@@ -35,12 +36,17 @@ export function sidebarLayout(cfg: SidebarConfig | undefined): SidebarLayout {
 /**
  * Orders the groups per `cockpit.sidebar.sort`. `worst` is the API's own
  * order (worst severity first), so it is returned as is. `last_activity`
- * puts the freshest group first, groups with no activity last. `manual` (the
- * order of `cockpit.groups` in config.yaml) cannot be recovered from JSON,
- * whose object keys carry no order - it falls back to the API order until
- * the config endpoint carries an explicit order.
+ * puts the freshest group first, groups with no activity last. `manual` is
+ * the `order` of each group in config.yaml, which /api/config's `groups`
+ * array carries (pm-cli-118-18); groups the config does not name follow
+ * in the API's order.
  */
-export function sortGroups(groups: GroupSummary[], sort: string | undefined): GroupSummary[] {
+export function sortGroups(
+  groups: GroupSummary[],
+  sort: string | undefined,
+  config?: ConfigGroup[],
+): GroupSummary[] {
+  if (sort === 'manual') return manualSidebarOrder(groups, config)
   if (sort !== 'last_activity') return groups
   return [...groups].sort((a, b) => {
     const x = a.last_activity ?? ''
