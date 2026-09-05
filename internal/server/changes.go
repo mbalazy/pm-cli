@@ -125,10 +125,27 @@ func (h *handler) runRefresh(ctx context.Context) (*feed.Result, error) {
 		return nil, err
 	}
 	h.bus.publish("changes", changesEventData(res.Sources))
-	// The report's once-per-period rule hangs off the first successful
-	// refresh of the period (the morning's). Nothing runs when it is off.
-	h.autoReport(cfg, cutoff)
+	// The report's once-per-period rule hangs off the first CLEAN refresh
+	// of the period (the morning's): Refresh returns nil whenever the cache
+	// was fine and files a source's failure in its status, so "successful"
+	// has to be read off the statuses - a 07:00 tick with gh unauthenticated
+	// or the laptop offline must not write the day's report from an empty
+	// feed and then never retry it. Nothing runs when the switch is off.
+	if sourcesClean(res.Sources) {
+		h.autoReport(cfg, cutoff)
+	}
 	return res, nil
+}
+
+// sourcesClean reports whether every ENABLED source of a refresh ran
+// without error. A disabled source is not a failure.
+func sourcesClean(sources []feed.SourceStatus) bool {
+	for _, s := range sources {
+		if s.Enabled && s.Error != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // seenRequest is POST /api/changes/seen's optional body.

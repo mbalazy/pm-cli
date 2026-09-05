@@ -62,6 +62,7 @@ func newServeCmd(store storage.TaskStore) *cobra.Command {
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
+			srv.RegisterOnShutdown(handler.StopStreams)
 			go handler.RunScheduler(ctx)
 
 			errCh := make(chan error, 1)
@@ -76,8 +77,11 @@ func newServeCmd(store storage.TaskStore) *cobra.Command {
 				return err
 			case <-ctx.Done():
 			}
-			// Graceful: let in-flight responses finish, then cut the SSE
-			// streams, which only end when their request context does.
+			// Graceful: let in-flight responses finish. Shutdown never
+			// cancels a request's context, and an SSE stream is an active
+			// connection until its handler returns - so the streams are cut
+			// explicitly (StopStreams, registered below) and Shutdown then
+			// completes at once instead of waiting out the 5 s with a tab open.
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := srv.Shutdown(shutdownCtx); err != nil {

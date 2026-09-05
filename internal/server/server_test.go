@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
@@ -595,13 +596,14 @@ func TestAttention(t *testing.T) {
 type fakeFeedSource struct {
 	name   string
 	events []feed.Event
+	err    error
 	calls  int
 }
 
 func (s *fakeFeedSource) Name() string { return s.name }
 func (s *fakeFeedSource) Fetch(ctx context.Context, from, to time.Time, projects []feed.Project) ([]feed.Event, error) {
 	s.calls++
-	return s.events, nil
+	return s.events, s.err
 }
 
 // postJSON POSTs as the cockpit does - with the client header.
@@ -1236,4 +1238,92 @@ func TestReport(t *testing.T) {
 			t.Fatalf("no header = %d", resp.StatusCode)
 		}
 	})
+}
+
+// TestStopStreamsEndsHandlers: StopStreams (registered with the server's
+// Shutdown by pm serve) ends an open /api/events stream at once, so
+// Shutdown does not wait out its deadline with a cockpit tab open.
+func TestStopStreamsEndsHandlers(t *testing.T) {
+	store := newTestStore(t)
+	h := NewHandler(store, Options{PollInterval: 20 * time.Millisecond, PingInterval: 50 * time.Millisecond})
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	events, cancel := sseClient(t, srv.URL+"/api/events")
+	defer cancel()
+	waitFor(t, events, "ping {}")
+	started := time.Now()
+	h.StopStreams()
+	h.StopStreams() // idempotent
+	select {
+	case _, ok := <-events:
+		for ok {
+			_, ok = <-events
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stream did not close after StopStreams")
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatalf("stream took %v to close", time.Since(started))
+	}
+	// A stream opened after the stop ends immediately too.
+	later, cancel2 := sseClient(t, srv.URL+"/api/events")
+	defer cancel2()
+	select {
+	case _, ok := <-later:
+		for ok {
+			_, ok = <-later
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stream opened after StopStreams did not end")
+	}
+}
+
+// TestReportWaitsForACleanRefresh: a refresh in which an enabled source
+// failed (gh unauthenticated, the laptop offline) is not the period's
+// "first successful refresh" - the report is not written off an empty feed
+// and is written by the next clean refresh instead.
+func TestReportWaitsForACleanRefresh(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, 9, 9, 15, 0, 0, 0, time.Local)
+	fakeDir := t.TempDir()
+	calls := filepath.Join(fakeDir, "calls.log")
+	exe := filepath.Join(fakeDir, "claude")
+	env := `{"type":"result","subtype":"success","is_error":false,"result":"quiet day","session_id":"s","usage":{"input_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":1,"output_tokens":2}}`
+	script := "#!/bin/sh\necho CALL >> \"$FAKE_CLAUDE_CALLS2\"\nprintf '%s' '" + env + "'\n"
+	if err := os.WriteFile(exe, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_CLAUDE_CALLS2", calls)
+	countCalls := func() int {
+		b, _ := os.ReadFile(calls)
+		return strings.Count(string(b), "CALL")
+	}
+	if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  sources:\n    report: true\n  report:\n    model: haiku\n    language: en\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := &fakeFeedSource{name: "pm", err: errors.New("gh: not logged in")}
+	f := feed.New(store.Root, []feed.Source{src})
+	srv := newServer(t, store, Options{Feed: f, Clock: func() time.Time { return now }, Report: &report.Writer{Exe: exe}, PollInterval: 20 * time.Millisecond, PingInterval: time.Minute})
+	events, cancel := sseClient(t, srv.URL+"/api/events")
+	defer cancel()
+
+	postJSON(t, srv.URL+"/api/changes/refresh", "", 200)
+	waitFor(t, events, `changes {"sources":["pm"]}`)
+	time.Sleep(100 * time.Millisecond)
+	if n := countCalls(); n != 0 {
+		t.Fatalf("claude ran %d time(s) after a refresh whose source failed", n)
+	}
+	if m := getJSON(t, srv.URL+"/api/report", 200); m["state"] != "none" {
+		t.Fatalf("after the failed refresh = %v", m)
+	}
+	// The next clean refresh writes it.
+	src.err = nil
+	postJSON(t, srv.URL+"/api/changes/refresh", "", 200)
+	waitFor(t, events, `report {"period":"2026-09-08T18"}`)
+	if n := countCalls(); n != 1 {
+		t.Fatalf("claude calls = %d, want 1", n)
+	}
+	if m := getJSON(t, srv.URL+"/api/report", 200); m["state"] != "done" {
+		t.Fatalf("after the clean refresh = %v", m)
+	}
 }

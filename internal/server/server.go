@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mbalazy/pm/internal/feed"
@@ -94,6 +95,13 @@ type Handler struct {
 // ServeHTTP makes Handler an http.Handler.
 func (s *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
 
+// StopStreams ends every open /api/events stream (and refuses none: a
+// stream opened afterwards ends at once). Register it with
+// http.Server.RegisterOnShutdown so Shutdown completes as soon as the
+// ordinary requests are done instead of waiting out its deadline with a
+// cockpit tab open. Idempotent.
+func (s *Handler) StopStreams() { s.h.stopOnce.Do(func() { close(s.h.done) }) }
+
 // NewHandler routes /api/* to the JSON endpoints, /api/events to the SSE
 // feed and everything else to the SPA (or the placeholder page when the
 // bundle has not been built).
@@ -124,7 +132,7 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 		opts.Report = &report.Writer{}
 	}
 	h := &handler{store: store, opts: opts, feed: opts.Feed, clock: opts.Clock, bus: newChangeBus(), runs: opts.RunControl,
-		reports: &reportControl{writing: map[string]bool{}}}
+		reports: &reportControl{writing: map[string]bool{}}, done: make(chan struct{})}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/projects", h.projects)
@@ -174,6 +182,12 @@ type handler struct {
 	runs  *runctl.Controller
 	// reports tracks the report writes in flight (one per period).
 	reports *reportControl
+	// done is closed by StopStreams: every SSE handler selects on it and
+	// returns, which is what lets http.Server.Shutdown finish - Shutdown
+	// waits for active connections and never cancels a request's context,
+	// so a stream would otherwise hold it until the timeout.
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 // --- JSON plumbing ---
