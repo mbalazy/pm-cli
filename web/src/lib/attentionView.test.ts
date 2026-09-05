@@ -58,7 +58,17 @@ describe('capSection', () => {
 
 describe('rowKey', () => {
   it('distinguishes project rows from task rows', () => {
-    expect(rowKey(row(1))).toBe('waiting/p/p-1')
-    expect(rowKey({ ...row(1), task_id: undefined })).toBe('waiting/p/')
+    expect(rowKey(row(1))).not.toBe(rowKey({ ...row(1), task_id: undefined }))
+    expect(rowKey(row(1)).startsWith('waiting/p/p-1/')).toBe(true)
+  })
+  it('tells two events on one task apart, and two project-less rows', () => {
+    const a = { ...row(1), section: 'changes', title: 'ev1', since: '2026-01-01T10:00:00Z' }
+    const b = { ...a, title: 'ev2', since: '2026-01-01T11:00:00Z' }
+    expect(rowKey(a)).not.toBe(rowKey(b))
+    const dm1 = { ...a, project: '', task_id: undefined, title: 'slack dm one' }
+    const dm2 = { ...dm1, title: 'slack dm two' }
+    expect(rowKey(dm1)).not.toBe(rowKey(dm2))
+    // and stable: the same row keys the same
+    expect(rowKey({ ...a })).toBe(rowKey(a))
   })
 })

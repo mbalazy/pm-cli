@@ -92,7 +92,14 @@ export function capSection(section: AttentionSection, expanded: boolean): Capped
   }
 }
 
-/** A stable key for a row (rows without a task id are project rows). */
+/**
+ * A stable key for a row - the keyboard selection lives on it across
+ * refetches. Section, project and task id are not enough: the changes
+ * section is one row PER EVENT, so two events on one task (or two
+ * project-less Slack rows) would share a key and `j` could never step past
+ * the first. The event's stamp and title tell them apart and are as stable
+ * as the id.
+ */
 export function rowKey(row: AttentionRow): string {
-  return `${row.section}/${row.project}/${row.task_id ?? ''}`
+  return `${row.section}/${row.project}/${row.task_id ?? ''}/${row.since ?? ''}/${row.title}`
 }

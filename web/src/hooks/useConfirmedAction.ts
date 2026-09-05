@@ -85,8 +85,16 @@ export function useConfirmedAction(): ConfirmedAction {
   let text: ConfirmText | null = null
   if (pending) {
     text = describeAction(pending, value, focused, runKind ? plan.data : undefined)
+    // A plan that failed to load is no plan: the preview IS the contract, so
+    // the confirm button stays disabled (loading) and the error says why -
+    // never an enabled button whose click does nothing.
     if (runKind && plan.isError)
-      text = { ...text, loading: false, warnings: [`plan: ${plan.error.message}`] }
+      text = {
+        ...text,
+        loading: true,
+        preview: '(no command - the plan could not be loaded)',
+        warnings: [`plan: ${plan.error.message}`],
+      }
   }
   return {
     pending,

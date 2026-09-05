@@ -32,6 +32,16 @@ describe('shortcutFor', () => {
     expect(shortcutFor({ key: 'j', metaKey: true })).toBeNull()
     expect(shortcutFor({ key: 'j', altKey: true })).toBeNull()
   })
+  it('leaves Enter on a focused button or link to the browser', () => {
+    const button = document.createElement('button')
+    const link = document.createElement('a')
+    const div = document.createElement('div')
+    expect(shortcutFor({ key: 'Enter', target: button })).toBeNull()
+    expect(shortcutFor({ key: 'Enter', target: link })).toBeNull()
+    expect(shortcutFor({ key: 'Enter', target: div })).toBe('open')
+    // other keys on a button are still shortcuts (j/k from a focused row action)
+    expect(shortcutFor({ key: 'j', target: button })).toBe('down')
+  })
   it('ignores navigation keys while typing, but still closes on Escape', () => {
     const input = document.createElement('input')
     expect(shortcutFor({ key: 'j', target: input })).toBeNull()

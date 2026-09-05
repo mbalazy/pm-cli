@@ -52,7 +52,8 @@ export function TodayPage({ group }: { group: string }) {
     down: () => step(1),
     up: () => step(-1),
     open: () => {
-      if (selected) void navigate(openTarget(selected))
+      // Only a row the API lets us open (a project-less Slack row has no page).
+      if (selected?.actions.includes('open')) void navigate(openTarget(selected))
     },
     focus: () => {
       if (selected?.actions.includes('focus_toggle')) onAction('focus_toggle', selected)

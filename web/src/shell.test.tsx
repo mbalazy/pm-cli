@@ -1194,3 +1194,62 @@ describe('report panel', () => {
     expect(posts[2]).toEqual({ path: '/api/report', header: 'cockpit', body: undefined })
   })
 })
+
+describe('home rows the API cannot open', () => {
+  const dup = {
+    ...attention,
+    sections: [
+      {
+        name: 'changes',
+        rows: [
+          row('changes', 'alpha', 'alpha-2', 'ev1 on alpha-2', {
+            actions: ['mark_seen', 'open'],
+            since: '2026-01-02T09:00:00Z',
+          }),
+          row('changes', 'alpha', 'alpha-2', 'ev2 on alpha-2', {
+            actions: ['mark_seen', 'open'],
+            since: '2026-01-02T09:30:00Z',
+          }),
+          row('changes', '', undefined as unknown as string, 'slack dm one', {
+            actions: ['mark_seen'],
+            group: '',
+          }),
+          row('changes', '', undefined as unknown as string, 'slack dm two', {
+            actions: ['mark_seen'],
+            group: '',
+          }),
+          row('changes', 'alpha', 'alpha-1', 'ev on alpha-1', { actions: ['mark_seen', 'open'] }),
+        ],
+        total: 5,
+      },
+    ],
+  }
+  it('j walks past two events on one task and two project-less rows; a row without open is no link and Enter does nothing', async () => {
+    vi.stubGlobal('fetch', fakeFetch({ ...api, '/api/attention': dup }))
+    const user = userEvent.setup()
+    renderAt('/')
+    await screen.findByText('ev on alpha-1')
+    const titles = [
+      'ev1 on alpha-2',
+      'ev2 on alpha-2',
+      'slack dm one',
+      'slack dm two',
+      'ev on alpha-1',
+    ]
+    for (const title of titles) {
+      await user.keyboard('j')
+      const current = screen.getAllByRole('listitem', { current: true })
+      expect(current).toHaveLength(1)
+      expect(current[0]).toHaveTextContent(title)
+    }
+    // a project-less row: no link, and Enter on it navigates nowhere
+    expect(screen.getByText('slack dm one').closest('a')).toBeNull()
+    expect(screen.getByText('ev1 on alpha-2').closest('a')).not.toBeNull()
+    await user.keyboard('k')
+    await user.keyboard('k')
+    expect(screen.getByRole('listitem', { current: true })).toHaveTextContent('slack dm one')
+    await user.keyboard('{Enter}')
+    expect(screen.queryByRole('article')).toBeNull()
+    expect(screen.getByRole('listitem', { current: true })).toHaveTextContent('slack dm one')
+  })
+})

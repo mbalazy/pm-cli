@@ -29,6 +29,10 @@ export function AttentionRow({ row, selected, onAction }: Props) {
   useEffect(() => {
     if (selected) ref.current?.scrollIntoView?.({ block: 'nearest' })
   }, [selected])
+  // `open` is the API's to offer (a project-less Slack row has no page to
+  // open); a row without it renders its title as text, never as a link to
+  // a route that does not exist.
+  const canOpen = row.actions.includes('open')
   const target = openTarget(row)
   return (
     <li
@@ -42,10 +46,17 @@ export function AttentionRow({ row, selected, onAction }: Props) {
         {row.project}
       </span>
       <span className="min-w-0">
-        <Link to={target.to} params={target.params} className="hover:underline">
-          {row.task_id && <span className="id mr-1.5">{row.task_id}</span>}
-          <span className="font-medium">{row.title}</span>
-        </Link>
+        {canOpen ? (
+          <Link to={target.to} params={target.params} className="hover:underline">
+            {row.task_id && <span className="id mr-1.5">{row.task_id}</span>}
+            <span className="font-medium">{row.title}</span>
+          </Link>
+        ) : (
+          <span>
+            {row.task_id && <span className="id mr-1.5">{row.task_id}</span>}
+            <span className="font-medium">{row.title}</span>
+          </span>
+        )}
         <span className="mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[0.8125rem] text-ink-2">
           <span className="chip md:hidden">{row.project}</span>
           <span>{row.reason}</span>

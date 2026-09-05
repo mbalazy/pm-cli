@@ -65,6 +65,20 @@ export function isTypingTarget(el: EventTarget | null | undefined): boolean {
 }
 
 /**
+ * True when Enter on this element already means something to the browser:
+ * a focused button, link or summary activates on Enter, and a keyboard user
+ * tabbing to "refresh now" or a row action must not have it swallowed by
+ * the `open` shortcut.
+ */
+export function isActivationTarget(el: EventTarget | null | undefined): boolean {
+  if (!el || !(el instanceof Element)) return false
+  const tag = el.tagName
+  if (tag === 'BUTTON' || tag === 'A' || tag === 'SUMMARY') return true
+  const role = el.getAttribute('role')
+  return role === 'button' || role === 'link'
+}
+
+/**
  * Maps a keystroke to an action, or null. The palette chord works everywhere
  * (it is how you leave a text field); every other key is ignored while typing
  * and while a modifier is held, so browser shortcuts stay browser shortcuts.
@@ -76,6 +90,7 @@ export function shortcutFor(e: KeyLike): Action | null {
   if (e.metaKey || e.ctrlKey || e.altKey) return null
   if (k === 'Escape') return 'close'
   if (isTypingTarget(e.target)) return null
+  if (k === 'Enter' && isActivationTarget(e.target)) return null
   switch (k) {
     case 'j':
       return 'down'
