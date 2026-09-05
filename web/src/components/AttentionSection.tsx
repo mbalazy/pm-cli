@@ -44,9 +44,11 @@ export function AttentionSection({
         <p className="px-2 py-1 text-sm text-ink-3">{meta.empty}</p>
       ) : (
         <ul>
-          {capped.rows.map((r) => (
+          {capped.rows.map((r, i) => (
+            // The changes digest can list one task several times (one row
+            // per event), so the key carries the position too.
             <AttentionRow
-              key={rowKey(r)}
+              key={`${rowKey(r)}#${i}`}
               row={r}
               selected={rowKey(r) === selectedKey}
               onAction={onAction}

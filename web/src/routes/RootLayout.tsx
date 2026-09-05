@@ -105,6 +105,15 @@ export function RootLayout() {
           >
             <Search aria-hidden="true" className="size-4" strokeWidth={1.75} />
           </button>
+          <button
+            type="button"
+            className="flex size-9 items-center justify-center rounded-sm text-ink-2"
+            title={`theme: ${theme.choice} (tap to change)`}
+            aria-label={`theme: ${theme.choice}`}
+            onClick={theme.cycle}
+          >
+            <ThemeIcon aria-hidden="true" className="size-4" strokeWidth={1.75} />
+          </button>
         </div>
         {attention.data && (
           <div className="overflow-x-auto px-3 pb-2 [scrollbar-width:none]">
