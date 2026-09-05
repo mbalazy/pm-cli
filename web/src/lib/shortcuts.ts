@@ -14,6 +14,8 @@ export type Action =
   | 'settings'
   | 'focus'
   | 'groupPrefix'
+  | 'tabPrev'
+  | 'tabNext'
 
 export interface Shortcut {
   keys: string
@@ -35,6 +37,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
     action: 'groupPrefix',
     description: 'filter home by group (g, then its letter)',
   },
+  { keys: '[ / ]', action: 'tabPrev', description: 'previous / next tab on a group page' },
   { keys: 'Esc', action: 'close', description: 'close the task / dialog' },
   { keys: '?', action: 'help', description: 'this list' },
   { keys: '⌘K / Ctrl+K', action: 'palette', description: 'command palette' },
@@ -94,6 +97,10 @@ export function shortcutFor(e: KeyLike): Action | null {
       return 'focus'
     case 'g':
       return 'groupPrefix'
+    case '[':
+      return 'tabPrev'
+    case ']':
+      return 'tabNext'
     default:
       return null
   }

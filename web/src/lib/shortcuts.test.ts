@@ -18,6 +18,8 @@ describe('shortcutFor', () => {
     expect(shortcutFor({ key: ',' })).toBe('settings')
     expect(shortcutFor({ key: 't' })).toBe('focus')
     expect(shortcutFor({ key: 'g' })).toBe('groupPrefix')
+    expect(shortcutFor({ key: '[' })).toBe('tabPrev')
+    expect(shortcutFor({ key: ']' })).toBe('tabNext')
     const input = document.createElement('input')
     expect(shortcutFor({ key: '1', target: input })).toBeNull()
   })
@@ -51,6 +53,7 @@ describe('shortcutFor', () => {
       'settings',
       'focus',
       'groupPrefix',
+      'tabPrev',
     ])
       expect(actions.has(a as never)).toBe(true)
   })

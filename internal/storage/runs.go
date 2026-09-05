@@ -71,6 +71,18 @@ type RunRow struct {
 	Run    RunCell    `json:"run"`
 	Accept AcceptCell `json:"acceptance"`
 
+	// Timing of the run and the acceptance, RAW off their run-states (RFC3339),
+	// for a reader that wants "how long did it run", "how long since it ended"
+	// and "when did it last breathe" (pm-cli-118-17). Started/Updated are the
+	// run-state's own stamps; RunLive says whether its Updated is a heartbeat
+	// (a live manager) or the moment it stopped. Empty when there is no run /
+	// no acceptance. The table renderers ignore them; the SPA formats them.
+	RunStarted    string `json:"run_started,omitempty"`
+	RunUpdated    string `json:"run_updated,omitempty"`
+	RunLive       bool   `json:"run_live,omitempty"`
+	AcceptStarted string `json:"accept_started,omitempty"`
+	AcceptUpdated string `json:"accept_updated,omitempty"`
+
 	// Note marks a PLACEHOLDER row: a remote runner that could not be reached
 	// or could not answer. Such a row carries no tracker - the whole point is
 	// that a sleeping VPS costs one line, never the local rows and never a
@@ -211,9 +223,12 @@ func runRow(slug, dir string, tr Tracker, task *Task, run, accept *RunState, lan
 	}
 	if run != nil {
 		stamps = append(stamps, run.Updated)
+		row.RunStarted, row.RunUpdated = run.Started, run.Updated
+		row.RunLive = run.IsLive()
 	}
 	if accept != nil {
 		stamps = append(stamps, accept.Updated)
+		row.AcceptStarted, row.AcceptUpdated = accept.Started, accept.Updated
 	}
 	row.Updated = latestStamp(stamps)
 	return row

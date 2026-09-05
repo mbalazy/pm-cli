@@ -6,6 +6,8 @@ import {
 } from '@tanstack/react-router'
 
 import { parseGroupFilter } from '../lib/groupFilter'
+import { parseTab } from '../lib/groupView'
+import { GroupPage } from './GroupPage'
 import { ProjectPage } from './ProjectPage'
 import { RootLayout } from './RootLayout'
 import { RunsPage } from './RunsPage'
@@ -28,6 +30,24 @@ export const indexRoute = createRoute({
     return g === '' ? {} : { g }
   },
   component: () => <TodayPage group={indexRoute.useSearch().g ?? ''} />,
+})
+
+// The group page (pm-cli-118-17): tab and board repo in the search so a tab
+// is a URL. `/p/$slug` stays as the alias + the task detail's layout.
+export const groupRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/g/$group',
+  validateSearch: (search: Record<string, unknown>): { tab?: string; repo?: string } => {
+    const out: { tab?: string; repo?: string } = {}
+    if (typeof search.tab === 'string' && search.tab !== 'overview') out.tab = parseTab(search.tab)
+    if (typeof search.repo === 'string' && search.repo !== '') out.repo = search.repo
+    return out
+  },
+  component: () => {
+    const { group } = groupRoute.useParams()
+    const { tab, repo } = groupRoute.useSearch()
+    return <GroupPage group={group} tab={parseTab(tab)} repo={repo} />
+  },
 })
 
 export const projectRoute = createRoute({
@@ -67,6 +87,7 @@ const settingsRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
+  groupRoute,
   projectRoute.addChildren([taskRoute]),
   runsRoute,
   changesRoute,

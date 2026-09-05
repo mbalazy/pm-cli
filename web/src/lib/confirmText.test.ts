@@ -113,6 +113,17 @@ describe('requestFor', () => {
       brief: 'b',
     })
   })
+  it('edit_notes is a project mutation with a textarea', () => {
+    const p = {
+      kind: 'edit_notes' as const,
+      subject: { project: 'acme-api', title: 'acme-api', notes: 'n' },
+    }
+    expect(initialValue(p)).toBe('n')
+    expect(describeAction(p, '').field?.kind).toBe('textarea')
+    expect(describeAction(p, '').warning).toMatch(/NOT saved/)
+    expect(describeAction(p, 'x').warning).toBeUndefined()
+    expect(requestFor(p, 'new')).toEqual({ kind: 'project', project: 'acme-api', notes: 'new' })
+  })
   it('isPendingKind knows the batch-1 actions only', () => {
     expect(isPendingKind('focus_toggle')).toBe(true)
     expect(isPendingKind('mark_seen')).toBe(true)

@@ -229,6 +229,7 @@ type apiProject struct {
 	service.ProjectInfo
 	Path            string            `json:"path,omitempty"`
 	Repo            string            `json:"repo,omitempty"`
+	Notes           string            `json:"notes,omitempty"`
 	Tags            []string          `json:"tags,omitempty"`
 	Links           map[string]string `json:"links,omitempty"`
 	Statuses        []string          `json:"statuses"`
@@ -253,7 +254,7 @@ func (h *handler) projects(w http.ResponseWriter, r *http.Request) {
 		// a project listed there reads again here - the second read failing
 		// leaves the row with the counts it has.
 		if proj, err := h.store.GetProject(pi.Slug); err == nil {
-			p.Path, p.Repo, p.Tags, p.Links = proj.Path, proj.Repo, proj.Tags, proj.Links
+			p.Path, p.Repo, p.Notes, p.Tags, p.Links = proj.Path, proj.Repo, proj.Notes, proj.Tags, proj.Links
 		}
 		for _, s := range h.store.GetProjectStatuses(pi.Slug) {
 			p.Statuses = append(p.Statuses, string(s))

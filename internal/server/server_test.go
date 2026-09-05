@@ -32,7 +32,7 @@ func newTestStore(t *testing.T) *storage.Store {
 		t.Fatal(err)
 	}
 	if err := storage.WriteProject(filepath.Join(projDir, "project.yaml"), &storage.Project{
-		Name: "Test Project", Prefix: "t", Path: "/home/user/test", Tags: []string{"go"},
+		Name: "Test Project", Prefix: "t", Path: "/home/user/test", Tags: []string{"go"}, Notes: "where we left off",
 	}); err != nil {
 		t.Fatal(err)
 	}

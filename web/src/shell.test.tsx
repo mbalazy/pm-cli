@@ -13,8 +13,30 @@ const projects = {
     {
       slug: 'alpha',
       name: 'Alpha',
+      group: 'alpha',
+      group_name: 'ALPHA',
       task_counts: { todo: 2 },
       statuses: ['todo', 'done'],
+      landing_statuses: [],
+    },
+    {
+      slug: 'acme-api',
+      name: 'ACME-API',
+      group: 'acme',
+      group_name: 'ACME',
+      stack: 'Livingdocs',
+      notes: 'ACME-60 in two repos',
+      task_counts: { doing: 1, waiting: 1 },
+      statuses: ['todo', 'doing', 'waiting', 'done'],
+      landing_statuses: [],
+    },
+    {
+      slug: 'acme-zap',
+      name: 'acme-zap',
+      group: 'acme',
+      group_name: 'ACME',
+      task_counts: { doing: 1 },
+      statuses: ['todo', 'doing', 'done'],
       landing_statuses: [],
     },
   ],
@@ -32,6 +54,39 @@ const tasks = {
   total: 2,
   shown: 2,
 }
+const acme-apiTasks = {
+  tasks: [
+    { ...summary('acme-api-1', 'Acme-api thing'), project: 'acme-api', status: 'waiting' },
+    { ...summary('acme-api-2', 'Old doing'), project: 'acme-api', status: 'doing', updated: '2025-12-01' },
+  ],
+  total: 2,
+  shown: 2,
+}
+const acme-zapTasks = {
+  tasks: [
+    {
+      ...summary('acme-zap-1', 'Zap task'),
+      project: 'acme-zap',
+      status: 'doing',
+      updated: '2026-01-05T10:00:00Z',
+    },
+  ],
+  total: 1,
+  shown: 1,
+}
+const context = (slug: string, trackers: unknown[]) => ({
+  project: { slug, name: slug, statuses: [] },
+  doing_tasks: [],
+  task_counts: {},
+  trackers,
+})
+const tracker = (id: string, title: string, total: number, progress: Record<string, number>) => ({
+  id,
+  title,
+  status: 'doing',
+  total,
+  progress,
+})
 const detail = {
   ...summary('alpha-1', 'First'),
   created: '2026-01-01',
@@ -46,8 +101,35 @@ const runs = {
       project: 'alpha',
       tracker: 'alpha-9',
       title: 'Epic',
+      status: 'doing',
+      updated: '2026-01-02T09:30:00Z',
       run: { state: 'running', done: 1, total: 3 },
       acceptance: {},
+      run_started: '2026-01-02T08:00:00Z',
+      run_updated: '2026-01-02T09:30:00Z',
+      run_live: true,
+    },
+    {
+      project: 'alpha',
+      tracker: 'alpha-1',
+      title: 'First',
+      status: 'todo',
+      updated: '2026-01-01T12:00:00Z',
+      run: { state: 'failed', done: 0, total: 2 },
+      acceptance: {},
+      run_started: '2026-01-01T10:00:00Z',
+      run_updated: '2026-01-01T12:00:00Z',
+    },
+    {
+      project: 'acme-api',
+      tracker: 'acme-api-9',
+      title: 'Old epic',
+      status: 'done',
+      updated: '2025-12-01T12:00:00Z',
+      run: { state: 'done', done: 2, total: 2 },
+      acceptance: { state: 'done' },
+      run_started: '2025-12-01T10:00:00Z',
+      run_updated: '2025-12-01T12:00:00Z',
     },
   ],
 }
@@ -190,8 +272,31 @@ const config = (sidebar: Record<string, unknown>) => ({
 })
 const changes = {
   cutoff: '2026-01-01T18:00:00Z',
-  events: [],
-  unseen: 0,
+  events: [
+    {
+      id: 'e1',
+      ts: '2026-01-02T09:00:00Z',
+      source: 'pm',
+      project: 'acme-api',
+      group: 'acme',
+      task_id: 'acme-api-1',
+      title: 'Acme-api thing',
+      detail: 'moved',
+      severity: 'ok',
+      seen: false,
+    },
+    {
+      id: 'e2',
+      ts: '2026-01-02T09:10:00Z',
+      source: 'git',
+      project: 'alpha',
+      group: 'alpha',
+      title: 'alpha event',
+      severity: 'info',
+      seen: false,
+    },
+  ],
+  unseen: 2,
   sources: [{ name: 'pm', enabled: true, events: 1, last_fetch: '2026-01-02T09:30:00Z' }],
 }
 
@@ -206,6 +311,12 @@ const api = {
   '/api/runs?remote=1': remoteRuns,
   '/api/attention': attention,
   '/api/attention?group=acme': attentionNzz,
+  '/api/tasks?project=acme-api&limit=200': acme-apiTasks,
+  '/api/tasks?project=acme-zap&limit=200': acme-zapTasks,
+  '/api/context?project=acme-api': context('acme-api', [tracker('acme-api-9', 'Old epic', 2, { done: 2 })]),
+  '/api/context?project=acme-zap': context('acme-zap', [
+    tracker('acme-zap-1', 'Zap task', 2, { done: 1, doing: 1 }),
+  ]),
   '/api/config': config({}),
   '/api/changes': changes,
 }
@@ -416,10 +527,13 @@ describe('sidebar', () => {
     // header + alpha + acme + 2 repos of acme
     expect(rows).toHaveLength(5)
     expect(within(rows[1]).getByLabelText('worst: crit')).toHaveTextContent('✗')
-    expect(within(rows[1]).getByRole('link', { name: 'ALPHA' })).toHaveAttribute('href', '/p/alpha')
+    expect(within(rows[1]).getByRole('link', { name: 'ALPHA' })).toHaveAttribute('href', '/g/alpha')
     expect(within(rows[1]).getAllByText('·')).toHaveLength(2)
-    expect(within(rows[2]).getByRole('link', { name: 'ACME' })).toHaveAttribute('href', '/p/acme-api')
-    expect(within(rows[3]).getByRole('link', { name: '· acme-api' })).toBeInTheDocument()
+    expect(within(rows[2]).getByRole('link', { name: 'ACME' })).toHaveAttribute('href', '/g/acme')
+    expect(within(rows[3]).getByRole('link', { name: '· acme-api' })).toHaveAttribute(
+      'href',
+      '/g/acme?tab=board&repo=acme-api',
+    )
     expect(within(nav).getByText('Projects · worst first')).toBeInTheDocument()
   })
 
@@ -524,19 +638,147 @@ describe('palette', () => {
 })
 
 describe('runs', () => {
-  it('lists local rows and appends remote rows only after an explicit fetch', async () => {
+  it('defaults to unfinished only, needs-me first, with the three times; remote rows only after an explicit fetch', async () => {
     vi.stubGlobal('fetch', fakeFetch(api))
     const user = userEvent.setup()
     renderAt('/runs')
     const table = await screen.findByRole('table', { name: 'Runs' })
-    expect(within(table).getByText('running 1/3')).toBeInTheDocument()
-    expect(within(table).queryByText('vps/beta')).toBeNull()
+    // alpha-1 is in needs_me (crit) -> first; alpha-9 is live -> kept; acme-api-9 finished -> hidden.
+    let trackers = () =>
+      within(screen.getByRole('table', { name: 'Runs' }))
+        .getAllByRole('row')
+        .slice(1)
+        .map((r) => within(r).getAllByRole('cell')[2].textContent)
+    expect(trackers()).toEqual(['alpha-1', 'alpha-9'])
+    const live = within(table).getAllByRole('row')[2]
+    const cells = within(live)
+      .getAllByRole('cell')
+      .map((c) => c.textContent)
+    expect(cells[0]).toBe('▶')
+    expect(cells[4]).toBe('running 1/3')
+    expect(cells[6]).toMatch(/\d+[dh]$/) // duration up to now
+    expect(cells[7]).toBe('') // no end while live
+    expect(cells[8]).toMatch(/\d+[dh]$/) // heartbeat age
+    const failed = within(table).getAllByRole('row')[1]
+    const fcells = within(failed)
+      .getAllByRole('cell')
+      .map((c) => c.textContent)
+    expect(fcells[0]).toBe('✗')
+    expect(fcells[6]).toBe('2h')
+    expect(fcells[8]).toBe('')
     expect(screen.getByText(/remote: not fetched/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'unfinished only' }))
+    expect(trackers()).toEqual(['alpha-1', 'alpha-9', 'acme-api-9'])
+    await user.click(screen.getByRole('button', { name: 'newest' }))
+    expect(trackers()).toEqual(['alpha-9', 'alpha-1', 'acme-api-9'])
+    await user.click(screen.getByRole('button', { name: 'by project' }))
+    expect(trackers()).toEqual(['alpha-9', 'alpha-1', 'acme-api-9'])
 
     await user.click(screen.getByRole('button', { name: 'fetch remote' }))
     expect(await within(table).findByText('vps/beta')).toBeInTheDocument()
-    expect(within(table).getByText('done 2/2')).toBeInTheDocument()
-    expect(within(table).getAllByRole('row')).toHaveLength(3)
+    expect(within(table).getAllByText('done 2/2')).toHaveLength(2)
+    expect(within(table).getAllByRole('row')).toHaveLength(5)
     expect(screen.getByText(/remote: fetched just now/)).toBeInTheDocument()
+  })
+})
+
+describe('group page', () => {
+  it('shows the header, repo chips, tabs; the overview has notes, the narrowed queue, doing by activity and trackers', async () => {
+    vi.stubGlobal('fetch', fakeFetch(api))
+    renderAt('/g/acme')
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('ACME')
+    expect(screen.getByText(/group · 2 repos/)).toBeInTheDocument()
+    const repos = screen.getByRole('list', { name: 'Repos' })
+    expect(within(repos).getByRole('link', { name: 'acme-api' })).toHaveAttribute(
+      'href',
+      '/g/acme?tab=board&repo=acme-api',
+    )
+    expect(within(repos).getByText(/· Livingdocs/)).toBeInTheDocument()
+    const tabs = screen.getByRole('tablist')
+    expect(
+      within(tabs)
+        .getAllByRole('tab')
+        .map((t) => t.textContent),
+    ).toEqual(['overview', 'board', 'runs', 'changes'])
+    expect(within(tabs).getByRole('tab', { selected: true })).toHaveTextContent('overview')
+
+    const left = screen.getByRole('region', { name: 'Where we left off' })
+    expect(within(left).getByText('ACME-60 in two repos')).toBeInTheDocument()
+    expect(within(left).getByRole('button', { name: 'add notes' })).toBeInTheDocument()
+    expect(within(left).getByRole('button', { name: 'edit notes' })).toBeInTheDocument()
+
+    // The queue, narrowed to acme by the API (?group=acme route).
+    const waiting = screen.getByRole('region', { name: 'Waiting on' })
+    expect(within(waiting).getByText('Acme-api thing')).toBeInTheDocument()
+    expect(within(waiting).queryByText('Second')).toBeNull()
+    expect(
+      within(screen.getByRole('region', { name: 'Needs me' })).getByText('Nothing needs you.'),
+    ).toBeInTheDocument()
+
+    // Doing: acme-zap's fresher task first, acme-api's idle one marked quiet.
+    const doing = await screen.findByRole('region', { name: 'In progress (doing)' })
+    await vi.waitFor(() => expect(within(doing).getAllByRole('listitem')).toHaveLength(2))
+    const items = within(doing).getAllByRole('listitem')
+    expect(items[0]).toHaveTextContent('acme-zap-1')
+    expect(items[0]).toHaveTextContent('tracker 1 done · 1 doing of 2')
+    expect(items[1]).toHaveTextContent('acme-api-2')
+    expect(items[1]).toHaveAttribute('data-idle', 'true')
+    expect(within(items[1]).getByLabelText('quiet')).toBeInTheDocument()
+
+    // Trackers joined with the runs rows.
+    const trackers = screen.getByRole('table', { name: 'Trackers' })
+    const rows = within(trackers).getAllByRole('row').slice(1)
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toHaveTextContent('acme-api-9')
+    expect(rows[0]).toHaveTextContent('done 2/2')
+    expect(rows[1]).toHaveTextContent('acme-zap-1')
+    expect(rows[1]).toHaveTextContent('1 done · 1 doing')
+  })
+
+  it('/p/<slug> redirects to the group board on that repo; the board switches repos; [ ] step the tabs', async () => {
+    vi.stubGlobal('fetch', fakeFetch(api))
+    const user = userEvent.setup()
+    renderAt('/p/acme-zap')
+    const tabs = await screen.findByRole('tablist')
+    expect(within(tabs).getByRole('tab', { selected: true })).toHaveTextContent('board')
+    const repo = screen.getByRole('navigation', { name: 'Repo' })
+    expect(within(repo).getByRole('link', { current: 'page' })).toHaveTextContent('acme-zap')
+    expect(await screen.findByRole('region', { name: 'doing' })).toHaveTextContent('Zap task')
+
+    await user.click(within(repo).getByRole('link', { name: 'acme-api' }))
+    expect(await screen.findByText('Acme-api thing')).toBeInTheDocument()
+
+    await user.keyboard(']')
+    await vi.waitFor(() =>
+      expect(
+        within(screen.getByRole('tablist')).getByRole('tab', { selected: true }),
+      ).toHaveTextContent('runs'),
+    )
+    // Nothing of the group is unfinished: the table only appears on "all runs".
+    expect(await screen.findByText('no runs')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'unfinished only' }))
+    const table = await screen.findByRole('table', { name: 'Runs' })
+    expect(within(table).getAllByRole('row')).toHaveLength(2)
+    expect(within(table).getByText('acme-api-9')).toBeInTheDocument()
+    expect(within(table).queryByText('alpha-9')).toBeNull()
+    // user-event reads `[` as a descriptor bracket; `[[` is the literal key.
+    await user.keyboard('[[')
+    await user.keyboard('[[')
+    await vi.waitFor(() =>
+      expect(
+        within(screen.getByRole('tablist')).getByRole('tab', { selected: true }),
+      ).toHaveTextContent('overview'),
+    )
+  })
+
+  it('the changes tab lists the group events only', async () => {
+    vi.stubGlobal('fetch', fakeFetch(api))
+    renderAt('/g/acme?tab=changes')
+    const list = await screen.findByRole('region', { name: 'Changes' })
+    await vi.waitFor(() => expect(within(list).getAllByRole('listitem')).toHaveLength(1))
+    expect(list).toHaveTextContent('Acme-api thing')
+    expect(list).toHaveTextContent('moved')
+    expect(list).not.toHaveTextContent('alpha event')
   })
 })

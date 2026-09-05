@@ -54,14 +54,28 @@ export function useGroups() {
   })
 }
 
-/** All non-archived tasks of one project (up to the API's cap), newest first. */
-export function useTasks(slug: string) {
-  return useQuery({
+/** The query options of one project's task list - shared by useTasks and the group page's useQueries. */
+export function tasksQuery(slug: string) {
+  return {
     queryKey: keys.tasks(slug),
     queryFn: () =>
       apiGet<ListTasksResult>(`/api/tasks${query({ project: slug, limit: MAX_LIST_LIMIT })}`),
     enabled: slug !== '',
-  })
+  }
+}
+
+/** All non-archived tasks of one project (up to the API's cap), newest first. */
+export function useTasks(slug: string) {
+  return useQuery(tasksQuery(slug))
+}
+
+/** The query options of one project's context (trackers, doing tasks, counts). */
+export function contextQuery(slug: string) {
+  return {
+    queryKey: keys.context(slug),
+    queryFn: () => apiGet<ProjectContextResult>(`/api/context${query({ project: slug })}`),
+    enabled: slug !== '',
+  }
 }
 
 export function useTask(slug: string, id: string) {
@@ -74,11 +88,7 @@ export function useTask(slug: string, id: string) {
 }
 
 export function useProjectContext(slug: string) {
-  return useQuery({
-    queryKey: keys.context(slug),
-    queryFn: () => apiGet<ProjectContextResult>(`/api/context${query({ project: slug })}`),
-    enabled: slug !== '',
-  })
+  return useQuery(contextQuery(slug))
 }
 
 export function useCrossProjectContext() {

@@ -17,6 +17,8 @@ export interface ActionSubject {
   brief?: string
   /** A changes row's stamp - mark_seen marks everything up to it. */
   since?: string
+  /** A project's notes ("where we left off"), for edit_notes. */
+  notes?: string
 }
 
 /** A task detail as an action subject (the detail carries `id`, a row `task_id`). */
@@ -46,6 +48,7 @@ export type PendingKind =
   | 'edit_brief'
   | 'edit_waiting_for'
   | 'set_status'
+  | 'edit_notes'
 
 export interface PendingAction {
   kind: PendingKind
@@ -79,7 +82,8 @@ export function isPendingKind(k: string): k is PendingKind {
     k === 'mark_seen' ||
     k === 'edit_brief' ||
     k === 'edit_waiting_for' ||
-    k === 'set_status'
+    k === 'set_status' ||
+    k === 'edit_notes'
   )
 }
 
@@ -88,6 +92,8 @@ export function initialValue(p: PendingAction): string {
   switch (p.kind) {
     case 'edit_brief':
       return p.subject.brief ?? ''
+    case 'edit_notes':
+      return p.subject.notes ?? ''
     case 'edit_waiting_for':
     case 'set_waiting_for':
       return p.subject.waiting_for ?? ''
@@ -154,6 +160,16 @@ export function describeAction(p: PendingAction, value: string, focused?: boolea
         field: { kind: 'input', label: 'waiting for', placeholder: 'who or what blocks this' },
         warning: s.status === 'waiting' && !value.trim() ? NO_REASON : undefined,
       }
+    case 'edit_notes':
+      return {
+        ...base,
+        sentence: `Replaces the notes of project ${s.project} ("where we left off"; an empty text keeps the current notes - the API treats empty as "leave").`,
+        confirmLabel: 'save notes',
+        field: { kind: 'textarea', label: 'notes', placeholder: 'where we left off' },
+        warning: value.trim()
+          ? undefined
+          : 'empty notes are NOT saved - the API keeps the current text',
+      }
     case 'set_status': {
       const to = p.status ?? ''
       const waiting = to === 'waiting'
@@ -193,6 +209,8 @@ export function requestFor(p: PendingAction, value: string): MutationRequest {
       return { kind: 'task', project: s.project, taskId, body: { brief: value } }
     case 'edit_waiting_for':
       return { kind: 'task', project: s.project, taskId, body: { waiting_for: v } }
+    case 'edit_notes':
+      return { kind: 'project', project: s.project, notes: value }
     case 'set_status':
       return {
         kind: 'task',
