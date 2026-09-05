@@ -308,3 +308,30 @@ export interface RefreshResult {
 export interface SeenResult {
   seen: string
 }
+
+/** service.SidebarResult - cockpit.sidebar as the SPA reads it. */
+export interface SidebarConfig {
+  variant: 'columns' | 'plain' | 'rail' | string
+  show_repos: boolean
+  sort: 'worst' | 'last_activity' | 'manual' | string
+  /** 0 = the SPA's own default. */
+  width: number
+}
+
+/** service.CockpitResult - the resolved `cockpit:` block (defaults applied server-side). */
+export interface CockpitConfig {
+  groups: { slug: string; name: string }[]
+  doing_idle_days: number
+  waiting_highlight_days: number
+  stuck_project_days: number
+  cutoff_hour: number
+  refresh: { every_seconds: number; window: string }
+  sections: Record<string, boolean>
+  sources: Record<string, boolean>
+  sidebar: SidebarConfig
+}
+
+/** service.ConfigResult - GET /api/config */
+export interface ConfigResult {
+  cockpit: CockpitConfig
+}

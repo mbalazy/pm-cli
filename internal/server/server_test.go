@@ -188,6 +188,42 @@ func TestProjectsGroups(t *testing.T) {
 	}
 }
 
+func TestConfig(t *testing.T) {
+	store := newTestStore(t)
+	srv := newServer(t, store, Options{})
+
+	// No file: the defaults, resolved, so the SPA never has to know them.
+	m := getJSON(t, srv.URL+"/api/config", 200)
+	c := m["cockpit"].(map[string]any)
+	wantKeys(t, c, "groups", "doing_idle_days", "waiting_highlight_days", "stuck_project_days",
+		"cutoff_hour", "refresh", "sections", "sources", "sidebar")
+	sb := c["sidebar"].(map[string]any)
+	if sb["variant"] != "columns" || sb["show_repos"] != true || sb["sort"] != "worst" || sb["width"] != float64(0) {
+		t.Fatalf("sidebar = %v", sb)
+	}
+	if c["refresh"].(map[string]any)["every_seconds"] != float64(1800) {
+		t.Fatalf("refresh = %v", c["refresh"])
+	}
+
+	if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  sidebar: {variant: plain, width: 240}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m = getJSON(t, srv.URL+"/api/config", 200)
+	sb = m["cockpit"].(map[string]any)["sidebar"].(map[string]any)
+	if sb["variant"] != "plain" || sb["width"] != float64(240) {
+		t.Fatalf("sidebar = %v", sb)
+	}
+
+	// A broken file is a loud 500, never a sidebar drawn on defaults.
+	if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  sidebar: {variant: bogus}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := getJSON(t, srv.URL+"/api/config", 500)
+	if !strings.Contains(e["error"].(string), "bogus") {
+		t.Fatalf("error = %v", e)
+	}
+}
+
 func TestTasks(t *testing.T) {
 	srv := newServer(t, newTestStore(t), Options{})
 

@@ -1,13 +1,14 @@
 // react-query hooks, one per endpoint. The KEYS are a contract shared with the
 // live feed (118-9 invalidates by them) - keep them exactly as listed:
 //   ['projects'] ['groups'] ['tasks', slug] ['task', slug, id] ['context', slug] ['runs'] ['focus']
-//   ['attention', project, group] ['changes']
+//   ['attention', project, group] ['changes'] ['config']
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { apiGet, apiPost, query } from './client'
 import type {
   Attention,
   Changes,
+  ConfigResult,
   CrossProjectContextResult,
   FocusResult,
   GroupsResult,
@@ -35,6 +36,7 @@ export const keys = {
   focus: () => ['focus'] as const,
   attention: (project = '', group = '') => ['attention', project, group] as const,
   changes: () => ['changes'] as const,
+  config: () => ['config'] as const,
 }
 
 export function useProjects() {
@@ -112,6 +114,14 @@ export function useFocus() {
   return useQuery({
     queryKey: keys.focus(),
     queryFn: () => apiGet<FocusResult>('/api/focus'),
+  })
+}
+
+/** The resolved cockpit config (sidebar variant, section toggles, refresh schedule). */
+export function useConfig() {
+  return useQuery({
+    queryKey: keys.config(),
+    queryFn: () => apiGet<ConfigResult>('/api/config'),
   })
 }
 

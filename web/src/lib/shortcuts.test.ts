@@ -11,6 +11,16 @@ describe('shortcutFor', () => {
     expect(shortcutFor({ key: '?' })).toBe('help')
     expect(shortcutFor({ key: 'x' })).toBeNull()
   })
+  it('maps the screen keys, focus and the group chord prefix', () => {
+    expect(shortcutFor({ key: '1' })).toBe('today')
+    expect(shortcutFor({ key: '2' })).toBe('changes')
+    expect(shortcutFor({ key: '3' })).toBe('runs')
+    expect(shortcutFor({ key: ',' })).toBe('settings')
+    expect(shortcutFor({ key: 't' })).toBe('focus')
+    expect(shortcutFor({ key: 'g' })).toBe('groupPrefix')
+    const input = document.createElement('input')
+    expect(shortcutFor({ key: '1', target: input })).toBeNull()
+  })
   it('opens the palette on cmd/ctrl+k, even from a text field', () => {
     const input = document.createElement('input')
     expect(shortcutFor({ key: 'k', metaKey: true })).toBe('palette')
@@ -28,7 +38,20 @@ describe('shortcutFor', () => {
   })
   it('lists every action in the help table', () => {
     const actions = new Set(SHORTCUTS.map((s) => s.action))
-    for (const a of ['down', 'up', 'open', 'close', 'help', 'palette'])
+    for (const a of [
+      'down',
+      'up',
+      'open',
+      'close',
+      'help',
+      'palette',
+      'today',
+      'changes',
+      'runs',
+      'settings',
+      'focus',
+      'groupPrefix',
+    ])
       expect(actions.has(a as never)).toBe(true)
   })
 })
