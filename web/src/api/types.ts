@@ -231,6 +231,8 @@ export interface AttentionRow {
   status?: string
   /** One display-ready sentence: why the row is here. */
   reason: string
+  /** A waiting row's raw reason - what an edit of it starts from. */
+  waiting_for?: string
   /** null = unknown, render "since ?" - never derive from another stamp. */
   age_seconds: number | null
   since?: string

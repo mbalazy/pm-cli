@@ -19,10 +19,16 @@ interface Props {
 
 export function Palette({ open, query, items, onQueryChange, onSelect, onClose }: Props) {
   const ref = useRef<HTMLDialogElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     const d = ref.current
     if (!d) return
-    if (open && !d.open) d.showModal()
+    if (open && !d.open) {
+      d.showModal()
+      // showModal lands on cmdk's root, not the field: typing would go
+      // nowhere and Enter would fire the pre-selected item (ux-audit F-03).
+      inputRef.current?.focus()
+    }
     if (!open && d.open) d.close()
   }, [open])
 
@@ -37,6 +43,7 @@ export function Palette({ open, query, items, onQueryChange, onSelect, onClose }
         <div className="flex items-center gap-2 border-b border-rule px-3">
           <Search aria-hidden="true" className="size-4 shrink-0 text-ink-3" strokeWidth={1.75} />
           <Command.Input
+            ref={inputRef}
             value={query}
             onValueChange={onQueryChange}
             placeholder="project, task id or title, runs…"

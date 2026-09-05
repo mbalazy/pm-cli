@@ -206,6 +206,9 @@ func TestAttentionWaiting(t *testing.T) {
 	if got := ids(rows); strings.Join(got, ",") != "solo-1,solo-2,solo-3" {
 		t.Fatalf("order = %v", got)
 	}
+	if r := rows[0]; r.WaitingFor != "client answer" {
+		t.Errorf("waiting row carries the raw reason for the edit dialog: %+v", r)
+	}
 	if r := rows[0]; !has(r.Flags, FlagHighlight) || r.Severity != SeverityWarn || r.Reason != "waiting for client answer" {
 		t.Errorf("highlighted row = %+v", r)
 	}

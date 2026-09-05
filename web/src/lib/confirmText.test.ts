@@ -32,7 +32,7 @@ describe('describeAction', () => {
     expect(describeAction(p, '').heading).toBe('atlas-158 ACME-1736')
   })
   it('waiting needs a reason and warns when empty', () => {
-    const p = { kind: 'set_waiting_for' as const, subject }
+    const p = { kind: 'set_waiting_for' as const, subject: { ...subject, status: 'doing' } }
     const empty = describeAction(p, '')
     expect(empty.field?.kind).toBe('input')
     expect(empty.warning).toMatch(/no reason/)
@@ -40,6 +40,21 @@ describe('describeAction', () => {
     const filled = describeAction(p, ' client answer ')
     expect(filled.warning).toBeUndefined()
     expect(filled.sentence).toBe('Moves atlas-158 to waiting with the reason: client answer.')
+  })
+  it('waiting on a task already waiting is an edit of the reason, pre-filled', () => {
+    const waiting = { ...subject, status: 'waiting', waiting_for: 'client answer' }
+    const p = { kind: 'set_waiting_for' as const, subject: waiting }
+    expect(initialValue(p)).toBe('client answer')
+    const t = describeAction(p, 'client answer')
+    expect(t.sentence).toBe('Sets the waiting reason of atlas-158.')
+    expect(t.confirmLabel).toBe('save reason')
+    expect(t.warning).toBeUndefined()
+    const cleared = describeAction(p, '')
+    expect(cleared.sentence).toMatch(/Clears the waiting reason/)
+    expect(cleared.warning).toMatch(/no reason/)
+    expect(requestFor(p, 'client answer')).toMatchObject({
+      body: { status: 'waiting', waiting_for: 'client answer' },
+    })
   })
   it('set_status warns only for waiting', () => {
     const w = describeAction({ kind: 'set_status', subject, status: 'waiting' }, '')
@@ -223,5 +238,28 @@ describe('run actions', () => {
     expect(describeAction({ kind: 'rerun_finish', subject: p.subject }, '').sentence).toMatch(
       /never --sim/,
     )
+  })
+  it('a warning that promises a refusal blocks confirm unless a flag can route around it', () => {
+    const p = {
+      kind: 'resume_run' as const,
+      subject: { project: 'atlas', task_id: 'atlas-1', title: 'Epic' },
+    }
+    const dirty = 'working tree dirty - the run will refuse unless it uses an additional worktree'
+    expect(describeAction(p, '', undefined, plan).blocked).toBeUndefined()
+    expect(
+      describeAction(p, '', undefined, { ...plan, warnings: [dirty], additional_avail: true })
+        .blocked,
+    ).toBeUndefined()
+    expect(
+      describeAction(p, '', undefined, { ...plan, warnings: [dirty], additional_avail: false })
+        .blocked,
+    ).toMatch(/commit or stash the working tree in \/r/)
+    expect(
+      describeAction({ kind: 'rerun_finish', subject: p.subject }, '', undefined, {
+        ...plan,
+        action: 'rerun_finish',
+        warnings: ['claim held by x - `pm finish` will refuse'],
+      }).blocked,
+    ).toMatch(/release or wait out the claim/)
   })
 })

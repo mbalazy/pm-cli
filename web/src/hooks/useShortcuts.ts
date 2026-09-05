@@ -34,7 +34,12 @@ export function useShortcuts(handlers: ShortcutHandlers) {
       }
       const action = shortcutFor(e)
       if (action === null) return
-      if (action !== 'palette' && document.querySelector('dialog[open]')) return
+      // A dialog owns the keyboard: while one is open, and for the very key
+      // that closed it (React flushes the close before the event reaches the
+      // window, so `dialog[open]` alone let Esc fall through to "close the
+      // task" - ux-audit F-05).
+      const inDialog = e.target instanceof Element && e.target.closest('dialog') !== null
+      if (action !== 'palette' && (inDialog || document.querySelector('dialog[open]'))) return
       if (action === 'groupPrefix') {
         if (ref.current.group) {
           armedAt = Date.now()

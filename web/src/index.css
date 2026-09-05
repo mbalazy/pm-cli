@@ -20,7 +20,7 @@
   --paper-3: oklch(91% 0.012 80);
   --ink: oklch(24% 0.02 60);
   --ink-2: oklch(46% 0.018 60);
-  --ink-3: oklch(62% 0.014 60);
+  --ink-3: oklch(53% 0.014 60); /* 4.9:1 on paper, 4.8:1 on paper-2 (ux-audit F-01) */
   --rule: oklch(86% 0.012 75);
   --rule-strong: oklch(72% 0.014 70);
   --highlight: oklch(93% 0.09 95);
@@ -30,7 +30,7 @@
   /* Severity - always next to a glyph, never alone. */
   --crit: oklch(50% 0.17 28);
   --crit-bg: oklch(94% 0.03 28);
-  --warn: oklch(60% 0.14 72);
+  --warn: oklch(53% 0.14 72); /* 5.1:1 on paper as 14 px alert text */
   --warn-bg: oklch(95% 0.04 80);
   --info: oklch(50% 0.07 250);
   --info-bg: oklch(94% 0.02 250);
@@ -73,7 +73,7 @@
   --paper-3: oklch(26% 0.016 60);
   --ink: oklch(88% 0.01 80);
   --ink-2: oklch(68% 0.012 75);
-  --ink-3: oklch(52% 0.012 70);
+  --ink-3: oklch(62% 0.012 70); /* 5.3:1 on the dark paper */
   --rule: oklch(28% 0.014 60);
   --rule-strong: oklch(38% 0.016 60);
   --highlight: oklch(33% 0.06 95);

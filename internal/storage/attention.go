@@ -107,6 +107,9 @@ type AttentionRow struct {
 	Status string `json:"status,omitempty"`
 	// Reason is one display-ready sentence: WHY the row is here.
 	Reason string `json:"reason"`
+	// WaitingFor is the task's raw waiting reason on a waiting row - the
+	// value an edit starts from (Reason is prose, not a field).
+	WaitingFor string `json:"waiting_for,omitempty"`
 	// AgeSeconds is how long the row's condition has held; nil = unknown,
 	// rendered "since ?" and NEVER guessed from another stamp.
 	AgeSeconds *int64 `json:"age_seconds"`
@@ -698,6 +701,7 @@ func waitingRows(v *projectView, cfg *CockpitConfig, now time.Time) []AttentionR
 			r.Severity = SeverityWarn
 		} else {
 			r.Reason = "waiting for " + t.Meta.WaitingFor
+			r.WaitingFor = t.Meta.WaitingFor
 		}
 		// Age from status_changed ONLY: `updated` moves on every edit and
 		// would reset the clock this row exists to show. Empty = unknown.

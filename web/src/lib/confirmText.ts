@@ -108,6 +108,12 @@ export interface ConfirmText {
   flags?: FlagOption[]
   /** True while the preview is still loading - the confirm button waits for it. */
   loading?: boolean
+  /**
+   * The plan says the run WILL refuse and nothing in the dialog can route
+   * around it (no worktree slot to tick): confirm is disabled and this says
+   * what to do first (ux-audit F-13).
+   */
+  blocked?: string
 }
 
 /** The kinds this build knows; anything else has no dialog and no request. */
@@ -166,6 +172,23 @@ export function flagOptions(kind: RunKind, plan?: RunPlan): FlagOption[] {
   }
 }
 
+/**
+ * Why the plan cannot be started as shown: a warning that promises a refusal
+ * which no checkbox can avoid. The dirty-tree warning is escapable by
+ * `--additional` when the project has a slot (then the re-planned warnings
+ * drop it); without a slot the only fix is in the checkout.
+ */
+export function blockedBy(plan: RunPlan | undefined): string | undefined {
+  if (!plan) return undefined
+  const refuses = (plan.warnings ?? []).find((w) => /will refuse/.test(w))
+  if (!refuses) return undefined
+  if (/additional worktree/.test(refuses) && plan.additional_avail) return undefined
+  const where = plan.cwd ? ` in ${plan.cwd}` : ''
+  return /additional worktree/.test(refuses)
+    ? `commit or stash the working tree${where}, or configure a worktree slot for this project, then try again`
+    : 'release or wait out the claim named above, then try again'
+}
+
 /** The argv preview line of a plan: `cd <cwd> && pm ...`, or the claim/kill target. */
 export function previewOf(plan: RunPlan | undefined): string {
   if (!plan) return ''
@@ -197,6 +220,19 @@ export function describeAction(
         confirmLabel: focused ? 'drop from focus' : 'add to focus',
       }
     case 'set_waiting_for':
+      // On a task already waiting this is an edit of the reason, worded and
+      // pre-filled like the detail's (ux-audit F-08: an empty field + Enter
+      // used to wipe a recorded reason into a "no reason" alarm).
+      if (s.status === 'waiting')
+        return {
+          ...base,
+          sentence: value.trim()
+            ? `Sets the waiting reason of ${id}.`
+            : `Clears the waiting reason of ${id} - it stays waiting.`,
+          confirmLabel: 'save reason',
+          field: { kind: 'input', label: 'waiting for', placeholder: 'who or what blocks this' },
+          warning: value.trim() ? undefined : NO_REASON,
+        }
       return {
         ...base,
         sentence: `Moves ${id} to waiting${value.trim() ? ` with the reason: ${value.trim()}` : ''}.`,
@@ -303,6 +339,7 @@ function describeRun(
     warnings: plan?.warnings,
     flags: flagOptions(kind, plan),
     loading: plan === undefined,
+    blocked: blockedBy(plan),
   }
   switch (kind) {
     case 'claim':

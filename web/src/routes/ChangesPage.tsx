@@ -59,7 +59,11 @@ export function ChangesPage({ group }: { group: string }) {
   const shown = filterEvents(byGroup, { sources, group: '' })
   const chips = sourceChips(changes.data?.sources, now)
   const names = chips.map((c) => c.name)
-  const times = refreshTimes(changes.data?.sources, config.data?.cockpit.refresh.every_seconds)
+  const times = refreshTimes(
+    changes.data?.sources,
+    config.data?.cockpit.refresh.every_seconds,
+    config.data?.cockpit.refresh.window,
+  )
   const cfg = config.data?.cockpit
 
   const markSeen = (e?: ChangeEvent) =>

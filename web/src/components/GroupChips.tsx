@@ -1,12 +1,17 @@
 import { Link } from '@tanstack/react-router'
+import { ArrowUpRight } from 'lucide-react'
 
 import type { GroupSummary } from '../api/types'
 import { severityGlyph } from '../lib/glyphs'
 import { groupSearch } from '../lib/groupFilter'
+import { groupTarget } from '../lib/sidebarView'
 import { toneClass } from './tone'
 
 // The home filter as pills: "all" plus one per group, each a link to `/?g=`.
 // The active one is the URL's; the hotkey letters come from lib/groupFilter.
+// The compact strip (the phone bar) also carries, per group, the one link the
+// phone otherwise loses with the sidebar: the group page itself (ux-audit
+// F-07 - "where we left off" had no tap path from Today).
 
 interface Props {
   groups: Pick<GroupSummary, 'slug' | 'name' | 'worst'>[]
@@ -52,6 +57,20 @@ export function GroupChips({ groups, active, hotkeys, compact, to = '/' }: Props
           {g.name}
         </Link>
       ))}
+      {compact &&
+        groups.map((g) => (
+          <Link
+            key={`open:${g.slug}`}
+            to={groupTarget(g).to}
+            params={groupTarget(g).params}
+            search={{ tab: 'overview' }}
+            className="pill"
+            aria-label={`open ${g.name}`}
+            title={`open ${g.name}`}
+          >
+            <ArrowUpRight aria-hidden="true" className="size-3" strokeWidth={1.75} />
+          </Link>
+        ))}
       {!compact && to === '/' && (
         <span className="ml-1 text-xs text-ink-3 italic">one click, home stays</span>
       )}

@@ -38,7 +38,11 @@ export function TodayPage({ group }: { group: string }) {
   const capped = sections.map((s) => ({ section: s, capped: capSection(s, expanded.has(s.name)) }))
   const flat = capped.flatMap((c) => c.capped.rows)
   const hotkeys = groupHotkeys(all.data?.groups ?? [])
-  const times = refreshTimes(changes.data?.sources, config.data?.cockpit.refresh.every_seconds)
+  const times = refreshTimes(
+    changes.data?.sources,
+    config.data?.cockpit.refresh.every_seconds,
+    config.data?.cockpit.refresh.window,
+  )
 
   const step = (delta: number) => {
     if (flat.length === 0) return
