@@ -8,7 +8,7 @@ export function RunsTable({ rows }: { rows: RunRow[] }) {
   if (rows.length === 0) return <p className="text-gray-500">no runs</p>
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-left text-sm">
+      <table aria-label="Runs" className="w-full text-left text-sm">
         <thead>
           <tr className="border-b text-gray-500">
             <th className="py-1 pr-3">PROJECT</th>

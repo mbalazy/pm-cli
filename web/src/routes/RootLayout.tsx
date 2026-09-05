@@ -1,33 +1,34 @@
-import { Outlet, useLocation, useNavigate, useParams } from '@tanstack/react-router'
+import { Link, Outlet, useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { useState } from 'react'
 
-import { useProjects, useTasks } from '../api/queries'
+import { useAttention, useConfig, useProjects, useTasks } from '../api/queries'
 import { useLiveInvalidation } from '../api/useLiveInvalidation'
+import { GroupChips } from '../components/GroupChips'
+import { GroupSidebar } from '../components/GroupSidebar'
 import { HelpDialog } from '../components/HelpDialog'
 import { Palette } from '../components/Palette'
-import { ProjectSidebar } from '../components/ProjectSidebar'
 import { useRecentTasks } from '../hooks/useRecentTasks'
 import { useShortcuts } from '../hooks/useShortcuts'
-import { openTaskCount } from '../lib/groupByStatus'
+import { groupHotkeys, parseGroupFilter } from '../lib/groupFilter'
 import { paletteItems, type PaletteItem } from '../lib/paletteItems'
+import { SCREENS } from '../lib/screens'
+import { asleepProjects, sidebarLayout, sortGroups } from '../lib/sidebarView'
 
-// The shell: sidebar (a drawer under 768 px), the page, the palette, the
-// help dialog and the live feed. Composition only - hooks in, components out.
+// The shell: the group sidebar (a chip strip on a phone), the page, the
+// palette, the help dialog and the live feed. Composition only - hooks in,
+// components out. The sidebar's shape is the server's config (/api/config).
 
 export function RootLayout() {
   const { slug } = useParams({ strict: false })
+  const search = useSearch({ strict: false }) as Record<string, unknown>
   const navigate = useNavigate()
   const projects = useProjects()
   const tasks = useTasks(slug ?? '')
+  const attention = useAttention()
+  const config = useConfig()
   const { recent } = useRecentTasks()
   useLiveInvalidation()
 
-  // The phone drawer is open for ONE path: any navigation - a task row, the
-  // palette, the back button - closes it, without an effect to do so.
-  const { pathname } = useLocation()
-  const [drawerPath, setDrawerPath] = useState<string | null>(null)
-  const drawerOpen = drawerPath === pathname
-  const setDrawerOpen = (open: boolean) => setDrawerPath(open ? pathname : null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -35,6 +36,10 @@ export function RootLayout() {
   useShortcuts({
     palette: () => setPaletteOpen((o) => !o),
     help: () => setHelpOpen(true),
+    today: () => void navigate({ to: '/' }),
+    changes: () => void navigate({ to: '/changes' }),
+    runs: () => void navigate({ to: '/runs' }),
+    settings: () => void navigate({ to: '/settings' }),
   })
 
   const items = paletteItems({
@@ -49,37 +54,57 @@ export function RootLayout() {
     void navigate({ to: item.to })
   }
 
+  const layout = sidebarLayout(config.data?.cockpit.sidebar)
+  const groups = sortGroups(attention.data?.groups ?? [], config.data?.cockpit.sidebar.sort)
+  const asleep = asleepProjects(projects.data?.projects)
+  const columns = layout.width ?? (layout.variant === 'rail' ? '3.5rem' : '15rem')
+
   return (
-    <div className="min-h-screen md:grid md:grid-cols-[14rem_1fr]">
-      <div className="border-b p-2 md:hidden">
-        <button type="button" className="underline" onClick={() => setDrawerOpen(!drawerOpen)}>
-          {drawerOpen ? 'Hide projects' : 'Projects'}
-        </button>
-        <button type="button" className="ml-4 underline" onClick={() => setPaletteOpen(true)}>
-          ⌘K
-        </button>
+    <div
+      className="min-h-screen md:grid"
+      style={{ gridTemplateColumns: `${columns} minmax(0, 1fr)` }}
+    >
+      <div className="space-y-2 border-b p-2 md:hidden">
+        <nav aria-label="Screens" className="flex flex-wrap gap-3 text-sm">
+          {SCREENS.map((s) => (
+            <Link
+              key={s.to}
+              to={s.to}
+              className="underline"
+              activeProps={{ className: 'font-bold' }}
+            >
+              {s.label}
+            </Link>
+          ))}
+          <button type="button" className="ml-auto underline" onClick={() => setPaletteOpen(true)}>
+            ⌘K
+          </button>
+        </nav>
+        {attention.data && (
+          <div className="overflow-x-auto">
+            <GroupChips
+              compact
+              groups={groups}
+              active={parseGroupFilter(search)}
+              hotkeys={groupHotkeys(groups)}
+            />
+          </div>
+        )}
       </div>
-      <aside className={`border-r ${drawerOpen ? '' : 'hidden'} md:block`}>
-        {projects.isPending && <p className="p-3 text-sm">loading…</p>}
-        {projects.isError && (
-          <p className="p-3 text-sm text-red-700">error: {projects.error.message}</p>
+      <aside className="hidden border-r md:block">
+        {attention.isPending && <p className="p-3 text-sm">loading…</p>}
+        {attention.isError && (
+          <p className="p-3 text-sm text-red-700">error: {attention.error.message}</p>
         )}
-        {projects.data && (
-          <ProjectSidebar
-            activeSlug={slug}
-            onNavigate={() => setDrawerOpen(false)}
-            items={projects.data.projects
-              .filter((p) => !p.archived)
-              .map((p) => ({
-                slug: p.slug,
-                name: p.name,
-                openTasks: openTaskCount(p.task_counts),
-              }))}
-          />
+        {config.isError && (
+          <p className="p-3 text-sm text-red-700">config: {config.error.message}</p>
         )}
-        <p className="hidden p-3 text-xs text-gray-400 md:block">
-          <kbd>?</kbd> shortcuts · <kbd>⌘K</kbd> palette
-        </p>
+        {attention.data && <GroupSidebar groups={groups} layout={layout} asleep={asleep} />}
+        {layout.variant !== 'rail' && (
+          <p className="p-3 text-xs text-gray-400">
+            <kbd>?</kbd> shortcuts · <kbd>⌘K</kbd> palette
+          </p>
+        )}
       </aside>
       <main className="min-w-0 p-4">
         <Outlet />
