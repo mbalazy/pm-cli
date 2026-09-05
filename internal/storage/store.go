@@ -196,6 +196,9 @@ func (s *Store) CreateProject(slug string, p *Project) error {
 		if err := ValidateProjectPrefix(p.Prefix); err != nil {
 			return err
 		}
+		if err := ValidateGroup(p.Group); err != nil {
+			return err
+		}
 	}
 	dir := s.ProjectDir(slug)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -338,9 +341,16 @@ func (s *Store) MutateProject(slug string, fn func(*Project) error) (*Project, e
 	if err != nil {
 		return nil, err
 	}
-	before := p.Prefix
+	before, groupBefore := p.Prefix, p.Group
 	if err := fn(p); err != nil {
 		return nil, err
+	}
+	// Same CHANGE-scoped rule for the group: a hand-edited bad group must not
+	// lock the project out of every other edit.
+	if p.Group != groupBefore {
+		if err := ValidateGroup(p.Group); err != nil {
+			return nil, err
+		}
 	}
 	// Reject a mutation that INTRODUCES an unsafe prefix (the ID source for
 	// every auto-minted task - see CreateProject). Deliberately scoped to a
