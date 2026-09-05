@@ -27,6 +27,7 @@ const config: CockpitConfig = {
   sources: { pm: true, git: true, slack: false },
   sidebar: { variant: 'columns', show_repos: true, sort: 'worst', width: 0 },
   git: { all_branches: false },
+  report: { model: 'haiku', language: 'pl' },
 }
 
 describe('form and patch', () => {
@@ -50,6 +51,7 @@ describe('form and patch', () => {
       sources: { ...base.sources },
       sidebar: { ...base.sidebar, variant: 'rail' },
       git_all_branches: true,
+      report_model: 'sonnet ',
       groups: { ...base.groups, acme: { name: 'ACME', order: 2 }, vega: { name: '', order: 3 } },
     }
     expect(patchFromForm(base, edited)).toEqual({
@@ -58,6 +60,7 @@ describe('form and patch', () => {
       sections: { recent: true },
       sidebar: { variant: 'rail' },
       git: { all_branches: true },
+      report: { model: 'sonnet' },
       groups: [
         { slug: 'acme', name: 'ACME', order: 2 },
         { slug: 'vega', order: 3 },

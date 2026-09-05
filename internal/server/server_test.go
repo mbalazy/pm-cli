@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/mbalazy/pm/internal/feed"
+	"github.com/mbalazy/pm/internal/report"
 	"github.com/mbalazy/pm/internal/runctl"
 	"github.com/mbalazy/pm/internal/service"
 	"github.com/mbalazy/pm/internal/storage"
@@ -1108,5 +1109,131 @@ func TestRunControl(t *testing.T) {
 			t.Fatalf("busy = %v", e)
 		}
 		postJSON(t, srv.URL+"/api/runs/test/t-2/release_claim", "", 409)
+	})
+}
+
+// The LLM report (pm-cli-118-20) against a fake `claude`: never run while
+// the switch is off, written once per period after a refresh when on,
+// written now on POST, its failure stored, a suggestion dismissed.
+func TestReport(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Date(2026, 9, 9, 15, 0, 0, 0, time.Local)
+	fakeDir := t.TempDir()
+	calls := filepath.Join(fakeDir, "calls.log")
+	exe := filepath.Join(fakeDir, "claude")
+	env := `{"type":"result","subtype":"success","is_error":false,"result":"**test**: t-1 waits.\n\n- SUGGEST t-1 back_to_todo: the block lifted\n","session_id":"s","usage":{"input_tokens":5,"cache_creation_input_tokens":0,"cache_read_input_tokens":100,"output_tokens":20}}`
+	prompts := filepath.Join(fakeDir, "prompts.log")
+	script := "#!/bin/sh\necho CALL >> \"$FAKE_CLAUDE_CALLS\"\necho \"$*\" >> \"$FAKE_CLAUDE_PROMPTS\"\nif [ -f \"$FAKE_CLAUDE_FAIL\" ]; then echo boom >&2; exit 1; fi\nprintf '%s' '" + env + "'\n"
+	if err := os.WriteFile(exe, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_CLAUDE_CALLS", calls)
+	t.Setenv("FAKE_CLAUDE_PROMPTS", prompts)
+	failFlag := filepath.Join(fakeDir, "fail")
+	t.Setenv("FAKE_CLAUDE_FAIL", failFlag)
+	countCalls := func() int {
+		b, _ := os.ReadFile(calls)
+		return strings.Count(string(b), "CALL")
+	}
+	src := &fakeFeedSource{name: "pm", events: []feed.Event{{ID: "e1", TS: now.Add(-time.Hour).Format(time.RFC3339), Project: "test", Group: "test", TaskID: "t-1", Title: "Test Task", Detail: "moved"}}}
+	f := feed.New(store.Root, []feed.Source{src})
+	srv := newServer(t, store, Options{Feed: f, Clock: func() time.Time { return now }, Report: &report.Writer{Exe: exe}, PollInterval: 20 * time.Millisecond, PingInterval: time.Minute})
+	events, cancel := sseClient(t, srv.URL+"/api/events")
+	defer cancel()
+
+	t.Run("off: GET says off, POST is 409, a refresh writes nothing - claude never ran", func(t *testing.T) {
+		m := getJSON(t, srv.URL+"/api/report", 200)
+		if m["enabled"] != false || m["state"] != "off" || m["period"] != "2026-09-08T18" {
+			t.Fatalf("report = %v", m)
+		}
+		e := postJSON(t, srv.URL+"/api/report", "", 409)
+		if !strings.Contains(e["error"].(string), "off") {
+			t.Fatalf("error = %v", e)
+		}
+		postJSON(t, srv.URL+"/api/changes/refresh", "", 200)
+		waitFor(t, events, `changes {"sources":["pm"]}`)
+		time.Sleep(50 * time.Millisecond)
+		if n := countCalls(); n != 0 {
+			t.Fatalf("claude ran %d time(s) while the report was off", n)
+		}
+		if m := getJSON(t, srv.URL+"/api/report", 200); m["state"] != "off" {
+			t.Fatalf("after refresh = %v", m)
+		}
+	})
+
+	t.Run("on: the next refresh writes the period's report once; GET carries text, suggestions, tokens", func(t *testing.T) {
+		if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  sources:\n    report: true\n  report:\n    model: haiku\n    language: en\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if m := getJSON(t, srv.URL+"/api/report", 200); m["state"] != "none" || m["enabled"] != true {
+			t.Fatalf("enabled, nothing yet = %v", m)
+		}
+		postJSON(t, srv.URL+"/api/changes/refresh", "", 200)
+		waitFor(t, events, `report {"period":"2026-09-08T18"}`)
+		if n := countCalls(); n != 1 {
+			t.Fatalf("claude calls = %d, want 1", n)
+		}
+		m := getJSON(t, srv.URL+"/api/report", 200)
+		if m["state"] != "done" {
+			t.Fatalf("report = %v", m)
+		}
+		rep := m["report"].(map[string]any)
+		if !strings.HasPrefix(rep["text"].(string), "**test**") || rep["model"] != "haiku" {
+			t.Fatalf("report = %v", rep)
+		}
+		if rep["tokens"].(map[string]any)["cache_read"] != float64(100) {
+			t.Fatalf("tokens = %v", rep["tokens"])
+		}
+		sugg := rep["suggestions"].([]any)
+		if len(sugg) != 1 || sugg[0].(map[string]any)["project"] != "test" || sugg[0].(map[string]any)["action"] != "back_to_todo" {
+			t.Fatalf("suggestions = %v", sugg)
+		}
+		// A second refresh in the same period writes nothing more.
+		postJSON(t, srv.URL+"/api/changes/refresh", "", 200)
+		waitFor(t, events, `changes {"sources":["pm"]}`)
+		time.Sleep(50 * time.Millisecond)
+		if n := countCalls(); n != 1 {
+			t.Fatalf("claude calls after the second refresh = %d, want 1", n)
+		}
+		// The prompt carried the event and the language.
+		b, _ := os.ReadFile(prompts)
+		if !strings.Contains(string(b), "t-1: Test Task - moved") || !strings.Contains(string(b), `language with code "en"`) || !strings.Contains(string(b), "--model haiku") {
+			t.Fatalf("prompt = %s", b)
+		}
+		// Dismiss: recorded and announced; an unknown id is 400.
+		id := sugg[0].(map[string]any)["id"].(string)
+		d := postJSON(t, srv.URL+"/api/report/dismiss", `{"id":"`+id+`"}`, 200)
+		if len(d["dismissed"].([]any)) != 1 {
+			t.Fatalf("dismiss = %v", d)
+		}
+		waitFor(t, events, `report {"period":"2026-09-08T18"}`)
+		postJSON(t, srv.URL+"/api/report/dismiss", `{"id":"nope"}`, 400)
+	})
+
+	t.Run("POST writes now even though the period has a report; a failing claude is stored as the error state", func(t *testing.T) {
+		if err := os.WriteFile(failFlag, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		m := postJSON(t, srv.URL+"/api/report", "", 202)
+		if m["state"] != "writing" {
+			t.Fatalf("accepted = %v", m)
+		}
+		waitFor(t, events, `report {"period":"2026-09-08T18"}`)
+		m = getJSON(t, srv.URL+"/api/report", 200)
+		if m["state"] != "error" || !strings.Contains(m["report"].(map[string]any)["error"].(string), "boom") {
+			t.Fatalf("after failure = %v", m)
+		}
+		if n := countCalls(); n != 2 {
+			t.Fatalf("claude calls = %d, want 2", n)
+		}
+		// GET on the POST-only route is the catch-all 404; no header is 403.
+		if st, _, _ := get(t, srv.URL+"/api/report/dismiss"); st != 404 {
+			t.Fatalf("GET dismiss = %d", st)
+		}
+		resp, _ := http.Post(srv.URL+"/api/report", "application/json", nil)
+		resp.Body.Close()
+		if resp.StatusCode != 403 {
+			t.Fatalf("no header = %d", resp.StatusCode)
+		}
 	})
 }

@@ -272,6 +272,13 @@ type CockpitResult struct {
 	Sources              map[string]bool `json:"sources"`
 	Sidebar              SidebarResult   `json:"sidebar"`
 	Git                  GitResult       `json:"git"`
+	Report               ReportResult    `json:"report"`
+}
+
+// ReportResult is storage.ReportConfig with json tags.
+type ReportResult struct {
+	Model    string `json:"model"`
+	Language string `json:"language"`
 }
 
 // ConfigGroup is one configured group (cockpit.groups.<slug>). The list is

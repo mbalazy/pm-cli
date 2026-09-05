@@ -67,6 +67,20 @@ type CockpitConfig struct {
 
 	// Git tunes the change feed's git source.
 	Git GitConfig `yaml:"git"`
+
+	// Report tunes the LLM report over the feed (pm-cli-118-20); the
+	// switch itself is Sources["report"].
+	Report ReportConfig `yaml:"report"`
+}
+
+// ReportConfig tunes the LLM report: which model writes it and in what
+// language. Off by default (Sources["report"]) because it costs tokens.
+type ReportConfig struct {
+	// Model is the claude model alias or name; a summary, not reasoning,
+	// so the default is the cheap one.
+	Model string `yaml:"model"`
+	// Language is the prose language of the report ("pl", "en", ...).
+	Language string `yaml:"language"`
 }
 
 // GroupConfig is one entry of CockpitConfig.Groups.
@@ -152,6 +166,7 @@ func DefaultCockpitConfig() CockpitConfig {
 			ShowRepos: true,
 			Sort:      "worst",
 		},
+		Report: ReportConfig{Model: "haiku", Language: "pl"},
 	}
 }
 
@@ -252,6 +267,12 @@ func (c *CockpitConfig) validate(where string) error {
 	}
 	if c.Sidebar.Width < 0 {
 		return fmt.Errorf("%s: cockpit.sidebar.width is %d, must be >= 0", where, c.Sidebar.Width)
+	}
+	if strings.TrimSpace(c.Report.Model) == "" {
+		return fmt.Errorf("%s: cockpit.report.model is empty", where)
+	}
+	if strings.ContainsAny(c.Report.Model, " \t\n") {
+		return fmt.Errorf("%s: cockpit.report.model %q must be one word (a claude model alias or name)", where, c.Report.Model)
 	}
 	return nil
 }

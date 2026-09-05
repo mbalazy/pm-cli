@@ -119,11 +119,15 @@ func (h *handler) runRefresh(ctx context.Context) (*feed.Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, refreshTimeout)
 	defer cancel()
 	now := h.clock()
-	res, err := h.feed.Refresh(ctx, h.store, cfg, feed.Cutoff(cfg, now), now)
+	cutoff := feed.Cutoff(cfg, now)
+	res, err := h.feed.Refresh(ctx, h.store, cfg, cutoff, now)
 	if err != nil {
 		return nil, err
 	}
 	h.bus.publish("changes", changesEventData(res.Sources))
+	// The report's once-per-period rule hangs off the first successful
+	// refresh of the period (the morning's). Nothing runs when it is off.
+	h.autoReport(cfg, cutoff)
 	return res, nil
 }
 

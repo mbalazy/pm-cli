@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/mbalazy/pm/internal/feed"
+	"github.com/mbalazy/pm/internal/report"
 	"github.com/mbalazy/pm/internal/runctl"
 	"github.com/mbalazy/pm/internal/service"
 	"github.com/mbalazy/pm/internal/storage"
@@ -65,6 +66,10 @@ type Options struct {
 	// over the store with the serving binary. Tests hand in one whose pm
 	// is a fake script, so no request ever starts a real worker.
 	RunControl *runctl.Controller
+	// Report writes the LLM report (pm-cli-118-20); nil = `claude` on PATH.
+	// Tests hand in one whose Exe is a fake script - and the test that the
+	// report never runs while switched off records that no script ran.
+	Report *report.Writer
 }
 
 const (
@@ -115,7 +120,11 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	if opts.RunControl == nil {
 		opts.RunControl = runctl.New(store, runctl.Options{})
 	}
-	h := &handler{store: store, opts: opts, feed: opts.Feed, clock: opts.Clock, bus: newChangeBus(), runs: opts.RunControl}
+	if opts.Report == nil {
+		opts.Report = &report.Writer{}
+	}
+	h := &handler{store: store, opts: opts, feed: opts.Feed, clock: opts.Clock, bus: newChangeBus(), runs: opts.RunControl,
+		reports: &reportControl{writing: map[string]bool{}}}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/projects", h.projects)
@@ -129,6 +138,7 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux.HandleFunc("GET /api/focus", h.focus)
 	mux.HandleFunc("GET /api/attention", h.attention)
 	mux.HandleFunc("GET /api/changes", h.changes)
+	mux.HandleFunc("GET /api/report", h.getReport)
 	// Mutations. Every POST under /api/ needs the client header (see
 	// requireClient); GETs stay open.
 	mux.HandleFunc("POST /api/changes/refresh", requireClient(h.refresh))
@@ -138,6 +148,8 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux.HandleFunc("POST /api/projects/{slug}", requireClient(h.updateProject))
 	mux.HandleFunc("POST /api/settings", requireClient(h.updateSettings))
 	mux.HandleFunc("POST /api/runs/{project}/{id}/{action}", requireClient(h.runAction))
+	mux.HandleFunc("POST /api/report", requireClient(h.writeReport))
+	mux.HandleFunc("POST /api/report/dismiss", requireClient(h.dismissSuggestion))
 	mux.HandleFunc("GET /api/events", h.events)
 	// Anything else under /api/ is unknown, never the SPA: a typo'd endpoint
 	// answering with index.html would read as "the server is fine, the data
@@ -160,6 +172,8 @@ type handler struct {
 	clock func() time.Time
 	bus   *changeBus
 	runs  *runctl.Controller
+	// reports tracks the report writes in flight (one per period).
+	reports *reportControl
 }
 
 // --- JSON plumbing ---

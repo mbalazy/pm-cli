@@ -55,6 +55,7 @@ export type PendingKind =
   | 'sleep_project'
   | 'wake_project'
   | 'move_repo'
+  | 'write_report'
   | RunKind
 
 /** The run-control kinds (pm-cli-118-21): a POST /api/runs/{p}/{id}/{action}. */
@@ -123,6 +124,7 @@ export function isPendingKind(k: string): k is PendingKind {
     k === 'sleep_project' ||
     k === 'wake_project' ||
     k === 'move_repo' ||
+    k === 'write_report' ||
     isRunKind(k)
   )
 }
@@ -279,6 +281,13 @@ export function describeAction(
           : `Takes ${s.project} out of its group - it becomes a group of its own.`,
         confirmLabel: s.group ? `move to ${s.group}` : 'leave group',
       }
+    case 'write_report':
+      return {
+        ...base,
+        sentence:
+          'Runs a headless claude over the feed since the cutoff and the attention queue, and stores the report for this period. It costs tokens (one short call).',
+        confirmLabel: 'write report',
+      }
   }
 }
 
@@ -365,6 +374,8 @@ export function requestFor(p: PendingAction, value: string, flags: RunFlags = {}
       return { kind: 'project', project: s.project, body: { archived: false } }
     case 'move_repo':
       return { kind: 'project', project: s.project, body: { group: s.group ?? '' } }
+    case 'write_report':
+      return { kind: 'report_write' }
     case 'set_status':
       return {
         kind: 'task',
