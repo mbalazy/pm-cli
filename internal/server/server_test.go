@@ -15,6 +15,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/mbalazy/pm/internal/feed"
 	"github.com/mbalazy/pm/internal/storage"
 )
 
@@ -546,4 +547,150 @@ func TestAttention(t *testing.T) {
 		t.Fatal(err)
 	}
 	getJSON(t, srv.URL+"/api/attention", 500)
+}
+
+// --- change feed ---
+
+// fakeFeedSource is a scripted feed source for the endpoint tests.
+type fakeFeedSource struct {
+	name   string
+	events []feed.Event
+	calls  int
+}
+
+func (s *fakeFeedSource) Name() string { return s.name }
+func (s *fakeFeedSource) Fetch(ctx context.Context, from, to time.Time, projects []feed.Project) ([]feed.Event, error) {
+	s.calls++
+	return s.events, nil
+}
+
+func postJSON(t *testing.T, url, body string, want int) map[string]any {
+	t.Helper()
+	resp, err := http.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != want {
+		t.Fatalf("POST %s = %d, want %d: %s", url, resp.StatusCode, want, b)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("not JSON: %v: %s", err, b)
+	}
+	return m
+}
+
+// /api/changes reads the cache; POST /api/changes/refresh runs the sources
+// and publishes an SSE `changes` event; POST /api/changes/seen moves the
+// mark and every event carries its seen flag.
+func TestChangesEndpoints(t *testing.T) {
+	store := newTestStore(t)
+	// A fixed clock at 15:00, inside the default window; the cutoff is
+	// yesterday 18:00.
+	now := time.Date(2026, 9, 9, 15, 0, 0, 0, time.Local)
+	src := &fakeFeedSource{name: "pm", events: []feed.Event{
+		{ID: "e-new", TS: now.Add(-time.Hour).Format(time.RFC3339), Project: "test", Group: "test", Title: "fresh", Detail: "moved"},
+		{ID: "e-old", TS: now.Add(-30 * time.Hour).Format(time.RFC3339), Project: "test", Group: "test", Title: "before cutoff"},
+	}}
+	f := feed.New(store.Root, []feed.Source{src})
+	srv := newServer(t, store, Options{Feed: f, Clock: func() time.Time { return now }, PollInterval: 20 * time.Millisecond, PingInterval: time.Minute})
+	events, cancel := sseClient(t, srv.URL+"/api/events")
+	defer cancel()
+
+	// Nothing cached yet: an empty feed, no sources, the cutoff stated.
+	m := getJSON(t, srv.URL+"/api/changes", 200)
+	wantKeys(t, m, "cutoff", "events", "unseen", "sources")
+	if len(m["events"].([]any)) != 0 || m["cutoff"] != time.Date(2026, 9, 8, 18, 0, 0, 0, time.Local).Format(time.RFC3339) {
+		t.Fatalf("empty feed = %v", m)
+	}
+
+	r := postJSON(t, srv.URL+"/api/changes/refresh", "", 200)
+	if r["added"] != float64(1) || src.calls != 1 {
+		t.Fatalf("refresh = %v (calls %d)", r, src.calls)
+	}
+	waitFor(t, events, `changes {"sources":["pm"]}`)
+
+	m = getJSON(t, srv.URL+"/api/changes", 200)
+	evs := m["events"].([]any)
+	if len(evs) != 1 || evs[0].(map[string]any)["id"] != "e-new" || evs[0].(map[string]any)["seen"] != false || m["unseen"] != float64(1) {
+		t.Fatalf("after refresh = %v", m)
+	}
+	sources := m["sources"].([]any)
+	if len(sources) != 1 || sources[0].(map[string]any)["name"] != "pm" || sources[0].(map[string]any)["enabled"] != true {
+		t.Fatalf("sources = %v", sources)
+	}
+
+	postJSON(t, srv.URL+"/api/changes/seen", "", 200)
+	waitFor(t, events, `changes {"sources":[]}`)
+	m = getJSON(t, srv.URL+"/api/changes", 200)
+	if m["unseen"] != float64(0) || m["events"].([]any)[0].(map[string]any)["seen"] != true {
+		t.Fatalf("after seen = %v", m)
+	}
+	// An explicit older mark leaves the newer event unseen again.
+	postJSON(t, srv.URL+"/api/changes/seen", `{"ts":"`+now.Add(-2*time.Hour).Format(time.RFC3339)+`"}`, 200)
+	m = getJSON(t, srv.URL+"/api/changes", 200)
+	if m["unseen"] != float64(1) {
+		t.Fatalf("after older mark = %v", m)
+	}
+	postJSON(t, srv.URL+"/api/changes/seen", `{"ts":"yesterday"}`, 400)
+
+	// The attention queue embeds the digest off the cache: count + rows.
+	a := getJSON(t, srv.URL+"/api/attention", 200)
+	for _, s := range a["sections"].([]any) {
+		sec := s.(map[string]any)
+		if sec["name"] != "changes" {
+			continue
+		}
+		if sec["total"] != float64(1) || len(sec["rows"].([]any)) != 1 || sec["note"] != nil {
+			t.Fatalf("changes section = %v", sec)
+		}
+		row := sec["rows"].([]any)[0].(map[string]any)
+		if row["title"] != "fresh" || row["reason"] != "pm: moved" {
+			t.Fatalf("changes row = %v", row)
+		}
+	}
+
+	// A GET on a POST-only route falls to the /api/ catch-all (a JSON 404,
+	// never the SPA); a broken config is a 500.
+	if st, body, _ := get(t, srv.URL+"/api/changes/refresh"); st != 404 || !strings.Contains(body, "no such endpoint") {
+		t.Fatalf("GET refresh = %d %s", st, body)
+	}
+	if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  cutoff_hour: 99\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	getJSON(t, srv.URL+"/api/changes", 500)
+}
+
+// The scheduler refreshes inside the window and never outside it.
+func TestSchedulerHonoursTheWindow(t *testing.T) {
+	run := func(t *testing.T, hour int) int {
+		t.Helper()
+		store := newTestStore(t)
+		if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  refresh:\n    every: 10ms\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		src := &fakeFeedSource{name: "pm"}
+		clock := func() time.Time { return time.Date(2026, 9, 9, hour, 30, 0, 0, time.Local) }
+		h := NewHandler(store, Options{Feed: feed.New(store.Root, []feed.Source{src}), Clock: clock})
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		h.RunScheduler(ctx)
+		return src.calls
+	}
+	if n := run(t, 12); n == 0 {
+		t.Error("inside the window the scheduler never refreshed")
+	}
+	if n := run(t, 22); n != 0 {
+		t.Errorf("outside the window the scheduler refreshed %d times", n)
+	}
+	// A manual refresh works outside the window regardless.
+	store := newTestStore(t)
+	src := &fakeFeedSource{name: "pm"}
+	srv := newServer(t, store, Options{Feed: feed.New(store.Root, []feed.Source{src}), Clock: func() time.Time { return time.Date(2026, 9, 9, 22, 30, 0, 0, time.Local) }})
+	postJSON(t, srv.URL+"/api/changes/refresh", "", 200)
+	if src.calls != 1 {
+		t.Errorf("manual refresh outside the window: calls = %d", src.calls)
+	}
 }

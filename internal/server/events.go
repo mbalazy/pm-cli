@@ -11,8 +11,9 @@ import (
 )
 
 // The SSE feed says WHAT CHANGED, never what it changed to: `event: tasks`
-// or `event: runs` with `{"project": slug}`, and the client refetches the
-// endpoint it cares about. Polling, not fsnotify (decision: zero new
+// or `event: runs` with `{"project": slug}`, or `event: changes` with
+// `{"sources": [...]}` after the change feed refreshed (or its seen mark
+// moved), and the client refetches the endpoint it cares about. Polling, not fsnotify (decision: zero new
 // dependencies, and the board already lives on a 2 s tick), and the poll
 // reads only directory metadata - names, sizes, mtimes - never a file's
 // content, so a hundred projects cost a hundred ReadDirs per tick.
@@ -47,11 +48,15 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 	defer poll.Stop()
 	ping := time.NewTicker(h.opts.PingInterval)
 	defer ping.Stop()
+	changes, unsubscribe := h.bus.subscribe()
+	defer unsubscribe()
 	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case data := <-changes:
+			emit("changes", data)
 		case <-ping.C:
 			emit("ping", "{}")
 		case <-poll.C:
