@@ -14,8 +14,10 @@ export default defineConfig({
   },
   server: {
     // `pm serve` on its default address; the dev server only adds HMR.
+    // PM_API_URL points the proxy at another pm serve (a worktree slot's rig
+    // runs its own on the slot's PM_API_PORT) without editing this file.
     proxy: {
-      '/api': 'http://127.0.0.1:7070',
+      '/api': process.env.PM_API_URL ?? 'http://127.0.0.1:7070',
     },
   },
   test: {
