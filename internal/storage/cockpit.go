@@ -71,6 +71,53 @@ type CockpitConfig struct {
 	// Report tunes the LLM report over the feed (pm-cli-118-20); the
 	// switch itself is Sources["report"].
 	Report ReportConfig `yaml:"report"`
+
+	// Slack configures the feed's slack source (pm-cli-118-19): which MCP
+	// servers to run, one per workspace. The switch is Sources["slack"].
+	Slack SlackSourceConfig `yaml:"slack"`
+}
+
+// SlackSourceConfig is the `cockpit.slack` block: the Slack MCP servers
+// pm serve runs as an MCP client, one per workspace. A server is either
+// taken from Claude Code's own registration (ClaudeServer names an entry
+// in ClaudeConfig's mcpServers, top-level or under any project - the
+// tokens stay in the one place they already are) or spelled out here.
+type SlackSourceConfig struct {
+	Servers []SlackServer `yaml:"servers,omitempty"`
+	// ClaudeConfig is the Claude Code config file the ClaudeServer names
+	// resolve against; empty = ~/.claude.json.
+	ClaudeConfig string `yaml:"claude_config,omitempty"`
+}
+
+// SlackServer is one workspace's MCP server.
+type SlackServer struct {
+	// Workspace is the label a project's slack mapping (Project.Slack.
+	// Workspace) refers to, and what an event carries. A slug.
+	Workspace string `yaml:"workspace"`
+	// ClaudeServer is the name of an mcpServers entry in ClaudeConfig to
+	// take command/args/env from (e.g. slack-orbit).
+	ClaudeServer string `yaml:"claude_server,omitempty"`
+	// Command/Args/Env spell the server out instead.
+	Command string            `yaml:"command,omitempty"`
+	Args    []string          `yaml:"args,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
+	// Me is the user's own handle ("@me-login") or id ("U0..") in this
+	// workspace; mentions and DMs are found through it. Empty = the source
+	// carries only the mapped channels and says so.
+	Me string `yaml:"me,omitempty"`
+}
+
+// Server returns the server for a workspace label, or nil.
+func (c *SlackSourceConfig) Server(workspace string) *SlackServer {
+	if c == nil {
+		return nil
+	}
+	for i := range c.Servers {
+		if c.Servers[i].Workspace == workspace {
+			return &c.Servers[i]
+		}
+	}
+	return nil
 }
 
 // ReportConfig tunes the LLM report: which model writes it and in what
@@ -273,6 +320,20 @@ func (c *CockpitConfig) validate(where string) error {
 	}
 	if strings.ContainsAny(c.Report.Model, " \t\n") {
 		return fmt.Errorf("%s: cockpit.report.model %q must be one word (a claude model alias or name)", where, c.Report.Model)
+	}
+	seen := map[string]bool{}
+	for i, sv := range c.Slack.Servers {
+		key := fmt.Sprintf("cockpit.slack.servers[%d]", i)
+		if err := ValidateSlug(sv.Workspace); err != nil {
+			return fmt.Errorf("%s: %s.workspace: %w", where, key, err)
+		}
+		if seen[sv.Workspace] {
+			return fmt.Errorf("%s: %s.workspace %q is declared twice", where, key, sv.Workspace)
+		}
+		seen[sv.Workspace] = true
+		if sv.ClaudeServer == "" && sv.Command == "" {
+			return fmt.Errorf("%s: %s (%s) needs claude_server or command", where, key, sv.Workspace)
+		}
 	}
 	return nil
 }

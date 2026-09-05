@@ -510,13 +510,17 @@ func (c *Controller) Claim(project, taskID string) (*ClaimResult, error) {
 	}
 	res := &ClaimResult{Claim: claim, Refreshed: claim.Refreshed != claim.Started,
 		HeartbeatSeconds: int(ClaimHeartbeat.Seconds()), MaxHoldSeconds: int(ClaimMaxHold.Seconds())}
+	// The heartbeat refreshes ITS OWN copy: RefreshFinishClaim moves the
+	// stamp on the struct it is handed, and the one in the result belongs
+	// to the caller now.
+	own := *claim
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if h, ok := c.held[key]; ok {
-		h.claim = claim
+		h.claim = &own
 		return res, nil
 	}
-	h := &heldClaim{claim: claim, stop: make(chan struct{})}
+	h := &heldClaim{claim: &own, stop: make(chan struct{})}
 	c.held[key] = h
 	go c.heartbeat(key, t.stateDir, t.task.Meta.ID, h)
 	return res, nil

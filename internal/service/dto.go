@@ -273,6 +273,22 @@ type CockpitResult struct {
 	Sidebar              SidebarResult   `json:"sidebar"`
 	Git                  GitResult       `json:"git"`
 	Report               ReportResult    `json:"report"`
+	Slack                SlackResult     `json:"slack"`
+}
+
+// SlackResult is the read-only view of cockpit.slack: which workspaces
+// have a server (the settings screen names them next to the per-project
+// mapping); the servers themselves are hand-edited in config.yaml.
+type SlackResult struct {
+	Workspaces []SlackWorkspace `json:"workspaces"`
+}
+
+// SlackWorkspace is one configured Slack MCP server, without its secrets.
+type SlackWorkspace struct {
+	Workspace string `json:"workspace"`
+	// Source is "claude_server <name>" or the command.
+	Source string `json:"source"`
+	HasMe  bool   `json:"has_me"`
 }
 
 // ReportResult is storage.ReportConfig with json tags.

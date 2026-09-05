@@ -60,13 +60,15 @@ type Event struct {
 }
 
 // Project is what a source gets per active project: identity, group, the
-// checkout path (empty when the project has none) and the tasks.
+// checkout path (empty when the project has none), the tasks, and the
+// Slack mapping (project.yaml `slack`; nil = none).
 type Project struct {
 	Slug  string
 	Group string
 	Path  string
 	Dir   string // the pm project dir (.executor/ lives under it)
 	Tasks []*storage.Task
+	Slack *storage.SlackConfig
 }
 
 // Source is the one interface every feed source implements. Fetch returns
@@ -145,6 +147,7 @@ func Sources(root string, run Runner) []Source {
 		&PMSource{Root: root},
 		&GitSource{Run: run},
 		&GitHubSource{Run: run},
+		&SlackSource{},
 	}
 }
 
@@ -567,6 +570,7 @@ func activeProjects(store storage.TaskStore) ([]Project, error) {
 		p := Project{Slug: slug, Group: proj.GroupSlug(slug), Dir: store.ProjectDir(slug), Tasks: tasks}
 		if proj != nil {
 			p.Path = proj.Path
+			p.Slack = proj.Slack
 		}
 		out = append(out, p)
 	}
