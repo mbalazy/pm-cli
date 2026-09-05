@@ -81,10 +81,34 @@ func buildWorkerPrompt(t *storage.Task, parent *storage.Task, proj *storage.Proj
 			sb.WriteString("- pr: skip (epic mode - the manager integrates your branch; do NOT open a PR)\n")
 			continue
 		}
+		if phase == storage.PhaseRuntime {
+			fmt.Fprintf(&sb, "- runtime: %s\n", runtimeDirective(t, exec))
+			continue
+		}
 		fmt.Fprintf(&sb, "- %s: %s\n", phase, phaseDirective(phase, exec.Phase(phase)))
 	}
 
 	return sb.String()
+}
+
+// runtimeDirective renders the runtime phase's binding line. Unlike every
+// other phase it is gated PER TASK (`runtime: on`) and, when on, by the rig
+// verdict the run captured (executor.rig, the "## Runtime rig" section) - a
+// project with no rig hook leaves the gate to the phase's own binding, which
+// must then probe before it trusts anything.
+func runtimeDirective(t *storage.Task, exec storage.Executor) string {
+	if !t.Meta.RuntimeEnabled() {
+		return "skip (not enabled for this task - `runtime: on` in its frontmatter turns it on; do not drive any runtime, simulator or browser)"
+	}
+	directive := phaseDirective(storage.PhaseRuntime, exec.Phase(storage.PhaseRuntime))
+	if exec.Phase(storage.PhaseRuntime).Kind() == storage.BindSkip {
+		return directive
+	}
+	gate := "the binding's own rig gate decides: no \"## Runtime rig\" section was captured for this run (executor.rig is unset), so prove the runtime runs YOUR tree before trusting a reading, and if it is not up record `TODO: runtime verification not run - rig DEAD: <why>` instead of standing it up"
+	if strings.TrimSpace(exec.Rig) != "" {
+		gate = "ONLY when the \"## Runtime rig\" section below says the rig is UP; when it says DEAD, skip the phase and record the TODO line it names"
+	}
+	return directive + " - " + gate + ". Every reading you take goes into `unresolved` as an `OBSERVED:` line (see the result contract)"
 }
 
 // baselineSection renders the "## Verification baseline" prompt section from a
@@ -151,6 +175,7 @@ Run these phases in order. The user prompt gives the BINDING for each phase (ski
 4. fix - apply fixes for valid findings (review is read-only, so fixing is a separate step), commit, then re-review.
    A FURTHER ROUND EXISTS ONLY IF THE ROUND YOU JUST HAD PRODUCED AT LEAST ONE VALID FINDING. Zero valid findings ends the review - do NOT run a confirming round to hear that the fixes are fine. There is no such thing as a review that says "clean": an adversarial reviewer asked to refute your change will almost always write something, so "repeat until clean" has no end and pm will refuse the spawn at the round cap anyway. If a round DID produce valid findings, fix them and re-review - up to the round cap. If valid findings remain at the cap, STOP and return status "blocked" with them in ` + "`unresolved`" + `.
 5. verify - the GATE. Run the project's verification EXACTLY as bound for this phase (the bound cmd/skill; generic binding = the repo's own stated verification: tests + lint + typecheck). The gate is the ONLY measure of verify-green. Do NOT run additional suites beyond it "for extra confidence": a check the project keeps outside its verify command (e.g. a slow full test suite) is outside it deliberately - if you believe an extra check would be valuable, record "TODO: run <check>" in unresolved instead of running it. A check outside the gate NEVER demotes the verdict, finished or not, and a still-running background process is never a reason for a non-green status: either a check is part of the gate and you wait for its result, or it is not and it belongs in unresolved. The gate MUST pass before success. PRE-EXISTING failures do not count against you: when the prompt carries a "Verification baseline" section, judge ONLY failures not present in that baseline; without one, a failure that is demonstrably pre-existing (wholly in files outside your diff, present on the branch you forked from) is likewise out of scope - record it once as "PRE-EXISTING: <what>" in unresolved instead of failing on it. If NEW failures cannot be fixed within AC scope, return status "failed" (or "blocked") with the reason.
+6. runtime - AFTER a green verify, and ONLY when the user prompt's runtime binding is enabled for this task (most tasks say "skip" here - then there is nothing to do and nothing to probe). Drive the project's LIVE runtime (a simulator, a browser, a running service) as bound, to observe what the AC says a user sees: navigate to the affected screen or page, read what it actually shows, and compare it with the AC. A "## Runtime rig" section in the user prompt is the gate: UP = drive, DEAD = skip and record the TODO it names - never boot, build, install, relaunch or re-point the runtime yourself, in any mode. Readings are EVIDENCE, not verdicts: a runtime reading can neither upgrade nor demote the verify verdict (the gate is verify), and every reading - a match as much as a discrepancy - is recorded in ` + "`unresolved`" + ` as an ` + "`OBSERVED:`" + ` line (contract below). A discrepancy you can fix within the AC: fix it, commit, re-run verify (the gate), then observe again; one you cannot: leave the OBSERVED line and carry on. Budget: this phase is worth roughly 10-20 turns; past that, record what you have and stop.
 
 ## Reading discipline
 Whatever you read rides in your context for every turn that follows and is billed again each time - one whole-file read of a large file can cost more than all the code you write. So: a file longer than ~600 lines is read in SLICES, never end-to-end - locate what you need first (Grep for the symbol, or read the head for an outline), then Read just that range with offset/limit. Read a large file whole only when the task is genuinely about the whole file.
@@ -176,7 +201,7 @@ Every message you send is one API call that re-reads your ENTIRE context (100k+ 
 - summary: 2-4 sentences of what you did.
 - branch: the git branch you committed on.
 - commits: short hashes of the commits you created (empty if none).
-- unresolved: unresolved findings / blockers / open questions (empty if clean).
+- unresolved: unresolved findings / blockers / open questions (empty if clean). When the runtime phase ran, it also carries your runtime readings, one per line, prefixed "OBSERVED: " - ` + "`OBSERVED: <screen/page> shows <what you saw> - expected: <what the AC says> - positive control: <a thing that MUST be visible and was> - negative control: <a thing that MUST NOT be visible and was not> - evidence: <screenshot path / element tree / log line>`" + `. Both controls are REQUIRED on every OBSERVED line: a rig that runs the wrong tree, a stale bundle or a persisted store produces confident, normal-looking, false readings, and a reading without controls cannot be told apart from one. An OBSERVED line is a HYPOTHESIS for the human who accepts your work to confirm, never a claim that the AC is met - so state exactly what you saw, never "verified on the simulator". A reading you could not take (rig DEAD, runtime stopped answering) is a "TODO: " line, not an OBSERVED one.
 
 Emit the structured result as your FINAL act, with nothing still running behind you. Before you emit it, retrieve (or kill) every background task you started, so no completion notification can arrive afterwards. The harness only reports the result while it is the last thing in the run: anything that forces one more turn after it - a late background notification is the usual culprit - discards the result, and pm then records your finished, committed work as a failed run.
 `)
@@ -193,7 +218,7 @@ This task is one of several UNRELATED tasks in a batch. A human returns to every
 - NEVER stop early or abandon the task as a whole. Partial verified progress always beats a clean refusal.
 - When information is missing or a decision is ambiguous, make the most reasonable assumption, proceed, and RECORD it in ` + "`unresolved`" + ` prefixed "ASSUMPTION: ". Every assumption MUST be a testable statement AND carry a concrete empirical check, appended as " - verify: <how>" (e.g. "ASSUMPTION: GET /clients returns a plain array, not a paginated object - verify: hit the endpoint on dev and inspect the response" or "ASSUMPTION: prop isNew is never undefined here - verify: log it in <file> and open the screen"). You know exactly where you hesitated and where the doubt is observable - hand the human that check. A wrong assumption buried inside working-looking code is the worst bug you can leave behind; the human runs these checks FIRST when finishing the task.
 - A premise that is checkable against this repo or a READ-ONLY reference repo (an enum, an endpoint shape, a contract) is NOT an assumption - CHECK it (grep/read costs minutes) and record the evidence instead. This applies even when the spec hands you a pre-made decision: if your evidence refutes the decision's stated premise, record "SPEC-CONFLICT: <premise> refuted by <evidence file:line>" in ` + "`unresolved`" + `, prefer the variant the evidence supports when it still fits the ticket's intent, and flag it prominently either way. Never silently implement a decision whose premise you have disproven.
-- Everything you could not finish or verify (needs a simulator/visual check, a design or product decision, an answer from a human) goes into ` + "`unresolved`" + ` as a concrete, actionable handoff item prefixed "TODO: ".
+- Everything you could not finish or verify (needs a simulator/visual check, a design or product decision, an answer from a human) goes into ` + "`unresolved`" + ` as a concrete, actionable handoff item prefixed "TODO: ". A runtime reading you DID take (runtime phase enabled, rig UP) is not a TODO - it is an "OBSERVED: " line with both controls; the human confirms it instead of redoing it.
 - Status semantics in this mode: "verified" = the work is implemented + committed and verify shows zero NEW failures caused by your changes (open handoff items in unresolved are fine and expected, and PRE-EXISTING breakage never demotes the verdict - the human reads it from unresolved); "failed" = your changes introduce failures you could not fix despite best effort; "blocked" ONLY when no meaningful progress was possible at all.
 `)
 	}
@@ -229,6 +254,8 @@ func genericPhasePrompt(phase string) string {
 			"Reviewer spawns run SYNCHRONOUSLY: pm forces `run_in_background: false` on the spawn, so the call blocks and its tool result IS the reviewer's report - never try to run a reviewer in the background, never poll for it, and never stop a running one (a stopped reviewer is a spent spawn with nothing collected, and the round it opened still counts). Do NOT decide how many either: pm sizes the review from the production diff and refuses any spawn past that cap, so spawn what the change seems to need and treat a refusal as the budget being spent, not as a problem to work around - never re-issue a refused spawn under a different description. You do NOT need to paste the diff into a reviewer's prompt - pm attaches the full change (tests included) to every reviewer spawn itself, so give each reviewer the AC, what to focus on, and nothing it can already see. Instruct each to actively REFUTE the change: correctness bugs, missed/over-shot AC, broken edge cases, style violations. A test that encodes the wrong behavior is exactly what review must catch, which is why the attached diff includes them. Reviewers have no Bash: verify is a separate phase and it is the gate, so do not ask a reviewer to run anything. With several reviewers, treat a finding as valid if >=2 raise it OR any one finds a clear correctness bug; with one reviewer, treat every concretely-argued finding as valid. Reviewers must not spawn subagents of their own; that is refused too. If your change is documentation only - every changed file is prose - pm gives it ONE reviewer and ONE round however long the document is, and briefs that reviewer to check the document's claims against the repo instead of hunting for bugs in text; that is the whole review, so act on what it reports and move on. SPECIAL CASE: a finding that contradicts the PREMISE of a decision or assumption stated in the spec (e.g. 'existing data holds a value this change makes unrepresentable') is never fixed by a defensive guard that hides the contradiction - first verify the premise against the authoritative source (this repo or a reference repo), then fix the root or escalate it in `unresolved`."
 	case storage.PhaseVerify:
 		return "Detect and run the repo's full verification - tests + lint + typecheck (e.g. `go vet ./... && go test ./...`; or `yarn jest && yarn biome check && yarn tsc --noEmit`; or `npm test`). All must pass. If you cannot determine the commands, list that in `unresolved`."
+	case storage.PhaseRuntime:
+		return "Use the repo's own runtime-driving skill or scripts if it ships any (a simulator-verify skill, a browser driver, a smoke script), else the plainest available driver (the project's dev server plus curl for a service; `xcrun simctl` plus the accessibility tree for an iOS simulator). First prove the runtime runs YOUR tree (a fresh marker in the entry file that shows up in the runtime's log, or the equivalent) - a runtime you cannot prove is DEAD: record `TODO: runtime verification not run - rig DEAD: <why>` and stop. Then, for each AC a user can see, navigate there, capture what it shows (element tree, screenshot to a path you name) and record one OBSERVED line with both controls. Never stand the runtime up yourself."
 	case storage.PhasePR:
 		return "Open a DRAFT pull request with `gh pr create --draft`, title from the task, body summarizing the change and an AC checklist. Do not mark it ready for review."
 	default:

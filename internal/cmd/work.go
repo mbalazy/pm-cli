@@ -530,6 +530,11 @@ type workPlan struct {
 	// `runtime: on` only - epic subs receive the manager's once-per-run verdict
 	// via opts.rig; a runtime-off task never runs it). Empty = no check.
 	rigCmd string
+	// allowExtra = executor.runtime_tools when the task has `runtime: on`:
+	// the allowlist patterns the runtime phase's skill needs and the curated
+	// worker envelope refuses. Nil for every other task - a worker with no
+	// runtime to drive keeps the envelope exactly as narrow as before.
+	allowExtra []string
 	// guard is what the PreToolUse hook needs to know about this run: where to
 	// record subagent spawns (telemetryPath - keyed by sessionID, so it is known
 	// before the worker starts and two concurrent workers never share a file;
@@ -778,7 +783,12 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		reviewModel:   exec.ResolveReviewModel(),
 		fixRounds:     exec.FixRounds,
 	}
-	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.effort, opts.maxTurns, opts.yolo, guard, workDir, false)
+	// Extra permissions ride ONLY with a task that drives the runtime.
+	var allowExtra []string
+	if task.Meta.RuntimeEnabled() {
+		allowExtra = exec.RuntimeTools
+	}
+	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.effort, opts.maxTurns, opts.yolo, guard, workDir, false, allowExtra)
 
 	// Standalone only: the epic manager runs prepare ITSELF, once per run,
 	// right after claiming the slot - not per sub (5 subs must not mean 5
@@ -803,7 +813,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		proj: proj, branch: branch, sessionID: sessionID,
 		prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs,
 		workDir: workDir, worktree: opts.additional, base: base, env: env, slots: slots,
-		prepare: prepare, baselineCmd: baselineCmd, rigCmd: rigCmd, guard: guard,
+		prepare: prepare, baselineCmd: baselineCmd, rigCmd: rigCmd, allowExtra: allowExtra, guard: guard,
 		buildPrompt: buildPrompt, opts: opts, modelSource: modelSource, effortSource: effortSource,
 		timeout: resolveWorkerTimeout(opts.timeout, opts.timeoutSet, exec.Timeout),
 	}, nil
@@ -818,7 +828,7 @@ func (p *workPlan) retarget(dir string, env []string) {
 	p.workDir = dir
 	p.env = env
 	p.prompt = p.buildPrompt(dir)
-	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.effort, p.opts.maxTurns, p.opts.yolo, p.guard, dir, false)
+	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.effort, p.opts.maxTurns, p.opts.yolo, p.guard, dir, false, p.allowExtra)
 }
 
 // workerHeartbeatInterval is how often a live worker's run-state is re-stamped.
@@ -883,7 +893,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		fmt.Fprintf(opts.stderr(), "pm work: baseline in %s: %s\n", dir, plan.baselineCmd)
 		if section := captureBaseline(opts.stderr(), dir, plan.baselineCmd); section != "" {
 			plan.prompt += "\n" + section
-			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false)
+			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false, plan.allowExtra)
 			baselineUsed = plan.baselineCmd
 		}
 	}
@@ -896,7 +906,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	if plan.rigCmd != "" {
 		verdict := runRig(opts.stderr(), dir, plan.rigCmd, plan.env)
 		plan.prompt += "\n" + rigSection(verdict)
-		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false)
+		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false, plan.allowExtra)
 		rigUsed = verdict.journalWord()
 	}
 
@@ -992,7 +1002,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// before the cap existed.
 	if sha := gitHeadSHA(dir); sha != "" && sha != plan.guard.diffBase {
 		plan.guard.diffBase = sha
-		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false)
+		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false, plan.allowExtra)
 	}
 	stopHeartbeat := hbw.Heartbeat(workerHeartbeatInterval)
 	// Stopping is idempotent, so the defer only matters if runWorker panics -
@@ -1163,8 +1173,15 @@ type claudeRun struct {
 
 // buildClaudeArgs assembles the `claude -p` argv for a worker run. workDir is
 // the repo the worker runs in (its .mcp.json, when present, is the one MCP
-// config a worker keeps); workers never keep user-scope MCP.
-func buildClaudeArgs(prompt, sysPrompt, sessionID, model, effort string, maxTurns int, yolo bool, guard guardOptions, workDir string, userMCP bool) []string {
+// config a worker keeps); workers never keep user-scope MCP. allowExtra are
+// permission patterns appended to the curated allowlist for THIS worker only
+// (executor.runtime_tools for a `runtime: on` task); nil keeps the envelope
+// exactly as it was.
+func buildClaudeArgs(prompt, sysPrompt, sessionID, model, effort string, maxTurns int, yolo bool, guard guardOptions, workDir string, userMCP bool, allowExtra []string) []string {
+	allowed := workerAllowedTools
+	if len(allowExtra) > 0 {
+		allowed += " " + strings.Join(allowExtra, " ")
+	}
 	return buildClaudeArgsFor(claudeRun{
 		prompt: prompt, sysPrompt: sysPrompt, sessionID: sessionID,
 		model: model, effort: effort, maxTurns: maxTurns, yolo: yolo,
@@ -1174,7 +1191,7 @@ func buildClaudeArgs(prompt, sysPrompt, sessionID, model, effort string, maxTurn
 		// project repo: `pm work` requires a clean tree, so a `.claude/agents/`
 		// file written per run would dirty it on every single one.
 		agents:          reviewerAgentsJSON(guard.reviewModel),
-		allowedTools:    workerAllowedTools,
+		allowedTools:    allowed,
 		disallowedTools: workerDisallowedTools,
 		guard:           guard,
 		workDir:         workDir,
