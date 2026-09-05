@@ -30,17 +30,29 @@ describe('groupByStatus', () => {
     expect(groups[1].tasks.map((t) => t.id)).toEqual(['x'])
   })
 
-  it('sorts by order ascending with unset (0) last, then updated descending', () => {
+  it('sorts like storage.LessByOrder: order ascending with unset (0) FIRST, then id number, then updated descending', () => {
     const groups = groupByStatus(
       [
-        task('unset-old', 'todo', { updated: '2026-01-01' }),
-        task('o20', 'todo', { order: 20 }),
-        task('unset-new', 'todo', { updated: '2026-02-01T10:00:00+02:00' }),
-        task('o10', 'todo', { order: 10 }),
+        task('p-7', 'todo', { updated: '2026-01-01' }),
+        task('p-20', 'todo', { order: 20 }),
+        task('p-3', 'todo', { updated: '2026-02-01T10:00:00+02:00' }),
+        task('p-10', 'todo', { order: 10 }),
       ],
       ['todo'],
     )
-    expect(groups[0].tasks.map((t) => t.id)).toEqual(['o10', 'o20', 'unset-new', 'unset-old'])
+    // 0-order tasks first (the TUI puts a freshly added task at the top), ties on order broken by the id number
+    expect(groups[0].tasks.map((t) => t.id)).toEqual(['p-3', 'p-7', 'p-10', 'p-20'])
+  })
+
+  it('falls back to updated descending when order and id number tie', () => {
+    const groups = groupByStatus(
+      [
+        task('old', 'todo', { updated: '2026-01-01' }),
+        task('new', 'todo', { updated: '2026-02-01T10:00:00+02:00' }),
+      ],
+      ['todo'],
+    )
+    expect(groups[0].tasks.map((t) => t.id)).toEqual(['new', 'old'])
   })
 
   it('does not mutate the input', () => {
