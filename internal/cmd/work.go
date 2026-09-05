@@ -189,6 +189,9 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 					if plan.prepare != "" {
 						fmt.Fprintf(stdout, "prepare (before worker, in claimed slot): %s\n", plan.prepare)
 					}
+					if plan.rigCmd != "" {
+						fmt.Fprintf(stdout, "rig (after prepare, in claimed slot with its env; this task has runtime: on): %s\n", plan.rigCmd)
+					}
 				} else {
 					fmt.Fprintf(stdout, "run: DEFAULT (main checkout, clean-tree required)\n")
 				}
@@ -449,6 +452,12 @@ type workOptions struct {
 	// (after branch setup + prepare, so it measures exactly what the worker
 	// forked from).
 	baseline string
+	// rig: the pre-rendered "## Runtime rig" prompt section, produced ONCE by
+	// the epic manager (executor.rig in the claimed slot) and handed to every
+	// sub; planWork bakes it into the prompt of the subs that have `runtime:
+	// on` and ignores it for the rest. Empty for standalone `pm work`, which
+	// runs its own check in executeWork, and for runs with no rig.
+	rig string
 	// runWriter: the epic manager's run-state writer, so a sub's worker can
 	// heartbeat the SHARED epic-level run-state while it runs. Nil for
 	// standalone `pm work` (it owns its own run-state, created in executeWork)
@@ -516,6 +525,16 @@ type workPlan struct {
 	// worker (standalone runs only - epic subs receive the manager's shared
 	// capture via opts.baseline instead, already baked into prompt/cmdArgs).
 	baselineCmd string
+	// rigCmd = executor.rig to run in executeWork right after prepare, in the
+	// claimed slot with its env (standalone --additional runs whose task has
+	// `runtime: on` only - epic subs receive the manager's once-per-run verdict
+	// via opts.rig; a runtime-off task never runs it). Empty = no check.
+	rigCmd string
+	// allowExtra = executor.runtime_tools when the task has `runtime: on`:
+	// the allowlist patterns the runtime phase's skill needs and the curated
+	// worker envelope refuses. Nil for every other task - a worker with no
+	// runtime to drive keeps the envelope exactly as narrow as before.
+	allowExtra []string
 	// guard is what the PreToolUse hook needs to know about this run: where to
 	// record subagent spawns (telemetryPath - keyed by sessionID, so it is known
 	// before the worker starts and two concurrent workers never share a file;
@@ -749,6 +768,12 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		if opts.baseline != "" {
 			p += "\n" + opts.baseline
 		}
+		// The rig verdict reaches ONLY a runtime-enabled task's worker: a task
+		// that skips the runtime phase has no use for it, and "subs without a
+		// visual AC pay nothing extra" is the feature's acceptance criterion.
+		if opts.rig != "" && task.Meta.RuntimeEnabled() {
+			p += "\n" + opts.rig
+		}
 		return p
 	}
 	prompt := buildPrompt(workDir)
@@ -758,16 +783,26 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		reviewModel:   exec.ResolveReviewModel(),
 		fixRounds:     exec.FixRounds,
 	}
-	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.effort, opts.maxTurns, opts.yolo, guard, workDir, false)
+	// Extra permissions ride ONLY with a task that drives the runtime.
+	var allowExtra []string
+	if task.Meta.RuntimeEnabled() {
+		allowExtra = exec.RuntimeTools
+	}
+	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.effort, opts.maxTurns, opts.yolo, guard, workDir, false, allowExtra)
 
 	// Standalone only: the epic manager runs prepare ITSELF, once per run,
 	// right after claiming the slot - not per sub (5 subs must not mean 5
 	// dependency installs). Same split for the baseline capture.
 	prepare := ""
 	baselineCmd := ""
+	rigCmd := ""
 	if opts.standalone {
 		if opts.additional {
 			prepare = strings.TrimSpace(exec.Prepare)
+			// The rig check is paid ONLY by a task that will drive the runtime.
+			if task.Meta.RuntimeEnabled() {
+				rigCmd = strings.TrimSpace(exec.Rig)
+			}
 		}
 		if opts.baseline == "" {
 			baselineCmd = strings.TrimSpace(exec.Baseline)
@@ -778,7 +813,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		proj: proj, branch: branch, sessionID: sessionID,
 		prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs,
 		workDir: workDir, worktree: opts.additional, base: base, env: env, slots: slots,
-		prepare: prepare, baselineCmd: baselineCmd, guard: guard,
+		prepare: prepare, baselineCmd: baselineCmd, rigCmd: rigCmd, allowExtra: allowExtra, guard: guard,
 		buildPrompt: buildPrompt, opts: opts, modelSource: modelSource, effortSource: effortSource,
 		timeout: resolveWorkerTimeout(opts.timeout, opts.timeoutSet, exec.Timeout),
 	}, nil
@@ -793,7 +828,7 @@ func (p *workPlan) retarget(dir string, env []string) {
 	p.workDir = dir
 	p.env = env
 	p.prompt = p.buildPrompt(dir)
-	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.effort, p.opts.maxTurns, p.opts.yolo, p.guard, dir, false)
+	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.effort, p.opts.maxTurns, p.opts.yolo, p.guard, dir, false, p.allowExtra)
 }
 
 // workerHeartbeatInterval is how often a live worker's run-state is re-stamped.
@@ -858,9 +893,21 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		fmt.Fprintf(opts.stderr(), "pm work: baseline in %s: %s\n", dir, plan.baselineCmd)
 		if section := captureBaseline(opts.stderr(), dir, plan.baselineCmd); section != "" {
 			plan.prompt += "\n" + section
-			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false)
+			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false, plan.allowExtra)
 			baselineUsed = plan.baselineCmd
 		}
+	}
+
+	// Prove the slot's runtime is up (executor.rig) for a task that will
+	// drive it - after prepare (a bundler needs the deps) and with the slot's
+	// env (SIM_UDID, the port). Whatever it finds goes into the prompt; a
+	// dead rig is a handoff the worker records, never an aborted run.
+	rigUsed := ""
+	if plan.rigCmd != "" {
+		verdict := runRig(opts.stderr(), dir, plan.rigCmd, plan.env)
+		plan.prompt += "\n" + rigSection(verdict)
+		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false, plan.allowExtra)
+		rigUsed = verdict.journalWord()
 	}
 
 	// Run-state for observability (standalone only; in epic mode the manager
@@ -909,7 +956,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		start := storage.JournalEntry{
 			Event: storage.JournalEventStart, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
 			PID: os.Getpid(), Model: plan.opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-			WorkDir: journalDir, Baseline: baselineUsed, Source: storage.LaunchSource(),
+			WorkDir: journalDir, Baseline: baselineUsed, Source: storage.LaunchSource(), Rig: rigUsed,
 		}
 		_ = storage.AppendJournal(stateDir, &start)
 		// From here until the end line, a catchable signal journals its own
@@ -929,7 +976,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
 			PID: os.Getpid(), Model: plan.opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-			WorkDir: journalDir, Baseline: baselineUsed,
+			WorkDir: journalDir, Baseline: baselineUsed, Rig: rigUsed,
 			Status: status, DurationS: sub.DurationS, Error: errMsg,
 			Subs: []storage.JournalSub{sub},
 		})
@@ -955,7 +1002,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// before the cap existed.
 	if sha := gitHeadSHA(dir); sha != "" && sha != plan.guard.diffBase {
 		plan.guard.diffBase = sha
-		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false)
+		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false, plan.allowExtra)
 	}
 	stopHeartbeat := hbw.Heartbeat(workerHeartbeatInterval)
 	// Stopping is idempotent, so the defer only matters if runWorker panics -
@@ -1126,8 +1173,15 @@ type claudeRun struct {
 
 // buildClaudeArgs assembles the `claude -p` argv for a worker run. workDir is
 // the repo the worker runs in (its .mcp.json, when present, is the one MCP
-// config a worker keeps); workers never keep user-scope MCP.
-func buildClaudeArgs(prompt, sysPrompt, sessionID, model, effort string, maxTurns int, yolo bool, guard guardOptions, workDir string, userMCP bool) []string {
+// config a worker keeps); workers never keep user-scope MCP. allowExtra are
+// permission patterns appended to the curated allowlist for THIS worker only
+// (executor.runtime_tools for a `runtime: on` task); nil keeps the envelope
+// exactly as it was.
+func buildClaudeArgs(prompt, sysPrompt, sessionID, model, effort string, maxTurns int, yolo bool, guard guardOptions, workDir string, userMCP bool, allowExtra []string) []string {
+	allowed := workerAllowedTools
+	if len(allowExtra) > 0 {
+		allowed += " " + strings.Join(allowExtra, " ")
+	}
 	return buildClaudeArgsFor(claudeRun{
 		prompt: prompt, sysPrompt: sysPrompt, sessionID: sessionID,
 		model: model, effort: effort, maxTurns: maxTurns, yolo: yolo,
@@ -1137,7 +1191,7 @@ func buildClaudeArgs(prompt, sysPrompt, sessionID, model, effort string, maxTurn
 		// project repo: `pm work` requires a clean tree, so a `.claude/agents/`
 		// file written per run would dirty it on every single one.
 		agents:          reviewerAgentsJSON(guard.reviewModel),
-		allowedTools:    workerAllowedTools,
+		allowedTools:    allowed,
 		disallowedTools: workerDisallowedTools,
 		guard:           guard,
 		workDir:         workDir,

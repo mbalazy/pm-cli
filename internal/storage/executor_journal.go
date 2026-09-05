@@ -99,7 +99,12 @@ type JournalEntry struct {
 	// Baseline = the verification baseline command actually captured and
 	// injected into the worker(s) this run, empty if none was used (not
 	// configured, or capture degraded to no-baseline). Records USE, not config.
-	Baseline  string       `json:"baseline,omitempty"`
+	Baseline string `json:"baseline,omitempty"`
+	// Rig = what the executor.rig check found for this run: "up" or "dead".
+	// Empty when no check ran (not configured, not --additional, or no task
+	// of the run had `runtime: on`). Records USE, like Baseline: a retro
+	// asking "how often was the rig dead when a sub needed it" reads this.
+	Rig       string       `json:"rig,omitempty"`
 	Branch    string       `json:"branch,omitempty"`     // epic integration branch / task branch; "independent:<base>" for batch runs
 	Status    string       `json:"status,omitempty"`     // end only: done | failed (run level)
 	DurationS int          `json:"duration_s,omitempty"` // end only: whole-run wall-clock

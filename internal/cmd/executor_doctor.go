@@ -155,6 +155,7 @@ func runExecutorDoctor(proj *storage.Project) []check {
 	e := proj.GetExecutor()
 	out = append(out, checkLandingStatuses(e, proj.GetStatuses())...)
 	out = append(out, checkBaseline(e)...)
+	out = append(out, checkRuntimePhase(e)...)
 	out = append(out, checkContextRepos(e)...)
 	out = append(out, checkSlots(e, proj.Path)...)
 	out = append(out, checkHandoff(e, proj)...)
@@ -237,6 +238,41 @@ func checkBaseline(e storage.Executor) []check {
 	return []check{{levelWarn, "`baseline` is unset - workers get no list of pre-existing failures", hint}}
 }
 
+// checkRuntimePhase: the runtime phase is three settings that only work
+// together - a binding (what drives the rig), `rig` (whether the rig is up,
+// checked once per run) and `runtime_tools` (what the binding is allowed to
+// run outside --yolo) - and each one alone is silent: a `runtime: on` sub with
+// no binding gets the generic, with no rig gets no verdict, with no tools gets
+// refusals it reports as TODOs. All WARN: every one is a heuristic about a
+// phase the project may never enable on a sub. Nothing to say when none of
+// the three is set - the phase is simply not in use.
+func checkRuntimePhase(e storage.Executor) []check {
+	binding := e.Phase(storage.PhaseRuntime)
+	rig := strings.TrimSpace(e.Rig)
+	bound := binding.Kind() == storage.BindSkill || binding.Kind() == storage.BindCmd
+	if !bound && rig == "" && len(e.RuntimeTools) == 0 {
+		return nil
+	}
+	var out []check
+	switch binding.Kind() {
+	case storage.BindSkip:
+		out = append(out, check{levelWarn, "runtime phase is bound to `false` (skip) - a sub's `runtime: on` does nothing here", "bind `phases.runtime` to the skill or command that drives this project's runtime, or drop the binding"})
+	case storage.BindGeneric:
+		out = append(out, check{levelWarn, "runtime phase is generic while `rig`/`runtime_tools` are set - a `runtime: on` worker improvises a driver", "bind `phases.runtime` to the skill (e.g. `skill: simulator-verify`) or command that drives this project's runtime"})
+	default:
+		out = append(out, check{levelOK, "runtime phase -> " + describeBinding(binding), ""})
+	}
+	if rig == "" {
+		out = append(out, check{levelWarn, "`rig` is unset - a `runtime: on` worker gets no rig verdict and must probe the runtime itself", "set `rig` to the command that proves the slot's runtime runs the claimed worktree (e.g. the runtime skill's rig-check script with the slot's $SIM_UDID / port)"})
+	} else {
+		out = append(out, check{levelOK, "rig -> " + rig, ""})
+	}
+	if bound && len(e.RuntimeTools) == 0 {
+		out = append(out, check{levelWarn, "`runtime_tools` is empty - outside --yolo the runtime phase's commands (xcrun, curl, the skill's scripts) are refused", "list the allowlist patterns the binding runs, e.g. `Bash(xcrun simctl:*)`, `Bash(curl:*)`, `Bash(<skill dir>/scripts/*:*)`"})
+	}
+	return out
+}
+
 func checkContextRepos(e storage.Executor) []check {
 	var out []check
 	for _, name := range sortedKeys(e.ContextRepos) {
@@ -308,8 +344,16 @@ func checkHandoff(e storage.Executor, proj *storage.Project) []check {
 			"name the skill that drives the real runtime (simulator/device/browser)"})
 	case h.SkillPath == "":
 		out = append(out, check{levelError,
-			fmt.Sprintf("handoff.runtime_skill %q not found under .claude/skills or .claude/commands", h.RuntimeSkill),
+			fmt.Sprintf("handoff.runtime_skill %q not found under .claude/skills or .claude/commands, nor under %s (skills/ or commands/)", h.RuntimeSkill, h.GlobalRoot),
 			"fix the name or add the skill"})
+	case h.RuntimeSkillGlobal:
+		// Legitimate for a machine-knowledge driver (web-verify), but never
+		// silent: a repo that is synced to another machine takes no global
+		// skill with it, and this is where that shows up before it costs an
+		// acceptance (the 0.49.1 rule, kept as a warning instead of a refusal).
+		out = append(out, check{levelWarn,
+			fmt.Sprintf("runtime skill /%s -> %s (%d script(s)) - resolved in %s, NOT in the repo", h.RuntimeSkill, h.SkillPath, len(h.Scripts), h.GlobalRoot),
+			"a global runtime skill is machine knowledge: every machine that accepts this project needs it under its claude_config_dir; a repo-local .claude/skills/<name> is what travels with the repo"})
 	default:
 		out = append(out, check{levelOK,
 			fmt.Sprintf("runtime skill /%s -> %s (%d script(s))", h.RuntimeSkill, h.SkillPath, len(h.Scripts)), ""})

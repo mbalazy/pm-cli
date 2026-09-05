@@ -644,6 +644,7 @@ type execFields struct {
 	Model      string `json:"model"`
 	EpicMode   string `json:"epic_mode"`
 	FinishMode string `json:"finish_mode"`
+	Runtime    string `json:"runtime"`
 }
 
 func getExecFields(t *testing.T, sess *mcp.ClientSession, id string) execFields {
@@ -942,6 +943,115 @@ func TestE2EFinishMode(t *testing.T) {
 		}
 		if reloaded.Meta.Title != before.Meta.Title {
 			t.Errorf("co-passed title was persisted by a rejected update: %q -> %q", before.Meta.Title, reloaded.Meta.Title)
+		}
+	})
+}
+
+// TestE2ERuntime drives the real handlers for a sub's runtime field - the
+// per-task opt-in to the executor's runtime phase (pm-cli-122). Same contract
+// as finish_mode: set at add, tri-state at update, returned by get, invalid
+// values refused before anything is written. The omit-keeps case matters most
+// here: the opt-in is a field precisely so an unrelated update (a re-tag, a
+// brief) cannot silently drop it the way a replaced tags list would.
+func TestE2ERuntime(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+
+	t.Run("add sets runtime, get returns it", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_add_task", map[string]any{
+			"project": "test", "title": "Visual sub", "runtime": storage.RuntimeOn,
+		})
+		if isErr {
+			t.Fatalf("add_task error: %s", text)
+		}
+		var added execFields
+		mustUnmarshal(t, text, &added)
+		onDisk, err := store.FindTask("test", added.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if onDisk.Meta.Runtime != storage.RuntimeOn {
+			t.Errorf("on-disk runtime = %q, want on", onDisk.Meta.Runtime)
+		}
+		if got := getExecFields(t, sess, added.ID); got.Runtime != storage.RuntimeOn {
+			t.Errorf("get runtime = %q, want on", got.Runtime)
+		}
+	})
+
+	t.Run("update sets, keeps on omit (a re-tag included), clears on empty string", func(t *testing.T) {
+		text, isErr := call(t, sess, "pm_add_task", map[string]any{"project": "test", "title": "Plain sub"})
+		if isErr {
+			t.Fatalf("add_task error: %s", text)
+		}
+		var added execFields
+		mustUnmarshal(t, text, &added)
+		if got := getExecFields(t, sess, added.ID); got.Runtime != "" {
+			t.Fatalf("fresh task runtime = %q, want empty", got.Runtime)
+		}
+		if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": added.ID, "runtime": storage.RuntimeOn,
+		}); isErr {
+			t.Fatal("update_task error")
+		}
+		if got := getExecFields(t, sess, added.ID); got.Runtime != storage.RuntimeOn {
+			t.Fatalf("after set, runtime = %q", got.Runtime)
+		}
+		if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": added.ID, "tags": []string{"ui"}, "brief": "still visual",
+		}); isErr {
+			t.Fatal("update_task error")
+		}
+		if got := getExecFields(t, sess, added.ID); got.Runtime != storage.RuntimeOn {
+			t.Fatalf("omitted runtime must survive a re-tag, got %q", got.Runtime)
+		}
+		if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": added.ID, "runtime": storage.RuntimeOff,
+		}); isErr {
+			t.Fatal("update_task error")
+		}
+		if got := getExecFields(t, sess, added.ID); got.Runtime != storage.RuntimeOff {
+			t.Fatalf("after off, runtime = %q", got.Runtime)
+		}
+		if _, isErr := call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": added.ID, "runtime": "",
+		}); isErr {
+			t.Fatal("update_task error")
+		}
+		if got := getExecFields(t, sess, added.ID); got.Runtime != "" {
+			t.Fatalf("empty runtime must clear, got %q", got.Runtime)
+		}
+	})
+
+	t.Run("invalid runtime rejected on add and update, nothing written", func(t *testing.T) {
+		before, err := store.GetTasks("test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, isErr := call(t, sess, "pm_add_task", map[string]any{
+			"project": "test", "title": "Bad sub", "runtime": "true",
+		})
+		if !isErr || !strings.Contains(text, "invalid runtime") {
+			t.Fatalf("invalid runtime must be ValidateRuntime's error, got: %s", text)
+		}
+		after, err := store.GetTasks("test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(after) != len(before) {
+			t.Errorf("rejected add must not create a task (%d -> %d)", len(before), len(after))
+		}
+		text, isErr = call(t, sess, "pm_update_task", map[string]any{
+			"project": "test", "task_id": "t-1", "runtime": "sim", "title": "should not be written",
+		})
+		if !isErr || !strings.Contains(text, "invalid runtime") {
+			t.Fatalf("invalid runtime must be ValidateRuntime's error, got: %s", text)
+		}
+		reloaded, err := store.FindTask("test", "t-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reloaded.Meta.Runtime != "" || reloaded.Meta.Title == "should not be written" {
+			t.Errorf("rejected update wrote through: runtime=%q title=%q", reloaded.Meta.Runtime, reloaded.Meta.Title)
 		}
 	})
 }

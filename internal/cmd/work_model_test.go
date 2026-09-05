@@ -152,7 +152,7 @@ func TestPlanEpicResolvesModelAndEffort(t *testing.T) {
 }
 
 func TestBuildClaudeArgsToolsAndEffort(t *testing.T) {
-	joined := strings.Join(buildClaudeArgs("p", "sp", "s", "opus", "", 10, false, guardOptions{}, "", false), " ")
+	joined := strings.Join(buildClaudeArgs("p", "sp", "s", "opus", "", 10, false, guardOptions{}, "", false, nil), " ")
 	mustContain(t, joined, "--tools "+workerTools)
 	if strings.Contains(joined, "--effort") {
 		t.Error("no effort resolved means no --effort flag - Claude's own default must apply")
@@ -162,7 +162,7 @@ func TestBuildClaudeArgsToolsAndEffort(t *testing.T) {
 			t.Errorf("workerTools must keep %s - the inner loop uses it", name)
 		}
 	}
-	joined = strings.Join(buildClaudeArgs("p", "sp", "s", "opus", "medium", 10, true, guardOptions{}, "", false), " ")
+	joined = strings.Join(buildClaudeArgs("p", "sp", "s", "opus", "medium", 10, true, guardOptions{}, "", false, nil), " ")
 	mustContain(t, joined, "--effort medium")
 	mustContain(t, joined, "--tools "+workerTools)
 }

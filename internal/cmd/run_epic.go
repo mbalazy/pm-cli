@@ -420,6 +420,13 @@ func printEpicDryRun(plan *epicPlan, opts epicOptions) error {
 		if prep := strings.TrimSpace(plan.exc.Prepare); prep != "" {
 			fmt.Fprintf(opts.stdout(), "\nprepare (once per run, in claimed slot): %s\n", prep)
 		}
+		if rig := strings.TrimSpace(plan.exc.Rig); rig != "" {
+			if n := len(runtimeSubs(plan.subs, plan.doneStatus)); n > 0 {
+				fmt.Fprintf(opts.stdout(), "\nrig (once per run, after prepare, in claimed slot with its env; %d runtime sub(s)): %s\n", n, rig)
+			} else {
+				fmt.Fprintf(opts.stdout(), "\nrig: skipped - no sub of this run has `runtime: on`\n")
+			}
+		}
 	}
 	if bl := strings.TrimSpace(plan.exc.Baseline); bl != "" {
 		fmt.Fprintf(opts.stdout(), "\nbaseline (once per run, injected into every worker prompt): %s\n", bl)
@@ -530,7 +537,27 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		}
 	}
 
+	// Prove the slot's runtime is up (executor.rig) ONCE for the whole run,
+	// after prepare (a bundler needs the deps) and with the slot's env - but
+	// only when a sub of this run will drive it: a run with no `runtime: on`
+	// sub never touches the rig. The verdict is rendered into every
+	// runtime-enabled sub's prompt; a dead rig is their handoff, never the
+	// run's error.
+	rigUsed := ""
+	rigPrompt := ""
+	if opts.additional {
+		if rig := strings.TrimSpace(plan.exc.Rig); rig != "" {
+			if need := runtimeSubs(subs, doneStatus); len(need) > 0 {
+				fmt.Fprintf(errOut, "pm run-epic: rig check for %d runtime sub(s) in %s: %s\n", len(need), workDir, rig)
+				verdict := runRig(errOut, workDir, rig, claimedEnv)
+				rigPrompt = rigSection(verdict)
+				rigUsed = verdict.journalWord()
+			}
+		}
+	}
+
 	workOpts := workOptions{
+		rig: rigPrompt,
 		// model/effort come from the PLAN, resolved once against executor.model /
 		// executor.effort, and are marked as set so the sub's own planWork keeps
 		// them (a sub's `model:` frontmatter is applied below, per sub).
@@ -626,7 +653,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	start := storage.JournalEntry{
 		Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID, RunID: runID,
 		PID: os.Getpid(), Model: plan.model, Additional: opts.additional, Yolo: opts.yolo, Independent: independentMode, Branch: journalBranch,
-		WorkDir: journalDir, Baseline: baselineUsed, Source: storage.LaunchSource(),
+		WorkDir: journalDir, Baseline: baselineUsed, Source: storage.LaunchSource(), Rig: rigUsed,
 	}
 	_ = storage.AppendJournal(stateDir, &start)
 	// From here until the end line below, a catchable signal (a terminal's Ctrl-C,
@@ -717,7 +744,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 		Event: storage.JournalEventEnd, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID, RunID: runID,
 		PID: os.Getpid(), Model: plan.model, Additional: opts.additional, Yolo: opts.yolo, Independent: independentMode, Branch: journalBranch,
-		WorkDir: journalDir, Baseline: baselineUsed,
+		WorkDir: journalDir, Baseline: baselineUsed, Rig: rigUsed,
 		Status: runStatus, Error: abortReason, DurationS: int(time.Since(epicStart).Seconds()),
 		Subs: jSubs,
 	})
@@ -1197,6 +1224,9 @@ func printEpicPlan(w io.Writer, tracker *storage.Task, epicBranch, base string, 
 		dep := ""
 		if len(s.Meta.DependsOn) > 0 {
 			dep = "  depends_on=" + strings.Join(s.Meta.DependsOn, ",")
+		}
+		if s.Meta.RuntimeEnabled() {
+			dep += "  runtime=on"
 		}
 		fmt.Fprintf(w, "  [%-7s] %-14s %-8s order=%d  -> %s%s\n", ready, s.Meta.ID, s.Meta.Status, s.Meta.Order, resolveWorkBranch(s), dep)
 	}

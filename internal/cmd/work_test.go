@@ -279,7 +279,7 @@ func TestBuildWorkerSystemPrompt(t *testing.T) {
 
 func TestBuildClaudeArgs(t *testing.T) {
 	t.Run("curated allowlist by default", func(t *testing.T) {
-		args := buildClaudeArgs("p", "sp", "sess-1", "opus", "", 100, false, guardOptions{}, "", false)
+		args := buildClaudeArgs("p", "sp", "sess-1", "opus", "", 100, false, guardOptions{}, "", false, nil)
 		joined := strings.Join(args, " ")
 		mustContain(t, joined, "--permission-mode acceptEdits")
 		mustContain(t, joined, "--allowedTools")
@@ -290,7 +290,7 @@ func TestBuildClaudeArgs(t *testing.T) {
 		}
 	})
 	t.Run("yolo bypasses permissions", func(t *testing.T) {
-		args := buildClaudeArgs("p", "sp", "sess-1", "opus", "", 100, true, guardOptions{}, "", false)
+		args := buildClaudeArgs("p", "sp", "sess-1", "opus", "", 100, true, guardOptions{}, "", false, nil)
 		joined := strings.Join(args, " ")
 		mustContain(t, joined, "--dangerously-skip-permissions")
 		if strings.Contains(joined, "acceptEdits") {
@@ -299,7 +299,7 @@ func TestBuildClaudeArgs(t *testing.T) {
 	})
 	t.Run("user-scope MCP is cut, project .mcp.json survives", func(t *testing.T) {
 		// No project config: strict mode alone, no --mcp-config.
-		joined := strings.Join(buildClaudeArgs("p", "sp", "s", "opus", "", 10, false, guardOptions{}, t.TempDir(), false), " ")
+		joined := strings.Join(buildClaudeArgs("p", "sp", "s", "opus", "", 10, false, guardOptions{}, t.TempDir(), false, nil), " ")
 		mustContain(t, joined, "--strict-mcp-config")
 		if strings.Contains(joined, "--mcp-config") && !strings.Contains(joined, "--strict-mcp-config") {
 			t.Error("no .mcp.json means nothing to pass back in")
@@ -309,12 +309,12 @@ func TestBuildClaudeArgs(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte("{}"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		joined = strings.Join(buildClaudeArgs("p", "sp", "s", "opus", "", 10, false, guardOptions{}, dir, false), " ")
+		joined = strings.Join(buildClaudeArgs("p", "sp", "s", "opus", "", 10, false, guardOptions{}, dir, false, nil), " ")
 		mustContain(t, joined, "--strict-mcp-config")
 		mustContain(t, joined, "--mcp-config "+filepath.Join(dir, ".mcp.json"))
 		// userMCP restores the pre-cut behaviour for a spawn kind that needs
 		// the user's servers (a future pm finish) - no strictness at all.
-		joined = strings.Join(buildClaudeArgs("p", "sp", "s", "opus", "", 10, false, guardOptions{}, dir, true), " ")
+		joined = strings.Join(buildClaudeArgs("p", "sp", "s", "opus", "", 10, false, guardOptions{}, dir, true, nil), " ")
 		if strings.Contains(joined, "--strict-mcp-config") || strings.Contains(joined, "--mcp-config") {
 			t.Error("userMCP=true must leave MCP resolution exactly as it was")
 		}

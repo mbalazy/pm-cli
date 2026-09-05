@@ -38,6 +38,7 @@ export interface TaskDetail extends TaskSummary {
   model?: string
   epic_mode?: string
   finish_mode?: string
+  runtime?: string
 }
 
 /** service.ListTasksResult - a page of tasks plus the truncation footer. */

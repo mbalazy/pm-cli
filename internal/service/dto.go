@@ -73,6 +73,7 @@ type TaskDetail struct {
 	Model      string   `json:"model,omitempty"`
 	EpicMode   string   `json:"epic_mode,omitempty"`
 	FinishMode string   `json:"finish_mode,omitempty"`
+	Runtime    string   `json:"runtime,omitempty"`
 }
 
 // ToSummary converts a task to its listing shape.
@@ -108,6 +109,7 @@ func ToDetail(t *storage.Task) TaskDetail {
 		Model:       t.Meta.Model,
 		EpicMode:    t.Meta.EpicMode,
 		FinishMode:  t.Meta.FinishMode,
+		Runtime:     t.Meta.Runtime,
 	}
 }
 

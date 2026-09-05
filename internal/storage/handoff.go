@@ -31,9 +31,17 @@ type Handoff struct {
 	// generic evidence categories to real commands here. Relative paths resolve
 	// against the repo dir; "~" is expanded.
 	Playbook string `yaml:"playbook,omitempty"`
-	// RuntimeSkill names the project-local skill that drives the real runtime
-	// (simulator, device, browser) - the one an acceptance needs in full, not by its
-	// one-line description. Bare name, with or without a leading "/".
+	// RuntimeSkill names the skill that drives the real runtime (simulator,
+	// device, browser) - the one an acceptance needs in full, not by its
+	// one-line description. Bare name, with or without a leading "/". Resolves
+	// in the REPO first (.claude/skills, then .claude/commands); a name the repo
+	// does not carry falls back to the project's pinned Claude config dir, and
+	// that fallback is FLAGGED (ResolvedHandoff.RuntimeSkillGlobal) so `doctor`
+	// can WARN: a global runtime skill (web-verify - a browser driver is machine
+	// knowledge like a rig skill, pm-cli-123) is legitimate by design, but a
+	// repo-missing skill that only happens to exist on this machine is exactly
+	// the misconfiguration a VPS sync surfaces too late (0.49.1), so it is
+	// never silent.
 	RuntimeSkill string `yaml:"runtime_skill,omitempty"`
 	// RigSkill names the skill that STANDS UP the runtime when it is down -
 	// the cold-start procedure (local backend, dev server, booting the rig).
@@ -67,10 +75,13 @@ type ResolvedHandoff struct {
 	PlaybookExists bool
 	RuntimeSkill   string // normalised bare name; "" when not declared
 	SkillPath      string // absolute path to the skill's SKILL.md / command .md; "" when not found
-	ScriptsDir     string // absolute; "" when the skill has no scripts/ dir
-	Scripts        []string
-	RigSkill       string // normalised bare name; "" when not declared
-	RigSkillPath   string // absolute path to the rig skill's SKILL.md / command .md; "" when not found
+	// RuntimeSkillGlobal is true when SkillPath came from the pinned Claude
+	// config dir (GlobalRoot), not from the repo - doctor WARNs on it, show says it.
+	RuntimeSkillGlobal bool
+	ScriptsDir         string // absolute; "" when the skill has no scripts/ dir
+	Scripts            []string
+	RigSkill           string // normalised bare name; "" when not declared
+	RigSkillPath       string // absolute path to the rig skill's SKILL.md / command .md; "" when not found
 	// GlobalRoot is the Claude config dir the rig skill's fallback searched -
 	// carried so doctor/show can name the actual location set they judged.
 	GlobalRoot string
@@ -80,10 +91,11 @@ type ResolvedHandoff struct {
 // repo dir. claudeConfigDir is the project's pinned Claude config dir
 // (Project.ResolveClaudeConfigDir()) - the ONE global root the rig skill may
 // fall back to, because it is the dir the acceptance session actually loads
-// skills from; empty degrades to the unpinned default. The runtime skill never
-// uses it: it resolves in the repo only, so a runtime skill misplaced on one
-// machine fails `pm executor doctor` here instead of failing the acceptance on
-// the machine the project is synced to.
+// skills from; empty degrades to the unpinned default. The runtime skill
+// prefers the repo and falls back to it FLAGGED (RuntimeSkillGlobal), so a
+// runtime skill that exists only on this machine is visible to `pm executor
+// doctor` here instead of failing the acceptance on the machine the project is
+// synced to.
 func (e Executor) ResolveHandoff(projPath, claudeConfigDir string) ResolvedHandoff {
 	h := e.Handoff
 	out := ResolvedHandoff{Declared: !h.IsZero()}
@@ -103,6 +115,10 @@ func (e Executor) ResolveHandoff(projPath, claudeConfigDir string) ResolvedHando
 	if name := strings.TrimPrefix(strings.TrimSpace(h.RuntimeSkill), "/"); name != "" {
 		out.RuntimeSkill = name
 		out.SkillPath, out.ScriptsDir, out.Scripts = resolveSkillRef([]string{repoRoot}, name)
+		if out.SkillPath == "" {
+			out.SkillPath, out.ScriptsDir, out.Scripts = resolveSkillRef([]string{claudeConfigDir}, name)
+			out.RuntimeSkillGlobal = out.SkillPath != ""
+		}
 	}
 	if name := strings.TrimPrefix(strings.TrimSpace(h.RigSkill), "/"); name != "" {
 		out.RigSkill = name
