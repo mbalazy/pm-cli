@@ -5,6 +5,8 @@ import { keys } from './queries'
 import type {
   ConfigResult,
   ProjectResult,
+  Report,
+  ReportState,
   RunActionResult,
   RunFlags,
   SettingsPatch,
@@ -27,9 +29,18 @@ export type MutationRequest =
   | { kind: 'project'; project: string; body: UpdateProjectBody }
   | { kind: 'settings'; body: SettingsPatch }
   | { kind: 'run'; project: string; taskId: string; action: string; flags: RunFlags }
+  | { kind: 'report_write' }
+  | { kind: 'report_dismiss'; id: string }
 
 export type MutationResult =
-  TaskDetail | ToggleFocusResult | ProjectResult | ConfigResult | RunActionResult | { seen: string }
+  | TaskDetail
+  | ToggleFocusResult
+  | ProjectResult
+  | ConfigResult
+  | RunActionResult
+  | ReportState
+  | Report
+  | { seen: string }
 
 export function runMutation(req: MutationRequest): Promise<MutationResult> {
   switch (req.kind) {
@@ -46,6 +57,10 @@ export function runMutation(req: MutationRequest): Promise<MutationResult> {
       return apiPost<ProjectResult>(`/api/projects/${encodeURIComponent(req.project)}`, req.body)
     case 'settings':
       return apiPost<ConfigResult>('/api/settings', req.body)
+    case 'report_write':
+      return apiPost<ReportState>('/api/report')
+    case 'report_dismiss':
+      return apiPost<Report>('/api/report/dismiss', { id: req.id })
     case 'run':
       return apiPost<RunActionResult>(
         `/api/runs/${encodeURIComponent(req.project)}/${encodeURIComponent(req.taskId)}/${req.action}`,
@@ -74,6 +89,7 @@ export function useRowMutation() {
         inv(keys.groups())
         inv(keys.context(req.project))
       }
+      if (req.kind === 'report_write' || req.kind === 'report_dismiss') inv(keys.report())
       if (req.kind === 'run') {
         // A spawn seeds a run-state, a kill stamps one, a claim writes a
         // claim file: the runs table and the queue read all three.

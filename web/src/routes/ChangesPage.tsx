@@ -1,8 +1,9 @@
 import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 
-import { useAttention, useChanges, useConfig, useRefreshChanges } from '../api/queries'
-import type { ChangeEvent } from '../api/types'
+import { useRowMutation } from '../api/mutations'
+import { useAttention, useChanges, useConfig, useRefreshChanges, useReport } from '../api/queries'
+import type { ChangeEvent, ReportSuggestion } from '../api/types'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { EventRow } from '../components/EventRow'
 import { GroupChips } from '../components/GroupChips'
@@ -19,7 +20,9 @@ import {
   sourceCounts,
   toggleSource,
 } from '../lib/changesView'
+import { isPendingKind } from '../lib/confirmText'
 import { groupHotkeys, groupSearch } from '../lib/groupFilter'
+import { reportView } from '../lib/reportView'
 import { refreshTimes } from '../lib/refreshTimes'
 
 // The Changes screen: the whole feed since the cutoff (off the server's
@@ -34,6 +37,8 @@ export function ChangesPage({ group }: { group: string }) {
   const config = useConfig()
   const attention = useAttention()
   const refresh = useRefreshChanges()
+  const report = useReport()
+  const dismiss = useRowMutation()
   const action = useConfirmedAction()
   const navigate = useNavigate()
   const [sources, setSources] = useState<Set<string>>(new Set())
@@ -119,7 +124,23 @@ export function ChangesPage({ group }: { group: string }) {
         )}
       </header>
 
-      <ReportPanel enabled={cfg?.sources.report === true} />
+      <ReportPanel
+        view={reportView(report.data)}
+        onWrite={() =>
+          action.ask({ kind: 'write_report', subject: { project: '', title: 'Report' } })
+        }
+        onDo={(s: ReportSuggestion) => {
+          // The suggestion names one of the cockpit's own actions; "do" is
+          // that action's ordinary dialog on the task it names.
+          if (s.action && isPendingKind(s.action) && s.project) {
+            action.ask({
+              kind: s.action,
+              subject: { project: s.project, task_id: s.task_id, title: s.text },
+            })
+          }
+        }}
+        onDismiss={(s: ReportSuggestion) => dismiss.mutate({ kind: 'report_dismiss', id: s.id })}
+      />
 
       <section aria-label="Feed">
         <h2 className="mb-1 flex flex-wrap items-baseline gap-2 border-b">

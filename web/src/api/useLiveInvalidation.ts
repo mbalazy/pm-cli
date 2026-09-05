@@ -51,6 +51,10 @@ export function useLiveInvalidation(url = '/api/events') {
       void client.invalidateQueries({ queryKey: keys.changes() })
       void client.invalidateQueries({ queryKey: ['attention'] })
     })
+    // A report finished (or a suggestion was dismissed).
+    es.addEventListener('report', () => {
+      void client.invalidateQueries({ queryKey: keys.report() })
+    })
     // The settings screen (or another tab of it) wrote config.yaml: the
     // sidebar shape, the sections and the thresholds are all downstream.
     es.addEventListener('settings', () => {

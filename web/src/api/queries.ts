@@ -16,6 +16,7 @@ import type {
   ProjectContextResult,
   ProjectsResult,
   RefreshResult,
+  ReportState,
   RunFlags,
   RunPlan,
   RunsResult,
@@ -39,6 +40,7 @@ export const keys = {
   attention: (project = '', group = '') => ['attention', project, group] as const,
   changes: () => ['changes'] as const,
   config: () => ['config'] as const,
+  report: () => ['report'] as const,
   runPlan: (project: string, id: string, action: string, flags: RunFlags) =>
     ['run-plan', project, id, action, flags.yolo === true, flags.additional === true] as const,
 }
@@ -198,5 +200,13 @@ export function useRunPlan(project: string, id: string, action: string, flags: R
     enabled: project !== '' && id !== '' && action !== '',
     staleTime: 0,
     retry: false,
+  })
+}
+
+/** The period's LLM report (off / none / writing / done / error) off the server's disk. */
+export function useReport() {
+  return useQuery({
+    queryKey: keys.report(),
+    queryFn: () => apiGet<ReportState>('/api/report'),
   })
 }

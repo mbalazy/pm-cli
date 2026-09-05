@@ -26,6 +26,8 @@ export interface SettingsForm {
   sources: Record<string, boolean>
   sidebar: { variant: string; show_repos: boolean; sort: string; width: number }
   git_all_branches: boolean
+  report_model: string
+  report_language: string
   /** The configured groups: name + order per slug (unknown groups come from `groupRows`). */
   groups: Record<string, { name: string; order: number }>
 }
@@ -45,6 +47,8 @@ export function formFromConfig(c: CockpitConfig): SettingsForm {
     sources: { ...c.sources },
     sidebar: { ...c.sidebar },
     git_all_branches: c.git.all_branches,
+    report_model: c.report.model,
+    report_language: c.report.language,
     groups,
   }
 }
@@ -80,6 +84,11 @@ export function patchFromForm(base: SettingsForm, edited: SettingsForm): Setting
   if (Object.keys(sidebar).length > 0) p.sidebar = sidebar
   if (edited.git_all_branches !== base.git_all_branches)
     p.git = { all_branches: edited.git_all_branches }
+  const report: NonNullable<SettingsPatch['report']> = {}
+  if (edited.report_model.trim() !== base.report_model) report.model = edited.report_model.trim()
+  if (edited.report_language.trim() !== base.report_language)
+    report.language = edited.report_language.trim()
+  if (Object.keys(report).length > 0) p.report = report
   const groups: NonNullable<SettingsPatch['groups']> = []
   for (const [slug, g] of Object.entries(edited.groups)) {
     const b = base.groups[slug] ?? { name: '', order: 0 }

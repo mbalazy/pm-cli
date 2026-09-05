@@ -116,6 +116,27 @@ export function SettingsPage() {
             />
             git: scan every branch (default: only branches pm tasks name + open PRs)
           </label>
+          <div className="flex flex-wrap items-center gap-2">
+            report model
+            <input
+              type="text"
+              aria-label="report model"
+              value={form.report_model}
+              onChange={(e) => set({ report_model: e.target.value })}
+              className="w-24 rounded border px-1"
+            />
+            language
+            <input
+              type="text"
+              aria-label="report language"
+              value={form.report_language}
+              onChange={(e) => set({ report_language: e.target.value })}
+              className="w-14 rounded border px-1"
+            />
+            <span className="text-xs text-gray-500">
+              the LLM report costs tokens: one per period, written after the first refresh
+            </span>
+          </div>
         </SettingsGroup>
 
         <SettingsGroup

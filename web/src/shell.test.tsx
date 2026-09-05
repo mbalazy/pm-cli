@@ -170,6 +170,18 @@ function fakeFetch(routes: Record<string, unknown>) {
           status: 400,
         })
       }
+      if (url.includes('/api/report')) {
+        return new Response(
+          JSON.stringify({
+            state: 'writing',
+            enabled: true,
+            period: 'p',
+            cutoff: '',
+            model: 'haiku',
+          }),
+          { status: 200 },
+        )
+      }
       if (url.includes('/api/runs/')) {
         return new Response(
           JSON.stringify({
@@ -300,6 +312,7 @@ const config = (sidebar: Record<string, unknown>) => ({
     sources: {},
     sidebar: { variant: 'columns', show_repos: true, sort: 'worst', width: 0, ...sidebar },
     git: { all_branches: false },
+    report: { model: 'haiku', language: 'pl' },
   },
 })
 const settingsConfig = {
@@ -351,6 +364,42 @@ const changes = {
 }
 
 const focusPlan = { date: '2026-01-02', task_ids: [] as string[], tasks: [] as unknown[] }
+const reportOff = {
+  enabled: false,
+  period: '2026-01-01T18',
+  cutoff: '2026-01-01T18:00:00Z',
+  state: 'off',
+  model: 'haiku',
+}
+const reportDone = {
+  enabled: true,
+  period: '2026-01-01T18',
+  cutoff: '2026-01-01T18:00:00Z',
+  state: 'done',
+  model: 'haiku',
+  report: {
+    period: '2026-01-01T18',
+    cutoff: '2026-01-01T18:00:00Z',
+    generated: '2026-01-02T08:00:00Z',
+    model: 'haiku',
+    tokens: { input: 100, cache_creation: 0, cache_read: 4000, output: 300 },
+    duration_s: 9,
+    text: '**ACME**: acme-api-1 waits on review.\n\nDecide on the batch.',
+    suggestions: [
+      {
+        id: 'sg1',
+        project: 'acme-api',
+        task_id: 'acme-api-1',
+        action: 'back_to_todo',
+        text: 'the reviewer answered',
+      },
+      { id: 'sg2', task_id: 'zzz-9', text: 'nothing known' },
+    ],
+    dismissed: [] as string[],
+    events: 2,
+    rows: 1,
+  },
+}
 
 const api = {
   '/api/focus': focusPlan,
@@ -370,6 +419,7 @@ const api = {
   '/api/config': config({}),
   '/api/changes': changes,
   '/api/groups': groupsApi,
+  '/api/report': reportOff,
   '/api/runs/alpha/alpha-9/plan?action=resume_run': {
     action: 'resume_run',
     project: 'alpha',
@@ -1083,5 +1133,63 @@ describe('run control goes through the dialog with the argv preview', () => {
     await vi.waitFor(() => expect(posts).toHaveLength(1))
     expect(posts[0].path).toBe('/api/runs/alpha/alpha-9/kill')
     expect(posts[0].header).toBe('cockpit')
+  })
+})
+
+describe('report panel', () => {
+  it('off says so and offers no button', async () => {
+    vi.stubGlobal('fetch', fakeFetch(api))
+    renderAt('/changes')
+    const panel = await screen.findByRole('region', { name: 'Report' })
+    await vi.waitFor(() => expect(panel).toHaveAttribute('data-state', 'off'))
+    expect(panel).toHaveTextContent('report is off')
+    expect(within(panel).queryByRole('button', { name: /write/ })).toBeNull()
+  })
+
+  it('done shows the prose, the cost and the open suggestions', async () => {
+    vi.stubGlobal('fetch', fakeFetch({ ...api, '/api/report': reportDone }))
+    renderAt('/changes')
+    const done = await screen.findByRole('region', { name: 'Report' })
+    await vi.waitFor(() => expect(done).toHaveAttribute('data-state', 'done'))
+    expect(done).toHaveTextContent('**ACME**: acme-api-1 waits on review.')
+    expect(done).toHaveTextContent('haiku · 4.4k tokens · 9 s')
+    expect(within(done).getByRole('button', { name: 'write again' })).toBeInTheDocument()
+    const items = within(done).getAllByRole('listitem')
+    expect(items).toHaveLength(2)
+    expect(within(items[0]).getByRole('button', { name: 'do' })).toBeEnabled()
+    expect(within(items[1]).getByRole('button', { name: 'do' })).toBeDisabled()
+  })
+
+  it('"do" opens the mapped action\'s dialog on the task; dismiss posts the id; "write now" asks first and costs a POST', async () => {
+    vi.stubGlobal('fetch', fakeFetch({ ...api, '/api/report': reportDone }))
+    const user = userEvent.setup()
+    renderAt('/changes')
+    const panel = await screen.findByRole('region', { name: 'Report' })
+    await vi.waitFor(() => expect(panel).toHaveAttribute('data-state', 'done'))
+    const items = within(panel).getAllByRole('listitem')
+    await user.click(within(items[0]).getByRole('button', { name: 'do' }))
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    expect(dialog).toHaveAttribute('open')
+    expect(within(dialog).getByText(/Moves acme-api-1 back to todo/)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'back to todo' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toEqual({
+      path: '/api/tasks/acme-api/acme-api-1',
+      header: 'cockpit',
+      body: { status: 'todo', waiting_for: '' },
+    })
+    await user.click(within(items[1]).getByRole('button', { name: 'dismiss' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(2))
+    expect(posts[1]).toEqual({
+      path: '/api/report/dismiss',
+      header: 'cockpit',
+      body: { id: 'sg2' },
+    })
+    await user.click(within(panel).getByRole('button', { name: 'write again' }))
+    expect(within(dialog).getByText(/costs tokens/)).toBeInTheDocument()
+    expect(posts).toHaveLength(2)
+    await user.click(within(dialog).getByRole('button', { name: 'write report' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(3))
+    expect(posts[2]).toEqual({ path: '/api/report', header: 'cockpit', body: undefined })
   })
 })

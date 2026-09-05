@@ -355,6 +355,7 @@ export interface CockpitConfig {
   sources: Record<string, boolean>
   sidebar: SidebarConfig
   git: { all_branches: boolean }
+  report: { model: string; language: string }
 }
 
 /** service.UpdateSettingsInput - POST /api/settings: a PATCH, absent = keep. */
@@ -370,6 +371,7 @@ export interface SettingsPatch {
   /** Merged by slug: name null keeps, '' clears; order 0 unplaces. */
   groups?: { slug: string; name?: string; order?: number }[]
   git?: { all_branches?: boolean }
+  report?: { model?: string; language?: string }
 }
 
 /** The fields POST /api/projects/{slug} accepts from the cockpit (service.UpdateProjectInput subset). */
@@ -475,3 +477,38 @@ export interface KillResult {
 }
 
 export type RunActionResult = RunStarted | ClaimResult | KillResult
+
+/** report.Suggestion - one proposed action; `action` empty = not mappable, `project` empty = unplaced. */
+export interface ReportSuggestion {
+  id: string
+  project?: string
+  task_id: string
+  action?: string
+  text: string
+}
+
+/** report.Report - one period's LLM report as stored. */
+export interface Report {
+  period: string
+  cutoff: string
+  generated: string
+  model: string
+  tokens?: { input: number; cache_creation: number; cache_read: number; output: number }
+  duration_s: number
+  text?: string
+  suggestions: ReportSuggestion[]
+  dismissed?: string[]
+  error?: string
+  events: number
+  rows: number
+}
+
+/** server.reportState - GET /api/report (and POST's 202 answer). */
+export interface ReportState {
+  enabled: boolean
+  period: string
+  cutoff: string
+  state: 'off' | 'none' | 'writing' | 'done' | 'error' | string
+  model: string
+  report?: Report
+}
