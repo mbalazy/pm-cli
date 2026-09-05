@@ -91,6 +91,8 @@ export interface ProjectMeta {
 
 /** service.ProjectContextResult - /api/context?project=slug */
 export interface ProjectContextResult {
+  attention?: AttentionDigest
+  attention_note?: string
   doing_tasks: TaskDetail[]
   executor_profile?: string
   focus_tasks?: TaskSummary[]
@@ -113,6 +115,7 @@ export interface ProjectSummary {
 
 /** service.CrossProjectContextResult - /api/context without a project. */
 export interface CrossProjectContextResult {
+  attention?: AttentionDigest
   focus_tasks?: TaskSummary[]
   note?: string
   projects: ProjectSummary[]
@@ -197,4 +200,65 @@ export interface FocusResult {
   date?: string
   task_ids: string[]
   tasks: TaskSummary[]
+}
+
+/** storage.AttentionRow - one row of the attention queue, one shape for every section. */
+export interface AttentionRow {
+  section: string
+  severity: 'crit' | 'warn' | 'info' | 'ok'
+  project: string
+  group: string
+  task_id?: string
+  title: string
+  status?: string
+  /** One display-ready sentence: why the row is here. */
+  reason: string
+  /** null = unknown, render "since ?" - never derive from another stamp. */
+  age_seconds: number | null
+  since?: string
+  flags?: string[]
+  /** The closed action set the row may carry; the UI invents none. */
+  actions: string[]
+}
+
+/** storage.AttentionSection */
+export interface AttentionSection {
+  name: string
+  rows: AttentionRow[]
+  /** Row count before any cap (changes: the feed's own count). */
+  total: number
+  note?: string
+}
+
+/** storage.GroupSummary - the sidebar's line for one group. */
+export interface GroupSummary {
+  slug: string
+  name: string
+  projects: string[]
+  worst: 'crit' | 'warn' | 'info' | 'ok'
+  failed: number
+  visual: number
+  waiting: number
+  quiet: number
+  last_activity?: string
+}
+
+/** storage.Attention - /api/attention[?project=|?group=] */
+export interface Attention {
+  generated: string
+  /** Doing tasks touched this week - the header number. */
+  wip: number
+  sections: AttentionSection[]
+  groups: GroupSummary[]
+}
+
+/** service.AttentionDigest - the `attention` block of /api/context. */
+export interface AttentionDigest {
+  wip: number
+  needs_me: AttentionRow[]
+  waiting: AttentionRow[]
+  waiting_total: number
+  stuck_projects: AttentionRow[]
+  counts: Record<string, number>
+  note?: string
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -494,6 +495,129 @@ func TestJournal(t *testing.T) {
 		}
 		if !strings.Contains(out.Note, "limit capped at 200") || out.Entries[0].Symptom != "s2" {
 			t.Fatalf("newest first + cap note: %+v", out)
+		}
+	})
+}
+
+// attentionFixture adds to the two-project store a waiting task without a
+// reason, an old waiting task, and a failed run on a tracker, so every
+// digest field has something to carry.
+func attentionFixture(t *testing.T, store *storage.Store) {
+	t.Helper()
+	seedProject(t, store, 1)
+	if _, err := store.MutateProject("beta", func(p *storage.Project) error {
+		p.Statuses = []string{"todo", "doing", "waiting", "merged", "done"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mk := func(slug, id, title string, st storage.TaskStatus, parent, waitingFor, changed string) {
+		task := &storage.Task{
+			Meta:     storage.TaskMeta{ID: id, Title: title, Status: st, Parent: parent, WaitingFor: waitingFor, StatusChanged: changed, Created: "2025-02-02", Updated: "2025-02-02T10:00:00+02:00"},
+			FilePath: filepath.Join(store.ProjectDir(slug), id+".md"),
+			Project:  slug,
+		}
+		if err := storage.WriteTask(task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("beta", "b-w1", "no reason", storage.StatusWaiting, "", "", "2025-02-01T10:00:00+02:00")
+	mk("beta", "b-w2", "old wait", storage.StatusWaiting, "", "review", "2024-12-01T10:00:00+02:00")
+	mk("beta", "b-e", "epic", storage.StatusDoing, "", "", "")
+	mk("beta", "b-e-1", "sub", storage.StatusTodo, "b-e", "", "")
+	if err := storage.WriteRunState(store.ProjectDir("beta"), &storage.RunState{TaskID: "b-e", Project: "beta", Kind: storage.RunKindEpic, Status: storage.RunStatusFailed, PID: 1, Started: "2025-02-03T10:00:00+02:00", Updated: "2025-02-03T11:00:00+02:00", Error: "boom"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAttention(t *testing.T) {
+	t.Run("scopes and digests", func(t *testing.T) {
+		store := newTestStore(t)
+		attentionFixture(t, store)
+		a, err := Attention(store, AttentionInput{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a.Section(storage.SectionNeedsMe).Total != 1 || a.Section(storage.SectionWaiting).Total != 2 {
+			t.Fatalf("%+v", a.Sections)
+		}
+		scoped, err := Attention(store, AttentionInput{Project: "t"}) // prefix resolves
+		if err != nil {
+			t.Fatal(err)
+		}
+		if scoped.Section(storage.SectionNeedsMe).Total != 0 || scoped.Section(storage.SectionWaiting).Total != 0 {
+			t.Fatalf("project scope leaked beta rows: %+v", scoped.Sections)
+		}
+		if _, err := Attention(store, AttentionInput{Project: "nosuch"}); err == nil {
+			t.Fatal("unknown project must error")
+		}
+
+		d := DigestAttention(a)
+		if d.WIP != a.WIP || len(d.NeedsMe) != 1 || d.NeedsMe[0].TaskID != "b-e" || !strings.Contains(d.NeedsMe[0].Reason, "boom") {
+			t.Fatalf("digest needs_me = %+v", d.NeedsMe)
+		}
+		// no_reason first, although b-w2 is older.
+		if d.WaitingTotal != 2 || len(d.Waiting) != 2 || d.Waiting[0].TaskID != "b-w1" || d.Waiting[1].TaskID != "b-w2" {
+			t.Fatalf("digest waiting = %+v", d.Waiting)
+		}
+		for _, name := range []string{storage.SectionFocus, storage.SectionInProgress, storage.SectionChanges, storage.SectionLandedNoPR} {
+			if _, ok := d.Counts[name]; !ok {
+				t.Errorf("counts lacks %s: %v", name, d.Counts)
+			}
+		}
+		if _, ok := d.Counts[storage.SectionWaiting]; ok {
+			t.Error("waiting is a list in the digest, not a count")
+		}
+		if DigestAttention(nil) != nil {
+			t.Error("nil in, nil out")
+		}
+	})
+
+	t.Run("digest caps waiting at the limit", func(t *testing.T) {
+		rows := make([]storage.AttentionRow, 0, ContextWaitingLimit+5)
+		for i := 0; i < ContextWaitingLimit+5; i++ {
+			rows = append(rows, storage.AttentionRow{Section: storage.SectionWaiting, TaskID: fmt.Sprintf("w-%d", i)})
+		}
+		rows[ContextWaitingLimit+3].Flags = []string{storage.FlagNoReason}
+		d := DigestAttention(&storage.Attention{Sections: []storage.AttentionSection{{Name: storage.SectionWaiting, Rows: rows, Total: len(rows)}}})
+		if len(d.Waiting) != ContextWaitingLimit || d.WaitingTotal != ContextWaitingLimit+5 {
+			t.Fatalf("len=%d total=%d", len(d.Waiting), d.WaitingTotal)
+		}
+		if d.Waiting[0].TaskID != fmt.Sprintf("w-%d", ContextWaitingLimit+3) {
+			t.Errorf("the no_reason row past the cap must be promoted, got %s first", d.Waiting[0].TaskID)
+		}
+	})
+
+	t.Run("context carries the block, and a broken config becomes a note", func(t *testing.T) {
+		store := newTestStore(t)
+		attentionFixture(t, store)
+		cross, err := CrossProjectContext(store, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cross.Attention == nil || len(cross.Attention.NeedsMe) != 1 {
+			t.Fatalf("cross attention = %+v", cross.Attention)
+		}
+		proj, err := ProjectContext(store, "beta")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if proj.Attention == nil || proj.Attention.WaitingTotal != 2 || proj.AttentionNote != "" {
+			t.Fatalf("project attention = %+v note=%q", proj.Attention, proj.AttentionNote)
+		}
+		if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  cutoff_hour: 99\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cross, err = CrossProjectContext(store, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cross.Attention != nil || !strings.Contains(cross.Note, "cutoff_hour") {
+			t.Fatalf("broken config: attention=%+v note=%q", cross.Attention, cross.Note)
+		}
+		proj, _ = ProjectContext(store, "beta")
+		if proj.Attention != nil || !strings.Contains(proj.AttentionNote, "cutoff_hour") {
+			t.Fatalf("broken config (project): %+v %q", proj.Attention, proj.AttentionNote)
 		}
 	})
 }

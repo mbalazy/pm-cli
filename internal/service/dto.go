@@ -166,6 +166,9 @@ type ProjectMeta struct {
 // ProjectContextResult is the project-scoped Context shape. Field order =
 // the alphabetical key order of the map it replaced.
 type ProjectContextResult struct {
+	// Attention is the queue narrowed to this project (pm_context budget).
+	Attention       *AttentionDigest       `json:"attention,omitempty"`
+	AttentionNote   string                 `json:"attention_note,omitempty"`
 	DoingTasks      []TaskDetail           `json:"doing_tasks"`
 	ExecutorProfile string                 `json:"executor_profile,omitempty"`
 	FocusTasks      []TaskSummary          `json:"focus_tasks,omitempty"`
@@ -189,6 +192,9 @@ type ProjectSummary struct {
 // CrossProjectContextResult is the cross-project Context shape. Field order
 // = the alphabetical key order of the map it replaced.
 type CrossProjectContextResult struct {
+	// Attention is the cross-project queue (pm_context budget): needs_me,
+	// waiting (capped), stuck_projects, counts of the rest.
+	Attention  *AttentionDigest `json:"attention,omitempty"`
 	FocusTasks []TaskSummary    `json:"focus_tasks,omitempty"`
 	Note       string           `json:"note,omitempty"`
 	Projects   []ProjectSummary `json:"projects"`

@@ -490,3 +490,60 @@ func TestEvents(t *testing.T) {
 		t.Fatal("server.Close hung: the events handler did not return")
 	}
 }
+
+// /api/attention is the queue (storage.Attention) scoped by ?project= or
+// ?group=; a bad project is 404 and a broken config 500.
+func TestAttention(t *testing.T) {
+	store := newTestStore(t)
+	projDir := filepath.Join(store.Root, "test")
+	w := &storage.Task{
+		Meta:     storage.TaskMeta{ID: "t-3", Title: "Waits", Status: storage.StatusWaiting, Created: "2025-01-01", Updated: "2025-01-01T10:00:00+01:00"},
+		FilePath: filepath.Join(projDir, "t-3.md"), Project: "test",
+	}
+	if err := storage.WriteTask(w); err != nil {
+		t.Fatal(err)
+	}
+	srv := newServer(t, store, Options{})
+
+	m := getJSON(t, srv.URL+"/api/attention", 200)
+	wantKeys(t, m, "generated", "wip", "sections", "groups")
+	sections := m["sections"].([]any)
+	if len(sections) != 7 {
+		t.Fatalf("sections = %d, want the seven defaults", len(sections))
+	}
+	var waiting map[string]any
+	for _, s := range sections {
+		sec := s.(map[string]any)
+		if sec["name"] == "waiting" {
+			waiting = sec
+		}
+	}
+	rows := waiting["rows"].([]any)
+	if waiting["total"] != float64(1) || len(rows) != 1 {
+		t.Fatalf("waiting = %v", waiting)
+	}
+	row := rows[0].(map[string]any)
+	wantKeys(t, row, "section", "severity", "project", "group", "task_id", "title", "reason", "age_seconds", "actions")
+	if row["age_seconds"] != nil || row["group"] != "test" {
+		t.Fatalf("row = %v (no status_changed = null age)", row)
+	}
+	if flags := row["flags"].([]any); len(flags) != 1 || flags[0] != "no_reason" {
+		t.Fatalf("flags = %v", flags)
+	}
+	groups := m["groups"].([]any)
+	if len(groups) != 1 || groups[0].(map[string]any)["waiting"] != float64(1) {
+		t.Fatalf("groups = %v", groups)
+	}
+
+	scoped := getJSON(t, srv.URL+"/api/attention?group=other", 200)
+	for _, s := range scoped["sections"].([]any) {
+		if sec := s.(map[string]any); sec["total"] != float64(0) {
+			t.Fatalf("group scope leaked: %v", sec)
+		}
+	}
+	getJSON(t, srv.URL+"/api/attention?project=nosuch", 404)
+	if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  sidebar:\n    variant: huge\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	getJSON(t, srv.URL+"/api/attention", 500)
+}

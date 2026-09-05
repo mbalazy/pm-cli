@@ -52,11 +52,12 @@ describe('useLiveInvalidation', () => {
       ['context', 'alpha'],
       ['projects'],
       ['groups'],
+      ['attention'],
     ])
 
     spy.mockClear()
     es.fire('runs', '{"project":"alpha"}')
-    expect(spy.mock.calls.map((c) => c[0]?.queryKey)).toEqual([['runs']])
+    expect(spy.mock.calls.map((c) => c[0]?.queryKey)).toEqual([['runs'], ['attention']])
 
     spy.mockClear()
     es.fire('tasks', 'not json')
