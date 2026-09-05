@@ -159,6 +159,25 @@ func TestDoctorUnknownRuntimeSkillIsError(t *testing.T) {
 	}
 }
 
+func TestDoctorGlobalRuntimeSkillIsWarn(t *testing.T) {
+	proj, _ := handoffProject(t, "x")
+	configDir := t.TempDir()
+	proj.ClaudeConfigDir = configDir
+	writeFile(t, filepath.Join(configDir, "skills", "web-verify", "SKILL.md"), "# web-verify")
+	proj.Executor.Handoff.RuntimeSkill = "web-verify"
+
+	checks := runExecutorDoctor(proj)
+	if levelOf(t, checks, "resolved in "+configDir+", NOT in the repo") != levelWarn {
+		t.Error("a runtime skill found only in the pinned Claude config dir is legitimate (web-verify) but never silent: WARN")
+	}
+	if failed(checks, false) {
+		t.Error("a WARN must not fail without --strict")
+	}
+	if !failed(checks, true) {
+		t.Error("--strict promotes the global-skill WARN, the 0.49.1 concern")
+	}
+}
+
 func TestDoctorRigSkill(t *testing.T) {
 	t.Run("declared and resolved is a passing finding", func(t *testing.T) {
 		proj, _ := handoffProject(t, "x")

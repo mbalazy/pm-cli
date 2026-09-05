@@ -102,6 +102,32 @@ type Executor struct {
 	// (the main checkout's deps are the user's business). A failure aborts the
 	// run. pm does not interpret the command.
 	Prepare string `yaml:"prepare,omitempty"`
+	// Rig is an optional shell command that proves the slot's RUNTIME is up
+	// and serving the claimed worktree (a simulator on the slot's Metro port, a
+	// dev server on the slot's port) - e.g. the simulator-verify skill's
+	// `rig-check.sh --repo <slot> --udid $SIM_UDID --port $ADDITIONAL_METRO_PORT`.
+	// Runs ONCE per run like Prepare, after it, in the claimed slot with the
+	// slot's env (that is where SIM_UDID and the port live), and ONLY when at
+	// least one task of the run has `runtime: on` - a run with no runtime sub
+	// never touches the rig. Exit 0 = RIG UP, anything else (a non-zero exit,
+	// a timeout, a command that cannot start) = RIG DEAD with the reason; the
+	// verdict is rendered into every runtime-enabled worker's prompt and NEVER
+	// aborts the run - a dead rig turns the runtime phase into a recorded
+	// handoff, not a failed sub. The command may WARM-start the rig (boot the
+	// slot's simulator, start Metro, launch the app); it must not COLD-start
+	// it - a native build is 15-40 min on the sim-rig journal's record, longer
+	// than the cap (rigTimeout, 10 min), and is done by hand once per slot.
+	// pm does not interpret the command. (pm-cli-122)
+	Rig string `yaml:"rig,omitempty"`
+	// RuntimeTools are extra `--allowedTools` patterns (Claude Code syntax,
+	// e.g. `Bash(xcrun simctl:*)`, `Bash(curl:*)`, `Bash(/abs/path/scripts/*:*)`)
+	// a worker gets ONLY when its task has `runtime: on`: the runtime phase's
+	// skill drives the rig with commands the curated worker allowlist refuses
+	// (outside --yolo), and a runtime-off worker must not gain them - it has no
+	// rig to drive and the envelope stays as narrow as before. pm does not
+	// interpret the patterns; a project names exactly what its runtime skill
+	// runs. Ignored under --yolo, where every tool is already allowed.
+	RuntimeTools []string `yaml:"runtime_tools,omitempty"`
 	// Baseline is an optional shell command (typically the project's full
 	// verification, e.g. `yarn validate`) whose output is captured ONCE per run
 	// on the branch the work forks from, BEFORE any worker starts, and injected
@@ -289,11 +315,21 @@ const (
 	PhaseTest      = "test"
 	PhaseReview    = "review"
 	PhaseVerify    = "verify"
-	PhasePR        = "pr"
+	// PhaseRuntime drives the project's LIVE runtime after a green verify -
+	// a simulator, a browser, a running service - to observe what the AC says
+	// a user sees. Unlike every other phase it is opt-in PER TASK (`runtime:
+	// on` in the task frontmatter): it costs turns and screenshots and can
+	// read false, so a task with no visible AC pays nothing for it. The
+	// binding is the project's (a skill that drives its rig, or a cmd); pm
+	// knows nothing about simulators. (pm-cli-122)
+	PhaseRuntime = "runtime"
+	PhasePR      = "pr"
 )
 
-// ExecutorPhases is the canonical phase ordering for the inner loop.
-var ExecutorPhases = []string{PhaseImplement, PhaseTest, PhaseReview, PhaseVerify, PhasePR}
+// ExecutorPhases is the canonical phase ordering for the inner loop. runtime
+// sits after verify (the gate) and before pr: a runtime reading never decides
+// the verify verdict, and a PR should carry the reading.
+var ExecutorPhases = []string{PhaseImplement, PhaseTest, PhaseReview, PhaseVerify, PhaseRuntime, PhasePR}
 
 // BindKind is the resolved state of a single phase binding.
 type BindKind int

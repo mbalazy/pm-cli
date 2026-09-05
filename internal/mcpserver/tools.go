@@ -54,6 +54,7 @@ type addTaskInput struct {
 	Model      string            `json:"model,omitempty" jsonschema:"Worker model override for this sub under pm run-epic / pm work (claude alias or full name, e.g. 'sonnet'). Empty = inherit the run-level model. Put trivial subs (copy/color/one-prop tweaks) on a cheaper model; leave investigation subs on the default."`
 	EpicMode   string            `json:"epic_mode,omitempty" jsonschema:"How pm run-epic drives this PARENT tracker's subs. Empty (default) = integration mode: subs branch off and merge back into a shared epic/<tracker> branch, ending in one epic PR. 'independent' = batch mode for UNRELATED tasks: each sub gets its own branch off the base, is pushed when it carries commits, and nothing is merged (no integration branch, no epic PR). Meaningful on a tracker only."`
 	FinishMode string            `json:"finish_mode,omitempty" jsonschema:"Whether pm run-epic chains the acceptance of this PARENT tracker itself. 'auto' = when the run is over, spawn a detached pm finish <tracker> (same machine only), so a batch launched at night is accepted by morning. 'off' or empty (default) = no chaining. Meaningful on a tracker only."`
+	Runtime    string            `json:"runtime,omitempty" jsonschema:"Opt this task into the executor's runtime phase: after a green verify the worker drives the project's live runtime (simulator, browser) as bound by executor.phases.runtime and records readings as OBSERVED: lines with positive + negative controls. 'on' enables it; 'off' or empty (default) skips the phase. Set it ONLY on subs with a visible AC - the phase costs 10-20 turns plus screenshots and can read false; the rig check (executor.rig) runs once per run only when some sub has it on."`
 	Tags       []string          `json:"tags,omitempty" jsonschema:"Tags"`
 	Links      map[string]string `json:"links,omitempty" jsonschema:"Links as key=url pairs (e.g. azure, pr, slack)"`
 	Body       string            `json:"body,omitempty" jsonschema:"Markdown body content. This is the append-only Log zone (session history)."`
@@ -77,6 +78,7 @@ type updateTaskInput struct {
 	Model      *string           `json:"model,omitempty" jsonschema:"Set the worker model override for pm run-epic / pm work (claude alias or full name, e.g. 'sonnet'). Empty string clears it (inherit run-level model). Omit to keep current."`
 	EpicMode   *string           `json:"epic_mode,omitempty" jsonschema:"Set how pm run-epic drives this PARENT tracker's subs. 'independent' = batch mode for UNRELATED tasks (each sub on its own branch off the base, pushed, nothing merged, no epic PR). Empty string clears it back to integration mode (shared epic/<tracker> branch, one epic PR). Omit to keep current."`
 	FinishMode *string           `json:"finish_mode,omitempty" jsonschema:"Set whether pm run-epic chains the acceptance of this PARENT tracker itself. 'auto' = spawn a detached pm finish <tracker> when the run is over (same machine only). 'off' disables it; an empty string clears the field, which also means off. Omit to keep current."`
+	Runtime    *string           `json:"runtime,omitempty" jsonschema:"Set whether this task runs the executor's runtime phase (worker drives the live runtime after verify, records OBSERVED: readings). 'on' enables it - only for subs with a visible AC; 'off' disables it; an empty string clears the field, which also means off. Omit to keep current."`
 	Tags       []string          `json:"tags,omitempty" jsonschema:"Replace tags (omit to keep current)"`
 	Links      map[string]string `json:"links,omitempty" jsonschema:"Links to merge (existing links are preserved)"`
 	BodyAppend string            `json:"body_append,omitempty" jsonschema:"Append to the Log zone of the body (append-only session history; never replaces existing content)"`
@@ -160,6 +162,7 @@ type taskDetail struct {
 	Model      string   `json:"model,omitempty"`
 	EpicMode   string   `json:"epic_mode,omitempty"`
 	FinishMode string   `json:"finish_mode,omitempty"`
+	Runtime    string   `json:"runtime,omitempty"`
 }
 
 func toSummary(t *storage.Task) taskSummary {
@@ -235,6 +238,7 @@ func toDetail(t *storage.Task) taskDetail {
 		Model:       t.Meta.Model,
 		EpicMode:    t.Meta.EpicMode,
 		FinishMode:  t.Meta.FinishMode,
+		Runtime:     t.Meta.Runtime,
 	}
 }
 
@@ -514,6 +518,11 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 			r, _ := toolError(err.Error())
 			return r, nil, nil
 		}
+		// runtime: the same load-bearing pre-check, for the same reason.
+		if err := storage.ValidateRuntime(in.Runtime); err != nil {
+			r, _ := toolError(err.Error())
+			return r, nil, nil
+		}
 
 		t.Meta.Branch = in.Branch
 		t.Meta.Parent = in.Parent
@@ -523,6 +532,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 		t.Meta.Model = in.Model
 		t.Meta.EpicMode = in.EpicMode
 		t.Meta.FinishMode = in.FinishMode
+		t.Meta.Runtime = in.Runtime
 		t.Meta.Tags = in.Tags
 		if len(in.Links) > 0 {
 			t.Meta.Links = in.Links
@@ -617,6 +627,13 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 				return r, nil, nil
 			}
 			task.Meta.FinishMode = *in.FinishMode
+		}
+		if in.Runtime != nil {
+			if err := storage.ValidateRuntime(*in.Runtime); err != nil {
+				r, _ := toolError(err.Error())
+				return r, nil, nil
+			}
+			task.Meta.Runtime = *in.Runtime
 		}
 		if in.Tags != nil {
 			task.Meta.Tags = in.Tags
