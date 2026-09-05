@@ -83,6 +83,7 @@ func NewHandler(store storage.TaskStore, opts Options) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/projects", h.projects)
+	mux.HandleFunc("GET /api/groups", h.groups)
 	mux.HandleFunc("GET /api/tasks", h.tasks)
 	mux.HandleFunc("GET /api/tasks/{project}/{id}", h.task)
 	mux.HandleFunc("GET /api/context", h.context)
@@ -189,6 +190,13 @@ func (h *handler) projects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// groups is the cockpit's sidebar input: the project groups derived from the
+// active projects' `group` fields, named by the global config.
+func (h *handler) groups(w http.ResponseWriter, r *http.Request) {
+	res, err := service.ListGroups(h.store)
+	writeResult(w, res, err)
+}
+
 func (h *handler) tasks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	in := service.ListTasksInput{Project: q.Get("project"), Status: q.Get("status")}
@@ -278,7 +286,7 @@ const placeholderPage = `<!doctype html>
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:40em;margin:4em auto;padding:0 1em;color:#333}code{background:#eee;padding:.1em .3em;border-radius:3px}</style>
 <h1>pm serve</h1>
 <p>The server is up, but the front end is not built into this binary.</p>
-<p>Run <code>make web</code> and rebuild, or use the JSON API directly: <code>/api/projects</code>, <code>/api/tasks</code>, <code>/api/context</code>, <code>/api/runs</code>, <code>/api/focus</code>, <code>/api/events</code>.</p>
+<p>Run <code>make web</code> and rebuild, or use the JSON API directly: <code>/api/projects</code>, <code>/api/groups</code>, <code>/api/tasks</code>, <code>/api/context</code>, <code>/api/runs</code>, <code>/api/focus</code>, <code>/api/events</code>.</p>
 `
 
 // static serves the bundle with client-side routing: a path that names a

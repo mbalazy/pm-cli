@@ -9,7 +9,7 @@ Local task tracker and control plane for AI coding agents. Data lives in `~/.cla
 - The user starts working on a new task/feature/bug → `pm_add_task` (read the task-authoring rules first: `pm docs authoring`)
 - The user finishes work or merges a PR → suggest moving the task to done (never move it yourself - see Closing)
 - The user switches projects, starts a session, or asks "what am I working on?" → `pm_context` (recent first, flag tasks stale 7+ days, short bullets per project)
-- The user mentions project setup, links, stack or path changes → `pm_update_project`
+- The user mentions project setup, links, stack or path changes → `pm_update_project`. `group` (a slug) joins several repos into ONE cockpit project (ACME = acme-api + acme-zap + ...); a project without one is its own group. A dormant project is `archived: true` on the project - that flag alone puts it to sleep for every cross-project view (the board's hidden list is not it).
 - The user asks to attach/link the session to a task → run `pm session-id` for the UUID, then `pm_update_task` with `sessions: ["<uuid>"]`
 - The user is blocked on someone else (review, client, an answer) → `pm_update_task` with status `waiting` + `waiting_for` naming who/what ("review Alex PR #940", "client answer") - a bare `waiting` says nothing about the blocker
 

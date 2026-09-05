@@ -258,6 +258,104 @@ func TestProjects(t *testing.T) {
 		if len(res.Projects) != 2 || res.Note != "" {
 			t.Fatalf("%+v", res)
 		}
+		// No group set: the project is its own group, named by its slug.
+		for _, p := range res.Projects {
+			if p.Group != p.Slug || p.GroupName != p.Slug {
+				t.Errorf("ungrouped %s: group=%q group_name=%q", p.Slug, p.Group, p.GroupName)
+			}
+		}
+	})
+
+	t.Run("list carries the group and its configured name", func(t *testing.T) {
+		store := newTestStore(t)
+		seedProject(t, store, 1)
+		if _, err := store.MutateProject("beta", func(p *storage.Project) error { p.Group = "acme"; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  groups:\n    acme: {name: ACME}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		res, err := ListProjects(store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byslug := map[string]ProjectInfo{}
+		for _, p := range res.Projects {
+			byslug[p.Slug] = p
+		}
+		if b := byslug["beta"]; b.Group != "acme" || b.GroupName != "ACME" {
+			t.Errorf("beta = %+v", b)
+		}
+		if x := byslug["test"]; x.Group != "test" || x.GroupName != "test" {
+			t.Errorf("test = %+v", x)
+		}
+
+		// A broken config is named in the note; names fall back to slugs.
+		if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  cutoff_hour: 99\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		res, err = ListProjects(store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(res.Note, "cutoff_hour") {
+			t.Errorf("note = %q, want the config error", res.Note)
+		}
+		for _, p := range res.Projects {
+			if p.Slug == "beta" && (p.Group != "acme" || p.GroupName != "acme") {
+				t.Errorf("fallback beta = %+v", p)
+			}
+		}
+	})
+
+	t.Run("groups lists active projects by group, loud on a broken config", func(t *testing.T) {
+		store := newTestStore(t)
+		seedProject(t, store, 1)
+		if _, err := store.MutateProject("beta", func(p *storage.Project) error { p.Group = "acme"; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		res, err := ListGroups(store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Groups) != 2 || res.Groups[0].Slug != "acme" || res.Groups[0].Projects[0] != "beta" || res.Groups[1].Slug != "test" {
+			t.Fatalf("%+v", res.Groups)
+		}
+		if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  cutoff_hour: 99\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ListGroups(store); err == nil {
+			t.Fatal("ListGroups must fail on a broken config")
+		}
+	})
+
+	t.Run("create and update set the group, an unsafe one is a validation error", func(t *testing.T) {
+		store := newTestStore(t)
+		res, err := CreateProject(store, CreateProjectInput{Slug: "acme-api", Group: "acme"})
+		if err != nil || res.Group != "acme" {
+			t.Fatalf("%+v, %v", res, err)
+		}
+		_, err = CreateProject(store, CreateProjectInput{Slug: "bad", Group: "Not A Slug"})
+		wantValidation(t, err)
+		if _, err := store.GetProject("bad"); err == nil {
+			t.Fatal("rejected create wrote a project")
+		}
+
+		bad := "Not A Slug"
+		_, err = UpdateProject(store, UpdateProjectInput{Project: "acme-api", Group: &bad})
+		wantValidation(t, err)
+		proj, _ := store.GetProject("acme-api")
+		if proj.Group != "acme" {
+			t.Fatalf("rejected group was written: %q", proj.Group)
+		}
+		// nil keeps, "" clears.
+		if res, err := UpdateProject(store, UpdateProjectInput{Project: "acme-api", Name: "ACME-API"}); err != nil || res.Group != "acme" {
+			t.Fatalf("omit must keep: %+v, %v", res, err)
+		}
+		empty := ""
+		if res, err := UpdateProject(store, UpdateProjectInput{Project: "acme-api", Group: &empty}); err != nil || res.Group != "" {
+			t.Fatalf("empty must clear: %+v, %v", res, err)
+		}
 	})
 
 	t.Run("create validates the slug and refuses case-insensitive duplicates", func(t *testing.T) {

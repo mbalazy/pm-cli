@@ -26,9 +26,11 @@ import (
 // PM_DATA_DIR, and a hand-joined home path would make every test reach into the
 // real user's data.
 //
-// NOT WRITTEN BY pm. The file is hand-authored, like a tuned project.yaml. If a
-// writer is ever added it owes the same debt writeProject pays: merge into the
-// existing YAML node tree so comments and unknown keys survive.
+// WRITTEN BY pm ONLY THROUGH SaveConfig (added with the cockpit block, so the
+// settings screen can edit it), which pays the same debt writeProject pays:
+// the fresh marshal is merged into the existing YAML node tree, so comments
+// and unknown keys survive. The remotes block stays hand-authored in
+// practice; nothing in pm edits it.
 
 // ConfigFileName is the global config's name inside the pm root.
 const ConfigFileName = "config.yaml"
@@ -36,6 +38,12 @@ const ConfigFileName = "config.yaml"
 // PMConfig is the resolved global configuration.
 type PMConfig struct {
 	Remotes []Remote `yaml:"remotes,omitempty"`
+
+	// Cockpit is the web cockpit's settings block (cockpit.go). Always
+	// resolved: a missing file or block yields DefaultCockpitConfig, and a
+	// file's keys are decoded OVER those defaults, so an absent key keeps its
+	// default and an explicit zero wins.
+	Cockpit CockpitConfig `yaml:"cockpit"`
 
 	// Path is where this config was read from, and Exists says whether that
 	// file was actually there. Both are resolved state, not file content -
@@ -76,7 +84,7 @@ func (s *Store) ConfigPath() string {
 // carries the file name, and yaml.v3's own message carries the line.
 func (s *Store) LoadConfig() (*PMConfig, error) {
 	path := s.ConfigPath()
-	cfg := &PMConfig{Path: path}
+	cfg := &PMConfig{Path: path, Cockpit: DefaultCockpitConfig()}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -97,6 +105,65 @@ func (s *Store) LoadConfig() (*PMConfig, error) {
 	if err := cfg.validate(path); err != nil {
 		return nil, err
 	}
+	if err := cfg.Cockpit.validate(path); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// knownConfigKeys are the top-level config.yaml keys PMConfig owns; any other
+// top-level key in the file is preserved verbatim by SaveConfig.
+var knownConfigKeys = map[string]bool{"remotes": true, "cockpit": true}
+
+// SaveConfig writes the config back, keeping what a struct round-trip cannot
+// carry: comments and unknown keys in the existing file (mergeYAMLDocuments,
+// the writeProject mechanism). The cockpit block is written as RESOLVED -
+// every default becomes an explicit key on the first save - which is the
+// price of decoding over defaults instead of through pointer fields; the
+// file stays readable by an older pm, which tolerates unknown keys. The
+// write is atomic (tmp+rename). Path and Exists are not content and are
+// never written; the file is created if missing.
+//
+// Validated before writing, so a bad value from a settings form never
+// lands on disk where it would make the NEXT LoadConfig fail.
+func (s *Store) SaveConfig(cfg *PMConfig) error {
+	if cfg == nil {
+		return fmt.Errorf("save config: nil config")
+	}
+	path := s.ConfigPath()
+	if err := cfg.validate(path); err != nil {
+		return err
+	}
+	if err := cfg.Cockpit.validate(path); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	if old, rerr := os.ReadFile(path); rerr == nil {
+		if merged, merr := mergeYAMLDocuments(old, data, knownConfigKeys); merr == nil {
+			data = merged
+		}
+	}
+	return atomicWriteFile(path, data, 0644)
+}
+
+// MutateConfig is the read-modify-write for the config: load fresh, apply
+// fn, save. No lock: the file is edited by a person or by one settings
+// screen, and a flock here would be the first one on the pm root.
+func (s *Store) MutateConfig(fn func(*PMConfig) error) (*PMConfig, error) {
+	cfg, err := s.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	if err := fn(cfg); err != nil {
+		return nil, err
+	}
+	if err := s.SaveConfig(cfg); err != nil {
+		return nil, err
+	}
+	cfg.Exists = true
 	return cfg, nil
 }
 

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -21,8 +22,23 @@ type Project struct {
 	Tags     []string          `yaml:"tags,omitempty"`
 	Statuses []string          `yaml:"statuses,omitempty"`
 	Notes    string            `yaml:"notes,omitempty"`
-	Archived bool              `yaml:"archived,omitempty"`
-	Executor *Executor         `yaml:"executor,omitempty"`
+	// Archived marks a dormant project. It is THE source of truth for "asleep"
+	// everywhere pm aggregates across projects (ListActiveProjects, the
+	// cockpit's home/sidebar/feed): an archived project is left out of every
+	// group and every rollup. The board's own hidden_projects (tui-config.yaml)
+	// is UI state of one screen, deliberately never read as a fact about the
+	// project.
+	Archived bool `yaml:"archived,omitempty"`
+	// Group joins several repos into ONE project on the cockpit (ACME = acme-api +
+	// acme-zap + acme-crm + acme-best; orbit = orbit +
+	// orbit-platform + orbit-web). The value is a group slug,
+	// validated like a project slug. Empty = the project is a group of its own
+	// whose slug is the project slug (see GroupSlug). A display name for a group
+	// lives in the global config's `cockpit.groups` block, never here - the
+	// name would otherwise be a copy in every member's project.yaml. The TUI
+	// and CLI ignore the field and preserve it on write.
+	Group    string    `yaml:"group,omitempty"`
+	Executor *Executor `yaml:"executor,omitempty"`
 	// Journals declares which subsystems this project keeps a running record
 	// of (see journal.go). This list IS the whole of the journal mechanism's
 	// project-awareness: pm never infers a subject, so nothing in the code
@@ -34,6 +50,32 @@ type Project struct {
 	// separate account/config (e.g. a company Team account in ~/.claude-alt).
 	// "~" is expanded. See ResolveClaudeConfigDir.
 	ClaudeConfigDir string `yaml:"claude_config_dir,omitempty"`
+}
+
+// GroupSlug is the group this project belongs to on the cockpit: its own
+// `group` field, or - for a project that declares none - its own slug, so
+// every project is in exactly one group and a consumer never special-cases
+// the ungrouped.
+func (p *Project) GroupSlug(slug string) string {
+	if p != nil && p.Group != "" {
+		return p.Group
+	}
+	return slug
+}
+
+// ValidateGroup checks a project's group field. Empty is legal (no group);
+// anything else must be a slug, because the value becomes a URL segment
+// (`/g/<slug>`), a config key (`cockpit.groups.<slug>`) and a filter value
+// (`?g=`), and the same rule keeps two spellings of one group from splitting
+// it in half.
+func ValidateGroup(group string) error {
+	if group == "" {
+		return nil
+	}
+	if err := ValidateSlug(group); err != nil {
+		return fmt.Errorf("invalid group %q - a group is named like a project slug: %w", group, err)
+	}
+	return nil
 }
 
 // DefaultClaudeConfigDir returns the default Claude Code config dir (~/.claude),
@@ -93,7 +135,7 @@ var knownProjectKeys = map[string]bool{
 	"name": true, "prefix": true, "path": true, "repo": true, "stack": true,
 	"links": true, "tags": true, "statuses": true, "notes": true,
 	"archived": true, "executor": true, "claude_config_dir": true,
-	"journals": true,
+	"journals": true, "group": true,
 }
 
 // writeProject persists a project WITHOUT destroying what a plain struct
@@ -125,6 +167,13 @@ func writeProject(path string, p *Project) error {
 // the new marshal decides the key set - but any subtree whose content is
 // unchanged keeps its ORIGINAL node, preserving the comments inside it.
 func mergeProjectYAML(oldData, newData []byte) ([]byte, error) {
+	return mergeYAMLDocuments(oldData, newData, knownProjectKeys)
+}
+
+// mergeYAMLDocuments is the merge behind writeProject and SaveConfig: known
+// names the top-level keys the struct owns (absent = cleared = dropped);
+// every other top-level key in the old document is user data and survives.
+func mergeYAMLDocuments(oldData, newData []byte, known map[string]bool) ([]byte, error) {
 	var oldDoc, newDoc yaml.Node
 	if err := yaml.Unmarshal(oldData, &oldDoc); err != nil {
 		return nil, err
@@ -137,7 +186,7 @@ func mergeProjectYAML(oldData, newData []byte) ([]byte, error) {
 		return newData, nil
 	}
 
-	merged := mergeMappingNodes(oldMap, newMap, knownProjectKeys)
+	merged := mergeMappingNodes(oldMap, newMap, known)
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	// 4 = yaml.Marshal's default indent, which every existing project.yaml was

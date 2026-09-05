@@ -20,6 +20,7 @@ type CreateProjectInput struct {
 	Links    map[string]string `json:"links,omitempty" jsonschema:"Links as key=url pairs"`
 	Tags     []string          `json:"tags,omitempty" jsonschema:"Tags"`
 	Statuses []string          `json:"statuses,omitempty" jsonschema:"Custom statuses (default: todo, doing, waiting, done)"`
+	Group    string            `json:"group,omitempty" jsonschema:"Cockpit group slug - several repos that are one product/client share it (e.g. acme); empty = the project is its own group"`
 }
 
 // UpdateProjectInput is the argument set of pm_update_project.
@@ -35,6 +36,7 @@ type UpdateProjectInput struct {
 	Tags     []string          `json:"tags,omitempty" jsonschema:"Replace tags (omit to keep current)"`
 	Statuses []string          `json:"statuses,omitempty" jsonschema:"Replace statuses (omit to keep current)"`
 	Archived *bool             `json:"archived,omitempty" jsonschema:"Archive or unarchive the project"`
+	Group    *string           `json:"group,omitempty" jsonschema:"Set the cockpit group slug (several repos that are one product/client share it). Omit to keep current; pass an empty string to leave the group"`
 }
 
 // ListProjects lists every project with per-status task counts. A project
@@ -47,6 +49,15 @@ func ListProjects(store storage.TaskStore) (*ListProjectsResult, error) {
 	}
 
 	var warnings []string
+	// Group display names come from the global config. This listing already
+	// skips-and-names a broken project rather than failing, so a broken
+	// config gets the same treatment: named in the note, names fall back
+	// to slugs. ListGroups (the cockpit's own read) stays loud.
+	cfg, err := store.LoadConfig()
+	if err != nil {
+		warnings = append(warnings, err.Error())
+		cfg = &storage.PMConfig{Cockpit: storage.DefaultCockpitConfig()}
+	}
 	result := []ProjectInfo{}
 	for _, slug := range projects {
 		proj, err := store.GetProject(slug)
@@ -54,11 +65,14 @@ func ListProjects(store storage.TaskStore) (*ListProjectsResult, error) {
 			warnings = append(warnings, fmt.Sprintf("project %q: failed to read project.yaml: %v", slug, err))
 			continue
 		}
+		group := proj.GroupSlug(slug)
 		pi := ProjectInfo{
 			Slug:       slug,
 			Name:       proj.Name,
 			Stack:      proj.Stack,
 			Archived:   proj.Archived,
+			Group:      group,
+			GroupName:  cfg.Cockpit.GroupName(group),
 			TaskCounts: make(map[string]int),
 		}
 		tasks, err := store.GetTasks(slug)
@@ -74,8 +88,24 @@ func ListProjects(store storage.TaskStore) (*ListProjectsResult, error) {
 	return &ListProjectsResult{Projects: result, Note: strings.Join(warnings, "; ")}, nil
 }
 
+// ListGroups lists the cockpit's project groups (storage.ProjectGroups):
+// active projects only, names from the global config. Unlike ListProjects
+// this fails on an unreadable config - the sidebar must never show a group
+// under the wrong name as if that were the setting.
+func ListGroups(store storage.TaskStore) (*ListGroupsResult, error) {
+	groups, err := store.ProjectGroups()
+	if err != nil {
+		return nil, err
+	}
+	if groups == nil {
+		groups = []storage.ProjectGroup{}
+	}
+	return &ListGroupsResult{Groups: groups}, nil
+}
+
 // CreateProject creates the project directory and project.yaml. An empty,
-// unsafe or already-taken slug (case-insensitively) is a *ValidationError.
+// unsafe or already-taken slug (case-insensitively), or an unsafe group, is
+// a *ValidationError.
 func CreateProject(store storage.TaskStore, in CreateProjectInput) (*ProjectResult, error) {
 	if in.Slug == "" {
 		return nil, validation(fmt.Errorf("slug is required"))
@@ -84,6 +114,9 @@ func CreateProject(store storage.TaskStore, in CreateProjectInput) (*ProjectResu
 	// ProjectYAML) - reject anything that could escape the pm root
 	// ("../foo") or isn't canonical (uppercase, spaces).
 	if err := validation(storage.ValidateSlug(in.Slug)); err != nil {
+		return nil, err
+	}
+	if err := validation(storage.ValidateGroup(in.Group)); err != nil {
 		return nil, err
 	}
 
@@ -118,6 +151,7 @@ func CreateProject(store storage.TaskStore, in CreateProjectInput) (*ProjectResu
 		Links:    in.Links,
 		Tags:     in.Tags,
 		Statuses: in.Statuses,
+		Group:    in.Group,
 	}
 
 	if err := store.CreateProject(in.Slug, p); err != nil {
@@ -142,6 +176,14 @@ func UpdateProject(store storage.TaskStore, in UpdateProjectInput) (*ProjectResu
 	// BEFORE the mutation so a rejected call writes nothing.
 	if err := validation(storage.ValidateProjectPrefix(in.Prefix)); err != nil {
 		return nil, err
+	}
+	// Same for the group: checked before the mutation so a rejected call
+	// writes nothing (MutateProject would refuse it too, but as a storage
+	// error, not the caller's-mistake kind).
+	if in.Group != nil {
+		if err := validation(storage.ValidateGroup(*in.Group)); err != nil {
+			return nil, err
+		}
 	}
 	// The whole read -> patch -> write runs under the project lock, with
 	// the project re-read FRESH inside it: this only sets the fields the
@@ -203,6 +245,10 @@ func UpdateProject(store storage.TaskStore, in UpdateProjectInput) (*ProjectResu
 		if in.Archived != nil {
 			proj.Archived = *in.Archived
 		}
+		// Group: tri-state (nil = keep, "" = leave the group)
+		if in.Group != nil {
+			proj.Group = *in.Group
+		}
 		return nil
 	})
 	if err != nil {
@@ -224,6 +270,7 @@ func projectResult(slug string, p *storage.Project) *ProjectResult {
 		Tags:     p.Tags,
 		Statuses: p.Statuses,
 		Archived: p.Archived,
+		Group:    p.Group,
 	}
 }
 

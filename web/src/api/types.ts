@@ -123,7 +123,12 @@ export interface Project {
   slug: string
   name: string
   stack?: string
+  /** Asleep: out of every group and every cockpit aggregation (project.yaml `archived: true`). */
   archived?: boolean
+  /** Cockpit group slug - the project's own slug when it declares none. Never empty. */
+  group: string
+  /** Display name from config.yaml `cockpit.groups`; the slug when unnamed. */
+  group_name: string
   task_counts: Record<string, number>
   path?: string
   repo?: string
@@ -138,6 +143,19 @@ export interface Project {
 export interface ProjectsResult {
   projects: Project[]
   note?: string
+}
+
+/** storage.ProjectGroup - one cockpit group, derived from the active projects' `group` fields. */
+export interface ProjectGroup {
+  slug: string
+  name: string
+  /** Active member slugs, sorted; an archived project is in no group. */
+  projects: string[]
+}
+
+/** service.ListGroupsResult - /api/groups */
+export interface GroupsResult {
+  groups: ProjectGroup[]
 }
 
 /** storage.RunCell - the RUN column of a run row. */

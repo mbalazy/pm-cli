@@ -14,6 +14,9 @@ type TaskStore interface {
 	// projects; see storage/config.go.
 	ConfigPath() string
 	LoadConfig() (*PMConfig, error)
+	// SaveConfig/MutateConfig write it back, comments and unknown keys kept.
+	SaveConfig(cfg *PMConfig) error
+	MutateConfig(fn func(*PMConfig) error) (*PMConfig, error)
 
 	// Projects - read
 	ListProjects() ([]string, error)
@@ -28,6 +31,9 @@ type TaskStore interface {
 	GetAllLandingStatuses() []TaskStatus
 	ProjectPrefix(slug string) string
 	ResolveProject(input string) (string, error)
+	// ProjectGroups derives the cockpit's project groups from the active
+	// projects' `group` fields (groups.go).
+	ProjectGroups() ([]ProjectGroup, error)
 
 	// Projects - write. All three self-lock; never call them while holding
 	// LockProject. MutateProject is the one to use for a partial-field edit

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -11,10 +12,13 @@ import (
 func newConfigCmd(store storage.TaskStore) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "Global pm configuration (remote runners)",
+		Short: "Global pm configuration (remote runners, cockpit settings)",
 		Long: "The global pm config lives at <pm data dir>/config.yaml - one file next to the projects, " +
-			"not a copy inside each project.yaml, because one remote runner serves many projects.\n\n" +
-			"pm never writes this file; it is hand-authored.",
+			"not a copy inside each project.yaml, because one remote runner serves many projects and the " +
+			"cockpit's settings (group names, thresholds, refresh window, section and source toggles) " +
+			"describe how you work, not one repo.\n\n" +
+			"The remotes block is hand-authored; the cockpit block is edited by the cockpit's settings screen " +
+			"or by hand, and pm writes it back with your comments and unknown keys kept.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
@@ -29,7 +33,8 @@ func newConfigShowCmd(store storage.TaskStore) *cobra.Command {
 		Use:   "show",
 		Short: "Print the resolved global config and the file it came from",
 		Long: "Prints the global config as RESOLVED, not as written (the pattern `pm executor show` follows): " +
-			"the file it was read from, and every remote runner pm knows about.\n\n" +
+			"the file it was read from, every remote runner pm knows about, and the cockpit block with its " +
+			"defaults filled in.\n\n" +
 			"No file at all is the normal state and prints as zero remote runners. An unreadable one is an " +
 			"error - a YAML typo must not read as \"you have no remotes\".",
 		Args: cobra.NoArgs,
@@ -53,21 +58,81 @@ func renderPMConfig(cfg *storage.PMConfig) string {
 		if cfg != nil {
 			path = cfg.Path
 		}
-		fmt.Fprintf(&b, "source: %s  [no file - zero remote runners]\n", path)
+		fmt.Fprintf(&b, "source: %s  [no file - zero remote runners, cockpit defaults]\n", path)
+		if cfg != nil {
+			renderCockpitConfig(&b, &cfg.Cockpit)
+		}
 		return b.String()
 	}
 	fmt.Fprintf(&b, "source: %s\n", cfg.Path)
 
 	if len(cfg.Remotes) == 0 {
 		b.WriteString("\n## Remote runners\n  (none declared)\n")
-		return b.String()
+	} else {
+		fmt.Fprintf(&b, "\n## Remote runners (%d)\n", len(cfg.Remotes))
+		for _, r := range cfg.Remotes {
+			fmt.Fprintf(&b, "  %s\n", r.Name)
+			fmt.Fprintf(&b, "    ssh:  %s\n", r.SSH)
+			fmt.Fprintf(&b, "    pm:   %s\n", r.PM)
+			fmt.Fprintf(&b, "    root: %s\n", r.Root)
+		}
 	}
-	fmt.Fprintf(&b, "\n## Remote runners (%d)\n", len(cfg.Remotes))
-	for _, r := range cfg.Remotes {
-		fmt.Fprintf(&b, "  %s\n", r.Name)
-		fmt.Fprintf(&b, "    ssh:  %s\n", r.SSH)
-		fmt.Fprintf(&b, "    pm:   %s\n", r.PM)
-		fmt.Fprintf(&b, "    root: %s\n", r.Root)
-	}
+	renderCockpitConfig(&b, &cfg.Cockpit)
 	return b.String()
+}
+
+// renderCockpitConfig prints the cockpit block as resolved: a missing block
+// prints its defaults, which is the honest answer to "what will the cockpit
+// do" (the defaults are what it does).
+func renderCockpitConfig(b *strings.Builder, c *storage.CockpitConfig) {
+	b.WriteString("\n## Cockpit\n")
+	if len(c.Groups) == 0 {
+		b.WriteString("  groups: (none named - every group displays as its slug)\n")
+	} else {
+		slugs := make([]string, 0, len(c.Groups))
+		for slug := range c.Groups {
+			slugs = append(slugs, slug)
+		}
+		sort.Strings(slugs)
+		fmt.Fprintf(b, "  groups (%d)\n", len(slugs))
+		for _, slug := range slugs {
+			fmt.Fprintf(b, "    %s: %s\n", slug, c.GroupName(slug))
+		}
+	}
+	fmt.Fprintf(b, "  thresholds: doing idle %dd · waiting highlight %dd · project stuck %dd\n",
+		c.DoingIdleDays, c.WaitingHighlightDays, c.StuckProjectDays)
+	fmt.Fprintf(b, "  cutoff hour: %02d:00\n", c.CutoffHour)
+	fmt.Fprintf(b, "  refresh: every %s within %s\n", c.Refresh.Every, c.Refresh.Window)
+	fmt.Fprintf(b, "  sections: %s\n", toggles(storage.CockpitSections, c.Sections))
+	fmt.Fprintf(b, "  sources: %s\n", toggles(storage.CockpitSources, c.Sources))
+	fmt.Fprintf(b, "  sidebar: %s · repos %s · sort %s · width %s\n",
+		c.Sidebar.Variant, onOff(c.Sidebar.ShowRepos), c.Sidebar.Sort, widthOrDefault(c.Sidebar.Width))
+}
+
+// toggles renders a toggle map in the closed list's order, "name" for on and
+// "-name" for off, so the line reads as the full switchboard.
+func toggles(order []string, m map[string]bool) string {
+	parts := make([]string, 0, len(order))
+	for _, name := range order {
+		if m[name] {
+			parts = append(parts, name)
+		} else {
+			parts = append(parts, "-"+name)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func onOff(v bool) string {
+	if v {
+		return "on"
+	}
+	return "off"
+}
+
+func widthOrDefault(w int) string {
+	if w == 0 {
+		return "default"
+	}
+	return fmt.Sprintf("%dpx", w)
 }
