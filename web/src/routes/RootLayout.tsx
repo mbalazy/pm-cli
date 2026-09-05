@@ -12,6 +12,7 @@ import { useShortcuts } from '../hooks/useShortcuts'
 import { groupHotkeys, parseGroupFilter } from '../lib/groupFilter'
 import { paletteItems, type PaletteItem } from '../lib/paletteItems'
 import { SCREENS } from '../lib/screens'
+import { groupMembers } from '../lib/groupView'
 import { asleepProjects, sidebarLayout, sortGroups } from '../lib/sidebarView'
 
 // The shell: the group sidebar (a chip strip on a phone), the page, the
@@ -19,11 +20,18 @@ import { asleepProjects, sidebarLayout, sortGroups } from '../lib/sidebarView'
 // components out. The sidebar's shape is the server's config (/api/config).
 
 export function RootLayout() {
-  const { slug } = useParams({ strict: false })
+  const { slug, group } = useParams({ strict: false })
   const search = useSearch({ strict: false }) as Record<string, unknown>
   const navigate = useNavigate()
   const projects = useProjects()
-  const tasks = useTasks(slug ?? '')
+  // The palette searches the tasks of the repo on screen: the detail's, the
+  // group board's (`?repo=`), else the group's first member.
+  const repoOnScreen =
+    slug ??
+    (typeof search.repo === 'string' ? search.repo : undefined) ??
+    (group ? groupMembers(projects.data?.projects, group)[0]?.slug : undefined) ??
+    ''
+  const tasks = useTasks(repoOnScreen)
   const attention = useAttention()
   const config = useConfig()
   const { recent } = useRecentTasks()

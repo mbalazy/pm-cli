@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { GroupSummary, Project } from '../api/types'
-import { asleepProjects, groupTarget, sidebarLayout, sortGroups } from './sidebarView'
+import { asleepProjects, groupTarget, repoTarget, sidebarLayout, sortGroups } from './sidebarView'
 
 const g = (slug: string, last_activity?: string): GroupSummary => ({
   slug,
@@ -61,11 +61,12 @@ describe('asleepProjects / groupTarget', () => {
     expect(asleepProjects([p('a'), p('b', true), p('c', true)])).toEqual(['b', 'c'])
     expect(asleepProjects(undefined)).toEqual([])
   })
-  it('a group opens its first repo until the group page exists', () => {
-    expect(groupTarget({ slug: 'acme', projects: ['acme-api', 'acme-zap'] })).toEqual({
-      to: '/p/$slug',
-      params: { slug: 'acme-api' },
+  it('a group opens the group page, a repo line the board tab on that repo', () => {
+    expect(groupTarget({ slug: 'acme' })).toEqual({ to: '/g/$group', params: { group: 'acme' } })
+    expect(repoTarget('acme', 'acme-api')).toEqual({
+      to: '/g/$group',
+      params: { group: 'acme' },
+      search: { tab: 'board', repo: 'acme-api' },
     })
-    expect(groupTarget({ slug: 'solo', projects: [] }).params.slug).toBe('solo')
   })
 })

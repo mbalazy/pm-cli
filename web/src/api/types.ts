@@ -135,6 +135,8 @@ export interface Project {
   task_counts: Record<string, number>
   path?: string
   repo?: string
+  /** "Where we left off" (project.yaml notes; editable via POST /api/projects/{slug}). */
+  notes?: string
   tags?: string[]
   links?: Record<string, string>
   /** The project's status list, in column order. */
@@ -186,6 +188,13 @@ export interface RunRow {
   updated?: string
   run: RunCell
   acceptance: AcceptCell
+  /** Raw RFC3339 stamps off the run-states (pm-cli-118-17); absent = no run / no acceptance. */
+  run_started?: string
+  run_updated?: string
+  /** True while the manager is alive: run_updated is then a heartbeat, not an end. */
+  run_live?: boolean
+  accept_started?: string
+  accept_updated?: string
   /** Set on a placeholder row for an unreachable remote runner. */
   note?: string
 }

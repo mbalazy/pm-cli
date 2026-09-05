@@ -1,5 +1,10 @@
 @import 'tailwindcss';
 
+/* The wireframe's 820 px: two attention columns side by side from here up. */
+@theme {
+  --breakpoint-wide: 51.25rem;
+}
+
 /* The bare minimum so markdown bodies stay readable under Tailwind's reset.
    Not a design - the visual pass (pm-cli-118-10) owns the look. */
 .markdown h1,

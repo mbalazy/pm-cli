@@ -57,13 +57,18 @@ export function asleepProjects(projects: Project[] | undefined): string[] {
   return (projects ?? []).filter((p) => p.archived).map((p) => p.slug)
 }
 
-/**
- * Where a group link goes. The group page is pm-cli-118-17; until then a
- * group opens its first member repo's board.
- */
-export function groupTarget(group: Pick<GroupSummary, 'slug' | 'projects'>): {
-  to: '/p/$slug'
-  params: { slug: string }
+/** Where a group link goes: the group page. */
+export function groupTarget(group: Pick<GroupSummary, 'slug'>): {
+  to: '/g/$group'
+  params: { group: string }
 } {
-  return { to: '/p/$slug', params: { slug: group.projects[0] ?? group.slug } }
+  return { to: '/g/$group', params: { group: group.slug } }
+}
+
+/** Where a member repo's line goes: the group's board tab, on that repo. */
+export function repoTarget(
+  group: string,
+  slug: string,
+): { to: '/g/$group'; params: { group: string }; search: { tab: 'board'; repo: string } } {
+  return { to: '/g/$group', params: { group }, search: { tab: 'board', repo: slug } }
 }

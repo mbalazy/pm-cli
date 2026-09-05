@@ -4,7 +4,7 @@ import type { GroupSummary } from '../api/types'
 import { COUNTER_COLUMNS, severityGlyph } from '../lib/glyphs'
 import { SCREENS } from '../lib/screens'
 import type { SidebarLayout } from '../lib/sidebarView'
-import { groupTarget } from '../lib/sidebarView'
+import { groupTarget, repoTarget } from '../lib/sidebarView'
 
 // Presentation only: the screen navigation and the group list with the four
 // counter columns. Which groups, in what order, with what counts, and which
@@ -129,8 +129,7 @@ function GroupRows({
             <td />
             <td colSpan={layout.showCounts ? 5 : 1}>
               <Link
-                to="/p/$slug"
-                params={{ slug }}
+                {...repoTarget(group.slug, slug)}
                 onClick={onNavigate}
                 className="block truncate pl-3 hover:underline"
               >
