@@ -30,6 +30,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -390,8 +391,20 @@ func (s Store) Read(period string) (*Report, error) {
 	return &r, nil
 }
 
+// storeMu makes Write and Dismiss (a read-modify-write) mutually exclusive
+// within the process: pm serve runs the background write and a dismiss
+// click on the same period, and without this a dismiss could read the old
+// report and write it back over the fresh one.
+var storeMu sync.Mutex
+
 // Write stores the report (both files, atomically each).
 func (s Store) Write(r *Report) error {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	return s.write(r)
+}
+
+func (s Store) write(r *Report) error {
 	if err := os.MkdirAll(s.dir(), 0o755); err != nil {
 		return err
 	}
@@ -417,6 +430,8 @@ func (s Store) Write(r *Report) error {
 
 // Dismiss records a suggestion as dismissed; unknown ids are an error.
 func (s Store) Dismiss(period, id string) (*Report, error) {
+	storeMu.Lock()
+	defer storeMu.Unlock()
 	r, err := s.Read(period)
 	if err != nil {
 		return nil, err
@@ -440,16 +455,34 @@ func (s Store) Dismiss(period, id string) (*Report, error) {
 	}
 	r.Dismissed = append(r.Dismissed, id)
 	sort.Strings(r.Dismissed)
-	return r, s.Write(r)
+	return r, s.write(r)
 }
 
+// atomicWrite writes through a unique temp file in the target's directory
+// and renames it over. Unique per call (os.CreateTemp), not per process: two
+// goroutines writing the same path would otherwise truncate and rename each
+// other's temp file.
 func atomicWrite(path string, data []byte) error {
-	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	name := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		_ = os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	if err := os.Chmod(name, 0o644); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
 		return err
 	}
 	return nil

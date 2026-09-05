@@ -400,3 +400,48 @@ func TestGitAndGitHubSourcesParseGH(t *testing.T) {
 		}
 	}
 }
+
+// TestReadDoesNotWaitForRefresh: the cache lock is not held across the
+// sources, so the Changes screen (Read) and "mark seen" (MarkSeen) answer
+// while a slow source runs - and a MarkSeen landing mid-refresh is still in
+// the state the refresh writes at its end.
+func TestReadDoesNotWaitForRefresh(t *testing.T) {
+	store := feedStore(t)
+	slow := &fakeSource{name: "pm", slow: 600 * time.Millisecond, events: []Event{{ID: "a", TS: at(time.Hour), Title: "a"}}}
+	f := New(store.Root, []Source{slow})
+	done := make(chan *Result, 1)
+	go func() {
+		res, _ := f.Refresh(context.Background(), store, cfgWith(nil), feedFrom, feedNow)
+		done <- res
+	}()
+	time.Sleep(50 * time.Millisecond)
+	started := time.Now()
+	if _, err := f.Read(feedFrom); err != nil {
+		t.Fatal(err)
+	}
+	seenAt := feedNow.Add(-30 * time.Minute)
+	if err := f.MarkSeen(seenAt); err != nil {
+		t.Fatal(err)
+	}
+	if waited := time.Since(started); waited > 300*time.Millisecond {
+		t.Fatalf("Read+MarkSeen waited %v for the refresh", waited)
+	}
+	select {
+	case res := <-done:
+		if res == nil || res.Added != 1 {
+			t.Fatalf("refresh = %+v", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh did not finish")
+	}
+	ch, err := f.Read(feedFrom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch.Seen != seenAt.Format(time.RFC3339) {
+		t.Fatalf("the seen mark set during the refresh was lost: %q", ch.Seen)
+	}
+	if len(ch.Sources) != 1 || ch.Sources[0].Events != 1 {
+		t.Fatalf("sources = %+v", ch.Sources)
+	}
+}

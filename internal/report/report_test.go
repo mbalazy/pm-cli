@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -149,4 +150,51 @@ func TestWriteSuccessAndFailure(t *testing.T) {
 			t.Fatalf("env = %s", env)
 		}
 	})
+}
+
+// TestConcurrentWritesOfOnePeriod: the background write and a dismiss click
+// on the same period must not trip over each other's temp file (one temp
+// name per process did) nor interleave a stale read-modify-write.
+func TestConcurrentWritesOfOnePeriod(t *testing.T) {
+	st := Store{Root: t.TempDir()}
+	base := &Report{Period: "2026-09-04T18", Model: "haiku", Text: "base", Suggestions: []Suggestion{{ID: "s1", TaskID: "acme-api-1", Action: "back_to_todo", Text: "x"}}}
+	if err := st.Write(base); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := *base
+			r.Text = "rewritten"
+			if err := st.Write(&r); err != nil {
+				errs <- err
+			}
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := st.Dismiss(base.Period, "s1"); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent write: %v", err)
+	}
+	back, err := st.Read(base.Period)
+	if err != nil || back == nil {
+		t.Fatalf("read back = %+v %v", back, err)
+	}
+	if back.Text != "rewritten" && back.Text != "base" {
+		t.Fatalf("torn report: %q", back.Text)
+	}
+	left, _ := filepath.Glob(filepath.Join(st.dir(), "*.tmp"))
+	if len(left) != 0 {
+		t.Fatalf("temp files left behind: %v", left)
+	}
 }

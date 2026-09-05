@@ -121,10 +121,17 @@ type state struct {
 
 // Feed owns the cache directory and the sources. One per process; safe for
 // concurrent use (the server's scheduler and a manual refresh may race).
+//
+// Two locks on purpose: refreshMu serialises refreshes (one fetch round at
+// a time), mu guards the CACHE FILES only. A refresh runs git, gh and slack
+// for up to minutes; holding mu across that would make every Read (the
+// Changes screen, the report writer) and MarkSeen wait for the network,
+// which is what happened before the split.
 type Feed struct {
-	root    string
-	sources []Source
-	mu      sync.Mutex
+	root      string
+	sources   []Source
+	refreshMu sync.Mutex
+	mu        sync.Mutex
 }
 
 // CacheDir is the feed's directory under the pm root.
@@ -170,8 +177,8 @@ type Result struct {
 // package makes to the user about the network. The state file is written
 // whatever happened, so a failure is visible on the next read.
 func (f *Feed) Refresh(ctx context.Context, store storage.TaskStore, cfg *storage.CockpitConfig, from, now time.Time) (*Result, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.refreshMu.Lock()
+	defer f.refreshMu.Unlock()
 	if cfg == nil {
 		c := storage.DefaultCockpitConfig()
 		cfg = &c
@@ -181,7 +188,9 @@ func (f *Feed) Refresh(ctx context.Context, store storage.TaskStore, cfg *storag
 	if err != nil {
 		return nil, err
 	}
+	f.mu.Lock()
 	st := f.readState()
+	f.mu.Unlock()
 	statusIdx := map[string]int{}
 	for i, s := range st.Sources {
 		statusIdx[s.Name] = i
@@ -236,15 +245,23 @@ func (f *Feed) Refresh(ctx context.Context, store storage.TaskStore, cfg *storag
 		return sourceRank(f.sources, st.Sources[i].Name) < sourceRank(f.sources, st.Sources[j].Name)
 	})
 
+	// The cache lock is taken only now, around the file writes. The state
+	// is re-read under it: a MarkSeen that landed while the sources were
+	// running must survive - this run owns the source statuses, nothing
+	// else in the file.
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	added, err := f.appendEvents(fresh, now)
 	if err != nil {
 		return nil, err
 	}
 	f.rotate(now)
-	if err := f.writeState(st); err != nil {
+	cur := f.readState()
+	cur.Sources = st.Sources
+	if err := f.writeState(cur); err != nil {
 		return nil, err
 	}
-	return &Result{Sources: st.Sources, Added: added, From: from.Format(time.RFC3339), To: now.Format(time.RFC3339)}, nil
+	return &Result{Sources: cur.Sources, Added: added, From: from.Format(time.RFC3339), To: now.Format(time.RFC3339)}, nil
 }
 
 func sourceRank(sources []Source, name string) int {
