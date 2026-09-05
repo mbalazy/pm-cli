@@ -70,6 +70,24 @@ type Executor struct {
 	// `pm executor doctor` checks it exists. "~" is expanded; empty = the same
 	// dir as claude_config_dir.
 	WorkerClaudeConfigDir string `yaml:"worker_claude_config_dir,omitempty"`
+	// Model is the model the project's WORKERS run on (the main implement ->
+	// review -> verify loop) when nobody says otherwise. Precedence, in both
+	// `pm work` and `pm run-epic`: an explicit --model flag > a sub's own
+	// `model:` frontmatter > this > the command's built-in default (opus).
+	// Reviewers are NOT affected - they run on ReviewModel whatever this says,
+	// which is the whole point: retro 2026-09-05 measured the main loop at
+	// ~76% of a sub's cost, so a project can put its workers on sonnet and keep
+	// the opus reviewers as the safety net instead of remembering a flag per
+	// run. Empty = the command default.
+	Model string `yaml:"model,omitempty"`
+	// Effort is the Claude Code effort level workers run at (`claude
+	// --effort`): one of EffortLevels, validated at plan time so a typo fails
+	// the dry-run instead of the spawn. Precedence: --effort flag > this >
+	// unset (Claude's own default, xhigh at the time of writing). Retro
+	// 2026-09-05: on a probe task `medium` cut turns 18 -> 12 and wall clock by
+	// half for the same answer, on sonnet and opus alike; `low` was WORSE (26
+	// turns). Empty = no flag passed.
+	Effort string `yaml:"effort,omitempty"`
 	// SeedExclude overrides DefaultSeedExcludes for worktree seeding
 	// (CopyUntrackedFiles): untracked directories that must NOT be copied into a
 	// fresh worktree (dependency/build artifacts). When set it REPLACES the
@@ -140,6 +158,25 @@ type Executor struct {
 	// the literal "inherit" turns the pinning off and restores pre-0.38
 	// behaviour, which is also the rollback for this one change alone.
 	ReviewModel string `yaml:"review_model,omitempty"`
+}
+
+// EffortLevels are the values `claude --effort` accepts, lowest first. Kept as
+// a closed list on purpose: an unknown level is a spawn that dies after the
+// prepare step and the baseline capture have already been paid for.
+var EffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+
+// ValidateEffort accepts "" (no flag) or one of EffortLevels, exactly - no
+// case folding, because the value is passed to claude verbatim.
+func ValidateEffort(level string) error {
+	if level == "" {
+		return nil
+	}
+	for _, l := range EffortLevels {
+		if level == l {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid effort %q (valid: %s)", level, strings.Join(EffortLevels, ", "))
 }
 
 // DefaultReviewModel is what reviewer subagents run on when a project does not

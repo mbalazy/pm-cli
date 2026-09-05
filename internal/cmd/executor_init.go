@@ -253,6 +253,12 @@ func preservedFieldNotes(existing *storage.Executor) []string {
 	if existing.FixRounds != base.FixRounds {
 		note("fix_rounds")
 	}
+	if existing.Model != "" {
+		note("model")
+	}
+	if existing.Effort != "" {
+		note("effort")
+	}
 	if existing.Notes != "" {
 		note("notes")
 	}

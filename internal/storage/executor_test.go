@@ -3,6 +3,7 @@ package storage
 import (
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -327,5 +328,40 @@ func TestResolveReviewModel(t *testing.T) {
 		if got := p.GetExecutor().ResolveReviewModel(); got != c.want {
 			t.Errorf("%q: ResolveReviewModel() = %q, want %q", c.yaml, got, c.want)
 		}
+	}
+}
+
+func TestValidateEffort(t *testing.T) {
+	for _, ok := range []string{"", "low", "medium", "high", "xhigh", "max"} {
+		if err := ValidateEffort(ok); err != nil {
+			t.Errorf("ValidateEffort(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"Medium", "ultra", " low", "medium "} {
+		if err := ValidateEffort(bad); err == nil {
+			t.Errorf("ValidateEffort(%q) = nil, want an error - the value goes to claude verbatim", bad)
+		}
+	}
+}
+
+func TestExecutorModelEffortRoundTrip(t *testing.T) {
+	var e Executor
+	if err := yaml.Unmarshal([]byte("model: sonnet\neffort: medium\n"), &e); err != nil {
+		t.Fatal(err)
+	}
+	if e.Model != "sonnet" || e.Effort != "medium" || e.FixRounds != 2 {
+		t.Fatalf("decoded %+v: model/effort must load and the untouched defaults must survive", e)
+	}
+	out, err := yaml.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "model: sonnet") || !strings.Contains(string(out), "effort: medium") {
+		t.Fatalf("marshal dropped the fields:\n%s", out)
+	}
+	var empty Executor
+	out, _ = yaml.Marshal(empty)
+	if strings.Contains(string(out), "model:") || strings.Contains(string(out), "effort:") {
+		t.Fatalf("unset model/effort must be omitted (a written project.yaml stays minimal):\n%s", out)
 	}
 }
