@@ -28,6 +28,7 @@ const config: CockpitConfig = {
   sidebar: { variant: 'columns', show_repos: true, sort: 'worst', width: 0 },
   git: { all_branches: false },
   report: { model: 'haiku', language: 'pl' },
+  slack: { workspaces: [] },
 }
 
 describe('form and patch', () => {

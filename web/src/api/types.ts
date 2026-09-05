@@ -356,6 +356,8 @@ export interface CockpitConfig {
   sidebar: SidebarConfig
   git: { all_branches: boolean }
   report: { model: string; language: string }
+  /** cockpit.slack, without secrets: which workspaces have an MCP server (hand-edited in config.yaml). */
+  slack: { workspaces: { workspace: string; source: string; has_me: boolean }[] }
 }
 
 /** service.UpdateSettingsInput - POST /api/settings: a PATCH, absent = keep. */
