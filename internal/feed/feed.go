@@ -78,6 +78,16 @@ type Source interface {
 	Fetch(ctx context.Context, from, to time.Time, projects []Project) ([]Event, error)
 }
 
+// Configurable is implemented by a source that takes settings from the
+// cockpit block (the git source's all_branches, the slack source's server
+// list). Refresh hands every Configurable source the CURRENT block before
+// its Fetch, so an edit in the settings screen takes effect on the next
+// refresh without a restart - the same per-call rule the cutoff and the
+// window already follow.
+type Configurable interface {
+	Configure(cfg *storage.CockpitConfig)
+}
+
 // ProjectError is a source's failure on ONE project (no checkout, no gh);
 // Fetch may return it wrapped in errors.Join with the events of the others.
 type ProjectError struct {
@@ -192,6 +202,9 @@ func (f *Feed) Refresh(ctx context.Context, store storage.TaskStore, cfg *storag
 		if !status.Enabled {
 			setStatus(status)
 			continue
+		}
+		if c, ok := src.(Configurable); ok {
+			c.Configure(cfg)
 		}
 		events, ferr := src.Fetch(ctx, from, now, projects)
 		status.LastFetch = now.Format(time.RFC3339)

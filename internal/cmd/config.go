@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/mbalazy/pm/internal/storage"
@@ -89,14 +88,13 @@ func renderCockpitConfig(b *strings.Builder, c *storage.CockpitConfig) {
 	if len(c.Groups) == 0 {
 		b.WriteString("  groups: (none named - every group displays as its slug)\n")
 	} else {
-		slugs := make([]string, 0, len(c.Groups))
-		for slug := range c.Groups {
-			slugs = append(slugs, slug)
-		}
-		sort.Strings(slugs)
-		fmt.Fprintf(b, "  groups (%d)\n", len(slugs))
-		for _, slug := range slugs {
-			fmt.Fprintf(b, "    %s: %s\n", slug, c.GroupName(slug))
+		fmt.Fprintf(b, "  groups (%d, manual sidebar order)\n", len(c.Groups))
+		for _, slug := range c.GroupOrder() {
+			if o := c.Groups[slug].Order; o > 0 {
+				fmt.Fprintf(b, "    %d. %s: %s\n", o, slug, c.GroupName(slug))
+			} else {
+				fmt.Fprintf(b, "    -  %s: %s\n", slug, c.GroupName(slug))
+			}
 		}
 	}
 	fmt.Fprintf(b, "  thresholds: doing idle %dd · waiting highlight %dd · project stuck %dd\n",
@@ -107,6 +105,7 @@ func renderCockpitConfig(b *strings.Builder, c *storage.CockpitConfig) {
 	fmt.Fprintf(b, "  sources: %s\n", toggles(storage.CockpitSources, c.Sources))
 	fmt.Fprintf(b, "  sidebar: %s · repos %s · sort %s · width %s\n",
 		c.Sidebar.Variant, onOff(c.Sidebar.ShowRepos), c.Sidebar.Sort, widthOrDefault(c.Sidebar.Width))
+	fmt.Fprintf(b, "  git: all branches %s\n", onOff(c.Git.AllBranches))
 }
 
 // toggles renders a toggle map in the closed list's order, "name" for on and

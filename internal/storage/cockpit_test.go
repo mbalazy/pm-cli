@@ -2,6 +2,7 @@ package storage
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -263,6 +264,67 @@ func TestSaveConfigCreatesAndValidates(t *testing.T) {
 		after, _ := os.ReadFile(store.ConfigPath())
 		if string(before) != string(after) {
 			t.Error("a rejected save touched the file")
+		}
+	})
+}
+
+func TestGroupOrderAndSlackMapping(t *testing.T) {
+	t.Run("placed groups by order then slug, unplaced after by slug", func(t *testing.T) {
+		c := CockpitConfig{Groups: map[string]GroupConfig{
+			"zeta": {Order: 1}, "alpha": {}, "mid": {Order: 2}, "beta": {}, "also1": {Order: 1},
+		}}
+		got := strings.Join(c.GroupOrder(), " ")
+		if got != "also1 zeta mid alpha beta" {
+			t.Fatalf("GroupOrder = %q", got)
+		}
+		if (&CockpitConfig{}).GroupOrder() != nil && len((&CockpitConfig{}).GroupOrder()) != 0 {
+			t.Fatal("no groups = empty order")
+		}
+	})
+	t.Run("a negative order is rejected at load", func(t *testing.T) {
+		store := &Store{Root: t.TempDir()}
+		if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  groups:\n    acme: {order: -1}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := store.LoadConfig()
+		if err == nil || !strings.Contains(err.Error(), "cockpit.groups.acme.order") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("git.all_branches decodes over its default and round-trips", func(t *testing.T) {
+		store := &Store{Root: t.TempDir()}
+		cfg, err := store.LoadConfig()
+		if err != nil || cfg.Cockpit.Git.AllBranches {
+			t.Fatalf("default all_branches must be off: %v %v", cfg.Cockpit.Git, err)
+		}
+		if _, err := store.MutateConfig(func(c *PMConfig) error { c.Cockpit.Git.AllBranches = true; return nil }); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err = store.LoadConfig()
+		if err != nil || !cfg.Cockpit.Git.AllBranches {
+			t.Fatalf("all_branches lost on the round trip: %v %v", cfg.Cockpit.Git, err)
+		}
+	})
+	t.Run("project slack mapping round-trips and survives a comment", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "project.yaml")
+		if err := os.WriteFile(path, []byte("name: P\n# keep me\nnotes: hi\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		p := &Project{Name: "P", Notes: "hi", Slack: &SlackConfig{Workspace: "acme", Channels: []string{"#acme-api-dev"}}}
+		if err := WriteProject(path, p); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := os.ReadFile(path)
+		if !strings.Contains(string(raw), "# keep me") || !strings.Contains(string(raw), "workspace: acme") {
+			t.Fatalf("written:\n%s", raw)
+		}
+		got, err := ReadProject(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Slack == nil || got.Slack.Workspace != "acme" || len(got.Slack.Channels) != 1 || got.Slack.Channels[0] != "#acme-api-dev" {
+			t.Fatalf("slack = %+v", got.Slack)
 		}
 	})
 }

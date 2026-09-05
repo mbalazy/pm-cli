@@ -37,6 +37,7 @@ type UpdateProjectInput struct {
 	Statuses []string          `json:"statuses,omitempty" jsonschema:"Replace statuses (omit to keep current)"`
 	Archived *bool             `json:"archived,omitempty" jsonschema:"Archive or unarchive the project"`
 	Group    *string           `json:"group,omitempty" jsonschema:"Set the cockpit group slug (several repos that are one product/client share it). Omit to keep current; pass an empty string to leave the group"`
+	Slack    *SlackMapping     `json:"slack,omitempty" jsonschema:"Replace the project's Slack mapping for the cockpit's change feed (workspace label + channel names). Omit to keep current; an empty workspace with no channels removes the mapping"`
 }
 
 // ListProjects lists every project with per-status task counts. A project
@@ -249,6 +250,10 @@ func UpdateProject(store storage.TaskStore, in UpdateProjectInput) (*ProjectResu
 		if in.Group != nil {
 			proj.Group = *in.Group
 		}
+		// Slack: replace whole (nil = keep, empty = remove)
+		if in.Slack != nil {
+			proj.Slack = slackConfig(in.Slack)
+		}
 		return nil
 	})
 	if err != nil {
@@ -271,7 +276,39 @@ func projectResult(slug string, p *storage.Project) *ProjectResult {
 		Statuses: p.Statuses,
 		Archived: p.Archived,
 		Group:    p.Group,
+		Slack:    SlackOf(p),
 	}
+}
+
+// SlackOf renders a project's Slack mapping for the wire; nil when the
+// project has none. Channels is never null so a client can append to it.
+func SlackOf(p *storage.Project) *SlackMapping {
+	if p == nil || p.Slack == nil {
+		return nil
+	}
+	out := &SlackMapping{Workspace: p.Slack.Workspace, Channels: []string{}}
+	out.Channels = append(out.Channels, p.Slack.Channels...)
+	return out
+}
+
+// slackConfig normalises a mapping from the wire: channels trimmed, blanks
+// dropped, a leading '#' kept as typed (the source strips it); an empty
+// mapping is nil, so the key leaves project.yaml instead of lingering as
+// `slack: {}`.
+func slackConfig(m *SlackMapping) *storage.SlackConfig {
+	if m == nil {
+		return nil
+	}
+	out := &storage.SlackConfig{Workspace: strings.TrimSpace(m.Workspace)}
+	for _, ch := range m.Channels {
+		if ch = strings.TrimSpace(ch); ch != "" {
+			out.Channels = append(out.Channels, ch)
+		}
+	}
+	if out.Workspace == "" && len(out.Channels) == 0 {
+		return nil
+	}
+	return out
 }
 
 // validateStatusesKeepTasks rejects an UpdateProject statuses replacement

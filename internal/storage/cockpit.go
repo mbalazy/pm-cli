@@ -64,12 +64,28 @@ type CockpitConfig struct {
 
 	// Sidebar shapes the SPA's project sidebar.
 	Sidebar SidebarConfig `yaml:"sidebar"`
+
+	// Git tunes the change feed's git source.
+	Git GitConfig `yaml:"git"`
 }
 
 // GroupConfig is one entry of CockpitConfig.Groups.
 type GroupConfig struct {
 	// Name is the display name; empty displays the slug.
 	Name string `yaml:"name,omitempty"`
+	// Order is the group's place in the sidebar's `manual` sort: lower first,
+	// 0 = unplaced (after every placed group, by slug). It lives here and not
+	// in the map's key order because a YAML map's order is not a fact the
+	// JSON on the wire can carry - the settings screen needs a number.
+	Order int `yaml:"order,omitempty"`
+}
+
+// GitConfig tunes the feed's git source.
+type GitConfig struct {
+	// AllBranches widens the commit scan from the branches pm tasks name to
+	// every ref of the checkout. Off by default: the v1 scope is "branches
+	// pinned to tasks + open PRs", not the whole repo's activity.
+	AllBranches bool `yaml:"all_branches"`
 }
 
 // RefreshConfig is the change feed's schedule.
@@ -139,6 +155,34 @@ func DefaultCockpitConfig() CockpitConfig {
 	}
 }
 
+// GroupOrder returns the configured group slugs in the sidebar's manual
+// order: placed groups (Order > 0) by Order then slug, then the unplaced by
+// slug. A group with no entry at all is not listed - the caller appends
+// those in whatever order it has them.
+func (c *CockpitConfig) GroupOrder() []string {
+	if c == nil {
+		return nil
+	}
+	slugs := make([]string, 0, len(c.Groups))
+	for slug := range c.Groups {
+		slugs = append(slugs, slug)
+	}
+	sort.Slice(slugs, func(i, j int) bool {
+		a, b := c.Groups[slugs[i]].Order, c.Groups[slugs[j]].Order
+		if a != b {
+			if a == 0 {
+				return false
+			}
+			if b == 0 {
+				return true
+			}
+			return a < b
+		}
+		return slugs[i] < slugs[j]
+	})
+	return slugs
+}
+
 // GroupName returns the display name of a group: the configured name, or the
 // slug when the group has no entry or an entry with no name.
 func (c *CockpitConfig) GroupName(slug string) string {
@@ -165,9 +209,12 @@ func (c *CockpitConfig) SourceEnabled(name string) bool {
 // key, for the same reason PMConfig.validate names the remote: the point of
 // failing loudly is that the user can find the line.
 func (c *CockpitConfig) validate(where string) error {
-	for slug := range c.Groups {
+	for slug, g := range c.Groups {
 		if err := ValidateSlug(slug); err != nil {
 			return fmt.Errorf("%s: cockpit.groups: %w", where, err)
+		}
+		if g.Order < 0 {
+			return fmt.Errorf("%s: cockpit.groups.%s.order is %d, must be >= 0", where, slug, g.Order)
 		}
 	}
 	for _, f := range []struct {

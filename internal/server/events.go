@@ -55,8 +55,8 @@ func (h *handler) events(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			return
-		case data := <-changes:
-			emit("changes", data)
+		case ev := <-changes:
+			emit(ev.event, ev.data)
 		case <-ping.C:
 			emit("ping", "{}")
 		case <-poll.C:

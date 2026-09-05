@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/mbalazy/pm/internal/storage"
 )
 
 // GitSource reads, per project with a checkout: commits on every branch a
@@ -28,6 +30,13 @@ type GitSource struct {
 }
 
 func (s *GitSource) Name() string { return "git" }
+
+// Configure takes AllBranches from cockpit.git.all_branches (feed.Configurable).
+func (s *GitSource) Configure(cfg *storage.CockpitConfig) {
+	if cfg != nil {
+		s.AllBranches = cfg.Git.AllBranches
+	}
+}
 
 // gitLogFormat separates fields with \x1f and records with \x1e so a
 // subject holding a newline or a quote cannot break the parse.
