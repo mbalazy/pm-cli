@@ -105,7 +105,21 @@ type JournalEntry struct {
 	DurationS int          `json:"duration_s,omitempty"` // end only: whole-run wall-clock
 	Subs      []JournalSub `json:"subs,omitempty"`       // end only: per-sub outcomes
 	Error     string       `json:"error,omitempty"`
+	// Source says WHO started the run: "cockpit" for a launch from the web
+	// (`pm serve`, which sets PM_LAUNCH_SOURCE for the manager it spawns),
+	// empty for the CLI and the board. Stamped on the start line by the
+	// manager and on a "killed" line by whoever killed - so `pm executor
+	// stats` can tell the web's runs from the rest. Absent on every line
+	// written before pm-cli-118-21.
+	Source string `json:"source,omitempty"`
 }
+
+// LaunchSourceEnv is the environment variable a launcher sets so the
+// manager it starts stamps JournalEntry.Source; read with LaunchSource.
+const LaunchSourceEnv = "PM_LAUNCH_SOURCE"
+
+// LaunchSource is the value of LaunchSourceEnv, empty when unset.
+func LaunchSource() string { return os.Getenv(LaunchSourceEnv) }
 
 // JournalPath is the executor journal path for a project dir.
 func JournalPath(projectDir string) string {

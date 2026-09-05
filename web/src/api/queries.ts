@@ -16,6 +16,8 @@ import type {
   ProjectContextResult,
   ProjectsResult,
   RefreshResult,
+  RunFlags,
+  RunPlan,
   RunsResult,
   SeenResult,
   TaskDetail,
@@ -37,6 +39,8 @@ export const keys = {
   attention: (project = '', group = '') => ['attention', project, group] as const,
   changes: () => ['changes'] as const,
   config: () => ['config'] as const,
+  runPlan: (project: string, id: string, action: string, flags: RunFlags) =>
+    ['run-plan', project, id, action, flags.yolo === true, flags.additional === true] as const,
 }
 
 export function useProjects() {
@@ -172,5 +176,27 @@ export function useMarkChangesSeen() {
       void client.invalidateQueries({ queryKey: keys.changes() })
       void client.invalidateQueries({ queryKey: ['attention'] })
     },
+  })
+}
+
+/**
+ * What a run action would do (argv, warnings, the kill target) - the
+ * dialog's preview. Disabled until an action is pending; never cached long,
+ * since the run-states it reads move.
+ */
+export function useRunPlan(project: string, id: string, action: string, flags: RunFlags) {
+  return useQuery({
+    queryKey: keys.runPlan(project, id, action, flags),
+    queryFn: () =>
+      apiGet<RunPlan>(
+        `/api/runs/${encodeURIComponent(project)}/${encodeURIComponent(id)}/plan${query({
+          action,
+          yolo: flags.yolo ? 1 : undefined,
+          additional: flags.additional ? 1 : undefined,
+        })}`,
+      ),
+    enabled: project !== '' && id !== '' && action !== '',
+    staleTime: 0,
+    retry: false,
   })
 }

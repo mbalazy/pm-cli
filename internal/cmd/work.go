@@ -909,7 +909,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		start := storage.JournalEntry{
 			Event: storage.JournalEventStart, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
 			PID: os.Getpid(), Model: plan.opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-			WorkDir: journalDir, Baseline: baselineUsed,
+			WorkDir: journalDir, Baseline: baselineUsed, Source: storage.LaunchSource(),
 		}
 		_ = storage.AppendJournal(stateDir, &start)
 		// From here until the end line, a catchable signal journals its own

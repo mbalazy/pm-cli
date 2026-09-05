@@ -170,6 +170,17 @@ function fakeFetch(routes: Record<string, unknown>) {
           status: 400,
         })
       }
+      if (url.includes('/api/runs/')) {
+        return new Response(
+          JSON.stringify({
+            pid: 4242,
+            log: '/pm/alpha/.executor/alpha-9.log',
+            kind: 'run-epic',
+            argv: [],
+          }),
+          { status: 200 },
+        )
+      }
       return new Response(JSON.stringify({ ok: true, task_ids: [], focused: true }), {
         status: 200,
       })
@@ -247,6 +258,26 @@ const attention = {
     },
   ],
   groups: [group('alpha', 'crit', 1), group('acme', 'warn', 1)],
+}
+/** The queue with a failed epic run carrying the run-control actions. */
+const attentionRuns = {
+  ...attention,
+  sections: attention.sections.map((s) =>
+    s.name === 'needs_me'
+      ? {
+          ...s,
+          rows: [
+            ...s.rows,
+            row('needs_me', 'alpha', 'alpha-9', 'Epic', {
+              severity: 'crit',
+              reason: 'run failed',
+              actions: ['open', 'resume_run', 'kill'],
+            }),
+          ],
+          total: 2,
+        }
+      : s,
+  ),
 }
 const attentionNzz = {
   ...attention,
@@ -339,6 +370,36 @@ const api = {
   '/api/config': config({}),
   '/api/changes': changes,
   '/api/groups': groupsApi,
+  '/api/runs/alpha/alpha-9/plan?action=resume_run': {
+    action: 'resume_run',
+    project: 'alpha',
+    task_id: 'alpha-9',
+    kind: 'run-epic',
+    argv: ['run-epic', 'alpha', 'alpha-9'],
+    cwd: '/repo/alpha',
+    log: '/pm/alpha/.executor/alpha-9.log',
+    warnings: ['a run of this task is already in flight'],
+    additional_avail: false,
+  },
+  '/api/runs/alpha/alpha-9/plan?action=resume_run&yolo=1': {
+    action: 'resume_run',
+    project: 'alpha',
+    task_id: 'alpha-9',
+    kind: 'run-epic',
+    argv: ['run-epic', 'alpha', 'alpha-9', '--yolo'],
+    cwd: '/repo/alpha',
+    log: '/pm/alpha/.executor/alpha-9.log',
+    additional_avail: false,
+  },
+  '/api/runs/alpha/alpha-9/plan?action=kill': {
+    action: 'kill',
+    project: 'alpha',
+    task_id: 'alpha-9',
+    kind: 'run-epic',
+    target: 'run-epic pid 777 (started 2026-01-02T08:00:00Z)',
+    pid: 777,
+    additional_avail: false,
+  },
 }
 
 afterEach(() => {
@@ -959,5 +1020,68 @@ describe('settings screen', () => {
       header: 'cockpit',
       body: { group: 'acme' },
     })
+  })
+})
+
+describe('run control goes through the dialog with the argv preview', () => {
+  const runsApi = { ...api, '/api/attention': attentionRuns }
+  it('resume run shows the server plan, a flag re-plans, Esc sends nothing, confirm posts the flags', async () => {
+    vi.stubGlobal('fetch', fakeFetch(runsApi))
+    const user = userEvent.setup()
+    renderAt('/')
+    const needs = await screen.findByRole('region', { name: 'Needs me' })
+    const epic = within(needs).getAllByRole('listitem')[1]
+    expect(within(epic).getByRole('button', { name: 'kill' })).toBeEnabled()
+    await user.click(within(epic).getByRole('button', { name: 'resume run' }))
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    expect(dialog).toHaveAttribute('open')
+    const preview = await within(dialog).findByLabelText('command preview')
+    await vi.waitFor(() =>
+      expect(preview).toHaveTextContent('cd /repo/alpha && pm run-epic alpha alpha-9'),
+    )
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(/already in flight/)
+    // The additional flag is offered but disabled: no slots on this project.
+    expect(within(dialog).getByRole('checkbox', { name: /additional worktree/ })).toBeDisabled()
+    await user.click(within(dialog).getByRole('checkbox', { name: /--yolo/ }))
+    await vi.waitFor(() => expect(preview).toHaveTextContent('--yolo'))
+    expect(posts).toHaveLength(0)
+    await user.keyboard('{Escape}')
+    await vi.waitFor(() => expect(dialog).not.toHaveAttribute('open'))
+    expect(posts).toHaveLength(0)
+
+    await user.click(within(epic).getByRole('button', { name: 'resume run' }))
+    await within(dialog).findByLabelText('command preview')
+    await user.click(within(dialog).getByRole('checkbox', { name: /--yolo/ }))
+    await vi.waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'start run' })).toBeEnabled(),
+    )
+    await user.click(within(dialog).getByRole('button', { name: 'start run' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toEqual({
+      path: '/api/runs/alpha/alpha-9/resume_run',
+      header: 'cockpit',
+      body: { yolo: true },
+    })
+    expect(await screen.findByRole('status')).toHaveTextContent('started run-epic (pid 4242)')
+  })
+
+  it('kill names the pid it would signal and posts the kill', async () => {
+    vi.stubGlobal('fetch', fakeFetch(runsApi))
+    const user = userEvent.setup()
+    renderAt('/')
+    const needs = await screen.findByRole('region', { name: 'Needs me' })
+    const epic = within(needs).getAllByRole('listitem')[1]
+    await user.click(within(epic).getByRole('button', { name: 'kill' }))
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    await vi.waitFor(() =>
+      expect(within(dialog).getByLabelText('command preview')).toHaveTextContent(
+        'run-epic pid 777',
+      ),
+    )
+    expect(within(dialog).getByText(/Sends SIGTERM to run-epic pid 777/)).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'kill' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].path).toBe('/api/runs/alpha/alpha-9/kill')
+    expect(posts[0].header).toBe('cockpit')
   })
 })

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/mbalazy/pm/internal/feed"
+	"github.com/mbalazy/pm/internal/runctl"
 	"github.com/mbalazy/pm/internal/service"
 	"github.com/mbalazy/pm/internal/storage"
 )
@@ -60,6 +61,10 @@ type Options struct {
 	// Clock is the scheduler's and the cutoff's clock; nil = time.Now.
 	// Injected so the refresh window is testable at any hour.
 	Clock func() time.Time
+	// RunControl performs the run actions (pm-cli-118-21); nil = runctl.New
+	// over the store with the serving binary. Tests hand in one whose pm
+	// is a fake script, so no request ever starts a real worker.
+	RunControl *runctl.Controller
 }
 
 const (
@@ -107,7 +112,10 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	if opts.Clock == nil {
 		opts.Clock = time.Now
 	}
-	h := &handler{store: store, opts: opts, feed: opts.Feed, clock: opts.Clock, bus: newChangeBus()}
+	if opts.RunControl == nil {
+		opts.RunControl = runctl.New(store, runctl.Options{})
+	}
+	h := &handler{store: store, opts: opts, feed: opts.Feed, clock: opts.Clock, bus: newChangeBus(), runs: opts.RunControl}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/projects", h.projects)
@@ -116,7 +124,8 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux.HandleFunc("GET /api/tasks", h.tasks)
 	mux.HandleFunc("GET /api/tasks/{project}/{id}", h.task)
 	mux.HandleFunc("GET /api/context", h.context)
-	mux.HandleFunc("GET /api/runs", h.runs)
+	mux.HandleFunc("GET /api/runs", h.runRows)
+	mux.HandleFunc("GET /api/runs/{project}/{id}/plan", h.runPlan)
 	mux.HandleFunc("GET /api/focus", h.focus)
 	mux.HandleFunc("GET /api/attention", h.attention)
 	mux.HandleFunc("GET /api/changes", h.changes)
@@ -128,6 +137,7 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux.HandleFunc("POST /api/focus/toggle", requireClient(h.toggleFocus))
 	mux.HandleFunc("POST /api/projects/{slug}", requireClient(h.updateProject))
 	mux.HandleFunc("POST /api/settings", requireClient(h.updateSettings))
+	mux.HandleFunc("POST /api/runs/{project}/{id}/{action}", requireClient(h.runAction))
 	mux.HandleFunc("GET /api/events", h.events)
 	// Anything else under /api/ is unknown, never the SPA: a typo'd endpoint
 	// answering with index.html would read as "the server is fine, the data
@@ -149,6 +159,7 @@ type handler struct {
 	feed  *feed.Feed
 	clock func() time.Time
 	bus   *changeBus
+	runs  *runctl.Controller
 }
 
 // --- JSON plumbing ---
@@ -322,7 +333,7 @@ type runsResult struct {
 	Rows []storage.RunRow `json:"rows"`
 }
 
-func (h *handler) runs(w http.ResponseWriter, r *http.Request) {
+func (h *handler) runRows(w http.ResponseWriter, r *http.Request) {
 	rows, err := storage.LocalRunRows(h.store, nil)
 	if err != nil {
 		writeResult(w, nil, err)

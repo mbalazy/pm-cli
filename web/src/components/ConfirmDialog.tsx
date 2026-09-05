@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 
+import type { RunFlags } from '../api/types'
 import type { ConfirmText } from '../lib/confirmText'
 
 // The one confirmation dialog every mutation passes through. What it says is
@@ -17,6 +18,9 @@ interface Props {
   onCancel: () => void
   busy?: boolean
   error?: string
+  /** A run action's flags and their setter (the checkboxes); optional elsewhere. */
+  flags?: RunFlags
+  onFlagsChange?: (f: RunFlags) => void
 }
 
 export function ConfirmDialog({
@@ -28,6 +32,8 @@ export function ConfirmDialog({
   onCancel,
   busy,
   error,
+  flags,
+  onFlagsChange,
 }: Props) {
   const ref = useRef<HTMLDialogElement>(null)
   const fieldRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
@@ -99,6 +105,35 @@ export function ConfirmDialog({
               )}
             </label>
           )}
+          {text.flags && text.flags.length > 0 && (
+            <fieldset className="space-y-1">
+              {text.flags.map((f) => (
+                <label key={f.key} className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={flags?.[f.key] === true}
+                    disabled={f.disabled !== undefined}
+                    onChange={(e) => onFlagsChange?.({ ...flags, [f.key]: e.target.checked })}
+                  />
+                  {f.label}
+                  {f.disabled && <span className="text-xs text-gray-400">({f.disabled})</span>}
+                </label>
+              ))}
+            </fieldset>
+          )}
+          {(text.preview !== undefined || text.loading) && (
+            <pre
+              aria-label="command preview"
+              className="overflow-x-auto rounded bg-gray-100 p-2 font-mono text-xs whitespace-pre-wrap"
+            >
+              {text.loading ? 'loading the preview…' : text.preview || '(no command)'}
+            </pre>
+          )}
+          {text.warnings?.map((w) => (
+            <p key={w} role="alert" className="text-amber-700">
+              ⚠ {w}
+            </p>
+          ))}
           {text.warning && (
             <p role="alert" className="text-amber-700">
               ⚠ {text.warning}
@@ -106,8 +141,12 @@ export function ConfirmDialog({
           )}
           {error && <p className="text-red-700">error: {error}</p>}
           <div className="flex gap-2">
-            <button type="submit" disabled={busy} className="rounded border px-2 font-semibold">
-              {busy ? 'saving…' : text.confirmLabel}
+            <button
+              type="submit"
+              disabled={busy || text.loading}
+              className="rounded border px-2 font-semibold disabled:text-gray-400"
+            >
+              {busy ? 'working…' : text.confirmLabel}
             </button>
             <button type="button" onClick={onCancel} className="rounded border px-2">
               cancel

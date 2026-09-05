@@ -4,8 +4,9 @@ import type { AttentionRow } from '../api/types'
 // .actions). The API decides WHICH actions a row carries; this table only
 // says how each one is worded and whether this build can perform it yet -
 // the mutation subs flip `pending` as they land (batch 1, pm-cli-118-16, is
-// in, and so is sleep_project - the settings screen's Asleep section,
-// pm-cli-118-18; run control, -21, is not).
+// in; sleep_project came with the settings screen, pm-cli-118-18; run
+// control - claim, release_claim, rerun_finish, resume_run, kill - with
+// pm-cli-118-21, each through the dialog with the argv preview).
 
 export type RowAction =
   | 'open'
@@ -20,6 +21,7 @@ export type RowAction =
   | 'mark_seen'
   | 'sleep_project'
   | 'open_pr'
+  | 'release_claim'
 
 export interface ActionMeta {
   label: string
@@ -30,16 +32,17 @@ export interface ActionMeta {
 const META: Record<RowAction, ActionMeta> = {
   open: { label: 'open', pending: '' },
   report: { label: 'report', pending: 'acceptance report view: later' },
-  claim: { label: 'claim', pending: 'pm-cli-118-21' },
-  rerun_finish: { label: 'rerun acceptance', pending: 'pm-cli-118-21' },
-  resume_run: { label: 'resume run', pending: 'pm-cli-118-21' },
-  kill: { label: 'kill', pending: 'pm-cli-118-21' },
+  claim: { label: 'claim', pending: '' },
+  rerun_finish: { label: 'rerun acceptance', pending: '' },
+  resume_run: { label: 'resume run', pending: '' },
+  kill: { label: 'kill', pending: '' },
   focus_toggle: { label: 'focus', pending: '' },
   set_waiting_for: { label: 'waiting…', pending: '' },
   back_to_todo: { label: 'back to todo', pending: '' },
   mark_seen: { label: 'seen', pending: '' },
   sleep_project: { label: 'sleep', pending: '' },
   open_pr: { label: 'PR', pending: 'needs the task link' },
+  release_claim: { label: 'release claim', pending: '' },
 }
 
 export function actionMeta(action: string): ActionMeta {

@@ -1,4 +1,5 @@
 import type { MutationRequest } from '../api/mutations'
+import type { RunFlags, RunPlan } from '../api/types'
 
 // Every mutation goes through one confirmation dialog (the user's rule: "I do
 // not want to fire something by accident"). This file decides, for a pending
@@ -54,12 +55,34 @@ export type PendingKind =
   | 'sleep_project'
   | 'wake_project'
   | 'move_repo'
+  | RunKind
+
+/** The run-control kinds (pm-cli-118-21): a POST /api/runs/{p}/{id}/{action}. */
+export type RunKind = 'claim' | 'release_claim' | 'rerun_finish' | 'resume_run' | 'kill'
+
+export function isRunKind(k: string): k is RunKind {
+  return (
+    k === 'claim' ||
+    k === 'release_claim' ||
+    k === 'rerun_finish' ||
+    k === 'resume_run' ||
+    k === 'kill'
+  )
+}
 
 export interface PendingAction {
   kind: PendingKind
   subject: ActionSubject
   /** set_status: the status chosen in the select. */
   status?: string
+}
+
+/** One launch flag the dialog offers as a checkbox. */
+export interface FlagOption {
+  key: keyof RunFlags
+  label: string
+  /** A flag the project cannot honour is shown disabled with this note. */
+  disabled?: string
 }
 
 export interface ConfirmField {
@@ -76,6 +99,14 @@ export interface ConfirmText {
   field?: ConfirmField
   /** Shown under the field when the current value deserves a second look. */
   warning?: string
+  /** A run action's exact command, as the server would run it (the board's overlay rule). */
+  preview?: string
+  /** The server's launch warnings: a live run, a dirty tree, a held claim. Shown, never blocking. */
+  warnings?: string[]
+  /** The checkboxes a run action offers. */
+  flags?: FlagOption[]
+  /** True while the preview is still loading - the confirm button waits for it. */
+  loading?: boolean
 }
 
 /** The kinds this build knows; anything else has no dialog and no request. */
@@ -91,7 +122,8 @@ export function isPendingKind(k: string): k is PendingKind {
     k === 'edit_notes' ||
     k === 'sleep_project' ||
     k === 'wake_project' ||
-    k === 'move_repo'
+    k === 'move_repo' ||
+    isRunKind(k)
   )
 }
 
@@ -114,11 +146,45 @@ export function initialValue(p: PendingAction): string {
 
 const NO_REASON = 'no reason given - the row will show as an alarm (no reason) on the home screen'
 
-export function describeAction(p: PendingAction, value: string, focused?: boolean): ConfirmText {
+/** Which flags each run action offers (the server ignores the rest). */
+export function flagOptions(kind: RunKind, plan?: RunPlan): FlagOption[] {
+  const additional: FlagOption = {
+    key: 'additional',
+    label: 'in an additional worktree slot (--additional)',
+    disabled:
+      plan && !plan.additional_avail ? 'no worktree slots configured for this project' : undefined,
+  }
+  switch (kind) {
+    case 'resume_run':
+      return [{ key: 'yolo', label: 'bypass permission prompts (--yolo)' }, additional]
+    case 'rerun_finish':
+      return [additional]
+    default:
+      return []
+  }
+}
+
+/** The argv preview line of a plan: `cd <cwd> && pm ...`, or the claim/kill target. */
+export function previewOf(plan: RunPlan | undefined): string {
+  if (!plan) return ''
+  if (plan.argv && plan.argv.length > 0) {
+    const cmd = ['pm', ...plan.argv].join(' ')
+    return plan.cwd ? `cd ${plan.cwd} && ${cmd}` : cmd
+  }
+  return plan.target ?? ''
+}
+
+export function describeAction(
+  p: PendingAction,
+  value: string,
+  focused?: boolean,
+  plan?: RunPlan,
+): ConfirmText {
   const s = p.subject
   const id = s.task_id ?? s.project
   const heading = s.task_id ? `${s.task_id} ${s.title}` : s.title
   const base = { heading, project: s.project }
+  if (isRunKind(p.kind)) return describeRun(p.kind, id, base, plan)
   switch (p.kind) {
     case 'focus_toggle':
       return {
@@ -216,11 +282,63 @@ export function describeAction(p: PendingAction, value: string, focused?: boolea
   }
 }
 
+function describeRun(
+  kind: RunKind,
+  id: string,
+  base: { heading: string; project: string },
+  plan: RunPlan | undefined,
+): ConfirmText {
+  const common = {
+    ...base,
+    preview: previewOf(plan),
+    warnings: plan?.warnings,
+    flags: flagOptions(kind, plan),
+    loading: plan === undefined,
+  }
+  switch (kind) {
+    case 'claim':
+      return {
+        ...common,
+        sentence: `Claims the acceptance of ${id} for this cockpit${plan?.session ? ` (session ${plan.session})` : ''}. pm serve refreshes the claim every 3 minutes for at most an hour; release it when done, or let it lapse.`,
+        confirmLabel: 'claim',
+      }
+    case 'release_claim':
+      return {
+        ...common,
+        sentence: `Releases the cockpit's acceptance claim on ${id}, so another session can take the run.`,
+        confirmLabel: 'release claim',
+      }
+    case 'rerun_finish':
+      return {
+        ...common,
+        sentence: `Starts a detached acceptance of ${id} (pm finish, --yolo by default, never --sim: nobody may be at the screen). It refuses on a held claim.`,
+        confirmLabel: 'start acceptance',
+      }
+    case 'resume_run':
+      return {
+        ...common,
+        sentence: `Starts a detached run of ${id} (re-entrant: finished subs are skipped). Its output goes to the log the preview names.`,
+        confirmLabel: 'start run',
+      }
+    case 'kill':
+      return {
+        ...common,
+        sentence: plan?.pid
+          ? `Sends SIGTERM to ${plan.target}, SIGKILL two seconds later if it survives; the in-flight sub is parked on waiting.`
+          : `Nothing of ${id} is running - the kill will report the run as already gone.`,
+        confirmLabel: 'kill',
+      }
+  }
+}
+
 /** The request a confirmed action sends. */
-export function requestFor(p: PendingAction, value: string): MutationRequest {
+export function requestFor(p: PendingAction, value: string, flags: RunFlags = {}): MutationRequest {
   const s = p.subject
   const taskId = s.task_id ?? ''
   const v = value.trim()
+  if (isRunKind(p.kind)) {
+    return { kind: 'run', project: s.project, taskId, action: p.kind, flags }
+  }
   switch (p.kind) {
     case 'focus_toggle':
       return { kind: 'focus', project: s.project, taskId }

@@ -11,11 +11,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/fstest"
 	"time"
 
 	"github.com/mbalazy/pm/internal/feed"
+	"github.com/mbalazy/pm/internal/runctl"
 	"github.com/mbalazy/pm/internal/service"
 	"github.com/mbalazy/pm/internal/storage"
 )
@@ -967,5 +969,144 @@ func TestSettings(t *testing.T) {
 		}
 		postJSON(t, srv.URL+"/api/projects/test", `{"group":"Bad Group"}`, 400)
 		postJSON(t, srv.URL+"/api/projects/nope", `{"archived":false}`, 404)
+	})
+}
+
+// Run control over HTTP (pm-cli-118-21): every action against a fake `pm`
+// so no request ever starts a worker; the conflict states are 409.
+func TestRunControl(t *testing.T) {
+	store := newTestStore(t)
+	// The fixture's project path is not a directory; point it at a temp
+	// checkout so a spawn has somewhere to run.
+	repo := t.TempDir()
+	if _, err := store.MutateProject("test", func(p *storage.Project) error { p.Path = repo; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	fakeDir := t.TempDir()
+	out := filepath.Join(fakeDir, "argv.txt")
+	exe := filepath.Join(fakeDir, "pm")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$FAKE_PM_OUT\"\nprintf 'source=%s\\n' \"$PM_LAUNCH_SOURCE\" >> \"$FAKE_PM_OUT\"\nsleep 30\n"
+	if err := os.WriteFile(exe, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_PM_OUT", out)
+	rc := runctl.New(store, runctl.Options{Exe: exe, Session: "cockpit-testhost", After: func(time.Duration, func()) {}})
+	srv := newServer(t, store, Options{RunControl: rc})
+
+	t.Run("plan: argv preview, never --sim, unknown action 400, missing task 404", func(t *testing.T) {
+		m := getJSON(t, srv.URL+"/api/runs/test/t-2/plan?action=resume_run&yolo=1&additional=1", 200)
+		argv := m["argv"].([]any)
+		if len(argv) != 4 || argv[0] != "run-epic" || argv[3] != "--yolo" || m["additional_avail"] != false {
+			t.Fatalf("plan = %v", m)
+		}
+		m = getJSON(t, srv.URL+"/api/runs/test/t-2/plan?action=rerun_finish", 200)
+		joined := ""
+		for _, a := range m["argv"].([]any) {
+			joined += a.(string) + " "
+		}
+		if !strings.Contains(joined, "--no-sim") || strings.Contains(joined, "--sim ") {
+			t.Fatalf("finish argv = %q", joined)
+		}
+		m = getJSON(t, srv.URL+"/api/runs/test/t-2/plan?action=claim", 200)
+		if m["session"] != "cockpit-testhost" {
+			t.Fatalf("claim plan = %v", m)
+		}
+		getJSON(t, srv.URL+"/api/runs/test/t-2/plan?action=dance", 400)
+		getJSON(t, srv.URL+"/api/runs/test/t-9/plan?action=kill", 404)
+	})
+
+	t.Run("POST needs the header; resume_run spawns the fake with the cockpit source; kill stops it; a second kill is 409", func(t *testing.T) {
+		resp, err := http.Post(srv.URL+"/api/runs/test/t-2/resume_run", "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("no header = %d", resp.StatusCode)
+		}
+		m := postJSON(t, srv.URL+"/api/runs/test/t-2/resume_run", `{"yolo":true}`, 200)
+		pid := int(m["pid"].(float64))
+		t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
+		if pid <= 0 || m["kind"] != "run-epic" {
+			t.Fatalf("started = %v", m)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		var seen string
+		for time.Now().Before(deadline) {
+			if b, err := os.ReadFile(out); err == nil && strings.Contains(string(b), "source=") {
+				seen = string(b)
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !strings.HasPrefix(seen, "run-epic test t-2 --yolo\n") || !strings.Contains(seen, "source=cockpit") {
+			t.Fatalf("fake pm saw %q", seen)
+		}
+		// The run is on /api/runs at once (the seed).
+		r := getJSON(t, srv.URL+"/api/runs", 200)
+		live := false
+		for _, row := range r["rows"].([]any) {
+			if row.(map[string]any)["tracker"] == "t-2" && row.(map[string]any)["run_live"] == true {
+				live = true
+			}
+		}
+		if !live {
+			t.Fatalf("runs = %v", r)
+		}
+		k := postJSON(t, srv.URL+"/api/runs/test/t-2/kill", "", 200)
+		if int(k["pid"].(float64)) != pid || k["parked"] != "t-2" {
+			t.Fatalf("kill = %v", k)
+		}
+		for time.Now().Before(time.Now().Add(5*time.Second)) && storage.ProcessAlive(pid) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		e := postJSON(t, srv.URL+"/api/runs/test/t-2/kill", "", 409)
+		if !strings.Contains(e["error"].(string), "nothing was signalled") {
+			t.Fatalf("second kill = %v", e)
+		}
+		postJSON(t, srv.URL+"/api/runs/test/t-2/dance", "", 400)
+		postJSON(t, srv.URL+"/api/runs/test/t-2/resume_run", `{"yolo":"yes"}`, 400)
+	})
+
+	t.Run("claim, a foreign claim is 409 naming the holder, release", func(t *testing.T) {
+		// The killed run above outranks a live claim in needs_me (a failed
+		// run is rank a, a claim rank f); drop its state so the claim row shows.
+		if err := os.Remove(storage.ExecutorRunPath(store.ProjectDir("test"), "t-2")); err != nil {
+			t.Fatal(err)
+		}
+		m := postJSON(t, srv.URL+"/api/runs/test/t-2/claim", "", 200)
+		if m["claim"].(map[string]any)["session"] != "cockpit-testhost" {
+			t.Fatalf("claim = %v", m)
+		}
+		// The attention queue now offers release_claim on the row.
+		a := getJSON(t, srv.URL+"/api/attention", 200)
+		found := false
+		for _, s := range a["sections"].([]any) {
+			for _, row := range s.(map[string]any)["rows"].([]any) {
+				rm := row.(map[string]any)
+				if rm["task_id"] == "t-2" && rm["section"] == "needs_me" {
+					for _, act := range rm["actions"].([]any) {
+						if act == "release_claim" {
+							found = true
+						}
+					}
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("the live-claim row must carry release_claim: %v", a)
+		}
+		rel := postJSON(t, srv.URL+"/api/runs/test/t-2/release_claim", "", 200)
+		if rel["released"] != true {
+			t.Fatalf("release = %v", rel)
+		}
+		if _, err := storage.AcquireFinishClaim(store.ProjectDir("test"), "t-2", "somebody"); err != nil {
+			t.Fatal(err)
+		}
+		e := postJSON(t, srv.URL+"/api/runs/test/t-2/claim", "", 409)
+		if !strings.Contains(e["error"].(string), "somebody") {
+			t.Fatalf("busy = %v", e)
+		}
+		postJSON(t, srv.URL+"/api/runs/test/t-2/release_claim", "", 409)
 	})
 }

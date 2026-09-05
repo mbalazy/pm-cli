@@ -415,3 +415,63 @@ export interface ProjectResult {
   archived?: boolean
   slack?: SlackMapping
 }
+
+/** runctl.Flags - the launch toggles a run action takes (never sim). */
+export interface RunFlags {
+  yolo?: boolean
+  additional?: boolean
+}
+
+/** runctl.Plan - GET /api/runs/{project}/{id}/plan: what an action would do. */
+export interface RunPlan {
+  action: string
+  project: string
+  task_id: string
+  kind: string
+  /** `pm` first; absent for claim / release_claim. */
+  argv?: string[]
+  cwd?: string
+  log?: string
+  warnings?: string[]
+  additional_avail: boolean
+  session?: string
+  /** kill: "<kind> pid N (started ...)" or "nothing is running"; claim: the holder. */
+  target?: string
+  pid?: number
+}
+
+/** runctl.Started - a spawn's answer. */
+export interface RunStarted {
+  pid: number
+  log: string
+  argv: string[]
+  kind: string
+  warnings?: string[]
+}
+
+/** runctl.ClaimResult - claim / release_claim. */
+export interface ClaimResult {
+  claim?: {
+    tracker_id: string
+    host: string
+    pid: number
+    session?: string
+    started: string
+    refreshed: string
+  }
+  refreshed?: boolean
+  released?: boolean
+  heartbeat_seconds?: number
+  max_hold_seconds?: number
+}
+
+/** runctl.KillResult */
+export interface KillResult {
+  kind: string
+  pid: number
+  parked?: string
+  claim_released?: boolean
+  note: string
+}
+
+export type RunActionResult = RunStarted | ClaimResult | KillResult
