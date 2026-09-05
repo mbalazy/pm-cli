@@ -173,16 +173,22 @@ The same rollup is available offline via `pm context [project]` - useful when a 
 
 ### Web UI
 
-The bundle is a React SPA in `web/` (Vite, TypeScript, Tailwind, TanStack Query + Router; npm). It is **deliberately raw** for now - a project sidebar and the project's tasks grouped by status - until the target views are designed (pm-cli-118-8); the visual pass is a separate task.
+The bundle is a React SPA in `web/` (Vite, TypeScript, Tailwind v4, TanStack Query + Router, shadcn/ui components copied into `web/src/components/ui`, lucide-react icons; npm). Five screens over the same API the MCP server answers from:
+
+- **Today** (`/`) - the attention queue: what needs you (failed runs, open visual claims, work landed without acceptance), accepted work without a PR, today's focus, live runs, tasks waiting on someone (with their age and a "no reason" alarm), the changes since the cutoff, stuck projects. `?g=<group>` narrows every section to one client.
+- **Group** (`/g/<slug>`) - one client or product over one or more repos, with Overview (where we left off, needs me + waiting, in progress, trackers), Board, Runs and Changes tabs.
+- **Changes** (`/changes`) - the feed of what changed since yesterday's cutoff, from pm itself, git, GitHub and Slack, with an optional LLM report on top.
+- **Runs** (`/runs`) - the `pm runs` table ordered "needs me first", with duration, time since the end and heartbeat age; remote runners only on an explicit button.
+- **Settings** (`/settings`) - the `cockpit:` block of `config.yaml` and the per-project group, Slack and asleep settings, saved from the browser.
+
+Every mutation - focus, status and blocker reason, brief, notes, marking changes seen, claiming, re-running or killing a run - goes through one confirmation dialog, and a run action shows the exact command before it starts. The look is an editorial ledger: a masthead with the date, sections separated by rules rather than cards, rows as dispatch lines (glyph, project, id and title, the reason, the age, the actions), Fraunces for the headings and Instrument Sans for the rest, warm neutrals in OKLCH, a dark theme that follows the system (or the toggle in the sidebar's footer), state glyphs always next to their colour, and a phone layout from 390 px up. Keyboard: `1`/`2`/`3`/`,` switch screens, `j`/`k`/`Enter` walk the rows, `t` toggles focus, `g <letter>` filters by group, `[`/`]` step a group page's tabs, `?` lists the shortcuts, ⌘K / Ctrl+K opens the palette. The page listens to `/api/events` and refetches what changed, so a board edit or a run's heartbeat shows up within a couple of seconds; a manifest makes it installable on a phone.
 
 ```sh
 make web-install && make web && make install   # or: make web-install && make install-full
 pm serve                                        # http://127.0.0.1:7070
 ```
 
-What it does (read-only, no mutations yet): the project's tasks grouped by status, a task detail with the body rendered as markdown under "Spec (current truth)" / "Log (history)" headings, a Runs view (the `pm runs` table; a "fetch remote" button asks the remote runners explicitly - never automatically), and a ⌘K / Ctrl+K command palette (go to project, open task by id or title, runs; with an empty query, the recently opened tasks). Keyboard: `j`/`k` move over the task list, `Enter` opens, `Esc` closes, `?` lists the shortcuts; everything is reachable by mouse too. The page listens to `/api/events` and refetches what changed, so a board edit or a run's heartbeat shows up within a couple of seconds. Under 768 px the sidebar becomes a "Projects" drawer and the detail takes the whole width; a manifest makes it installable on a phone.
-
-Development: run `pm serve` in one terminal and `cd web && npm run dev` in another - Vite proxies `/api` to the server. `make web-check` runs lint, tsc and vitest; `make check` and `make install` stay node-free (a binary built without the bundle serves a placeholder page).
+Development: run `pm serve` in one terminal and `cd web && npm run dev` in another - Vite proxies `/api` to the server (`PM_API_URL` points it elsewhere). `make web-check` runs lint, tsc and vitest; `make check` and `make install` stay node-free (a binary built without the bundle serves a placeholder page).
 
 ## The executor
 
