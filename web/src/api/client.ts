@@ -1,4 +1,5 @@
-// The one fetch wrapper. Every endpoint is a GET returning JSON; every error is
+// The one fetch wrapper. Every data endpoint is a GET returning JSON (the
+// change feed's refresh and seen mark are the two POSTs); every error is
 // `{"error": "..."}` with 400 (caller's mistake), 404 (not there) or 500.
 
 export class ApiError extends Error {
@@ -13,7 +14,20 @@ export class ApiError extends Error {
 
 /** GET `path` (already prefixed with /api) and decode the JSON body as T. */
 export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(path, { headers: { Accept: 'application/json' } })
+  return request<T>(path, { headers: { Accept: 'application/json' } })
+}
+
+/** POST `path` with an optional JSON body and decode the JSON body as T. */
+export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+  return request<T>(path, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+}
+
+async function request<T>(path: string, init: RequestInit): Promise<T> {
+  const res = await fetch(path, init)
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`
     try {

@@ -1,19 +1,22 @@
 // react-query hooks, one per endpoint. The KEYS are a contract shared with the
 // live feed (118-9 invalidates by them) - keep them exactly as listed:
 //   ['projects'] ['groups'] ['tasks', slug] ['task', slug, id] ['context', slug] ['runs'] ['focus']
-//   ['attention', project, group]
-import { useQuery } from '@tanstack/react-query'
+//   ['attention', project, group] ['changes']
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { apiGet, query } from './client'
+import { apiGet, apiPost, query } from './client'
 import type {
   Attention,
+  Changes,
   CrossProjectContextResult,
   FocusResult,
   GroupsResult,
   ListTasksResult,
   ProjectContextResult,
   ProjectsResult,
+  RefreshResult,
   RunsResult,
+  SeenResult,
   TaskDetail,
 } from './types'
 
@@ -31,6 +34,7 @@ export const keys = {
   runsRemote: () => ['runs-remote'] as const,
   focus: () => ['focus'] as const,
   attention: (project = '', group = '') => ['attention', project, group] as const,
+  changes: () => ['changes'] as const,
 }
 
 export function useProjects() {
@@ -116,5 +120,37 @@ export function useAttention(project = '', group = '') {
   return useQuery({
     queryKey: keys.attention(project, group),
     queryFn: () => apiGet<Attention>(`/api/attention${query({ project, group })}`),
+  })
+}
+
+/** The change feed since the cutoff, off the server's cache - never a fetch of the sources. */
+export function useChanges() {
+  return useQuery({
+    queryKey: keys.changes(),
+    queryFn: () => apiGet<Changes>('/api/changes'),
+  })
+}
+
+/** "Fetch now": runs the sources whatever the refresh window says. The SSE `changes` event refetches. */
+export function useRefreshChanges() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: () => apiPost<RefreshResult>('/api/changes/refresh'),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: keys.changes() })
+      void client.invalidateQueries({ queryKey: ['attention'] })
+    },
+  })
+}
+
+/** Marks everything up to `ts` (default: now) as read. */
+export function useMarkChangesSeen() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (ts?: string) => apiPost<SeenResult>('/api/changes/seen', ts ? { ts } : undefined),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: keys.changes() })
+      void client.invalidateQueries({ queryKey: ['attention'] })
+    },
   })
 }

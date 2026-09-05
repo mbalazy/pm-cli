@@ -1,8 +1,10 @@
 // Package server is `pm serve`: the cockpit's HTTP face over the same
-// internal/service functions the MCP server calls, plus an SSE change feed
-// and the embedded React bundle. Read-only by design - every mutation still
-// goes through MCP or the CLI - and unauthenticated, because it binds to
-// localhost (remote access is Tailscale's job, not this package's).
+// internal/service functions the MCP server calls, plus an SSE change feed,
+// the change feed's endpoints and scheduler (changes.go), and the embedded
+// React bundle. Read-only over pm's DATA - every task or project mutation
+// still goes through MCP or the CLI; the only writes are the feed's own
+// cache and seen mark - and unauthenticated, because it binds to localhost
+// (remote access is Tailscale's job, not this package's).
 //
 // stdlib net/http only (Go 1.22+ method+pattern routing); no framework.
 package server
@@ -19,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mbalazy/pm/internal/feed"
 	"github.com/mbalazy/pm/internal/service"
 	"github.com/mbalazy/pm/internal/storage"
 )
@@ -49,6 +52,13 @@ type Options struct {
 	PollInterval time.Duration
 	// PingInterval is how often an idle SSE stream sends `event: ping`.
 	PingInterval time.Duration
+	// Feed is the change feed; nil = feed.New over the store's root with the
+	// default sources (git/gh through feed.DefaultRunner). The command layer
+	// hands in one whose runner is the executor's process-group runner.
+	Feed *feed.Feed
+	// Clock is the scheduler's and the cutoff's clock; nil = time.Now.
+	// Injected so the refresh window is testable at any hour.
+	Clock func() time.Time
 }
 
 const (
@@ -62,10 +72,21 @@ func init() {
 	_ = mime.AddExtensionType(".webmanifest", "application/manifest+json")
 }
 
+// Handler is the server: an http.Handler plus the feed scheduler's entry
+// point (RunScheduler), which needs the same feed and clock the endpoints
+// use.
+type Handler struct {
+	mux *http.ServeMux
+	h   *handler
+}
+
+// ServeHTTP makes Handler an http.Handler.
+func (s *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.mux.ServeHTTP(w, r) }
+
 // NewHandler routes /api/* to the JSON endpoints, /api/events to the SSE
 // feed and everything else to the SPA (or the placeholder page when the
 // bundle has not been built).
-func NewHandler(store storage.TaskStore, opts Options) http.Handler {
+func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	if opts.Static == nil {
 		sub, err := fs.Sub(dist, "dist")
 		if err != nil {
@@ -79,7 +100,13 @@ func NewHandler(store storage.TaskStore, opts Options) http.Handler {
 	if opts.PingInterval <= 0 {
 		opts.PingInterval = defaultPingInterval
 	}
-	h := &handler{store: store, opts: opts}
+	if opts.Feed == nil {
+		opts.Feed = feed.New(store.RootDir(), nil)
+	}
+	if opts.Clock == nil {
+		opts.Clock = time.Now
+	}
+	h := &handler{store: store, opts: opts, feed: opts.Feed, clock: opts.Clock, bus: newChangeBus()}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/projects", h.projects)
@@ -90,6 +117,9 @@ func NewHandler(store storage.TaskStore, opts Options) http.Handler {
 	mux.HandleFunc("GET /api/runs", h.runs)
 	mux.HandleFunc("GET /api/focus", h.focus)
 	mux.HandleFunc("GET /api/attention", h.attention)
+	mux.HandleFunc("GET /api/changes", h.changes)
+	mux.HandleFunc("POST /api/changes/refresh", h.refresh)
+	mux.HandleFunc("POST /api/changes/seen", h.seen)
 	mux.HandleFunc("GET /api/events", h.events)
 	// Anything else under /api/ is unknown, never the SPA: a typo'd endpoint
 	// answering with index.html would read as "the server is fine, the data
@@ -98,15 +128,19 @@ func NewHandler(store storage.TaskStore, opts Options) http.Handler {
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such endpoint: "+r.URL.Path)
 	})
-	// GET-only, like every route here: a POST anywhere is answered 405 by the
-	// mux itself - this server mutates nothing and says so.
+	// GET-only, like every data route here: a POST anywhere else is answered
+	// 405 by the mux itself - pm's data is not mutated over HTTP. The two
+	// POSTs above touch the feed's own cache, nothing of pm's.
 	mux.Handle("GET /", h.static())
-	return mux
+	return &Handler{mux: mux, h: h}
 }
 
 type handler struct {
 	store storage.TaskStore
 	opts  Options
+	feed  *feed.Feed
+	clock func() time.Time
+	bus   *changeBus
 }
 
 // --- JSON plumbing ---
@@ -296,7 +330,7 @@ const placeholderPage = `<!doctype html>
 <style>body{font:15px/1.5 system-ui,sans-serif;max-width:40em;margin:4em auto;padding:0 1em;color:#333}code{background:#eee;padding:.1em .3em;border-radius:3px}</style>
 <h1>pm serve</h1>
 <p>The server is up, but the front end is not built into this binary.</p>
-<p>Run <code>make web</code> and rebuild, or use the JSON API directly: <code>/api/projects</code>, <code>/api/groups</code>, <code>/api/tasks</code>, <code>/api/context</code>, <code>/api/runs</code>, <code>/api/focus</code>, <code>/api/attention</code>, <code>/api/events</code>.</p>
+<p>Run <code>make web</code> and rebuild, or use the JSON API directly: <code>/api/projects</code>, <code>/api/groups</code>, <code>/api/tasks</code>, <code>/api/context</code>, <code>/api/runs</code>, <code>/api/focus</code>, <code>/api/attention</code>, <code>/api/changes</code>, <code>/api/events</code>.</p>
 `
 
 // static serves the bundle with client-side routing: a path that names a

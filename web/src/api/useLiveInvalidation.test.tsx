@@ -60,6 +60,10 @@ describe('useLiveInvalidation', () => {
     expect(spy.mock.calls.map((c) => c[0]?.queryKey)).toEqual([['runs'], ['attention']])
 
     spy.mockClear()
+    es.fire('changes', '{"sources":["pm"]}')
+    expect(spy.mock.calls.map((c) => c[0]?.queryKey)).toEqual([['changes'], ['attention']])
+
+    spy.mockClear()
     es.fire('tasks', 'not json')
     expect(spy).not.toHaveBeenCalled()
 

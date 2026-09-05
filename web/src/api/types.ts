@@ -262,3 +262,49 @@ export interface AttentionDigest {
   counts: Record<string, number>
   note?: string
 }
+
+/** feed.Event - one change; `seen` is applied by the reader from the seen mark. */
+export interface ChangeEvent {
+  id: string
+  ts: string
+  source: string
+  project: string
+  group: string
+  task_id?: string
+  title: string
+  detail?: string
+  url?: string
+  severity: 'crit' | 'warn' | 'info' | 'ok'
+  seen: boolean
+}
+
+/** feed.SourceStatus - one source's last run. */
+export interface SourceStatus {
+  name: string
+  enabled: boolean
+  last_fetch?: string
+  error?: string
+  events: number
+}
+
+/** feed.Changes - /api/changes: the cached events since the cutoff. */
+export interface Changes {
+  cutoff: string
+  events: ChangeEvent[]
+  unseen: number
+  seen?: string
+  sources: SourceStatus[]
+}
+
+/** feed.Result - POST /api/changes/refresh */
+export interface RefreshResult {
+  sources: SourceStatus[]
+  added: number
+  from: string
+  to: string
+}
+
+/** server.seenResult - POST /api/changes/seen */
+export interface SeenResult {
+  seen: string
+}

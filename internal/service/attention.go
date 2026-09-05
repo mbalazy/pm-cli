@@ -3,7 +3,9 @@ package service
 import (
 	"fmt"
 	"sort"
+	"time"
 
+	"github.com/mbalazy/pm/internal/feed"
 	"github.com/mbalazy/pm/internal/storage"
 )
 
@@ -32,7 +34,14 @@ func Attention(store storage.TaskStore, in AttentionInput) (*storage.Attention, 
 		}
 		project = slug
 	}
-	a, err := storage.BuildAttention(store, &cfg.Cockpit, storage.AttentionOptions{})
+	opts := storage.AttentionOptions{Now: time.Now()}
+	// The change feed's digest comes off its CACHE - the aggregation never
+	// fetches. Best-effort: an unreadable cache is a section without a
+	// feed, and the section's note says so.
+	if d, err := feed.ReadDigest(store.RootDir(), feed.Cutoff(&cfg.Cockpit, opts.Now), 5); err == nil {
+		opts.Changes = d
+	}
+	a, err := storage.BuildAttention(store, &cfg.Cockpit, opts)
 	if err != nil {
 		return nil, err
 	}
