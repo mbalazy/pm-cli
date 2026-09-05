@@ -1,5 +1,5 @@
 import { Link, Outlet, useNavigate, useParams, useSearch } from '@tanstack/react-router'
-import { Monitor, Moon, Search, Sun } from 'lucide-react'
+import { Monitor, Moon, PanelLeftClose, PanelLeftOpen, Search, Sun } from 'lucide-react'
 import { useState } from 'react'
 
 import { useAttention, useConfig, useProjects, useTasks } from '../api/queries'
@@ -10,12 +10,15 @@ import { HelpDialog } from '../components/HelpDialog'
 import { Palette } from '../components/Palette'
 import { useRecentTasks } from '../hooks/useRecentTasks'
 import { useShortcuts } from '../hooks/useShortcuts'
+import { useSidebarCollapsed } from '../hooks/useSidebarCollapsed'
 import { useTheme } from '../hooks/useTheme'
 import { groupHotkeys, parseGroupFilter } from '../lib/groupFilter'
 import { paletteItems, type PaletteItem } from '../lib/paletteItems'
 import { SCREENS } from '../lib/screens'
 import { groupMembers } from '../lib/groupView'
 import { asleepProjects, sidebarLayout, sortGroups } from '../lib/sidebarView'
+
+import { TooltipProvider } from '@/components/ui/tooltip'
 
 // The shell: the group sidebar (a top bar on a phone), the page, the
 // palette, the help dialog and the live feed. Composition only - hooks in,
@@ -38,6 +41,7 @@ export function RootLayout() {
   const config = useConfig()
   const { recent } = useRecentTasks()
   const theme = useTheme()
+  const sidebar = useSidebarCollapsed()
   useLiveInvalidation()
 
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -65,7 +69,12 @@ export function RootLayout() {
     void navigate({ to: item.to })
   }
 
-  const layout = sidebarLayout(config.data?.cockpit.sidebar)
+  // Folded = the rail variant whatever the config says; the config's own
+  // variant and width come back when it is opened again.
+  const sidebarCfg = config.data?.cockpit.sidebar
+  const layout = sidebarLayout(
+    sidebar.collapsed && sidebarCfg ? { ...sidebarCfg, variant: 'rail', width: 0 } : sidebarCfg,
+  )
   const groups = sortGroups(
     attention.data?.groups ?? [],
     config.data?.cockpit.sidebar.sort,
@@ -73,6 +82,7 @@ export function RootLayout() {
   )
   const asleep = asleepProjects(projects.data?.projects)
   const columns = layout.width ?? (layout.variant === 'rail' ? '3rem' : '15rem')
+  const FoldIcon = sidebar.collapsed ? PanelLeftOpen : PanelLeftClose
   const ThemeIcon = theme.choice === 'dark' ? Moon : theme.choice === 'light' ? Sun : Monitor
 
   return (
@@ -128,13 +138,35 @@ export function RootLayout() {
       </div>
 
       <aside className="hidden border-r border-rule bg-paper-2/40 md:flex md:flex-col md:sticky md:top-0 md:h-screen md:overflow-y-auto">
-        <div className="display px-4 pt-4 text-xl">pm</div>
+        <div
+          className={
+            layout.variant === 'rail'
+              ? 'flex flex-col items-center gap-1 pt-3'
+              : 'flex items-center px-4 pt-4'
+          }
+        >
+          {layout.variant !== 'rail' && <span className="display text-xl">pm</span>}
+          <button
+            type="button"
+            className={`flex size-7 items-center justify-center rounded-sm text-ink-3 hover:bg-paper-3 hover:text-ink ${layout.variant === 'rail' ? '' : 'ml-auto'}`}
+            title={sidebar.collapsed ? 'expand the sidebar' : 'fold the sidebar to a rail'}
+            aria-label={sidebar.collapsed ? 'expand sidebar' : 'collapse sidebar'}
+            aria-pressed={sidebar.collapsed}
+            onClick={sidebar.toggle}
+          >
+            <FoldIcon aria-hidden="true" className="size-4" strokeWidth={1.75} />
+          </button>
+        </div>
         {attention.isPending && <p className="p-3 text-sm text-ink-3">loading…</p>}
         {attention.isError && (
           <p className="p-3 text-sm text-crit">error: {attention.error.message}</p>
         )}
         {config.isError && <p className="p-3 text-sm text-crit">config: {config.error.message}</p>}
-        {attention.data && <GroupSidebar groups={groups} layout={layout} asleep={asleep} />}
+        {attention.data && (
+          <TooltipProvider delayDuration={0}>
+            <GroupSidebar groups={groups} layout={layout} asleep={asleep} />
+          </TooltipProvider>
+        )}
         <div className="mt-auto flex items-center gap-2 px-3 py-3 text-xs text-ink-3">
           {layout.variant !== 'rail' && (
             <span>
