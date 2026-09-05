@@ -9,6 +9,7 @@ import { useConfirmedAction } from '../hooks/useConfirmedAction'
 import { useRecentTasks } from '../hooks/useRecentTasks'
 import { useShortcuts } from '../hooks/useShortcuts'
 import { subjectOfTask } from '../lib/confirmText'
+import { groupOf } from '../lib/groupView'
 import { relativeTime } from '../lib/relativeTime'
 import { splitSpecLog } from '../lib/splitSpecLog'
 
@@ -42,6 +43,7 @@ export function TaskPage({ slug, id }: { slug: string; id: string }) {
         log={log}
         onBack={back}
         statuses={statuses}
+        group={projects.data ? groupOf(projects.data.projects, slug) : undefined}
         onEdit={(kind, status) => action.ask({ kind, subject: subjectOfTask(t), status })}
       />
       <ConfirmDialog

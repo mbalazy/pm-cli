@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -20,6 +21,8 @@ interface Props {
   onBack?: () => void
   /** The project's status list, for the status select. */
   statuses?: string[]
+  /** The group the task's repo belongs to - the project chip links to its board. */
+  group?: string
   /** Asks to edit a field; the status edit names the chosen status. */
   onEdit?: (kind: 'edit_brief' | 'edit_waiting_for' | 'set_status', status?: string) => void
 }
@@ -32,21 +35,35 @@ export function TaskDetail({
   log,
   onBack,
   statuses = [],
+  group,
   onEdit,
 }: Props) {
+  const projectChip = group ? (
+    <Link
+      to="/g/$group"
+      params={{ group }}
+      search={{ tab: 'board', repo: task.project }}
+      className="chip hover:text-ink hover:underline"
+      title="open the project's board"
+    >
+      {task.project}
+    </Link>
+  ) : (
+    <span className="chip">{task.project}</span>
+  )
   return (
     <article className="space-y-6">
       {onBack && (
         <button type="button" onClick={onBack} className="ghost-btn md:hidden">
           <ArrowLeft aria-hidden="true" className="size-3" />
-          back to list
+          back to {task.project}
         </button>
       )}
       <header className="space-y-2 border-b-2 border-ink pb-3">
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-ink-2">
           <code className="id">#{task.id}</code>
           <span aria-hidden="true">·</span>
-          <span className="chip">{task.project}</span>
+          {projectChip}
           <span aria-hidden="true">·</span>
           {onEdit && statuses.length > 0 ? (
             <label>
