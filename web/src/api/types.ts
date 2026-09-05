@@ -335,3 +335,29 @@ export interface CockpitConfig {
 export interface ConfigResult {
   cockpit: CockpitConfig
 }
+
+/** The fields POST /api/tasks/{project}/{id} accepts - a subset of service.UpdateTaskInput, tri-state like MCP: omit = keep, "" = clear. */
+export interface UpdateTaskBody {
+  status?: string
+  waiting_for?: string
+  brief?: string
+  ac?: string
+  body_append?: string
+}
+
+/** service.ToggleFocusResult - POST /api/focus/toggle */
+export interface ToggleFocusResult {
+  task_id: string
+  focused: boolean
+  date: string
+  task_ids: string[]
+}
+
+/** service.ProjectResult - POST /api/projects/{slug} */
+export interface ProjectResult {
+  slug: string
+  name: string
+  notes?: string
+  statuses?: string[]
+  group?: string
+}

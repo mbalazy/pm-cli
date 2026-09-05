@@ -14,6 +14,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -119,8 +120,13 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux.HandleFunc("GET /api/focus", h.focus)
 	mux.HandleFunc("GET /api/attention", h.attention)
 	mux.HandleFunc("GET /api/changes", h.changes)
-	mux.HandleFunc("POST /api/changes/refresh", h.refresh)
-	mux.HandleFunc("POST /api/changes/seen", h.seen)
+	// Mutations. Every POST under /api/ needs the client header (see
+	// requireClient); GETs stay open.
+	mux.HandleFunc("POST /api/changes/refresh", requireClient(h.refresh))
+	mux.HandleFunc("POST /api/changes/seen", requireClient(h.seen))
+	mux.HandleFunc("POST /api/tasks/{project}/{id}", requireClient(h.updateTask))
+	mux.HandleFunc("POST /api/focus/toggle", requireClient(h.toggleFocus))
+	mux.HandleFunc("POST /api/projects/{slug}", requireClient(h.updateProject))
 	mux.HandleFunc("GET /api/events", h.events)
 	// Anything else under /api/ is unknown, never the SPA: a typo'd endpoint
 	// answering with index.html would read as "the server is fine, the data
@@ -179,6 +185,40 @@ func statusFor(err error) int {
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError
+}
+
+// ClientHeader is the header every POST must carry, with ClientValue as its
+// value. There is no auth (localhost, Tailscale for the phone - pm-cli-118-5),
+// and this is not auth either: it is the one thing a cross-site form post or
+// a stray `curl` cannot send by accident, so a mutation only ever comes from
+// the cockpit itself. GETs are unaffected.
+const (
+	ClientHeader = "X-PM-Client"
+	ClientValue  = "cockpit"
+)
+
+// requireClient refuses a POST without the client header with a 403 naming
+// the header, before the handler reads a byte of the body.
+func requireClient(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(ClientHeader) != ClientValue {
+			writeError(w, http.StatusForbidden, fmt.Sprintf("mutations need the %s: %s header", ClientHeader, ClientValue))
+			return
+		}
+		next(w, r)
+	}
+}
+
+// decodeBody decodes a JSON body into v, refusing unknown fields - a typo'd
+// field name would otherwise be a silent no-op the caller reads as "saved".
+func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		writeError(w, http.StatusBadRequest, "body must be a JSON object: "+err.Error())
+		return false
+	}
+	return true
 }
 
 // --- Endpoints ---
@@ -328,6 +368,55 @@ func (h *handler) focus(w http.ResponseWriter, r *http.Request) {
 func (h *handler) attention(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	res, err := service.Attention(h.store, service.AttentionInput{Project: q.Get("project"), Group: q.Get("group")})
+	writeResult(w, res, err)
+}
+
+// --- Mutations (pm-cli-118-16) ---
+//
+// Each one is a thin call into internal/service - the SAME function the MCP
+// tool runs, so tri-state fields, link merging, status validation, the Spec/
+// Log body zones and the project lock are the service's and never re-stated
+// here. The body decodes straight into the service's input struct: there is
+// no second copy of the parameter list to drift.
+
+// updateTask is pm_update_task over HTTP: POST /api/tasks/{project}/{id}
+// with a JSON body of service.UpdateTaskInput fields (project and task_id
+// come from the path and override the body).
+func (h *handler) updateTask(w http.ResponseWriter, r *http.Request) {
+	var in service.UpdateTaskInput
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	in.Project = r.PathValue("project")
+	in.TaskID = r.PathValue("id")
+	task, err := service.UpdateTask(h.store, in)
+	if err != nil {
+		writeResult(w, nil, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, service.ToDetail(task))
+}
+
+// toggleFocus is the board's `t`: POST /api/focus/toggle {"task_id": ...}.
+func (h *handler) toggleFocus(w http.ResponseWriter, r *http.Request) {
+	var in service.ToggleFocusInput
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	res, err := service.ToggleFocus(h.store, in)
+	writeResult(w, res, err)
+}
+
+// updateProject is pm_update_project over HTTP: POST /api/projects/{slug}
+// with service.UpdateProjectInput fields (the slug comes from the path). The
+// cockpit sends `notes` ("where we left off", v1 = hand-written).
+func (h *handler) updateProject(w http.ResponseWriter, r *http.Request) {
+	var in service.UpdateProjectInput
+	if !decodeBody(w, r, &in) {
+		return
+	}
+	in.Project = r.PathValue("slug")
+	res, err := service.UpdateProject(h.store, in)
 	writeResult(w, res, err)
 }
 

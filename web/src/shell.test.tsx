@@ -65,9 +65,33 @@ const remoteRuns = {
   ],
 }
 
+/** Every POST the fake saw: method, path, headers and the parsed body. */
+interface SeenPost {
+  path: string
+  header: string | null
+  body: unknown
+}
+const posts: SeenPost[] = []
+
 function fakeFetch(routes: Record<string, unknown>) {
-  return vi.fn(async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (init?.method === 'POST') {
+      const headers = new Headers(init.headers)
+      posts.push({
+        path: url,
+        header: headers.get('X-PM-Client'),
+        body: init.body ? JSON.parse(init.body as string) : undefined,
+      })
+      if (url.includes('/t-fail')) {
+        return new Response(JSON.stringify({ error: 'status "bogus" is not one of todo, done' }), {
+          status: 400,
+        })
+      }
+      return new Response(JSON.stringify({ ok: true, task_ids: [], focused: true }), {
+        status: 200,
+      })
+    }
     const [path, qs] = url.split('?')
     // An exact `path?query` route wins; otherwise the bare path answers.
     const key = qs && routes[`${path}?${qs}`] !== undefined ? `${path}?${qs}` : path
@@ -124,8 +148,13 @@ const attention = {
     {
       name: 'waiting',
       rows: [
-        row('waiting', 'acme-api', 'acme-api-1', 'Acme-api thing', { flags: ['no_reason'] }),
-        row('waiting', 'alpha', 'alpha-2', 'Second'),
+        row('waiting', 'acme-api', 'acme-api-1', 'Acme-api thing', {
+          flags: ['no_reason'],
+          actions: ['open', 'focus_toggle', 'set_waiting_for', 'back_to_todo'],
+        }),
+        row('waiting', 'alpha', 'alpha-2', 'Second', {
+          actions: ['open', 'focus_toggle', 'set_waiting_for', 'back_to_todo'],
+        }),
       ],
       total: 2,
     },
@@ -166,7 +195,10 @@ const changes = {
   sources: [{ name: 'pm', enabled: true, events: 1, last_fetch: '2026-01-02T09:30:00Z' }],
 }
 
+const focusPlan = { date: '2026-01-02', task_ids: [] as string[], tasks: [] as unknown[] }
+
 const api = {
+  '/api/focus': focusPlan,
   '/api/projects': projects,
   '/api/tasks': tasks,
   '/api/tasks/alpha/alpha-1': detail,
@@ -178,7 +210,10 @@ const api = {
   '/api/changes': changes,
 }
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  posts.length = 0
+})
 
 describe('task detail', () => {
   it('renders the Spec and Log zones under their headings, with the fields', async () => {
@@ -221,7 +256,7 @@ describe('today', () => {
     expect(screen.getByText(/refreshed \d\d:\d\d · next \d\d:\d\d/)).toBeInTheDocument()
   })
 
-  it('renders the action buttons the row lists and enables only open', async () => {
+  it('renders the action buttons the row lists: open is a link, focus is live, kill is absent', async () => {
     vi.stubGlobal('fetch', fakeFetch(api))
     renderAt('/')
     const needs = await screen.findByRole('region', { name: 'Needs me' })
@@ -230,9 +265,7 @@ describe('today', () => {
       'href',
       '/p/alpha/t/alpha-1',
     )
-    const focus = within(item).getByRole('button', { name: 'focus' })
-    expect(focus).toBeDisabled()
-    expect(focus).toHaveAttribute('title', 'pm-cli-118-16')
+    expect(within(item).getByRole('button', { name: 'focus' })).toBeEnabled()
     expect(within(item).queryByRole('button', { name: 'kill' })).toBeNull()
   })
 
@@ -277,6 +310,100 @@ describe('today', () => {
     expect(await screen.findByRole('article')).toBeInTheDocument()
     await user.keyboard('3')
     expect(await screen.findByRole('table', { name: 'Runs' })).toBeInTheDocument()
+  })
+})
+
+describe('mutations go through the dialog', () => {
+  it('a row action opens the dialog; Esc cancels without a request', async () => {
+    vi.stubGlobal('fetch', fakeFetch(api))
+    const user = userEvent.setup()
+    renderAt('/')
+    const needs = await screen.findByRole('region', { name: 'Needs me' })
+    await user.click(within(needs).getByRole('button', { name: 'focus' }))
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    expect(dialog).toHaveAttribute('open')
+    expect(within(dialog).getByRole('heading')).toHaveTextContent('alpha-1 First')
+    expect(within(dialog).getByText(/Puts alpha-1 on today's focus/)).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await vi.waitFor(() => expect(dialog).not.toHaveAttribute('open'))
+    expect(posts).toHaveLength(0)
+  })
+
+  it('t on the selected row asks too, and Enter posts focus/toggle with the client header', async () => {
+    vi.stubGlobal('fetch', fakeFetch(api))
+    const user = userEvent.setup()
+    renderAt('/')
+    await screen.findByRole('region', { name: 'Needs me' })
+    await user.keyboard('j')
+    await user.keyboard('t')
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    expect(dialog).toHaveAttribute('open')
+    await user.click(within(dialog).getByRole('button', { name: 'add to focus' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toEqual({
+      path: '/api/focus/toggle',
+      header: 'cockpit',
+      body: { task_id: 'alpha-1' },
+    })
+    await vi.waitFor(() => expect(dialog).not.toHaveAttribute('open'))
+    expect(await screen.findByRole('status')).toHaveTextContent('saved')
+  })
+
+  it('waiting without a reason warns; Enter in the field sends status + reason', async () => {
+    vi.stubGlobal('fetch', fakeFetch(api))
+    const user = userEvent.setup()
+    renderAt('/')
+    const waiting = await screen.findByRole('region', { name: 'Waiting on' })
+    const second = within(waiting).getAllByRole('listitem')[1]
+    await user.click(within(second).getByRole('button', { name: 'waiting…' }))
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(/no reason/)
+    await user.type(within(dialog).getByRole('textbox'), 'review by Marta{Enter}')
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].path).toBe('/api/tasks/alpha/alpha-2')
+    expect(posts[0].body).toEqual({ status: 'waiting', waiting_for: 'review by Marta' })
+  })
+
+  it('the detail edits brief and status through the same dialog, and shows the server error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fakeFetch({ ...api, '/api/tasks/alpha/t-fail': { ...detail, id: 't-fail' } }),
+    )
+    const user = userEvent.setup()
+    renderAt('/p/alpha/t/alpha-1')
+    const article = await screen.findByRole('article')
+    await user.click(within(article).getByRole('button', { name: 'write brief' }))
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    const area = within(dialog).getByRole('textbox')
+    await user.type(area, 'line one{Enter}line two')
+    expect(posts).toHaveLength(0)
+    await user.keyboard('{Meta>}{Enter}{/Meta}')
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].body).toEqual({ brief: 'line one\nline two' })
+
+    await user.selectOptions(within(article).getByRole('combobox', { name: 'status' }), 'done')
+    expect(within(dialog).getByText('Moves alpha-1 from todo to done.')).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'move to done' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(2))
+    expect(posts[1].body).toEqual({ status: 'done' })
+  })
+
+  it('a rejected mutation keeps the dialog open with the error text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fakeFetch({
+        ...api,
+        '/api/tasks/alpha/t-fail': { ...detail, id: 't-fail', brief: undefined },
+      }),
+    )
+    const user = userEvent.setup()
+    renderAt('/p/alpha/t/t-fail')
+    const article = await screen.findByRole('article')
+    await user.selectOptions(within(article).getByRole('combobox', { name: 'status' }), 'done')
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    await user.click(within(dialog).getByRole('button', { name: 'move to done' }))
+    expect(await within(dialog).findByText(/error: status "bogus"/)).toBeInTheDocument()
+    expect(dialog).toHaveAttribute('open')
   })
 })
 
