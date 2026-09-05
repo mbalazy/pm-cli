@@ -322,6 +322,13 @@ func TestAttentionClosedTrackerLeavesQueue(t *testing.T) {
 	if got := ids(a.Section(SectionLandedNoPR).Rows); strings.Join(got, ",") != "acme-zap-1-1" {
 		t.Errorf("landed_no_pr with an archived parent = %v", got)
 	}
+	// The sidebar's counters follow the queue: the archived tracker's two
+	// visual claims and the done tracker's failed run no longer count.
+	for _, g := range a.Groups {
+		if g.Slug == "acme" && (g.Visual != 0 || g.Failed != 0) {
+			t.Errorf("acme counters with closed trackers = visual %d failed %d, want 0/0", g.Visual, g.Failed)
+		}
+	}
 	// A landing status is the executor's, not the human's: the row stays.
 	close("acme-api-3", StatusMerged)
 	a = build(t, store, "", AttentionOptions{})

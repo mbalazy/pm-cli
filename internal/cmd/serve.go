@@ -30,15 +30,17 @@ func newServeCmd(store storage.TaskStore) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Serve the web cockpit: JSON API + change feed + embedded front end (read-only, localhost)",
-		Long: "Starts an HTTP server with the read-only JSON API under /api/ (projects, groups, tasks, " +
+		Short: "Serve the web cockpit: JSON API + change feed + embedded front end (localhost)",
+		Long: "Starts an HTTP server with the JSON API under /api/ (projects, groups, tasks, " +
 			"context, runs, focus, attention, changes), a Server-Sent Events feed at /api/events, the " +
 			"change feed's scheduler (git/gh in the projects' checkouts, every cockpit.refresh.every " +
 			"inside cockpit.refresh.window only - see `pm config show`), and the React cockpit built " +
 			"into this binary (a placeholder page until `make web` has run).\n\n" +
 			"No authentication and no TLS: bind to localhost (the default) and reach it remotely " +
-			"through Tailscale or an ssh tunnel. Nothing here mutates pm data; the change feed's " +
-			"cache lives under <pm data dir>/.cockpit/.",
+			"through Tailscale or an ssh tunnel. The API WRITES too - task status, focus, notes, " +
+			"the cockpit settings - and its run control starts and stops executor runs (every POST " +
+			"needs the X-PM-Client header the cockpit sends); the change feed's cache lives under " +
+			"<pm data dir>/.cockpit/.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ln, err := net.Listen("tcp", addr)

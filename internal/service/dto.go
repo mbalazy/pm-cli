@@ -250,8 +250,10 @@ type ProjectResult struct {
 // SlackMapping is storage.SlackConfig with json tags: a project's Slack
 // workspace label and channels (the change feed's slack source reads it).
 type SlackMapping struct {
-	Workspace string   `json:"workspace,omitempty"`
-	Channels  []string `json:"channels"`
+	Workspace string `json:"workspace,omitempty"`
+	// omitempty: the generated MCP schema would otherwise mark channels
+	// REQUIRED, refusing the documented "empty mapping removes the key" form.
+	Channels []string `json:"channels,omitempty"`
 }
 
 // ConfigResult is Config's shape: the resolved `cockpit:` block of the

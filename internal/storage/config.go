@@ -102,6 +102,7 @@ func (s *Store) LoadConfig() (*PMConfig, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	cfg.Cockpit.reseedNilMaps()
 	if err := cfg.validate(path); err != nil {
 		return nil, err
 	}

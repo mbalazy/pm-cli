@@ -256,6 +256,22 @@ func (c *CockpitConfig) GroupName(slug string) string {
 	return slug
 }
 
+// reseedNilMaps restores the default toggle maps after a decode that
+// nil'ed them: yaml.v3 sets a map to nil for a key present with a null
+// value (`sections:` with its children commented out), where a struct or
+// an int under the same shape keeps its default. Without this every
+// section and source would silently be off - the one shape of "absent key
+// keeps its default" the decoder does not honour on its own.
+func (c *CockpitConfig) reseedNilMaps() {
+	def := DefaultCockpitConfig()
+	if c.Sections == nil {
+		c.Sections = def.Sections
+	}
+	if c.Sources == nil {
+		c.Sources = def.Sources
+	}
+}
+
 // SectionEnabled answers whether a home section is on. An unknown name is
 // off - validate rejects it at load, so this only covers a caller's typo.
 func (c *CockpitConfig) SectionEnabled(name string) bool {

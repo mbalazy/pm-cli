@@ -328,3 +328,26 @@ func TestGroupOrderAndSlackMapping(t *testing.T) {
 		}
 	})
 }
+
+// TestCockpitNullToggleMapsKeepDefaults: `sections:` / `sources:` present
+// with a null value (children commented out) is the default, not every
+// switch off.
+func TestCockpitNullToggleMapsKeepDefaults(t *testing.T) {
+	store := &Store{Root: t.TempDir()}
+	writeConfig(t, store, "cockpit:\n  sections:\n  sources:\n")
+	cfg, err := store.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := DefaultCockpitConfig()
+	for name, on := range def.Sections {
+		if cfg.Cockpit.SectionEnabled(name) != on {
+			t.Errorf("section %s = %v, want the default %v", name, cfg.Cockpit.SectionEnabled(name), on)
+		}
+	}
+	for name, on := range def.Sources {
+		if cfg.Cockpit.SourceEnabled(name) != on {
+			t.Errorf("source %s = %v, want the default %v", name, cfg.Cockpit.SourceEnabled(name), on)
+		}
+	}
+}

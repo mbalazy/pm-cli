@@ -902,6 +902,12 @@ func groupSummaries(views []*projectView, groups []ProjectGroup, byName map[stri
 			continue
 		}
 		for _, st := range v.accepts {
+			// The same rule as needs_me (closedByHuman): a tracker on done or
+			// archived is closed whatever its finish.json still says, so its
+			// claims are not a 👁 count with no row behind it.
+			if tr, ok := v.byID[st.TaskID]; ok && closedByHuman(tr.Meta.Status) {
+				continue
+			}
 			if v.claims[st.TaskID] == nil {
 				out[i].Visual += st.VisualClaimsOpen()
 			}

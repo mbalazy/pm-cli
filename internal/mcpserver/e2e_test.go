@@ -183,6 +183,26 @@ func TestE2EUpdateProject(t *testing.T) {
 	if final.Links["board"] != "https://x/board" || final.Links["ci"] != "https://x/ci" {
 		t.Fatalf("links must merge, got %v", final.Links)
 	}
+
+	// The slack mapping's channels are optional in the SCHEMA: a workspace
+	// alone passes, and the documented empty mapping removes the key. Both
+	// used to fail the SDK's validation before the handler ran.
+	if text, isErr := call(t, sess, "pm_update_project", map[string]any{
+		"project": "test", "slack": map[string]any{"workspace": "atlas"},
+	}); isErr {
+		t.Fatalf("slack without channels: %s", text)
+	}
+	if p, _ := store.GetProject("test"); p.Slack == nil || p.Slack.Workspace != "atlas" {
+		t.Fatalf("slack workspace not applied: %+v", p.Slack)
+	}
+	if text, isErr := call(t, sess, "pm_update_project", map[string]any{
+		"project": "test", "slack": map[string]any{},
+	}); isErr {
+		t.Fatalf("empty slack mapping: %s", text)
+	}
+	if p, _ := store.GetProject("test"); p.Slack != nil {
+		t.Fatalf("an empty mapping must remove the key, got %+v", p.Slack)
+	}
 }
 
 // TestE2EUpdateProjectArchived drives the real pm_update_project handler for

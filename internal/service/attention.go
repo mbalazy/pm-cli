@@ -1,8 +1,8 @@
 package service
 
 import (
-	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mbalazy/pm/internal/feed"
@@ -112,7 +112,7 @@ func DigestAttention(a *storage.Attention) *AttentionDigest {
 		}
 	}
 	if len(notes) > 0 {
-		d.Note = fmt.Sprint(notes)
+		d.Note = strings.Join(notes, "; ")
 	}
 	return d
 }
