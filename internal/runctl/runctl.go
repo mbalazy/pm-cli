@@ -636,6 +636,16 @@ func (c *Controller) Kill(project, taskID string) (*KillResult, error) {
 	if st == nil {
 		return nil, &NoRunError{Msg: "nothing to kill: " + t.task.Meta.ID + " has no run"}
 	}
+	// A run that already ENDED is not a kill target - the board refuses it
+	// ("no live executor run to stop") and so does this. Without the check a
+	// late kill (the row went stale while the dialog was open) would fall
+	// through to the stale branch below and rewrite a done run as failed,
+	// journal a kill that never happened and park the tracker on waiting.
+	// Only a state that still SAYS running gets reconciled: that is the
+	// crashed-manager case, where the honest outcome is worth writing.
+	if st.Status != storage.RunStatusRunning {
+		return nil, &NoRunError{Msg: fmt.Sprintf("nothing to kill: the last %s run of %s already ended (%s), nothing was signalled", kind, t.task.Meta.ID, st.Status)}
+	}
 	st.Kind = kind
 	acceptance := kind == storage.RunKindFinish
 	pid := st.PID

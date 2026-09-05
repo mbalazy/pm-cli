@@ -209,10 +209,63 @@ func TestSpawnAndKill(t *testing.T) {
 		t.Fatalf("the in-flight task must be parked on waiting, got %s", task.Meta.Status)
 	}
 
-	// A second kill finds a dead pid: a StaleRunError, nothing signalled.
-	var stale *storage.StaleRunError
-	if _, err := c.Kill("test", "t-2"); !errors.As(err, &stale) {
+	// A second kill finds a run that already ended (the first kill stamped it
+	// failed): a NoRunError, nothing signalled, and - the point - NOTHING
+	// rewritten: no second `killed` journal line, the state untouched.
+	before, _ := storage.ReadRunState(projDir, "t-2")
+	var noRun *NoRunError
+	if _, err := c.Kill("test", "t-2"); !errors.As(err, &noRun) {
 		t.Fatalf("second kill = %v", err)
+	}
+	after, _ := storage.ReadRunState(projDir, "t-2")
+	if after.Status != before.Status || after.Error != before.Error || after.Updated != before.Updated {
+		t.Fatalf("second kill rewrote the state: before %+v after %+v", before, after)
+	}
+	if n := countKilled(t, projDir); n != 1 {
+		t.Fatalf("second kill journaled again: %d killed lines", n)
+	}
+}
+
+// countKilled counts the `killed` lines in the project's executor journal.
+func countKilled(t *testing.T, projDir string) int {
+	t.Helper()
+	entries, err := storage.ReadJournal(projDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range entries {
+		if e.Event == storage.JournalEventKilled {
+			n++
+		}
+	}
+	return n
+}
+
+// TestKillFinishedRunIsNoRun: a done run (the row went stale while the dialog
+// was open) is refused as NoRunError and left exactly as it was - never
+// rewritten as failed, never journaled as killed, the tracker never parked.
+func TestKillFinishedRunIsNoRun(t *testing.T) {
+	store, projDir := newStore(t)
+	c := newController(t, store, "/bin/false")
+	done := &storage.RunState{TaskID: "t-2", Project: "test", Kind: "work", Status: storage.RunStatusDone, PID: 999999, Started: time.Now().UTC().Format(time.RFC3339)}
+	if err := storage.WriteRunState(projDir, done); err != nil {
+		t.Fatal(err)
+	}
+	var noRun *NoRunError
+	if _, err := c.Kill("test", "t-2"); !errors.As(err, &noRun) {
+		t.Fatalf("kill of a done run = %v, want NoRunError", err)
+	}
+	st, _ := storage.ReadRunState(projDir, "t-2")
+	if st.Status != storage.RunStatusDone || st.Error != "" {
+		t.Fatalf("a done run was rewritten: %+v", st)
+	}
+	if n := countKilled(t, projDir); n != 0 {
+		t.Fatalf("a done run was journaled as killed: %d lines", n)
+	}
+	task, _ := store.FindTaskExact("test", "t-2")
+	if task.Meta.Status == storage.StatusWaiting {
+		t.Fatalf("a done run's task was parked on waiting")
 	}
 }
 
