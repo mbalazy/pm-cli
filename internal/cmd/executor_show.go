@@ -93,6 +93,15 @@ func renderExecutorProfile(slug string, proj *storage.Project) string {
 	fmt.Fprintf(&b, "  base_branch:  %s\n", orUnset(e.BaseBranch))
 	fmt.Fprintf(&b, "  prepare:      %s\n", orUnset(e.Prepare))
 	fmt.Fprintf(&b, "  baseline:     %s\n", orUnset(e.Baseline))
+	// The runtime pair: the once-per-run rig check and the extra allowlist a
+	// `runtime: on` worker gets. Printed next to prepare/baseline because that
+	// is the family they belong to (once per run, in the claimed slot).
+	fmt.Fprintf(&b, "  rig:          %s\n", orUnset(e.Rig))
+	if len(e.RuntimeTools) > 0 {
+		fmt.Fprintf(&b, "  runtime_tools: %s\n", strings.Join(e.RuntimeTools, " "))
+	} else {
+		fmt.Fprintf(&b, "  runtime_tools: (unset - a `runtime: on` worker gets only the built-in allowlist outside --yolo)\n")
+	}
 	// Two done statuses because the two epic modes do different things with a
 	// green sub: integration merges it into the epic branch, independent only
 	// pushes its branch. Printed side by side so the difference is visible

@@ -189,6 +189,9 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 					if plan.prepare != "" {
 						fmt.Fprintf(stdout, "prepare (before worker, in claimed slot): %s\n", plan.prepare)
 					}
+					if plan.rigCmd != "" {
+						fmt.Fprintf(stdout, "rig (after prepare, in claimed slot with its env; this task has runtime: on): %s\n", plan.rigCmd)
+					}
 				} else {
 					fmt.Fprintf(stdout, "run: DEFAULT (main checkout, clean-tree required)\n")
 				}
@@ -449,6 +452,12 @@ type workOptions struct {
 	// (after branch setup + prepare, so it measures exactly what the worker
 	// forked from).
 	baseline string
+	// rig: the pre-rendered "## Runtime rig" prompt section, produced ONCE by
+	// the epic manager (executor.rig in the claimed slot) and handed to every
+	// sub; planWork bakes it into the prompt of the subs that have `runtime:
+	// on` and ignores it for the rest. Empty for standalone `pm work`, which
+	// runs its own check in executeWork, and for runs with no rig.
+	rig string
 	// runWriter: the epic manager's run-state writer, so a sub's worker can
 	// heartbeat the SHARED epic-level run-state while it runs. Nil for
 	// standalone `pm work` (it owns its own run-state, created in executeWork)
@@ -516,6 +525,11 @@ type workPlan struct {
 	// worker (standalone runs only - epic subs receive the manager's shared
 	// capture via opts.baseline instead, already baked into prompt/cmdArgs).
 	baselineCmd string
+	// rigCmd = executor.rig to run in executeWork right after prepare, in the
+	// claimed slot with its env (standalone --additional runs whose task has
+	// `runtime: on` only - epic subs receive the manager's once-per-run verdict
+	// via opts.rig; a runtime-off task never runs it). Empty = no check.
+	rigCmd string
 	// guard is what the PreToolUse hook needs to know about this run: where to
 	// record subagent spawns (telemetryPath - keyed by sessionID, so it is known
 	// before the worker starts and two concurrent workers never share a file;
@@ -749,6 +763,12 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		if opts.baseline != "" {
 			p += "\n" + opts.baseline
 		}
+		// The rig verdict reaches ONLY a runtime-enabled task's worker: a task
+		// that skips the runtime phase has no use for it, and "subs without a
+		// visual AC pay nothing extra" is the feature's acceptance criterion.
+		if opts.rig != "" && task.Meta.RuntimeEnabled() {
+			p += "\n" + opts.rig
+		}
 		return p
 	}
 	prompt := buildPrompt(workDir)
@@ -765,9 +785,14 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 	// dependency installs). Same split for the baseline capture.
 	prepare := ""
 	baselineCmd := ""
+	rigCmd := ""
 	if opts.standalone {
 		if opts.additional {
 			prepare = strings.TrimSpace(exec.Prepare)
+			// The rig check is paid ONLY by a task that will drive the runtime.
+			if task.Meta.RuntimeEnabled() {
+				rigCmd = strings.TrimSpace(exec.Rig)
+			}
 		}
 		if opts.baseline == "" {
 			baselineCmd = strings.TrimSpace(exec.Baseline)
@@ -778,7 +803,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		proj: proj, branch: branch, sessionID: sessionID,
 		prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs,
 		workDir: workDir, worktree: opts.additional, base: base, env: env, slots: slots,
-		prepare: prepare, baselineCmd: baselineCmd, guard: guard,
+		prepare: prepare, baselineCmd: baselineCmd, rigCmd: rigCmd, guard: guard,
 		buildPrompt: buildPrompt, opts: opts, modelSource: modelSource, effortSource: effortSource,
 		timeout: resolveWorkerTimeout(opts.timeout, opts.timeoutSet, exec.Timeout),
 	}, nil
@@ -863,6 +888,18 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		}
 	}
 
+	// Prove the slot's runtime is up (executor.rig) for a task that will
+	// drive it - after prepare (a bundler needs the deps) and with the slot's
+	// env (SIM_UDID, the port). Whatever it finds goes into the prompt; a
+	// dead rig is a handoff the worker records, never an aborted run.
+	rigUsed := ""
+	if plan.rigCmd != "" {
+		verdict := runRig(opts.stderr(), dir, plan.rigCmd, plan.env)
+		plan.prompt += "\n" + rigSection(verdict)
+		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false)
+		rigUsed = verdict.journalWord()
+	}
+
 	// Run-state for observability (standalone only; in epic mode the manager
 	// owns the epic-level run-state and updates the per-sub entry). The run-state
 	// lives in the pm data dir (where the TUI reads it), NOT the git repo. Every
@@ -909,7 +946,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		start := storage.JournalEntry{
 			Event: storage.JournalEventStart, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
 			PID: os.Getpid(), Model: plan.opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-			WorkDir: journalDir, Baseline: baselineUsed,
+			WorkDir: journalDir, Baseline: baselineUsed, Rig: rigUsed,
 		}
 		_ = storage.AppendJournal(stateDir, &start)
 		// From here until the end line, a catchable signal journals its own
@@ -929,7 +966,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
 			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
 			PID: os.Getpid(), Model: plan.opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-			WorkDir: journalDir, Baseline: baselineUsed,
+			WorkDir: journalDir, Baseline: baselineUsed, Rig: rigUsed,
 			Status: status, DurationS: sub.DurationS, Error: errMsg,
 			Subs: []storage.JournalSub{sub},
 		})
