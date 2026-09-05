@@ -299,7 +299,7 @@ export function SettingsPage() {
           label="Project groups"
           note="name and manual order live in config.yaml (Save above); moving a repo writes group: into its project.yaml"
         >
-          <table className="w-full text-sm">
+          <table className="ledger-table">
             <thead className="text-xs text-ink-2">
               <tr>
                 <th>group</th>

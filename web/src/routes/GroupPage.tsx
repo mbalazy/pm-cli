@@ -118,7 +118,7 @@ export function GroupPage({ group, tab, repo }: Props) {
         {members.length > 1 && (
           <ul aria-label="Repos" className="flex flex-wrap gap-1.5 text-xs">
             {members.map((m) => (
-              <li key={m.slug} className="pill max-w-[28rem] truncate" title={m.stack}>
+              <li key={m.slug} className="pill max-w-[22rem] gap-1.5" title={m.stack}>
                 <Link
                   to="/g/$group"
                   params={{ group }}
@@ -127,7 +127,7 @@ export function GroupPage({ group, tab, repo }: Props) {
                 >
                   {m.slug}
                 </Link>
-                {m.stack && <span className="text-ink-3"> · {m.stack}</span>}
+                {m.stack && <span className="truncate text-ink-3"> · {m.stack}</span>}
               </li>
             ))}
           </ul>

@@ -38,7 +38,8 @@ export function TaskDetail({
     <article className="space-y-6">
       {onBack && (
         <button type="button" onClick={onBack} className="ghost-btn md:hidden">
-          <ArrowLeft aria-hidden="true" className="size-3" />← back to list
+          <ArrowLeft aria-hidden="true" className="size-3" />
+          back to list
         </button>
       )}
       <header className="space-y-2 border-b-2 border-ink pb-3">
@@ -75,7 +76,7 @@ export function TaskDetail({
             </button>
           )}
         </p>
-        <h1 className="masthead">{task.title}</h1>
+        <h1 className="display text-[1.55rem] leading-tight text-balance">{task.title}</h1>
         <p className="num text-ink-3">
           updated {updatedText} · status changed {statusChangedText || 'unknown'}
         </p>

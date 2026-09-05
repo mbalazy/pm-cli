@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router'
 import type { GroupSummary } from '../api/types'
 import { severityGlyph } from '../lib/glyphs'
 import { groupSearch } from '../lib/groupFilter'
-import { toneClass } from './Glyph'
+import { toneClass } from './tone'
 
 // The home filter as pills: "all" plus one per group, each a link to `/?g=`.
 // The active one is the URL's; the hotkey letters come from lib/groupFilter.

@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router'
 import type { RunRow } from '../api/types'
 import { acceptCellText, runCellText } from '../lib/runCells'
 import type { RunTimes } from '../lib/runsView'
-import { toneClass } from './Glyph'
+import { toneClass } from './tone'
 
 // The `pm runs` table plus the cockpit's columns: a fixed-width glyph first,
 // then PROJECT / TRACKER / TITLE / RUN / ACCEPTANCE and the three times
