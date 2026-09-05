@@ -98,6 +98,37 @@ type TaskMeta struct {
 	// at night is already accepted by morning. "" (default) and "off" both mean
 	// no chaining - the acceptance stays a human's call.
 	FinishMode string `yaml:"finish_mode,omitempty"`
+	// Runtime opts THIS task into the executor's `runtime` phase: after a green
+	// verify the worker drives the project's live runtime (a simulator, a
+	// browser) as bound by `executor.phases.runtime` and records what it saw
+	// as `OBSERVED:` lines. "on" enables it; "" (default) and "off" both mean
+	// the phase is skipped for this task - which is the point: a runtime pass
+	// costs turns and screenshots and can read false, so only a sub with a
+	// visible AC pays for it. A field rather than a tag because MCP `tags`
+	// replace wholesale, so an unrelated re-tag would silently drop the opt-in.
+	Runtime string `yaml:"runtime,omitempty"`
+}
+
+// Runtime values for a task's runtime field. Empty is a second spelling of
+// RuntimeOff and the default, so every task written before the field existed
+// keeps its old behaviour (no runtime phase).
+const (
+	RuntimeOn  = "on"
+	RuntimeOff = "off"
+)
+
+// ValidateRuntime checks a task's runtime field. Empty means "off".
+func ValidateRuntime(r string) error {
+	switch r {
+	case "", RuntimeOn, RuntimeOff:
+		return nil
+	}
+	return fmt.Errorf("invalid runtime %q (valid: on, off, or empty for off)", r)
+}
+
+// RuntimeEnabled reports whether the task opted into the runtime phase.
+func (m TaskMeta) RuntimeEnabled() bool {
+	return m.Runtime == RuntimeOn
 }
 
 // EpicModeIndependent is the epic_mode value that switches `pm run-epic` to
@@ -290,6 +321,9 @@ func writeTask(t *Task) error {
 		return err
 	}
 	if err := ValidateFinishMode(t.Meta.FinishMode); err != nil {
+		return err
+	}
+	if err := ValidateRuntime(t.Meta.Runtime); err != nil {
 		return err
 	}
 	metaBytes, err := yaml.Marshal(t.Meta)
