@@ -97,6 +97,18 @@ func TestLocalRunRowsAcrossProjects(t *testing.T) {
 		t.Error("a childless task must not appear in the runs list")
 	}
 
+	// The timing stamps ride along raw: the run's own Started/Updated, whether
+	// it is live, and the acceptance's - empty where there is nothing.
+	if r := rowFor(rows, "alpha-1"); r.RunStarted == "" || !r.RunLive || r.AcceptStarted != "" {
+		t.Errorf("alpha-1 timing = %+v", r)
+	}
+	if r := rowFor(rows, "beta-1"); r.RunStarted != "2026-08-03T10:00:00Z" || r.RunLive || r.AcceptStarted != "2026-08-03T11:00:00Z" {
+		t.Errorf("beta-1 timing = %+v", r)
+	}
+	if r := rowFor(rows, "alpha-2"); r.RunStarted != "" || r.RunUpdated != "" || r.AcceptUpdated != "" {
+		t.Errorf("alpha-2 (never run) timing = %+v", r)
+	}
+
 	// A live run: counted over the subs it is FINISHED with.
 	if got := rowFor(rows, "alpha-1").Run.String(); got != "running 1/3" {
 		t.Errorf("alpha-1 RUN = %q, want %q", got, "running 1/3")
