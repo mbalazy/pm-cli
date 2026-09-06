@@ -550,7 +550,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 			if need := runtimeSubs(subs, doneStatus); len(need) > 0 {
 				fmt.Fprintf(errOut, "pm run-epic: rig check for %d runtime sub(s) in %s: %s\n", len(need), workDir, rig)
 				verdict := runRig(errOut, workDir, rig, claimedEnv)
-				rigPrompt = rigSection(verdict)
+				rigPrompt = rigSection(verdict, storage.ExpandRuntimeTools(plan.exc.RuntimeTools, workDir), claimedEnv)
 				rigUsed = verdict.journalWord()
 			}
 		}

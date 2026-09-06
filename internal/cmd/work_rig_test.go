@@ -81,14 +81,14 @@ func TestRunRig(t *testing.T) {
 }
 
 func TestRigSection(t *testing.T) {
-	up := rigSection(rigVerdict{Command: "rig-check.sh", Up: true, Output: "marker seen after 4s"})
+	up := rigSection(rigVerdict{Command: "rig-check.sh", Up: true, Output: "marker seen after 4s"}, nil, nil)
 	mustContain(t, up, "## Runtime rig")
 	mustContain(t, up, "`rig-check.sh` exited 0 - the rig is UP")
 	mustContain(t, up, "may drive it as bound")
 	mustContain(t, up, "never restart, rebuild or re-point the runtime yourself")
 	mustContain(t, up, "marker seen after 4s")
 
-	dead := rigSection(rigVerdict{Command: "rig-check.sh", Reason: "exited 1", Output: "RIG DEAD: no marker"})
+	dead := rigSection(rigVerdict{Command: "rig-check.sh", Reason: "exited 1", Output: "RIG DEAD: no marker"}, nil, nil)
 	mustContain(t, dead, "`rig-check.sh` exited 1 - the rig is DEAD")
 	mustContain(t, dead, "SKIP the `runtime` phase entirely")
 	mustContain(t, dead, "do not boot, build, install or launch anything")
@@ -189,7 +189,7 @@ func TestPlanWorkRigGating(t *testing.T) {
 		}
 	})
 	t.Run("epic sub: the manager's verdict is baked in for runtime: on only", func(t *testing.T) {
-		section := rigSection(rigVerdict{Command: "rig-check.sh", Up: true})
+		section := rigSection(rigVerdict{Command: "rig-check.sh", Up: true}, nil, nil)
 		for _, tc := range []struct {
 			runtime string
 			want    bool

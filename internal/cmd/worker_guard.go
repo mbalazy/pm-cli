@@ -216,6 +216,11 @@ type hookEvent struct {
 		Model        string `json:"model"`
 		SubagentType string `json:"subagent_type"`
 		Prompt       string `json:"prompt"`
+		// Status is the worker's result verdict when the tool is
+		// StructuredOutput - the envelope's fields arrive as the tool input,
+		// so `verified` is visible one turn BEFORE the worker ends (see
+		// judgeStructuredOutput).
+		Status string `json:"status"`
 		// Pointer on purpose: absent and false are different answers - absent
 		// means the tool's own default, which is BACKGROUND on the measured
 		// build (see forceSyncSpawn).
@@ -482,6 +487,11 @@ func runWorkerGuard(in io.Reader, out, errOut io.Writer, opts guardOptions) int 
 			fmt.Fprintln(errOut, reason)
 			return 2
 		}
+	case ev.ToolName == structuredOutputTool:
+		if reason := judgeStructuredOutput(opts, ev); reason != "" {
+			fmt.Fprintln(errOut, reason)
+			return 2
+		}
 	case agentToolNames[ev.ToolName]:
 		if reason := judgeAgentSpawn(opts, ev, time.Now()); reason != "" {
 			fmt.Fprintln(errOut, reason)
@@ -582,6 +592,13 @@ func workerGuardSettings(opts guardOptions) string {
 	// and the budget degrades to absent - the verified Bash spelling is never
 	// put at risk. Worker-level calls pass through it untouched (no agent_id),
 	// costing one hook exec per Read.
+	//
+	// The fifth entry is the result tool itself: the review FLOOR
+	// (judgeStructuredOutput) refuses a `verified` verdict on a change no
+	// reviewer ran on, one turn before the worker would have ended with it.
+	// Its own entry for the same degrade-to-absent reason; the manager applies
+	// the same rule after the run (demoteUnreviewed), so a build where this
+	// matcher never fires still cannot land unreviewed work as verified.
 	payload := map[string]any{
 		"hooks": map[string]any{
 			"PreToolUse": []matcher{
@@ -589,6 +606,7 @@ func workerGuardSettings(opts guardOptions) string {
 				{Matcher: "Write|Edit|MultiEdit|NotebookEdit", Hooks: hook},
 				{Matcher: "Agent|Task", Hooks: hook},
 				{Matcher: "Read|Grep|Glob", Hooks: hook},
+				{Matcher: structuredOutputTool, Hooks: hook},
 			},
 		},
 	}

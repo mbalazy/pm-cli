@@ -149,7 +149,12 @@ type journalStats struct {
 	// nothing checked.
 	UnreviewedSubs    int
 	UnreviewedCommits int
-	ReviewModels      map[string]int // model (or "inherit") -> subs that asked for it
+	// ReviewSkipped: subs whose worker returned `verified` with zero reviewer
+	// spawns on a real change and were demoted to `blocked` by the review
+	// floor (pm-cli-130). One such sub landed unnoticed in run pm-cli-129
+	// before the floor existed; this line is what makes the next one visible.
+	ReviewSkipped int
+	ReviewModels  map[string]int // model (or "inherit") -> subs that asked for it
 }
 
 // runDeath is one recorded abnormal end: which run, when, and the reason the
@@ -433,6 +438,9 @@ func (s *journalStats) addSubs(subs []storage.JournalSub) {
 				s.UnreviewedSubs++
 				s.UnreviewedCommits += r.UnreviewedCommits
 			}
+			if r.Skipped {
+				s.ReviewSkipped++
+			}
 			if s.ReviewModels == nil {
 				s.ReviewModels = map[string]int{}
 			}
@@ -705,6 +713,11 @@ func renderReviewStats(b *strings.Builder, st journalStats) {
 		// it is a number on the branch, not a sentence in a note.
 		fmt.Fprintf(b, "  unreviewed %d sub(s) landed %d commit(s) after their last review - nothing reviewed those\n",
 			st.UnreviewedSubs, st.UnreviewedCommits)
+	}
+	if st.ReviewSkipped > 0 {
+		// The floor's evidence line: a worker tried to land a change no
+		// reviewer saw, and pm parked it instead of merging it.
+		fmt.Fprintf(b, "  review skipped: %d sub(s) returned verified with 0 reviewer spawns - demoted to blocked by the review floor\n", st.ReviewSkipped)
 	}
 	if st.ToolCalls > 0 || st.ToolDenied > 0 {
 		// The budget's own evidence line: without the refusal count an enforced

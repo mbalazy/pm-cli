@@ -298,8 +298,8 @@ func TestWorkerGuardSettingsIsValidAndAttached(t *testing.T) {
 	// a live claude and must keep its exact spelling; the write and agent
 	// matchers are separate entries so a build that matches tool names literally
 	// simply does not fire them instead of losing the Bash one too.
-	if len(parsed.Hooks.PreToolUse) != 4 {
-		t.Fatalf("expected Bash, write-tool, agent and exploration PreToolUse matchers, got %s", s)
+	if len(parsed.Hooks.PreToolUse) != 5 {
+		t.Fatalf("expected Bash, write-tool, agent, exploration and StructuredOutput PreToolUse matchers, got %s", s)
 	}
 	if parsed.Hooks.PreToolUse[0].Matcher != "Bash" {
 		t.Errorf("first matcher = %q, want the verified exact \"Bash\"", parsed.Hooks.PreToolUse[0].Matcher)

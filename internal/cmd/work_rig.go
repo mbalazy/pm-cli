@@ -121,11 +121,20 @@ func tailOutput(s string, limit int) string {
 // try, record the handoff. The worker never re-checks or re-starts the rig
 // itself - the check ran once for the run and a worker that "fixes" a rig
 // burns its budget on a machine problem it cannot see.
-func rigSection(v rigVerdict) string {
+//
+// allowed are the runtime_tools patterns of this worker, already expanded for
+// its tree, and env the slot's KEY=VALUE pairs: on an UP rig the section
+// lists the exact command forms the allowlist accepts and the variables the
+// process already carries. Both are what the 2026-09-06 e2e test found
+// missing - every runtime worker had the tools and used none, because it
+// typed a relative path, a `~`, an `export`, a `VAR=x` prefix or `sh script`,
+// and each of those is a different literal prefix (pm-cli-130).
+func rigSection(v rigVerdict, allowed []string, env []string) string {
 	var sb strings.Builder
 	sb.WriteString("\n## Runtime rig (checked ONCE for this run, BEFORE your worker started)\n")
 	if v.Up {
 		fmt.Fprintf(&sb, "`%s` exited 0 - the rig is UP: the slot's runtime is running the tree you work on. The `runtime` phase may drive it as bound. Do not re-run this check and never restart, rebuild or re-point the runtime yourself; if it stops answering mid-phase, record `TODO: runtime verification incomplete - rig stopped answering: <what you saw>` in `unresolved` and move on.\n", v.Command)
+		sb.WriteString(runtimeToolsSection(allowed, env))
 	} else {
 		fmt.Fprintf(&sb, "`%s` %s - the rig is DEAD: nothing is proven to run your tree. SKIP the `runtime` phase entirely - do not boot, build, install or launch anything, do not probe the runtime by other means, and do not spend a single turn on it. Record exactly one line in `unresolved`: `TODO: runtime verification not run - rig DEAD: %s` (append the gist of the output below if it names a cause). Your verify verdict is unaffected: the gate is verify, not the rig.\n", v.Command, v.Reason, v.Reason)
 	}
@@ -149,6 +158,44 @@ func runtimeSubs(subs []*storage.Task, doneStatus storage.TaskStatus) []*storage
 			continue
 		}
 		out = append(out, s)
+	}
+	return out
+}
+
+// runtimeToolsSection renders the "Allowed runtime commands" block of an UP
+// rig section: every pattern as the literal prefix the worker must type, and
+// the rules that made the e2e test's denials - relative paths, `~`, `export`,
+// `VAR=x cmd`, `sh script`, an unlisted half of a chained command. Empty
+// when the project declared no runtime_tools (nothing to list; the phase's
+// binding says what to run).
+func runtimeToolsSection(allowed []string, env []string) string {
+	if len(allowed) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\nAllowed runtime commands - exactly these prefixes, typed as written (the allowlist is a LITERAL prefix match on the command you type):\n")
+	for _, a := range allowed {
+		if c := storage.RuntimeToolCommand(a); c != "" {
+			fmt.Fprintf(&sb, "- `%s ...`\n", c)
+		} else {
+			fmt.Fprintf(&sb, "- `%s`\n", a)
+		}
+	}
+	sb.WriteString("Rules: absolute paths exactly as listed - a relative `.claude/skills/...`, a `~/...` or a `sh`/`bash <script>` form is a different prefix and is refused; ")
+	if names := envNames(env); len(names) > 0 {
+		fmt.Fprintf(&sb, "your process already carries %s from the slot - never `export` them and never prefix a command with `VAR=value` (both are refused; read them with `printenv NAME` if you need the value); ", strings.Join(names, ", "))
+	}
+	sb.WriteString("every part of a chained command (`&&`, `|`, `;`) must match an allowed prefix on its own. Every other tool of the runtime phase (`node`, `python3`, `curl`, `xcrun simctl`) is allowed under its ordinary name.\n")
+	return sb.String()
+}
+
+// envNames lists the variable names of KEY=VALUE pairs, in order.
+func envNames(env []string) []string {
+	var out []string
+	for _, kv := range env {
+		if i := strings.Index(kv, "="); i > 0 {
+			out = append(out, kv[:i])
+		}
 	}
 	return out
 }

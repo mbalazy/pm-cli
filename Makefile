@@ -1,4 +1,4 @@
-VERSION ?= 0.58.1
+VERSION ?= 0.59.0
 LDFLAGS = -ldflags "-X github.com/mbalazy/pm/internal/version.Version=$(VERSION)"
 
 .PHONY: install install-full vet staticcheck fmt-check test test-race check build-pm-linux deploy-vps web-install web-check web
