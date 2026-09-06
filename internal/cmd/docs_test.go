@@ -30,7 +30,7 @@ func TestDocsClaudePrintsInstallableGuide(t *testing.T) {
 		"pm_context",
 		"Brief field",
 		"Spec / Log body zones",
-		"never move a standalone task or a parent tracker to done",
+		"a merged PR closes the task, everything else the user closes",
 		"pm docs authoring",
 	} {
 		if !strings.Contains(out, want) {
