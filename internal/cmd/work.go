@@ -1041,6 +1041,11 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	countUnreviewedCommits(dir, telemetry)
 	if res != nil {
 		res.Review = telemetry
+		// The review FLOOR, applied by the manager whatever the hook did: a
+		// `verified` with no reviewer on a real change is demoted to `blocked`
+		// here, BEFORE applyWorkerResult parks it and before the manager
+		// merges or pushes anything (pm-cli-130).
+		demoteUnreviewed(opts.stderr(), res, telemetry, dir, plan.guard.diffBase)
 	}
 	if err != nil {
 		// No envelope arrived, so this sub's turns and cost are 0 - and a sub

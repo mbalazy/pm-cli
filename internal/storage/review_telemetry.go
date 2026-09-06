@@ -161,11 +161,18 @@ func CountAgentToolCalls(calls []AgentToolCall, agentID string) int {
 // A pointer field on both, so entries written before this existed stay nil and
 // omitempty keeps them byte-identical rather than gaining empty keys.
 type ReviewTelemetry struct {
-	Spawns   int `json:"spawns"`              // subagent spawns that actually ran
-	Rounds   int `json:"rounds,omitempty"`    // derived: clusters of spawns (see ReviewRoundGap)
-	Nested   int `json:"nested,omitempty"`    // of Spawns, how many came from inside another subagent
-	WithDiff int `json:"with_diff,omitempty"` // of Spawns, how many were handed the diff
-	Denied   int `json:"denied,omitempty"`    // spawns the cap refused - these never ran
+	Spawns int `json:"spawns"` // subagent spawns that actually ran
+	// Reviewers is how many of Spawns pm treated as REVIEWERS: top-level,
+	// allowed, of a generic type (or none, which the guard turns into the
+	// reviewer type). It is the number the review FLOOR is judged against
+	// (see cmd's review_floor.go): a custom-type helper is not a review, and
+	// a refused spawn never ran. Kept apart from Spawns rather than replacing
+	// it because Spawns is what every older line and stat already means.
+	Reviewers int `json:"reviewers,omitempty"`
+	Rounds    int `json:"rounds,omitempty"`    // derived: clusters of spawns (see ReviewRoundGap)
+	Nested    int `json:"nested,omitempty"`    // of Spawns, how many came from inside another subagent
+	WithDiff  int `json:"with_diff,omitempty"` // of Spawns, how many were handed the diff
+	Denied    int `json:"denied,omitempty"`    // spawns the cap refused - these never ran
 	// ToolCalls / ToolDenied measure the subagents' exploration appetite: how
 	// many Read/Grep/Glob calls their agents made, and how many the per-agent
 	// budget refused. What the budget saves is the runaway tail (measured on run
@@ -202,6 +209,12 @@ type ReviewTelemetry struct {
 	// hashing trees - buys a case nobody has observed.
 	LastReviewedHead  string `json:"last_reviewed_head,omitempty"`
 	UnreviewedCommits int    `json:"unreviewed_commits,omitempty"`
+	// Skipped marks a sub whose worker returned `verified` with ZERO reviewer
+	// spawns on a non-empty production diff - the review floor (pm-cli-130).
+	// pm demotes such a result to `blocked` and records the fact here, so a
+	// retro can count how often a worker tried to land unreviewed work; set by
+	// the manager after the run, never by the hook.
+	Skipped bool `json:"skipped,omitempty"`
 }
 
 // ReviewRoundGap separates one review round from the next. Measured 2026-08-07
@@ -358,8 +371,11 @@ func AggregateReviewSpawns(spawns []ReviewSpawn) *ReviewTelemetry {
 		// read. (A generic-type helper spawned for non-review work still
 		// advances it - the harness attached the diff to its prompt, and
 		// nothing recordable tells it apart from a reviewer.)
-		if s.Head != "" && (s.SubagentType == "" || GenericSubagentType(s.SubagentType)) {
-			t.LastReviewedHead = s.Head
+		if s.SubagentType == "" || GenericSubagentType(s.SubagentType) {
+			t.Reviewers++
+			if s.Head != "" {
+				t.LastReviewedHead = s.Head
+			}
 		}
 		if ts, err := time.Parse(time.RFC3339Nano, s.TS); err == nil {
 			topTimes = append(topTimes, ts)

@@ -33,7 +33,7 @@ func TestAggregateReviewSpawns(t *testing.T) {
 				{TS: ts(600 * time.Millisecond), Model: "opus"},
 				{TS: ts(900 * time.Millisecond), Model: "opus"},
 			},
-			want: ReviewTelemetry{Spawns: 3, Rounds: 1, Models: "opus"},
+			want: ReviewTelemetry{Spawns: 3, Reviewers: 3, Rounds: 1, Models: "opus"},
 		},
 		{
 			name: "a gap larger than the threshold starts a new round",
@@ -43,7 +43,7 @@ func TestAggregateReviewSpawns(t *testing.T) {
 				{TS: ts(4 * time.Minute), Model: "opus"},
 				{TS: ts(9 * time.Minute), Model: "opus"},
 			},
-			want: ReviewTelemetry{Spawns: 4, Rounds: 3, Models: "opus"},
+			want: ReviewTelemetry{Spawns: 4, Reviewers: 4, Rounds: 3, Models: "opus"},
 		},
 		{
 			// A nested spawn happens WHILE a reviewer runs, so it is not a
@@ -53,7 +53,7 @@ func TestAggregateReviewSpawns(t *testing.T) {
 				{TS: ts(0), Model: "sonnet"},
 				{TS: ts(3 * time.Minute), Nested: true, AgentType: "Explore", Model: "sonnet"},
 			},
-			want: ReviewTelemetry{Spawns: 2, Rounds: 1, Nested: 1, Models: "sonnet"},
+			want: ReviewTelemetry{Spawns: 2, Reviewers: 1, Rounds: 1, Nested: 1, Models: "sonnet"},
 		},
 		{
 			// The pm-cli-105 measurement: spawns the worker asked to background
@@ -64,7 +64,7 @@ func TestAggregateReviewSpawns(t *testing.T) {
 				{TS: ts(0), Model: "opus", Background: true},
 				{TS: ts(700 * time.Millisecond), Model: "opus"},
 			},
-			want: ReviewTelemetry{Spawns: 2, Rounds: 1, Background: 1, Models: "opus"},
+			want: ReviewTelemetry{Spawns: 2, Reviewers: 2, Rounds: 1, Background: 1, Models: "opus"},
 		},
 		{
 			// An unnamed model is a different fact from a named one: the
@@ -75,7 +75,7 @@ func TestAggregateReviewSpawns(t *testing.T) {
 				{TS: ts(0)},
 				{TS: ts(200 * time.Millisecond), Model: "opus"},
 			},
-			want: ReviewTelemetry{Spawns: 2, Rounds: 1, Models: "inherit,opus"},
+			want: ReviewTelemetry{Spawns: 2, Reviewers: 2, Rounds: 1, Models: "inherit,opus"},
 		},
 		{
 			name: "diff-carrying prompts are counted",
@@ -83,7 +83,7 @@ func TestAggregateReviewSpawns(t *testing.T) {
 				{TS: ts(0), Model: "sonnet", HasDiff: true},
 				{TS: ts(100 * time.Millisecond), Model: "sonnet"},
 			},
-			want: ReviewTelemetry{Spawns: 2, Rounds: 1, WithDiff: 1, Models: "sonnet"},
+			want: ReviewTelemetry{Spawns: 2, Reviewers: 2, Rounds: 1, WithDiff: 1, Models: "sonnet"},
 		},
 		{
 			// Same lesson the journal's ordering rules learned: a bad timestamp
@@ -94,9 +94,24 @@ func TestAggregateReviewSpawns(t *testing.T) {
 				{TS: ts(0), Model: "opus"},
 				{TS: ts(400 * time.Millisecond), Model: "opus"},
 			},
-			want: ReviewTelemetry{Spawns: 3, Rounds: 1, Models: "opus"},
+			want: ReviewTelemetry{Spawns: 3, Reviewers: 3, Rounds: 1, Models: "opus"},
 		},
 	}
+	cases = append(cases, struct {
+		name   string
+		spawns []ReviewSpawn
+		want   ReviewTelemetry
+	}{
+		// The review floor's number: a custom-type helper and a refused spawn
+		// are spawns but not reviewers; a typeless one became a reviewer.
+		name: "reviewers counts what pm treated as a review",
+		spawns: []ReviewSpawn{
+			{TS: ts(0), SubagentType: "my-linter", Model: "opus"},
+			{TS: ts(100 * time.Millisecond), SubagentType: "pm-reviewer", Denied: true},
+			{TS: ts(200 * time.Millisecond)},
+		},
+		want: ReviewTelemetry{Spawns: 2, Reviewers: 1, Rounds: 1, Denied: 1, Models: "inherit,opus"},
+	})
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := AggregateReviewSpawns(c.spawns)
