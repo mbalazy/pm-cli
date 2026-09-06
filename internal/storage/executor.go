@@ -127,6 +127,16 @@ type Executor struct {
 	// rig to drive and the envelope stays as narrow as before. pm does not
 	// interpret the patterns; a project names exactly what its runtime skill
 	// runs. Ignored under --yolo, where every tool is already allowed.
+	// A pattern may name the worker's tree as `$SLOT` (`Bash($SLOT/.claude/
+	// skills/x/scripts/sim-ui.sh:*)`): pm expands it to the directory the
+	// worker actually runs in - the claimed worktree slot, or the main
+	// checkout - on every render (ExpandRuntimeTools), so one entry serves
+	// every slot and the pattern can never name a tree the worker is not in.
+	// Permission patterns are LITERAL prefixes of the typed command, which is
+	// why the path has to be the worker's own: the 2026-09-06 e2e test had 0
+	// of 3 runtime workers execute a skill script, every call denied because
+	// the pattern named the main checkout and the worker typed the slot's
+	// relative path (pm-cli-130).
 	RuntimeTools []string `yaml:"runtime_tools,omitempty"`
 	// Baseline is an optional shell command (typically the project's full
 	// verification, e.g. `yarn validate`) whose output is captured ONCE per run
@@ -496,4 +506,44 @@ func (p *Project) GetExecutor() Executor {
 // HasExecutor reports whether the project declares an explicit executor block.
 func (p *Project) HasExecutor() bool {
 	return p.Executor != nil
+}
+
+// RuntimeSlotPlaceholder is the token a runtime_tools pattern uses for the
+// worker's own tree (see Executor.RuntimeTools).
+const RuntimeSlotPlaceholder = "$SLOT"
+
+// ExpandRuntimeTools returns the runtime_tools patterns with $SLOT (and
+// ${SLOT}) replaced by dir, the directory the worker runs in. dir empty leaves
+// the placeholder in place - the caller has nothing better to say yet (a
+// provisional plan before the slot is claimed), and a literal `$SLOT` matches
+// nothing, which is the safe failure. The input is never mutated: the raw list
+// is re-expanded on every retarget.
+func ExpandRuntimeTools(tools []string, dir string) []string {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]string, len(tools))
+	for i, t := range tools {
+		if dir != "" {
+			t = strings.ReplaceAll(t, "${SLOT}", dir)
+			t = strings.ReplaceAll(t, RuntimeSlotPlaceholder, dir)
+		}
+		out[i] = t
+	}
+	return out
+}
+
+// RuntimeToolCommand is the command prefix a `Bash(<prefix>:*)` /
+// `Bash(<prefix>)` pattern allows - what the worker has to TYPE for the
+// pattern to match. Empty for a pattern of another shape (a non-Bash tool, a
+// bare name). It is the form the rig section shows the worker and the doctor
+// inspects.
+func RuntimeToolCommand(pattern string) string {
+	p := strings.TrimSpace(pattern)
+	if !strings.HasPrefix(p, "Bash(") || !strings.HasSuffix(p, ")") {
+		return ""
+	}
+	p = strings.TrimSuffix(strings.TrimPrefix(p, "Bash("), ")")
+	p = strings.TrimSuffix(p, ":*")
+	return strings.TrimSpace(p)
 }

@@ -192,6 +192,9 @@ func newWorkCmd(store storage.TaskStore) *cobra.Command {
 					if plan.rigCmd != "" {
 						fmt.Fprintf(stdout, "rig (after prepare, in claimed slot with its env; this task has runtime: on): %s\n", plan.rigCmd)
 					}
+					if len(plan.allowExtra) > 0 {
+						fmt.Fprintf(stdout, "runtime tools (expanded for %s): %s\n", plan.workDir, strings.Join(plan.allowExtra, " "))
+					}
 				} else {
 					fmt.Fprintf(stdout, "run: DEFAULT (main checkout, clean-tree required)\n")
 				}
@@ -533,8 +536,11 @@ type workPlan struct {
 	// allowExtra = executor.runtime_tools when the task has `runtime: on`:
 	// the allowlist patterns the runtime phase's skill needs and the curated
 	// worker envelope refuses. Nil for every other task - a worker with no
-	// runtime to drive keeps the envelope exactly as narrow as before.
-	allowExtra []string
+	// runtime to drive keeps the envelope exactly as narrow as before. Already
+	// expanded for workDir ($SLOT -> the tree the worker runs in); retarget
+	// re-expands runtimeTools, the raw list, for the claimed slot.
+	allowExtra   []string
+	runtimeTools []string
 	// guard is what the PreToolUse hook needs to know about this run: where to
 	// record subagent spawns (telemetryPath - keyed by sessionID, so it is known
 	// before the worker starts and two concurrent workers never share a file;
@@ -783,10 +789,14 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		reviewModel:   exec.ResolveReviewModel(),
 		fixRounds:     exec.FixRounds,
 	}
-	// Extra permissions ride ONLY with a task that drives the runtime.
-	var allowExtra []string
+	// Extra permissions ride ONLY with a task that drives the runtime. The
+	// patterns are expanded for the tree the worker runs in ($SLOT); a
+	// standalone --additional plan re-expands them once the real slot is
+	// claimed (retarget).
+	var allowExtra, runtimeTools []string
 	if task.Meta.RuntimeEnabled() {
-		allowExtra = exec.RuntimeTools
+		runtimeTools = exec.RuntimeTools
+		allowExtra = storage.ExpandRuntimeTools(runtimeTools, workDir)
 	}
 	cmdArgs := buildClaudeArgs(prompt, sysPrompt, sessionID, opts.model, opts.effort, opts.maxTurns, opts.yolo, guard, workDir, false, allowExtra)
 
@@ -813,7 +823,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 		proj: proj, branch: branch, sessionID: sessionID,
 		prompt: prompt, sysPrompt: sysPrompt, cmdArgs: cmdArgs,
 		workDir: workDir, worktree: opts.additional, base: base, env: env, slots: slots,
-		prepare: prepare, baselineCmd: baselineCmd, rigCmd: rigCmd, allowExtra: allowExtra, guard: guard,
+		prepare: prepare, baselineCmd: baselineCmd, rigCmd: rigCmd, allowExtra: allowExtra, runtimeTools: runtimeTools, guard: guard,
 		buildPrompt: buildPrompt, opts: opts, modelSource: modelSource, effortSource: effortSource,
 		timeout: resolveWorkerTimeout(opts.timeout, opts.timeoutSet, exec.Timeout),
 	}, nil
@@ -827,6 +837,7 @@ func planWork(store storage.TaskStore, task *storage.Task, slug string, opts wor
 func (p *workPlan) retarget(dir string, env []string) {
 	p.workDir = dir
 	p.env = env
+	p.allowExtra = storage.ExpandRuntimeTools(p.runtimeTools, dir)
 	p.prompt = p.buildPrompt(dir)
 	p.cmdArgs = buildClaudeArgs(p.prompt, p.sysPrompt, p.sessionID, p.opts.model, p.opts.effort, p.opts.maxTurns, p.opts.yolo, p.guard, dir, false, p.allowExtra)
 }
@@ -905,7 +916,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	rigUsed := ""
 	if plan.rigCmd != "" {
 		verdict := runRig(opts.stderr(), dir, plan.rigCmd, plan.env)
-		plan.prompt += "\n" + rigSection(verdict)
+		plan.prompt += "\n" + rigSection(verdict, plan.allowExtra, plan.env)
 		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false, plan.allowExtra)
 		rigUsed = verdict.journalWord()
 	}

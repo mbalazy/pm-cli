@@ -156,6 +156,7 @@ func runExecutorDoctor(proj *storage.Project) []check {
 	out = append(out, checkLandingStatuses(e, proj.GetStatuses())...)
 	out = append(out, checkBaseline(e)...)
 	out = append(out, checkRuntimePhase(e)...)
+	out = append(out, checkRuntimeTools(e, proj.Path)...)
 	out = append(out, checkContextRepos(e)...)
 	out = append(out, checkSlots(e, proj.Path)...)
 	out = append(out, checkHandoff(e, proj)...)
@@ -268,7 +269,7 @@ func checkRuntimePhase(e storage.Executor) []check {
 		out = append(out, check{levelOK, "rig -> " + rig, ""})
 	}
 	if bound && len(e.RuntimeTools) == 0 {
-		out = append(out, check{levelWarn, "`runtime_tools` is empty - outside --yolo the runtime phase's commands (xcrun, curl, the skill's scripts) are refused", "list the allowlist patterns the binding runs, e.g. `Bash(xcrun simctl:*)`, `Bash(curl:*)`, `Bash(<skill dir>/scripts/*:*)`"})
+		out = append(out, check{levelWarn, "`runtime_tools` is empty - outside --yolo the runtime phase's commands (xcrun, curl, the skill's scripts) are refused", "list the allowlist patterns the binding runs, e.g. `Bash(xcrun simctl:*)`, `Bash(curl:*)`, `Bash($SLOT/.claude/skills/<skill>/scripts/<script>:*)` ($SLOT = the worker's tree)"})
 	}
 	return out
 }
@@ -592,4 +593,77 @@ func gitConfigOrigin(dir, key string) string {
 func pathExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// checkRuntimeTools: a runtime_tools pattern is a LITERAL prefix of what the
+// worker types, so a path in it has to be one the worker can type from its
+// own tree. Two shapes are known to fail (pm-cli-130, the 2026-09-06 e2e
+// test): a path under the MAIN checkout while the project runs its workers in
+// worktree slots - the worker types the slot's path and the prefix never
+// matches (0 of 3 runtime workers ran a single skill script) - and a path
+// that does not exist on this machine at all. `$SLOT` is the fix for the
+// first: pm expands it to the worker's tree per run.
+func checkRuntimeTools(e storage.Executor, projPath string) []check {
+	if len(e.RuntimeTools) == 0 {
+		return nil
+	}
+	slots := e.ResolveWorktrees(projPath)
+	var out []check
+	slotPatterns := 0
+	for _, pat := range e.RuntimeTools {
+		p := runtimeToolPath(storage.RuntimeToolCommand(pat))
+		switch {
+		case p == "":
+			continue
+		case strings.Contains(p, storage.RuntimeSlotPlaceholder) || strings.Contains(p, "${SLOT}"):
+			slotPatterns++
+		case !filepath.IsAbs(p):
+			// Relative to the worker's cwd, which is its tree - fine.
+			continue
+		case len(slots) > 0 && underDir(p, projPath):
+			out = append(out, check{levelWarn,
+				fmt.Sprintf("runtime_tools pattern names the MAIN checkout: %s", pat),
+				"workers run in a worktree slot and type the slot's path, so this literal prefix never matches there; write the path as `$SLOT/...` - pm expands it to the worker's tree on every run"})
+		case !pathExists(literalDir(p)):
+			out = append(out, check{levelWarn,
+				fmt.Sprintf("runtime_tools pattern names a path that does not exist here: %s", pat),
+				"a prefix nothing can type is a refusal waiting to happen - fix the path, or use `$SLOT/...` for a script that lives in the repo"})
+		}
+	}
+	if slotPatterns > 0 {
+		out = append(out, check{levelOK, fmt.Sprintf("runtime_tools: %d pattern(s) use $SLOT (expanded to the worker's tree per run)", slotPatterns), ""})
+	}
+	return out
+}
+
+// runtimeToolPath picks the path a runtime_tools command prefix names: the
+// first token that looks like one, so `sh /x/rig-check.sh` and `/x/sim-ui.sh`
+// both answer `/x/...`. Empty when the prefix is a bare command (`curl`,
+// `xcrun simctl`).
+func runtimeToolPath(cmd string) string {
+	for _, tok := range strings.Fields(cmd) {
+		if strings.Contains(tok, "/") || strings.HasPrefix(tok, "$") {
+			return tok
+		}
+	}
+	return ""
+}
+
+// literalDir is the longest directory prefix of a path before any glob, i.e.
+// the part that must exist for the pattern to name anything.
+func literalDir(p string) string {
+	if i := strings.IndexAny(p, "*?["); i >= 0 {
+		p = p[:i]
+	}
+	return filepath.Dir(p + "x")
+}
+
+// underDir reports whether p lies inside dir (both cleaned; symlinks are not
+// resolved - a pattern names what the worker types, not what it resolves to).
+func underDir(p, dir string) bool {
+	if dir == "" {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(literalDir(p)))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
 }
