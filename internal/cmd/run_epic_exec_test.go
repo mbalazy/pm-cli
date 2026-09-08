@@ -593,3 +593,77 @@ exit 1`)
 		}
 	}
 }
+
+// TestExecuteEpicIndependentInASlotNeverTouchesTheLocalBase is the pm-cli-131
+// regression at the level it was reported: a batch run in a worktree slot while
+// the user's main checkout sits on `main`. Before the fix the run died with
+// `checkout main for prepare: exit status 128` (git refuses a branch another
+// worktree holds) and left the slot on `main`.
+func TestExecuteEpicIndependentInASlotNeverTouchesTheLocalBase(t *testing.T) {
+	fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\necho '"+envelope("merged", "all green")+"'")
+	store, repo, slot := epicSlotFixture(t)
+
+	baseBefore := gitReadT(t, repo, "rev-parse", "main")
+	_, stderr := runEpic(t, store, epicOptions{independent: true, additional: true})
+
+	if !strings.Contains(stderr, "off origin/main") {
+		t.Errorf("the run should say the subs fork from origin/main:\n%s", stderr)
+	}
+	// The main checkout keeps its branch and its tip - pm never moves it.
+	if got := gitReadT(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "main" {
+		t.Errorf("main checkout left on %q, want main", got)
+	}
+	if got := gitReadT(t, repo, "rev-parse", "main"); got != baseBefore {
+		t.Errorf("local main moved: %s -> %s", baseBefore, got)
+	}
+	// The run ends on the last sub's own branch (unchanged); what must never
+	// happen is the slot holding the base branch - that is what wedged the
+	// user's main checkout afterwards.
+	if got := gitReadT(t, slot, "rev-parse", "--abbrev-ref", "HEAD"); got == "main" {
+		t.Error("the slot ended holding the base branch - the main checkout can no longer switch to it")
+	}
+	if out, err := exec.Command("git", "-C", repo, "checkout", "main").CombinedOutput(); err != nil {
+		t.Errorf("main checkout can no longer switch to main: %v\n%s", err, out)
+	}
+	sub, _ := store.FindTask("app", "app-1-1")
+	if sub.Meta.Status != storage.StatusDone {
+		t.Errorf("verify-green sub must reach the done status, got %q", sub.Meta.Status)
+	}
+	if log := gitLogAll(t, slot, "feat/only-sub"); !strings.Contains(log, "worker commit") {
+		t.Errorf("the sub's branch should carry the worker's commit:\n%s", log)
+	}
+}
+
+// epicSlotFixture is epicRunFixture with an origin and a worktree slot: the
+// project is a clone whose main checkout stays on `main`, and the executor has
+// one slot plus a prepare and a baseline (the two steps that used to check the
+// base branch out).
+func epicSlotFixture(t *testing.T) (*storage.Store, string, string) {
+	t.Helper()
+	store := &storage.Store{Root: t.TempDir()}
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin.git")
+	gitT(t, root, "init", "--bare", "-q", "--initial-branch=main", origin)
+	repo := filepath.Join(root, "main")
+	gitT(t, root, "clone", "-q", origin, repo)
+	gitT(t, repo, "config", "user.email", "t@t")
+	gitT(t, repo, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, repo, "add", ".")
+	gitT(t, repo, "commit", "-q", "-m", "init")
+	gitT(t, repo, "push", "-q", "-u", "origin", "main")
+
+	slot := filepath.Join(root, "slot1")
+	if err := store.CreateProject("app", &storage.Project{Name: "App", Path: repo, Executor: &storage.Executor{
+		Enabled: true, StartStatus: "todo", DoneStatus: "done",
+		Worktrees: []storage.WorktreeSlot{{Path: slot}},
+		Prepare:   "true", Baseline: "true",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	addTask(t, store, "app", storage.TaskMeta{ID: "app-1", Title: "Epic", Status: storage.StatusDoing}, "")
+	addTask(t, store, "app", storage.TaskMeta{ID: "app-1-1", Title: "Only Sub", Status: storage.StatusTodo, Parent: "app-1", Order: 10}, "")
+	return store, repo, slot
+}

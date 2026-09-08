@@ -512,19 +512,26 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	// is the local base branch; in a slot it is origin/<base> (see below).
 	forkRef := baseBranch
 	if independentMode {
-		if !branchExists(workDir, baseBranch) {
-			return fmt.Errorf("independent mode: base branch %q does not exist at %s", baseBranch, workDir)
-		}
 		// Every sub forks from base: a stale local base is what produced the
 		// false SPEC-CONFLICT of a 2026-08 run (pm-cli-119-7). In the main
 		// checkout that means fast-forwarding the local base to origin. IN A
 		// SLOT it means reading origin/<base> instead: the local branch is held
 		// by the user's main checkout, so git refuses both to check it out and
-		// to move it (pm-cli-131) - see slotForkRef.
+		// to move it (pm-cli-131) - see slotForkRef. That also means a slot only
+		// needs the fork ref to RESOLVE (origin/<base> alone is enough), where
+		// the main checkout needs the local branch it is about to work on.
 		if opts.additional {
 			forkRef = slotForkRef(errOut, workDir, baseBranch)
-		} else if err := freshenBase(errOut, workDir, baseBranch); err != nil {
-			return fmt.Errorf("independent mode: %w", err)
+			if !gitRefExists(workDir, forkRef) {
+				return fmt.Errorf("independent mode: base %q resolves to neither %s nor origin/%s at %s", baseBranch, baseBranch, baseBranch, workDir)
+			}
+		} else {
+			if !branchExists(workDir, baseBranch) {
+				return fmt.Errorf("independent mode: base branch %q does not exist at %s", baseBranch, workDir)
+			}
+			if err := freshenBase(errOut, workDir, baseBranch); err != nil {
+				return fmt.Errorf("independent mode: %w", err)
+			}
 		}
 		fmt.Fprintf(errOut, "pm run-epic: %s INDEPENDENT - each sub on its own branch off %s (%d sub(s))\n", tracker.Meta.ID, forkRef, len(subs))
 	} else {
@@ -1256,8 +1263,14 @@ func printEpicPlan(w io.Writer, tracker *storage.Task, epicBranch, base, forkRef
 			branchLine += fmt.Sprintf("\nsubs fork from %s (slot; the local %s is never checked out or moved)", forkRef, base)
 		}
 	}
-	fmt.Fprintf(w, "# pm run-epic (dry-run)\ntracker: %s  %s\n%s\n%s\nbase freshness: %s is fetched from origin and fast-forwarded at run start before anything forks from it; a diverged %s aborts the run\nready status: %s -> done status: %s\n\nsubs (in Order):\n",
-		tracker.Meta.ID, tracker.Meta.Title, runLine, branchLine, base, base, startStatus, doneStatus)
+	freshness := fmt.Sprintf("base freshness: %s is fetched from origin and fast-forwarded at run start before anything forks from it; a diverged %s aborts the run", base, base)
+	if independent && additional {
+		// The slot neither moves nor holds the local base (pm-cli-131), so
+		// neither the fast-forward nor the divergence abort applies here.
+		freshness = fmt.Sprintf("base freshness: origin is fetched at run start and the subs fork from %s; the local %s is left as it is (local-only commits are a warning, not an abort)", forkRef, base)
+	}
+	fmt.Fprintf(w, "# pm run-epic (dry-run)\ntracker: %s  %s\n%s\n%s\n%s\nready status: %s -> done status: %s\n\nsubs (in Order):\n",
+		tracker.Meta.ID, tracker.Meta.Title, runLine, branchLine, freshness, startStatus, doneStatus)
 	for _, s := range subs {
 		ready := "skip"
 		if s.Meta.Status == doneStatus || s.Meta.Status == storage.StatusDone {

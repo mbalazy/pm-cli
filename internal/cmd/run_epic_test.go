@@ -585,6 +585,22 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 	if strings.Contains(independent, "integration branch:") {
 		t.Errorf("independent plan must not mention an integration branch:\n%s", independent)
 	}
+	if !strings.Contains(independent, "fast-forwarded at run start") {
+		t.Errorf("a main-checkout run still fast-forwards the base and must say so:\n%s", independent)
+	}
+
+	// In a slot the subs fork from origin/<base> and the local branch is left
+	// alone (pm-cli-131) - the plan must say where the work comes from and must
+	// not promise the fast-forward/abort the slot no longer does.
+	slot := captureStdout(t, func() {
+		printEpicPlan(os.Stdout, tracker, "epic/p-1", "main", "origin/main", storage.StatusTodo, storage.TaskStatus("merged"), subs, true, "/slot1", true, nil)
+	})
+	if !strings.Contains(slot, "subs fork from origin/main (slot;") {
+		t.Errorf("slot plan should name the fork ref:\n%s", slot)
+	}
+	if strings.Contains(slot, "fast-forwarded at run start") || strings.Contains(slot, "aborts the run") {
+		t.Errorf("slot plan must not promise the main-checkout base handling:\n%s", slot)
+	}
 }
 
 // TestPrintEpicSummaryLabel: the header used to hardcode "integration: %s", so

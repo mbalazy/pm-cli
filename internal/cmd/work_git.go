@@ -262,7 +262,9 @@ func fetchBase(w io.Writer, dir, base string) bool {
 // slotForkRefName is the ref a run IN A WORKTREE SLOT forks from, resolved
 // without touching the network: origin/<base> when it exists, the local base
 // otherwise (no remote, or a base with no counterpart on origin). Side-effect
-// free, so --dry-run reaches the same answer the run will.
+// free, which is what lets --dry-run print it - on the same refs the run will
+// see, unless the run's own fetch is the one that first creates
+// refs/remotes/origin/<base>.
 func slotForkRefName(dir, base string) string {
 	if base == "" || !gitHasRemote(dir) {
 		return base
