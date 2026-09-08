@@ -359,7 +359,7 @@ func (m Model) updateColVisMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.colVisCursor < len(m.colVisItems)-1 {
 			m.colVisCursor++
 		}
-	case key.Matches(msg, common.Keys.Space):
+	case key.Matches(msg, common.Keys.Space), key.Matches(msg, common.Keys.Enter):
 		if m.colVisCursor < len(m.colVisItems) {
 			item := &m.colVisItems[m.colVisCursor]
 			item.visible = !item.visible

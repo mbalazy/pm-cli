@@ -8,6 +8,60 @@ import (
 	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
+// TestColVisMenuEnterToggles covers pm-cli-69/pm-cli-132-3: the footer says
+// "enter toggle  esc back" but only Space flipped a status - Enter fell
+// through the switch and did nothing.
+func TestColVisMenuEnterToggles(t *testing.T) {
+	store := &storage.Store{Root: t.TempDir()}
+	if err := store.CreateProject("p", &storage.Project{Name: "P"}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := Model{
+		store:         store,
+		projects:      []string{"all", "p"},
+		activeProject: 1,
+		width:         80, height: 24,
+		menuState: menuState{
+			colVisMenu: true,
+			colVisItems: []colVisItem{
+				{status: storage.StatusTodo, visible: true},
+				{status: storage.StatusDoing, visible: true},
+			},
+			colVisCursor:   0,
+			hiddenStatuses: make(map[storage.TaskStatus]bool),
+		},
+	}
+	m.reload()
+
+	result, _ := m.updateColVisMenu(tea.KeyMsg{Type: tea.KeyEnter})
+	m = result.(Model)
+	if m.colVisItems[0].visible {
+		t.Fatal("Enter did not toggle the highlighted item's visibility")
+	}
+	if !m.hiddenStatuses[storage.StatusTodo] {
+		t.Fatal("Enter did not mark the status as explicitly hidden")
+	}
+	if !m.colVisMenu {
+		t.Fatal("Enter should not close the menu")
+	}
+
+	result, _ = m.updateColVisMenu(tea.KeyMsg{Type: tea.KeySpace})
+	m = result.(Model)
+	if !m.colVisItems[0].visible {
+		t.Fatal("Space did not toggle the item back")
+	}
+	if m.hiddenStatuses[storage.StatusTodo] {
+		t.Fatal("Space did not clear the hidden flag")
+	}
+
+	result, _ = m.updateColVisMenu(tea.KeyMsg{Type: tea.KeyEsc})
+	m = result.(Model)
+	if m.colVisMenu {
+		t.Fatal("Escape should still close the menu")
+	}
+}
+
 // TestAddTaskShowsErrorToast covers pm-cli-67-1: AddTask validates status and
 // does an O_EXCL claim on the task file, so a duplicate ID FAILS - the board
 // used to just reload and show nothing, silently discarding the user's input.
