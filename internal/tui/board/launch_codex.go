@@ -134,27 +134,23 @@ func (m Model) launchCodex(kind string) (tea.Model, tea.Cmd) {
 		return cmd
 	}
 
-	worktreeDir := func() string {
+	// worktreeDir mirrors launchClaude's worktree setup: a failed copy aborts
+	// the launch (via the returned error) instead of silently falling back to
+	// the plain project dir, which would start Codex without its gitignored
+	// configs and say nothing about it.
+	worktreeDir := func() (string, error) {
 		if projDir == "" {
-			return ""
+			return "", nil
 		}
 		wtName := worktreeName(t)
-		// Error ignored deliberately (unlike the launchClaude worktree paths,
-		// out of this task's scope): a failed copy leaves wtPath absent, and the
-		// os.Stat check below already falls back to the plain project dir.
-		_ = copyWorktreeFiles(projDir, wtName)
+		if err := copyWorktreeFiles(projDir, wtName); err != nil {
+			return "", err
+		}
 		wtPath := filepath.Join(projDir, ".claude", "worktrees", wtName)
 		if info, err := os.Stat(wtPath); err == nil && info.IsDir() {
-			return wtPath
+			return wtPath, nil
 		}
-		return ""
-	}
-
-	withWorktreeCd := func(cmd string) string {
-		if wtDir := worktreeDir(); wtDir != "" {
-			return fmt.Sprintf("cd %s && %s", shellQuote(wtDir), cmd)
-		}
-		return withCd(cmd)
+		return "", nil
 	}
 
 	switch kind {
@@ -181,7 +177,11 @@ func (m Model) launchCodex(kind string) (tea.Model, tea.Cmd) {
 		}
 
 	case "worktree":
-		wtDir := worktreeDir()
+		wtDir, err := worktreeDir()
+		if err != nil {
+			m.showErrorToast("worktree setup failed", err)
+			return m, nil
+		}
 		c := exec.Command("sh", "-c", codexInteractiveShellCommand(prompt, m.claudeMenuSkipPerms))
 		if wtDir != "" {
 			c.Dir = wtDir
@@ -196,7 +196,16 @@ func (m Model) launchCodex(kind string) (tea.Model, tea.Cmd) {
 		})
 
 	case "worktree-tmux":
-		shellCmd := withWorktreeCd(codexInteractiveShellCommand(prompt, m.claudeMenuSkipPerms))
+		wtDir, err := worktreeDir()
+		if err != nil {
+			m.showErrorToast("worktree setup failed", err)
+			return m, nil
+		}
+		interactiveCmd := codexInteractiveShellCommand(prompt, m.claudeMenuSkipPerms)
+		shellCmd := withCd(interactiveCmd)
+		if wtDir != "" {
+			shellCmd = fmt.Sprintf("cd %s && %s", shellQuote(wtDir), interactiveCmd)
+		}
 		winName := codexWindowName(t.Meta.ID)
 		sess, err := tmuxNewWindow(winName, shellCmd)
 		if err != nil {
