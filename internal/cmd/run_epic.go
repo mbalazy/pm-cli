@@ -787,7 +787,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	}
 
 	if independentMode {
-		printEpicSummary(opts.stdout(), tracker, "independent, off "+baseBranch, outcomes, slug, plan.startStatus, rerunSkips(store, slug, outcomes, plan.startStatus))
+		printEpicSummary(opts.stdout(), tracker, "independent, off "+baseBranch, outcomes, slug, plan.startStatus, rerunSkips(store, slug, outcomes, plan.startStatus, doneStatus))
 		fmt.Fprintf(errOut, "\nEach sub lives on its own branch (pushed to origin when it carried commits). Finish + verify every task by hand, then open per-task PRs - nothing was merged anywhere.\n")
 		maybeChainFinish()
 		return nil
@@ -799,7 +799,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	// only affects which branch is checked out at exit.
 	_ = gitEnsureBranch(workDir, epicBranch, "")
 
-	printEpicSummary(opts.stdout(), tracker, "integration: "+epicBranch, outcomes, slug, plan.startStatus, rerunSkips(store, slug, outcomes, plan.startStatus))
+	printEpicSummary(opts.stdout(), tracker, "integration: "+epicBranch, outcomes, slug, plan.startStatus, rerunSkips(store, slug, outcomes, plan.startStatus, doneStatus))
 
 	if !opts.noPR && anyMerged(outcomes) {
 		openEpicPR(errOut, workDir, epicBranch, baseBranch, tracker)
@@ -1257,35 +1257,47 @@ type rerunSkip struct {
 	status storage.TaskStatus
 }
 
-// rerunSkips scans the non-green outcomes of a finished run and reports which
-// ones now sit on a status other than startStatus - the ones classifySub will
-// skip on the next run. Excluded by RESULT, not by status, because each has
-// its own reason a re-run gap here would be noise:
-//   - merged/pushed already landed on doneStatus - nothing to pick up;
+// rerunSkips scans a finished run's outcomes and reports which subs now sit on
+// a status a plain re-run will pass over - the ones classifySub answers with
+// "not ready (status X)" and no announce line. Two results are excluded by
+// RESULT, because for them a gap here would be noise:
 //   - skipped subs (already-done, or classifySub's own pre-existing "not ready
 //     (status X)") print that exact reason as their per-sub line above; this
 //     sentence exists for subs that went bad DURING this run, not before it;
 //   - manual is a permanent human-only gate that never reaches startStatus by
 //     design, so flagging it would be a standing false positive on every run.
 //
-// aborted is deliberately NOT excluded: the manager returns an aborted sub to
-// startStatus best-effort (run_epic.go, the abort branch), and when that
-// MoveTask fails the sub is left exactly as stuck as a failed one - the status
-// check below still catches it because nothing here assumes the restore
-// succeeded.
-func rerunSkips(store storage.TaskStore, slug string, outcomes []subOutcome, startStatus storage.TaskStatus) []rerunSkip {
+// Everything else is judged by the sub's ACTUAL status, never by its result
+// word, because the result word is what the manager INTENDED and the status is
+// what it achieved. Two of them come apart:
+//   - aborted: the manager returns an aborted sub to startStatus best-effort
+//     (the abort branch in executeEpic) and only logs a failed restore;
+//   - merged/pushed: the done-status move is a logIfErr too (driveSubFlow,
+//     "mark <id> <doneStatus>"), so a green sub whose move failed is left on
+//     doing while the summary says it landed - the one shape where the run
+//     reports success AND the re-run then silently does nothing.
+//
+// A green sub that DID land (on doneStatus, or on a `done` the human set) is
+// skipped by classifySub for the right reason and must not be flagged: telling
+// someone to move a finished sub back to todo would be worse than silence.
+func rerunSkips(store storage.TaskStore, slug string, outcomes []subOutcome, startStatus, doneStatus storage.TaskStatus) []rerunSkip {
 	var skips []rerunSkip
 	for _, o := range outcomes {
-		if greenSubResult(o.result) || o.result == subSkipped || o.result == subManual {
+		if o.result == subSkipped || o.result == subManual {
 			continue
 		}
 		sub, err := store.FindTaskExact(slug, o.id)
 		if err != nil {
 			continue
 		}
-		if sub.Meta.Status != startStatus {
-			skips = append(skips, rerunSkip{id: o.id, status: sub.Meta.Status})
+		status := sub.Meta.Status
+		if status == startStatus {
+			continue
 		}
+		if greenSubResult(o.result) && (status == doneStatus || status == storage.StatusDone) {
+			continue
+		}
+		skips = append(skips, rerunSkip{id: o.id, status: status})
 	}
 	return skips
 }

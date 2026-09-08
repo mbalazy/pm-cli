@@ -642,14 +642,16 @@ func TestPrintEpicSummaryRerunSkips(t *testing.T) {
 
 // TestRerunSkips exercises the classification itself, one sub per case: a
 // failed sub still sitting off startStatus is listed; one a caller already
-// returned to startStatus is not; merged/pushed (green, by construction on
-// doneStatus) and manual are never listed regardless of status; a pre-existing
-// classifySub "not ready" skip is not listed (it already prints its own
-// reason as a per-sub line); blocked/conflict park on `waiting` like a failed
-// sub and are listed the same way; an aborted sub whose best-effort restore to
-// startStatus FAILED is still listed - the gap a result-based exclusion would
-// have hidden (pm-cli-75 review finding); an outcome naming a sub that no
-// longer resolves is skipped rather than erroring.
+// returned to startStatus is not; a green sub that actually landed (doneStatus,
+// or a `done` the human set) and a manual sub are never listed; a green sub
+// whose done-status move FAILED - it is on doing while the summary says
+// "pushed" - IS listed, because that is the one shape where the run reports
+// success and a re-run then does nothing at all; a pre-existing classifySub
+// "not ready" skip is not listed (it already prints its own reason as a per-sub
+// line); blocked/conflict park on `waiting` like a failed sub and are listed
+// the same way; an aborted sub whose best-effort restore to startStatus FAILED
+// is still listed; an outcome naming a sub that no longer resolves is skipped
+// rather than erroring.
 func TestRerunSkips(t *testing.T) {
 	store, slug := tempStore(t)
 	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1", Title: "Tracker", Status: storage.StatusTodo}, "")
@@ -660,7 +662,7 @@ func TestRerunSkips(t *testing.T) {
 	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-5", Title: "pre-existing not-ready skip", Status: storage.StatusWaiting, Parent: "proj-1"}, "")
 	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-6", Title: "blocked, parked waiting", Status: storage.StatusWaiting, Parent: "proj-1"}, "")
 	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-7", Title: "conflict, parked waiting", Status: storage.StatusWaiting, Parent: "proj-1"}, "")
-	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-8", Title: "pushed but anomalously off status", Status: storage.StatusDoing, Parent: "proj-1"}, "")
+	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-8", Title: "pushed, done-status move failed", Status: storage.StatusDoing, Parent: "proj-1"}, "")
 	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-9", Title: "aborted, restore-to-todo failed", Status: storage.StatusDoing, Parent: "proj-1"}, "")
 
 	outcomes := []subOutcome{
@@ -676,7 +678,7 @@ func TestRerunSkips(t *testing.T) {
 		{"proj-1-missing", subFailed, "died", "feat/x"},
 	}
 
-	got := rerunSkips(store, slug, outcomes, storage.StatusTodo)
+	got := rerunSkips(store, slug, outcomes, storage.StatusTodo, storage.StatusDone)
 	byID := map[string]storage.TaskStatus{}
 	for _, s := range got {
 		byID[s.id] = s.status
@@ -685,6 +687,7 @@ func TestRerunSkips(t *testing.T) {
 		"proj-1-1": storage.StatusDoing,
 		"proj-1-6": storage.StatusWaiting,
 		"proj-1-7": storage.StatusWaiting,
+		"proj-1-8": storage.StatusDoing,
 		"proj-1-9": storage.StatusDoing,
 	}
 	if len(byID) != len(want) {
@@ -694,6 +697,28 @@ func TestRerunSkips(t *testing.T) {
 		if byID[id] != status {
 			t.Errorf("rerunSkips missing/wrong entry for %s: got %v, want %v", id, byID[id], status)
 		}
+	}
+}
+
+// TestRerunSkipsGreenOnCustomDoneStatus guards the other side of the green
+// rule: independent mode lands a verified sub on `pushed`, not on `done`, so
+// the exclusion has to compare against the run's own doneStatus. Getting this
+// wrong would tell the human to move every successfully pushed sub of every
+// batch back to todo.
+func TestRerunSkipsGreenOnCustomDoneStatus(t *testing.T) {
+	store := &storage.Store{Root: t.TempDir()}
+	if err := store.CreateProject("proj", &storage.Project{
+		Name: "Proj", Path: t.TempDir(),
+		Statuses: []string{"todo", "doing", "waiting", "pushed", "done"},
+	}); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	addTask(t, store, "proj", storage.TaskMeta{ID: "proj-1", Title: "Tracker", Status: storage.StatusTodo}, "")
+	addTask(t, store, "proj", storage.TaskMeta{ID: "proj-1-1", Title: "landed pushed", Status: storage.TaskStatus("pushed"), Parent: "proj-1"}, "")
+
+	outcomes := []subOutcome{{"proj-1-1", subPushed, "ok", "feat/1"}}
+	if got := rerunSkips(store, "proj", outcomes, storage.StatusTodo, storage.TaskStatus("pushed")); len(got) != 0 {
+		t.Errorf("a sub that landed on the run's done status must not be flagged, got %+v", got)
 	}
 }
 
