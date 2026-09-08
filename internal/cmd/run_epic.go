@@ -940,6 +940,15 @@ func logIfErr(errOut io.Writer, context string, err error) {
 // for a missing one on the screen.
 func pushIfAhead(dir, branch, base string) string {
 	ahead, err := gitAheadCount(dir, branch, base)
+	return pushBranchNote(dir, branch, ahead, err)
+}
+
+// pushBranchNote is pushIfAhead's body, taking an ahead-count already computed
+// by the caller - the independent crashNote hook needs that same count to
+// decide the zero-progress tag, and a second `git rev-list` right after the
+// first one is redundant work with room to disagree if anything touched the
+// branch in between.
+func pushBranchNote(dir, branch string, ahead int, err error) string {
 	if err == nil && ahead == 0 {
 		return ""
 	}
@@ -1250,13 +1259,24 @@ type rerunSkip struct {
 
 // rerunSkips scans the non-green outcomes of a finished run and reports which
 // ones now sit on a status other than startStatus - the ones classifySub will
-// skip on the next run. Green outcomes (merged/pushed) need no re-run;
-// skipped/manual/aborted subs were never driven this run (or were returned to
-// startStatus already) so they read as ready on their own.
+// skip on the next run. Excluded by RESULT, not by status, because each has
+// its own reason a re-run gap here would be noise:
+//   - merged/pushed already landed on doneStatus - nothing to pick up;
+//   - skipped subs (already-done, or classifySub's own pre-existing "not ready
+//     (status X)") print that exact reason as their per-sub line above; this
+//     sentence exists for subs that went bad DURING this run, not before it;
+//   - manual is a permanent human-only gate that never reaches startStatus by
+//     design, so flagging it would be a standing false positive on every run.
+//
+// aborted is deliberately NOT excluded: the manager returns an aborted sub to
+// startStatus best-effort (run_epic.go, the abort branch), and when that
+// MoveTask fails the sub is left exactly as stuck as a failed one - the status
+// check below still catches it because nothing here assumes the restore
+// succeeded.
 func rerunSkips(store storage.TaskStore, slug string, outcomes []subOutcome, startStatus storage.TaskStatus) []rerunSkip {
 	var skips []rerunSkip
 	for _, o := range outcomes {
-		if greenSubResult(o.result) || o.result == subSkipped || o.result == subManual || o.result == subAborted {
+		if greenSubResult(o.result) || o.result == subSkipped || o.result == subManual {
 			continue
 		}
 		sub, err := store.FindTaskExact(slug, o.id)
@@ -1291,10 +1311,12 @@ func printEpicSummary(w io.Writer, tracker *storage.Task, label string, outcomes
 	if len(skips) == 0 {
 		return
 	}
-	parts := make([]string, len(skips))
+	descr := make([]string, len(skips))
+	cmds := make([]string, len(skips))
 	for i, s := range skips {
-		parts[i] = fmt.Sprintf("%s (status %s)", s.id, s.status)
+		descr[i] = fmt.Sprintf("%s (status %s)", s.id, s.status)
+		cmds[i] = fmt.Sprintf("pm mv %s %s %s", slug, s.id, startStatus)
 	}
-	fmt.Fprintf(w, "\nA re-run will NOT pick up: %s - move them back to %s first (`pm mv %s <id> %s`) or re-run with the sub's status fixed.\n",
-		strings.Join(parts, ", "), startStatus, slug, startStatus)
+	fmt.Fprintf(w, "\nA re-run will NOT pick up: %s - move them back to %s first: %s\n",
+		strings.Join(descr, ", "), startStatus, strings.Join(cmds, " / "))
 }

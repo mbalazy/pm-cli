@@ -629,7 +629,7 @@ func TestPrintEpicSummaryRerunSkips(t *testing.T) {
 	if !strings.Contains(got, "A re-run will NOT pick up: p-1-1 (status doing)") {
 		t.Errorf("summary should name the skipped sub and its status:\n%s", got)
 	}
-	if !strings.Contains(got, "pm mv p <id> todo") {
+	if !strings.Contains(got, "pm mv p p-1-1 todo") {
 		t.Errorf("summary should hint the fix command:\n%s", got)
 	}
 
@@ -640,27 +640,60 @@ func TestPrintEpicSummaryRerunSkips(t *testing.T) {
 	}
 }
 
-// TestRerunSkips exercises the classification itself: green/skipped/manual/
-// aborted subs are never listed even off the start status; a failed sub still
-// sitting on doing is; a failed sub a caller already returned to todo is not.
+// TestRerunSkips exercises the classification itself, one sub per case: a
+// failed sub still sitting off startStatus is listed; one a caller already
+// returned to startStatus is not; merged/pushed (green, by construction on
+// doneStatus) and manual are never listed regardless of status; a pre-existing
+// classifySub "not ready" skip is not listed (it already prints its own
+// reason as a per-sub line); blocked/conflict park on `waiting` like a failed
+// sub and are listed the same way; an aborted sub whose best-effort restore to
+// startStatus FAILED is still listed - the gap a result-based exclusion would
+// have hidden (pm-cli-75 review finding); an outcome naming a sub that no
+// longer resolves is skipped rather than erroring.
 func TestRerunSkips(t *testing.T) {
 	store, slug := tempStore(t)
 	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1", Title: "Tracker", Status: storage.StatusTodo}, "")
 	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-1", Title: "stuck failed", Status: storage.StatusDoing, Parent: "proj-1"}, "")
 	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-2", Title: "returned to start", Status: storage.StatusTodo, Parent: "proj-1"}, "")
-	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-3", Title: "landed", Status: storage.StatusDone, Parent: "proj-1"}, "")
-	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-4", Title: "manual", Status: storage.StatusTodo, Parent: "proj-1"}, "")
+	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-3", Title: "landed merged", Status: storage.StatusDone, Parent: "proj-1"}, "")
+	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-4", Title: "manual, never on todo", Status: storage.StatusDoing, Parent: "proj-1"}, "")
+	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-5", Title: "pre-existing not-ready skip", Status: storage.StatusWaiting, Parent: "proj-1"}, "")
+	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-6", Title: "blocked, parked waiting", Status: storage.StatusWaiting, Parent: "proj-1"}, "")
+	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-7", Title: "conflict, parked waiting", Status: storage.StatusWaiting, Parent: "proj-1"}, "")
+	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-8", Title: "pushed but anomalously off status", Status: storage.StatusDoing, Parent: "proj-1"}, "")
+	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-9", Title: "aborted, restore-to-todo failed", Status: storage.StatusDoing, Parent: "proj-1"}, "")
 
 	outcomes := []subOutcome{
 		{"proj-1-1", subFailed, "died", "feat/1"},
 		{"proj-1-2", subFailed, "died then returned", "feat/2"},
 		{"proj-1-3", subMerged, "ok", "feat/3"},
 		{"proj-1-4", subManual, "manual sub", ""},
+		{"proj-1-5", subSkipped, "not ready (status waiting)", ""},
+		{"proj-1-6", subBlocked, "blocked", "feat/6"},
+		{"proj-1-7", subConflict, "merge conflict", "feat/7"},
+		{"proj-1-8", subPushed, "ok", "feat/8"},
+		{"proj-1-9", subAborted, "account wall", "feat/9"},
+		{"proj-1-missing", subFailed, "died", "feat/x"},
 	}
 
 	got := rerunSkips(store, slug, outcomes, storage.StatusTodo)
-	if len(got) != 1 || got[0].id != "proj-1-1" || got[0].status != storage.StatusDoing {
-		t.Fatalf("rerunSkips = %+v, want exactly proj-1-1 (doing)", got)
+	byID := map[string]storage.TaskStatus{}
+	for _, s := range got {
+		byID[s.id] = s.status
+	}
+	want := map[string]storage.TaskStatus{
+		"proj-1-1": storage.StatusDoing,
+		"proj-1-6": storage.StatusWaiting,
+		"proj-1-7": storage.StatusWaiting,
+		"proj-1-9": storage.StatusDoing,
+	}
+	if len(byID) != len(want) {
+		t.Fatalf("rerunSkips = %+v, want exactly %v", got, want)
+	}
+	for id, status := range want {
+		if byID[id] != status {
+			t.Errorf("rerunSkips missing/wrong entry for %s: got %v, want %v", id, byID[id], status)
+		}
 	}
 }
 

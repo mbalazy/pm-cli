@@ -203,18 +203,22 @@ func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker,
 		// sibling's work.
 		park: func(*storage.Task) {},
 		crashNote: func(dir, branch, note string) string {
+			// One ahead-count feeds both decisions below, so the push and the
+			// zero-progress tag can never disagree about how many commits the
+			// branch carries.
+			ahead, aheadErr := gitAheadCount(dir, branch, baseBranch)
 			// Worker died (timeout/crash). Push whatever it committed before dying
 			// so partial work survives the worktree's next wipe.
-			if pushNote := pushIfAhead(dir, branch, baseBranch); pushNote != "" {
+			if pushNote := pushBranchNote(dir, branch, ahead, aheadErr); pushNote != "" {
 				note += "; " + pushNote
 			}
 			// A dead worker that never got as far as one commit reads very
 			// differently from one that worked and then failed verify - tag it so
 			// a human triaging the summary doesn't have to open the branch to
 			// tell them apart. An ahead-check that itself failed is NOT zero
-			// progress (matches pushIfAhead's own "push anyway" rule): silence
+			// progress (matches pushBranchNote's own "push anyway" rule): silence
 			// there must not read as "nothing happened".
-			if ahead, err := gitAheadCount(dir, branch, baseBranch); err == nil && ahead == 0 {
+			if aheadErr == nil && ahead == 0 {
 				note = zeroProgressPrefix + note
 			}
 			return note

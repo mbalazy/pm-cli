@@ -113,6 +113,12 @@ func TestDriveSubIndependentPushesOnWorkerCrash(t *testing.T) {
 	if !strings.HasPrefix(oc.note, "claude worker failed") {
 		t.Errorf("crash note should lead with the worker error, got %q", oc.note)
 	}
+	// pm-cli-75: this worker made progress (one commit) before dying, so the
+	// note must NOT carry the zero-progress tag - that is reserved for a
+	// worker that never got that far.
+	if strings.HasPrefix(oc.note, zeroProgressPrefix) {
+		t.Errorf("a sub that made progress must not carry the zero-progress prefix, got %q", oc.note)
+	}
 	final, _ := store.FindTask("app", "app-1")
 	if final.Meta.Status != storage.StatusDoing {
 		t.Errorf("independent mode must not park a crashed sub, got %q", final.Meta.Status)
@@ -120,64 +126,68 @@ func TestDriveSubIndependentPushesOnWorkerCrash(t *testing.T) {
 }
 
 // TestZeroProgressCrashNote covers the pm-cli-75 tag: a worker that dies
-// before committing anything gets a distinct prefix from one that dies after
-// making progress - so a human triaging the summary doesn't have to open the
-// branch to tell "never started" from "worked, then died" apart.
+// before committing anything gets a distinguishing prefix - the "made
+// progress" side of the contrast is TestDriveSubIndependentPushesOnWorkerCrash
+// above, which asserts the prefix is ABSENT there.
 func TestZeroProgressCrashNote(t *testing.T) {
-	t.Run("no commits", func(t *testing.T) {
-		fakeClaude(t, "exit 1") // dies immediately, nothing committed
-		store, sub, _, opts := executorFixture(t)
-		proj, _ := store.GetProject("app")
-		addTask(t, store, "app", storage.TaskMeta{ID: "app-t", Title: "Batch", Status: storage.StatusDoing}, "")
-		tracker, err := store.FindTask("app", "app-t")
-		if err != nil {
-			t.Fatal(err)
-		}
-		rw := storage.NewRunWriter(store.ProjectDir("app"), &storage.RunState{
-			TaskID: "app-t", Project: "app", Kind: "run-epic", Status: storage.RunStatusRunning, PID: os.Getpid(),
-		})
-		opts.standalone = false
-		opts.independent = true
-		base := gitHeadBranch(t, proj.Path)
-
-		oc := driveSubIndependent(store, proj.Path, "app", tracker, sub, base, storage.StatusDone, opts, rw, false)
-
-		if oc.result != subFailed {
-			t.Fatalf("outcome = %+v, want failed", oc)
-		}
-		if !strings.HasPrefix(oc.note, zeroProgressPrefix) {
-			t.Errorf("zero-progress note should carry the prefix, got %q", oc.note)
-		}
+	fakeClaude(t, "exit 1") // dies immediately, nothing committed
+	store, sub, _, opts := executorFixture(t)
+	proj, _ := store.GetProject("app")
+	addTask(t, store, "app", storage.TaskMeta{ID: "app-t", Title: "Batch", Status: storage.StatusDoing}, "")
+	tracker, err := store.FindTask("app", "app-t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rw := storage.NewRunWriter(store.ProjectDir("app"), &storage.RunState{
+		TaskID: "app-t", Project: "app", Kind: "run-epic", Status: storage.RunStatusRunning, PID: os.Getpid(),
 	})
+	opts.standalone = false
+	opts.independent = true
+	base := gitHeadBranch(t, proj.Path)
 
-	t.Run("one commit before dying", func(t *testing.T) {
-		fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\nexit 1")
-		store, sub, _, opts := executorFixture(t)
-		proj, _ := store.GetProject("app")
-		addTask(t, store, "app", storage.TaskMeta{ID: "app-t", Title: "Batch", Status: storage.StatusDoing}, "")
-		tracker, err := store.FindTask("app", "app-t")
-		if err != nil {
-			t.Fatal(err)
-		}
-		rw := storage.NewRunWriter(store.ProjectDir("app"), &storage.RunState{
-			TaskID: "app-t", Project: "app", Kind: "run-epic", Status: storage.RunStatusRunning, PID: os.Getpid(),
-		})
-		opts.standalone = false
-		opts.independent = true
-		base := gitHeadBranch(t, proj.Path)
+	oc := driveSubIndependent(store, proj.Path, "app", tracker, sub, base, storage.StatusDone, opts, rw, false)
 
-		oc := driveSubIndependent(store, proj.Path, "app", tracker, sub, base, storage.StatusDone, opts, rw, false)
+	if oc.result != subFailed {
+		t.Fatalf("outcome = %+v, want failed", oc)
+	}
+	if !strings.HasPrefix(oc.note, zeroProgressPrefix) {
+		t.Errorf("zero-progress note should carry the prefix, got %q", oc.note)
+	}
+}
 
-		if oc.result != subFailed {
-			t.Fatalf("outcome = %+v, want failed", oc)
-		}
-		if strings.HasPrefix(oc.note, zeroProgressPrefix) {
-			t.Errorf("a sub that made progress must not carry the zero-progress prefix, got %q", oc.note)
-		}
-		if !strings.HasPrefix(oc.note, "claude worker failed") {
-			t.Errorf("crash note should still lead with the worker error, got %q", oc.note)
-		}
+// TestZeroProgressCrashNoteAheadCheckError covers the other half of the "err
+// == nil && ahead == 0" guard: when the ahead-check ITSELF fails (a base ref
+// that stops resolving mid-run), that must not read as zero progress - the
+// same "when in doubt, don't claim silence" rule pushIfAhead already applies
+// to whether to push. The fake worker deletes the base branch ref before
+// dying, so gitAheadCount(dir, branch, base) errors on a missing ref.
+func TestZeroProgressCrashNoteAheadCheckError(t *testing.T) {
+	store, sub, _, opts := executorFixture(t)
+	proj, _ := store.GetProject("app")
+	base := gitHeadBranch(t, proj.Path) // whatever git's default init branch is named
+	// The fake worker deletes the base ref (not currently checked out - the
+	// sub's own branch is) and then dies, so the manager's post-mortem
+	// gitAheadCount(dir, sub-branch, base) fails to resolve it.
+	fakeClaude(t, "git branch -D "+base+" 2>/dev/null\nexit 1")
+	addTask(t, store, "app", storage.TaskMeta{ID: "app-t", Title: "Batch", Status: storage.StatusDoing}, "")
+	tracker, err := store.FindTask("app", "app-t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rw := storage.NewRunWriter(store.ProjectDir("app"), &storage.RunState{
+		TaskID: "app-t", Project: "app", Kind: "run-epic", Status: storage.RunStatusRunning, PID: os.Getpid(),
 	})
+	opts.standalone = false
+	opts.independent = true
+
+	oc := driveSubIndependent(store, proj.Path, "app", tracker, sub, base, storage.StatusDone, opts, rw, false)
+
+	if oc.result != subFailed {
+		t.Fatalf("outcome = %+v, want failed", oc)
+	}
+	if strings.HasPrefix(oc.note, zeroProgressPrefix) {
+		t.Errorf("a failed ahead-check must not read as zero progress, got %q", oc.note)
+	}
 }
 
 // epicRunFixture builds a store + git repo ready for a real executeEpic run:
@@ -309,6 +319,26 @@ func TestExecuteEpicIndependentMode(t *testing.T) {
 	}
 	if !entries[1].Independent {
 		t.Error("journal end must flag the run independent")
+	}
+}
+
+// TestExecuteEpicSummaryWarnsOfRerunSkip is the end-to-end wiring proof for
+// rerunSkips: a real executeEpic run whose only sub crashes without going
+// green leaves it on `doing` (independent mode never parks), off the `todo`
+// start status - exactly the reporter's "not ready (status doing)" silence
+// (pm-cli-75) - and the printed summary must say so.
+func TestExecuteEpicSummaryWarnsOfRerunSkip(t *testing.T) {
+	fakeClaude(t, "exit 1") // dies with no envelope, no commit
+	store, _ := epicRunFixture(t)
+
+	stdout, _ := runEpic(t, store, epicOptions{independent: true})
+
+	sub, _ := store.FindTask("app", "app-1-1")
+	if sub.Meta.Status != storage.StatusDoing {
+		t.Fatalf("crashed sub should stay on doing in independent mode, got %q", sub.Meta.Status)
+	}
+	if !strings.Contains(stdout, "A re-run will NOT pick up: app-1-1 (status doing)") {
+		t.Errorf("summary should warn that a plain re-run skips the stuck sub:\n%s", stdout)
 	}
 }
 
