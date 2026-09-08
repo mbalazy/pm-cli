@@ -229,6 +229,26 @@ func TestResolveProject(t *testing.T) {
 			t.Errorf("error should mention 'ambiguous', got: %v", err)
 		}
 	})
+
+	t.Run("mixed-case project dir is addressable", func(t *testing.T) {
+		// A project dir with mixed-case (hand-created, restored backup, or
+		// pre-dating ValidateSlug) must still resolve by exact id, by
+		// case-folded id, and by case-folded prefix, returning the real
+		// on-disk directory name.
+		mixedDir := filepath.Join(dir, "MyProj")
+		os.MkdirAll(mixedDir, 0755)
+		WriteProject(filepath.Join(mixedDir, "project.yaml"), &Project{Name: "My Project"})
+
+		for _, input := range []string{"MyProj", "myproj", "MYPROJ", "myp"} {
+			got, err := store.ResolveProject(input)
+			if err != nil {
+				t.Fatalf("ResolveProject(%q): unexpected error: %v", input, err)
+			}
+			if got != "MyProj" {
+				t.Errorf("ResolveProject(%q) = %q, want %q", input, got, "MyProj")
+			}
+		}
+	})
 }
 
 func TestFindTask(t *testing.T) {

@@ -509,7 +509,7 @@ func (s *Store) NextChildID(slug, parentID string) string {
 
 // ResolveProject finds a project slug by prefix match.
 func (s *Store) ResolveProject(input string) (string, error) {
-	input = strings.ToLower(input)
+	folded := strings.ToLower(input)
 	projects, err := s.ListProjects()
 	if err != nil {
 		return "", err
@@ -517,7 +517,8 @@ func (s *Store) ResolveProject(input string) (string, error) {
 
 	var matches []string
 	for _, p := range projects {
-		if strings.HasPrefix(p, input) || p == input {
+		pFolded := strings.ToLower(p)
+		if strings.HasPrefix(pFolded, folded) || pFolded == folded {
 			matches = append(matches, p)
 		}
 	}
@@ -528,7 +529,7 @@ func (s *Store) ResolveProject(input string) (string, error) {
 	case 1:
 		return matches[0], nil
 	default:
-		if matches[0] == input {
+		if strings.ToLower(matches[0]) == folded {
 			return matches[0], nil
 		}
 		return "", fmt.Errorf("ambiguous project %q: matches %s", input, strings.Join(matches, ", "))
