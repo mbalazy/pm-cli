@@ -42,7 +42,7 @@ var runStatusOrder = []string{
 // pushes - it opens a draft PR); "merged" and "pushed" are the manager's two
 // landing words. All three are green. Journals written before 0.34.0 only ever
 // say "merged", which still prints in its own row - they are not rewritten.
-var subResultOrder = []string{"verified", "merged", "pushed", "blocked", "failed", "conflict", "skipped", "manual"}
+var subResultOrder = []string{"verified", "merged", "pushed", "blocked", "failed", subAborted, "conflict", "skipped", "manual"}
 
 // numStat accumulates a metric plus the number of SAMPLES behind it. Two adders
 // because the two levels differ: every end line carries a run duration, so

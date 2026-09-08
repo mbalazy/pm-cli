@@ -746,6 +746,27 @@ func TestOrderedKeysIsDeterministic(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("aborted has a reserved row between failed and conflict", func(t *testing.T) {
+		got := orderedKeys(map[string]int{"merged": 1}, subResultOrder, true)
+		failedIdx, abortedIdx, conflictIdx := -1, -1, -1
+		for i, k := range got {
+			switch k {
+			case "failed":
+				failedIdx = i
+			case "aborted":
+				abortedIdx = i
+			case "conflict":
+				conflictIdx = i
+			}
+		}
+		if abortedIdx == -1 || failedIdx == -1 || conflictIdx == -1 {
+			t.Fatalf("orderedKeys = %v, want aborted between failed and conflict", got)
+		}
+		if !(failedIdx < abortedIdx && abortedIdx < conflictIdx) {
+			t.Errorf("orderedKeys = %v, want aborted between failed and conflict", got)
+		}
+	})
 }
 
 func TestFmtDuration(t *testing.T) {
@@ -808,7 +829,7 @@ func TestRenderJournalStats(t *testing.T) {
 
 	// The sub histogram prints the whole vocabulary, in subResultOrder, zeros
 	// included - one contiguous block, so this pins the render's ordering.
-	subBlock := "verified  0\n  merged    1\n  pushed    0\n  blocked   0\n  failed    0\n  conflict  0\n  skipped   1  (gate)\n  manual    0  (gate)\n"
+	subBlock := "verified  0\n  merged    1\n  pushed    0\n  blocked   0\n  failed    0\n  aborted   0\n  conflict  0\n  skipped   1  (gate)\n  manual    0  (gate)\n"
 	if !strings.Contains(out, subBlock) {
 		t.Errorf("sub histogram block missing or misordered, want:\n%s\n---got---\n%s", subBlock, out)
 	}
