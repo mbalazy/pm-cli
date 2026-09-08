@@ -217,7 +217,7 @@ func TestPrintEpicPlanRuntimeMarker(t *testing.T) {
 		{Meta: storage.TaskMeta{ID: "p-1-2", Status: storage.StatusTodo, Order: 20}},
 	}
 	out := captureStdout(t, func() {
-		printEpicPlan(os.Stdout, tracker, "epic/p-1", "main", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", false, nil)
+		printEpicPlan(os.Stdout, tracker, "epic/p-1", "main", "main", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", false, nil)
 	})
 	for _, line := range strings.Split(out, "\n") {
 		switch {

@@ -418,7 +418,14 @@ func epicDoneStatusGate(doneStatus storage.TaskStatus, slug string, allowed []st
 // for), and it should also exit non-zero when it can already see the real run
 // will refuse to start.
 func printEpicDryRun(plan *epicPlan, opts epicOptions) error {
-	printEpicPlan(opts.stdout(), plan.tracker, plan.epicBranch, plan.baseBranch, plan.startStatus, plan.doneStatus,
+	// A slot forks from origin/<base>, never from the local branch (pm-cli-131).
+	// Resolved against the MAIN checkout: the slot is not claimed during a
+	// dry-run, and every worktree of a repo shares its refs anyway.
+	forkRef := plan.baseBranch
+	if opts.additional && plan.independent {
+		forkRef = slotForkRefName(plan.proj.Path, plan.baseBranch)
+	}
+	printEpicPlan(opts.stdout(), plan.tracker, plan.epicBranch, plan.baseBranch, forkRef, plan.startStatus, plan.doneStatus,
 		plan.subs, opts.additional, plan.workDir, plan.independent, plan.crashRecovered)
 	if plan.doneStatusNote != "" {
 		fmt.Fprintf(opts.stdout(), "\nnote: %s\n", plan.doneStatusNote)
@@ -501,16 +508,25 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		}
 	}
 
+	// The ref every sub forks from in independent mode. In the main checkout it
+	// is the local base branch; in a slot it is origin/<base> (see below).
+	forkRef := baseBranch
 	if independentMode {
 		if !branchExists(workDir, baseBranch) {
 			return fmt.Errorf("independent mode: base branch %q does not exist at %s", baseBranch, workDir)
 		}
 		// Every sub forks from base: a stale local base is what produced the
-		// false SPEC-CONFLICT of a 2026-08 run (pm-cli-119-7).
-		if err := freshenBase(errOut, workDir, baseBranch); err != nil {
+		// false SPEC-CONFLICT of a 2026-08 run (pm-cli-119-7). In the main
+		// checkout that means fast-forwarding the local base to origin. IN A
+		// SLOT it means reading origin/<base> instead: the local branch is held
+		// by the user's main checkout, so git refuses both to check it out and
+		// to move it (pm-cli-131) - see slotForkRef.
+		if opts.additional {
+			forkRef = slotForkRef(errOut, workDir, baseBranch)
+		} else if err := freshenBase(errOut, workDir, baseBranch); err != nil {
 			return fmt.Errorf("independent mode: %w", err)
 		}
-		fmt.Fprintf(errOut, "pm run-epic: %s INDEPENDENT - each sub on its own branch off %s (%d sub(s))\n", tracker.Meta.ID, baseBranch, len(subs))
+		fmt.Fprintf(errOut, "pm run-epic: %s INDEPENDENT - each sub on its own branch off %s (%d sub(s))\n", tracker.Meta.ID, forkRef, len(subs))
 	} else {
 		// A FRESH integration branch forks from base, so base is brought up to
 		// origin first; a re-run continues the existing branch and must not
@@ -529,12 +545,14 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	// Prepare the claimed slot ONCE for the whole run (deps install etc.) -
 	// per-sub would repeat it for every worker. Runs after branch setup so
 	// the lockfile prepare sees is the one every sub forks from; in
-	// independent mode check the base branch out first for the same reason.
+	// independent mode check that fork ref out first for the same reason -
+	// DETACHED, because this is a slot and the base branch may be held by the
+	// user's main checkout (pm-cli-131).
 	if opts.additional {
 		if prep := strings.TrimSpace(plan.exc.Prepare); prep != "" {
 			if independentMode {
-				if err := gitEnsureBranch(workDir, baseBranch, ""); err != nil {
-					return fmt.Errorf("checkout %s for prepare: %w", baseBranch, err)
+				if err := gitCheckoutDetached(workDir, forkRef); err != nil {
+					return fmt.Errorf("checkout %s for prepare: %w", forkRef, err)
 				}
 			}
 			fmt.Fprintf(errOut, "pm run-epic: prepare in %s: %s\n", workDir, prep)
@@ -590,10 +608,15 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	baselineUsed := ""
 	if bl := strings.TrimSpace(plan.exc.Baseline); bl != "" {
 		ref := epicBranch
+		checkout := func() error { return gitEnsureBranch(workDir, ref, "") }
 		if independentMode {
-			ref = baseBranch
+			ref = forkRef
+			// A slot never checks the base branch out by name (pm-cli-131).
+			if opts.additional {
+				checkout = func() error { return gitCheckoutDetached(workDir, ref) }
+			}
 		}
-		if err := gitEnsureBranch(workDir, ref, ""); err != nil {
+		if err := checkout(); err != nil {
 			fmt.Fprintf(errOut, "pm run-epic: checkout %s for baseline failed (%v) - continuing without a baseline\n", ref, err)
 		} else {
 			fmt.Fprintf(errOut, "pm run-epic: baseline in %s: %s\n", workDir, bl)
@@ -650,7 +673,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	// so the journal records the fork base instead.
 	journalBranch := epicBranch
 	if independentMode {
-		journalBranch = "independent:" + baseBranch
+		journalBranch = "independent:" + forkRef
 	}
 	journalDir := ""
 	if opts.additional {
@@ -706,7 +729,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 
 		subStart := time.Now()
 		if independentMode {
-			oc = driveSubIndependent(store, workDir, slug, tracker, sub, baseBranch, doneStatus, subOpts, rw, opts.additional)
+			oc = driveSubIndependent(store, workDir, slug, tracker, sub, forkRef, doneStatus, subOpts, rw, opts.additional)
 		} else {
 			oc = driveSub(store, workDir, slug, tracker, sub, epicBranch, doneStatus, subOpts, rw, opts.additional)
 		}
@@ -781,13 +804,19 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		// cannot open. Best-effort and chain-only: a run nobody chains keeps
 		// exactly the branch it kept before.
 		if independentMode {
-			logIfErr(errOut, "restore "+baseBranch+" before the acceptance", gitEnsureBranch(workDir, baseBranch, ""))
+			if opts.additional {
+				// A slot leaves the base branch alone entirely (pm-cli-131) -
+				// detaching frees the sub's branch just as well.
+				logIfErr(errOut, "detach at "+forkRef+" before the acceptance", gitCheckoutDetached(workDir, forkRef))
+			} else {
+				logIfErr(errOut, "restore "+baseBranch+" before the acceptance", gitEnsureBranch(workDir, baseBranch, ""))
+			}
 		}
 		chainFinish(errOut, stateDir, slug, tracker.Meta.ID, workDir)
 	}
 
 	if independentMode {
-		printEpicSummary(opts.stdout(), tracker, "independent, off "+baseBranch, outcomes, slug, plan.startStatus, rerunSkips(store, slug, outcomes, plan.startStatus, doneStatus))
+		printEpicSummary(opts.stdout(), tracker, "independent, off "+forkRef, outcomes, slug, plan.startStatus, rerunSkips(store, slug, outcomes, plan.startStatus, doneStatus))
 		fmt.Fprintf(errOut, "\nEach sub lives on its own branch (pushed to origin when it carried commits). Finish + verify every task by hand, then open per-task PRs - nothing was merged anywhere.\n")
 		maybeChainFinish()
 		return nil
@@ -1215,7 +1244,7 @@ func describeAutoFinish(plan *epicPlan, opts epicOptions) string {
 		"` starts on THIS machine when the run ends, unless the acceptance claim is already held"
 }
 
-func printEpicPlan(w io.Writer, tracker *storage.Task, epicBranch, base string, startStatus, doneStatus storage.TaskStatus, subs []*storage.Task, additional bool, workDir string, independent bool, recovered map[string]bool) {
+func printEpicPlan(w io.Writer, tracker *storage.Task, epicBranch, base, forkRef string, startStatus, doneStatus storage.TaskStatus, subs []*storage.Task, additional bool, workDir string, independent bool, recovered map[string]bool) {
 	runLine := "run: DEFAULT (main checkout, clean-tree required)"
 	if additional {
 		runLine = "run: ADDITIONAL worktree " + workDir + " (isolated branch/port/sim; main checkout untouched)"
@@ -1223,6 +1252,9 @@ func printEpicPlan(w io.Writer, tracker *storage.Task, epicBranch, base string, 
 	branchLine := fmt.Sprintf("integration branch: %s (off %s)", epicBranch, base)
 	if independent {
 		branchLine = fmt.Sprintf("mode: INDEPENDENT - each sub on its own branch off %s, pushed to origin; no integration branch, no merging, no epic PR", base)
+		if additional {
+			branchLine += fmt.Sprintf("\nsubs fork from %s (slot; the local %s is never checked out or moved)", forkRef, base)
+		}
 	}
 	fmt.Fprintf(w, "# pm run-epic (dry-run)\ntracker: %s  %s\n%s\n%s\nbase freshness: %s is fetched from origin and fast-forwarded at run start before anything forks from it; a diverged %s aborts the run\nready status: %s -> done status: %s\n\nsubs (in Order):\n",
 		tracker.Meta.ID, tracker.Meta.Title, runLine, branchLine, base, base, startStatus, doneStatus)

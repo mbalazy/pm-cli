@@ -66,6 +66,26 @@ func branchExists(dir, branch string) bool {
 	return c.Run() == nil
 }
 
+// gitRefExists reports whether ref resolves at dir - ANY ref, not just a local
+// branch (branchExists only knows refs/heads). A slot forks from a
+// remote-tracking ref (origin/<base>), which branchExists would deny.
+func gitRefExists(dir, ref string) bool {
+	c := exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", ref)
+	return c.Run() == nil
+}
+
+// gitCheckoutDetached checks ref out with a DETACHED head. This is how a
+// worktree slot reads the base branch: `git checkout <base>` is refused while
+// another worktree of the same repo (the user's main checkout) holds that
+// branch, and moving it with `branch -f` is refused for the same reason
+// (pm-cli-131). Detaching takes no branch, so nothing is held and nothing moves.
+func gitCheckoutDetached(dir, ref string) error {
+	if out, err := exec.Command("git", "-C", dir, "checkout", "--detach", ref).CombinedOutput(); err != nil {
+		return fmt.Errorf("checkout --detach %s: %s", ref, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // gitCurrentBranch returns the name of the currently checked-out branch.
 func gitCurrentBranch(dir string) (string, error) {
 	out, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
@@ -104,7 +124,8 @@ func gitFreshBranch(dir, branch, base string) error {
 		return err
 	}
 	args := []string{"-C", dir, "checkout", "-B", branch}
-	if base != "" && branchExists(dir, base) {
+	// Any ref, not just a local branch: in a slot the base is origin/<base>.
+	if base != "" && gitRefExists(dir, base) {
 		args = append(args, base)
 	}
 	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
@@ -192,14 +213,11 @@ func freshenBase(w io.Writer, dir, base string) error {
 	if base == "" || !gitHasRemote(dir) || !branchExists(dir, base) {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), baseFetchTimeout)
-	defer cancel()
-	if out, err := exec.CommandContext(ctx, "git", "-C", dir, "fetch", "--quiet", "origin", base).CombinedOutput(); err != nil {
-		fmt.Fprintf(w, "pm: could not fetch origin/%s (%s) - running on the local %s as is\n", base, strings.TrimSpace(string(out)), base)
+	if !fetchBase(w, dir, base) {
 		return nil
 	}
 	remote := "origin/" + base
-	if exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", remote).Run() != nil {
+	if !gitRefExists(dir, remote) {
 		return nil // base has no counterpart on origin
 	}
 	behind, err := gitAheadCount(dir, remote, base) // origin commits the local base lacks
@@ -226,6 +244,61 @@ func freshenBase(w io.Writer, dir, base string) error {
 	}
 	fmt.Fprintf(w, "pm: fast-forwarded %s %s..%s (%d commit(s) behind origin)\n", base, localSHA, remoteSHA, behind)
 	return nil
+}
+
+// fetchBase fetches origin/<base>, capped by baseFetchTimeout, and reports
+// whether the fetch succeeded. A failure is said on w and is never fatal: an
+// offline run is still a run, on the refs it has.
+func fetchBase(w io.Writer, dir, base string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), baseFetchTimeout)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "git", "-C", dir, "fetch", "--quiet", "origin", base).CombinedOutput(); err != nil {
+		fmt.Fprintf(w, "pm: could not fetch origin/%s (%s) - running on the local %s as is\n", base, strings.TrimSpace(string(out)), base)
+		return false
+	}
+	return true
+}
+
+// slotForkRefName is the ref a run IN A WORKTREE SLOT forks from, resolved
+// without touching the network: origin/<base> when it exists, the local base
+// otherwise (no remote, or a base with no counterpart on origin). Side-effect
+// free, so --dry-run reaches the same answer the run will.
+func slotForkRefName(dir, base string) string {
+	if base == "" || !gitHasRemote(dir) {
+		return base
+	}
+	if remote := "origin/" + base; gitRefExists(dir, remote) {
+		return remote
+	}
+	return base
+}
+
+// slotForkRef resolves the fork ref for a slot run after fetching origin.
+//
+// In a slot the base branch is a REF TO READ FROM, never a branch to check out
+// or to move: git refuses both while the user's main checkout holds it
+// (pm-cli-131). So there is no fast-forward here - the local base is simply not
+// what the subs fork from - and local commits origin lacks are a WARNING (the
+// run proceeds from origin), where the main-checkout path (freshenBase) still
+// errors on a diverged base.
+func slotForkRef(w io.Writer, dir, base string) string {
+	if base == "" || !gitHasRemote(dir) {
+		return base
+	}
+	if !fetchBase(w, dir, base) {
+		return base
+	}
+	ref := slotForkRefName(dir, base)
+	if ref == base {
+		return base
+	}
+	if branchExists(dir, base) {
+		if ahead, err := gitAheadCount(dir, base, ref); err == nil && ahead > 0 {
+			fmt.Fprintf(w, "pm: the local %s carries %d commit(s) origin lacks - this slot run forks from %s (%s) and leaves the local branch alone\n",
+				base, ahead, ref, gitShortSHA(dir, ref))
+		}
+	}
+	return ref
 }
 
 // gitShortSHA is the abbreviated hash of ref, "?" when git cannot resolve it

@@ -554,7 +554,7 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 		{Meta: storage.TaskMeta{ID: "p-1-6", Title: "crashed", Status: storage.StatusDoing, Order: 60}},
 	}
 	out := captureStdout(t, func() {
-		printEpicPlan(os.Stdout, tracker, "epic/p-1", "main", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", false,
+		printEpicPlan(os.Stdout, tracker, "epic/p-1", "main", "main", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", false,
 			map[string]bool{"p-1-6": true})
 	})
 	for _, want := range []string{
@@ -574,7 +574,7 @@ func TestPrintEpicPlanLabels(t *testing.T) {
 	}
 
 	independent := captureStdout(t, func() {
-		printEpicPlan(os.Stdout, tracker, "epic/p-1", "development", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", true, nil)
+		printEpicPlan(os.Stdout, tracker, "epic/p-1", "development", "development", storage.StatusTodo, storage.TaskStatus("merged"), subs, false, "/repo", true, nil)
 	})
 	if !strings.Contains(independent, "mode: INDEPENDENT") {
 		t.Errorf("independent plan should announce the mode:\n%s", independent)
