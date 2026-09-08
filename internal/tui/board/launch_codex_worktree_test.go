@@ -19,15 +19,25 @@ import (
 func TestLaunchCodexWorktreeSetupFailureAborts(t *testing.T) {
 	for _, kind := range []string{"worktree", "worktree-tmux"} {
 		t.Run(kind, func(t *testing.T) {
+			// worktree-tmux's non-abort path calls tmuxNewWindow, which shells
+			// out to the real `tmux` binary - clear PATH so that if the abort
+			// guard ever regresses, the test fails on a clean "tmux failed"
+			// toast instead of actually spawning a tmux window.
+			t.Setenv("PATH", "")
+
 			dir := t.TempDir() // not a git repo -> `git worktree add` fails
 			store := &storage.Store{Root: t.TempDir()}
 			projDir := filepath.Join(store.Root, "proj")
-			os.MkdirAll(projDir, 0755)
-			storage.WriteProject(filepath.Join(projDir, "project.yaml"), &storage.Project{
+			if err := os.MkdirAll(projDir, 0755); err != nil {
+				t.Fatalf("MkdirAll(%q): %v", projDir, err)
+			}
+			if err := storage.WriteProject(filepath.Join(projDir, "project.yaml"), &storage.Project{
 				Name:   "Proj",
 				Prefix: "proj",
 				Path:   dir,
-			})
+			}); err != nil {
+				t.Fatalf("WriteProject: %v", err)
+			}
 
 			task := &storage.Task{Meta: storage.TaskMeta{ID: "proj-1", Title: "Some task"}, Project: "proj"}
 			m := Model{
