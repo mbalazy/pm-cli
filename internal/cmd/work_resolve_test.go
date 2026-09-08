@@ -188,7 +188,10 @@ func TestResolveWorkTaskIntraProjectAmbiguityCounts(t *testing.T) {
 	addTask(t, store, "alpha", storage.TaskMeta{ID: "alpha-2", Title: "Auth screen", Status: storage.StatusTodo}, "")
 	addTask(t, store, "beta", storage.TaskMeta{ID: "beta-1", Title: "Auth cleanup", Status: storage.StatusTodo}, "")
 
-	_, _, err := resolveWorkTask(store, []string{"auth"}, "work")
+	var err error
+	stderr := captureStderr(t, func() {
+		_, _, err = resolveWorkTask(store, []string{"auth"}, "work")
+	})
 	if err == nil {
 		t.Fatal("a query ambiguous inside alpha resolved to beta instead of erroring")
 	}
@@ -196,6 +199,11 @@ func TestResolveWorkTaskIntraProjectAmbiguityCounts(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error must name %q, got: %v", want, err)
 		}
+	}
+	// A project that is merely AMBIGUOUS (several matches inside it) is
+	// readable, not skipped - this must not print an unreadable-project note.
+	if stderr != "" {
+		t.Fatalf("intra-project ambiguity must print no unreadable-project note, got: %q", stderr)
 	}
 }
 
