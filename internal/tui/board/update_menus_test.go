@@ -34,7 +34,7 @@ func TestColVisMenuEnterToggles(t *testing.T) {
 	}
 	m.reload()
 
-	result, _ := m.updateColVisMenu(tea.KeyMsg{Type: tea.KeyEnter})
+	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = result.(Model)
 	if m.colVisItems[0].visible {
 		t.Fatal("Enter did not toggle the highlighted item's visibility")
@@ -46,7 +46,7 @@ func TestColVisMenuEnterToggles(t *testing.T) {
 		t.Fatal("Enter should not close the menu")
 	}
 
-	result, _ = m.updateColVisMenu(tea.KeyMsg{Type: tea.KeySpace})
+	result, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	m = result.(Model)
 	if !m.colVisItems[0].visible {
 		t.Fatal("Space did not toggle the item back")
@@ -55,7 +55,7 @@ func TestColVisMenuEnterToggles(t *testing.T) {
 		t.Fatal("Space did not clear the hidden flag")
 	}
 
-	result, _ = m.updateColVisMenu(tea.KeyMsg{Type: tea.KeyEsc})
+	result, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = result.(Model)
 	if m.colVisMenu {
 		t.Fatal("Escape should still close the menu")
