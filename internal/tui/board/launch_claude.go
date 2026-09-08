@@ -272,15 +272,15 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 
 	case "worktree":
 		sessionID := generateSessionID()
-		if err := m.saveSession(t, sessionID); err != nil {
-			m.showErrorToast("save session failed", err)
-		}
 		wtName := worktreeName(t)
 		if projDir != "" {
 			if err := copyWorktreeFiles(projDir, wtName); err != nil {
 				m.showErrorToast("worktree setup failed", err)
 				return m, nil
 			}
+		}
+		if err := m.saveSession(t, sessionID); err != nil {
+			m.showErrorToast("save session failed", err)
 		}
 		claim := m.pickWorktreeSlot(proj, t.Project, sessionID)
 		args := claudeWorktreeArgs(wtName, sessionID, skipFlag, prompt)
@@ -303,15 +303,15 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 
 	case "worktree-tmux":
 		sessionID := generateSessionID()
-		if err := m.saveSession(t, sessionID); err != nil {
-			m.showErrorToast("save session failed", err)
-		}
 		wtName := worktreeName(t)
 		if projDir != "" {
 			if err := copyWorktreeFiles(projDir, wtName); err != nil {
 				m.showErrorToast("worktree setup failed", err)
 				return m, nil
 			}
+		}
+		if err := m.saveSession(t, sessionID); err != nil {
+			m.showErrorToast("save session failed", err)
 		}
 		claim := m.pickWorktreeSlot(proj, t.Project, sessionID)
 		// Lock write goes between `cd` and the env-prefixed claude command;

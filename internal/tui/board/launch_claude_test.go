@@ -3,6 +3,8 @@ package board
 import (
 	"strings"
 	"testing"
+
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // TestClaudeSessionArgs covers pm-cli-72-2 point 6: launchClaude's kinds
@@ -82,6 +84,51 @@ func TestClaudeShellCommand(t *testing.T) {
 			t.Errorf("claudeShellCommand = %q, want %q", got, want)
 		}
 	})
+}
+
+// TestWorktreeLaunchSessionSavedOnlyAfterSetupSucceeds covers pm-cli-132-6
+// (pm-cli-77): a failed worktree setup must not leave a session ID on the
+// task that no process ever used - saveSession must run AFTER
+// copyWorktreeFiles succeeds, not before.
+func TestWorktreeLaunchSessionSavedOnlyAfterSetupSucceeds(t *testing.T) {
+	for _, kind := range []string{"worktree", "worktree-tmux"} {
+		t.Run(kind, func(t *testing.T) {
+			store := &storage.Store{Root: t.TempDir()}
+			if err := store.CreateProject("p", &storage.Project{
+				Name: "P",
+				Path: t.TempDir(), // not a git repo -> `git worktree add` fails
+			}); err != nil {
+				t.Fatal(err)
+			}
+			task := &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "Existing", Status: storage.StatusTodo}}
+			if err := store.AddTask("p", task); err != nil {
+				t.Fatal(err)
+			}
+
+			m := Model{
+				store:       store,
+				projects:    []string{"all", "p"},
+				currentView: viewDetail,
+				detailState: detailState{detailTask: task},
+				width:       80, height: 24,
+			}
+
+			result, _ := m.launchClaude(kind)
+			m = result.(Model)
+
+			if !strings.Contains(m.toastMsg, "worktree setup failed") {
+				t.Errorf("toastMsg = %q, want it to mention the worktree setup failure", m.toastMsg)
+			}
+
+			fresh, err := store.FindTask("p", "p-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(fresh.Meta.Sessions) != 0 {
+				t.Errorf("Meta.Sessions = %v, want empty - a failed worktree setup must not save a session", fresh.Meta.Sessions)
+			}
+		})
+	}
 }
 
 func assertArgsEqual(t *testing.T, got, want []string) {
