@@ -1,6 +1,9 @@
 package board
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -126,6 +129,76 @@ func TestWorktreeLaunchSessionSavedOnlyAfterSetupSucceeds(t *testing.T) {
 			}
 			if len(fresh.Meta.Sessions) != 0 {
 				t.Errorf("Meta.Sessions = %v, want empty - a failed worktree setup must not save a session", fresh.Meta.Sessions)
+			}
+		})
+	}
+}
+
+// TestWorktreeLaunchSessionSavedOnSuccess is the positive control for
+// pm-cli-132-6: on a SUCCESSFUL worktree setup, the session must still be
+// saved (the reorder must not have turned into "never save the session").
+// Uses a real git repo as the project path so `git worktree add` succeeds,
+// and a fake `tmux` on PATH (the worktree-tmux kind execs tmux synchronously
+// inside launchClaude, unlike the plain worktree kind which only builds a
+// tea.ExecProcess Cmd that this test never invokes) so no real tmux window
+// is touched.
+func TestWorktreeLaunchSessionSavedOnSuccess(t *testing.T) {
+	fakeBin := t.TempDir()
+	tmuxScript := "#!/bin/sh\ncase \"$1\" in\nlist-panes) exit 0 ;;\ndisplay-message) echo \"\"; exit 0 ;;\nnew-window) exit 0 ;;\nrename-window) exit 0 ;;\n*) exit 0 ;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(fakeBin, "tmux"), []byte(tmuxScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, kind := range []string{"worktree", "worktree-tmux"} {
+		t.Run(kind, func(t *testing.T) {
+			projPath := t.TempDir()
+			runGit := func(args ...string) {
+				t.Helper()
+				cmd := exec.Command("git", args...)
+				cmd.Dir = projPath
+				cmd.Env = append(os.Environ(),
+					"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t.com",
+					"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t.com")
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("git %v: %v: %s", args, err, out)
+				}
+			}
+			runGit("init", "-q")
+			runGit("commit", "--allow-empty", "-q", "-m", "init")
+
+			store := &storage.Store{Root: t.TempDir()}
+			if err := store.CreateProject("p", &storage.Project{
+				Name: "P",
+				Path: projPath, // a real git repo -> `git worktree add` succeeds
+			}); err != nil {
+				t.Fatal(err)
+			}
+			task := &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "Existing", Status: storage.StatusTodo}}
+			if err := store.AddTask("p", task); err != nil {
+				t.Fatal(err)
+			}
+
+			m := Model{
+				store:       store,
+				projects:    []string{"all", "p"},
+				currentView: viewDetail,
+				detailState: detailState{detailTask: task},
+				width:       80, height: 24,
+			}
+
+			// The "worktree" kind returns the launch as a tea.Cmd (never
+			// invoked here) instead of running it synchronously - only the
+			// session-save side effect, which already happened by the time
+			// launchClaude returns, is under test.
+			m.launchClaude(kind)
+
+			fresh, err := store.FindTask("p", "p-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(fresh.Meta.Sessions) != 1 {
+				t.Errorf("Meta.Sessions = %v, want exactly one saved session on a successful worktree setup", fresh.Meta.Sessions)
 			}
 		})
 	}
