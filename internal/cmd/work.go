@@ -306,12 +306,13 @@ func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*s
 		projects = append(projects, cwdSlug)
 	}
 
-	// unreadable notes a project ONCE (across all three tiers) when a lookup
-	// in it failed for a reason OTHER than "no such task" / "several
-	// matches" - i.e. the project itself could not be read (permissions, a
-	// corrupt file). Without this, a scan that silently drops such a project
-	// reports the same "not found in any project" as a genuine miss, and the
-	// user never learns a project was skipped.
+	// noteUnreadable reports a project ONCE (the first failing tier wins;
+	// across all three tiers) when a lookup in it failed for a reason OTHER
+	// than "no such task" / "several matches" - i.e. the project's task
+	// directory itself could not be read (e.g. a permissions error). Without
+	// this, a scan that silently drops such a project reports the same "not
+	// found in any project" as a genuine miss, and the user never learns a
+	// project was skipped.
 	noted := make(map[string]bool)
 	noteUnreadable := func(slug string, err error) {
 		if noted[slug] {

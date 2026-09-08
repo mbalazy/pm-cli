@@ -32,7 +32,10 @@ func TestResolveWorkTaskAmbiguousAcrossProjects(t *testing.T) {
 	addTask(t, store, "alpha", storage.TaskMeta{ID: "alpha-1", Title: "Fix auth refresh", Status: storage.StatusTodo}, "")
 	addTask(t, store, "beta", storage.TaskMeta{ID: "beta-1", Title: "Auth screen polish", Status: storage.StatusTodo}, "")
 
-	_, _, err := resolveWorkTask(store, []string{"auth"}, "work")
+	var err error
+	stderr := captureStderr(t, func() {
+		_, _, err = resolveWorkTask(store, []string{"auth"}, "work")
+	})
 	if err == nil {
 		t.Fatal("ambiguous cross-project query resolved instead of erroring")
 	}
@@ -40,6 +43,11 @@ func TestResolveWorkTaskAmbiguousAcrossProjects(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error must name %q, got: %v", want, err)
 		}
+	}
+	// A per-project title-match hit is a normal outcome (feeding the ambiguity
+	// above), not an unreadable project - must print no note.
+	if stderr != "" {
+		t.Fatalf("ambiguous-but-readable projects must print no note, got: %q", stderr)
 	}
 }
 
@@ -219,8 +227,8 @@ func TestResolveWorkTaskUniqueAcrossProjects(t *testing.T) {
 // unreadableProjectStore wraps a real TaskStore and makes every read on ONE
 // slug fail with a synthetic error distinct from the "no such task" / "several
 // matches" sentinels - simulating a project directory that cannot be read
-// (permissions, a corrupt file) rather than one that is merely readable and
-// empty of matches.
+// (e.g. a permissions error from the underlying os.ReadDir) rather than one
+// that is merely readable and empty of matches.
 type unreadableProjectStore struct {
 	storage.TaskStore
 	slug string
@@ -279,15 +287,16 @@ func TestResolveWorkTaskReportsUnreadableProject(t *testing.T) {
 	}
 
 	// A task that lives ONLY in the unreadable project stays not-found, but
-	// the note still fires.
+	// the note still fires - and, since this query walks all three tiers,
+	// exactly once despite beta failing at every tier (the dedup guard).
 	stderr = captureStderr(t, func() {
 		_, _, err = resolveWorkTask(broken, []string{"beta-1"}, "work")
 	})
 	if err == nil {
 		t.Fatal("a task in an unreadable project must not resolve")
 	}
-	if !strings.Contains(stderr, "skipping project beta") {
-		t.Fatalf("want a note about beta, got: %q", stderr)
+	if got := strings.Count(stderr, "skipping project beta"); got != 1 {
+		t.Fatalf("want exactly one note about beta despite failing every tier, got %d in: %q", got, stderr)
 	}
 }
 
