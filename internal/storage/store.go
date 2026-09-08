@@ -529,8 +529,18 @@ func (s *Store) ResolveProject(input string) (string, error) {
 	case 1:
 		return matches[0], nil
 	default:
-		if strings.ToLower(matches[0]) == folded {
-			return matches[0], nil
+		// Prefer a byte-exact match over a case-folded one, so a
+		// case-sensitive filesystem hosting both "alpha" and "Alpha"
+		// resolves the one the user actually typed.
+		for _, m := range matches {
+			if m == input {
+				return m, nil
+			}
+		}
+		for _, m := range matches {
+			if strings.ToLower(m) == folded {
+				return m, nil
+			}
 		}
 		return "", fmt.Errorf("ambiguous project %q: matches %s", input, strings.Join(matches, ", "))
 	}

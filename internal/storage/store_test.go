@@ -44,6 +44,18 @@ func setupTestStore(t *testing.T) (*Store, string) {
 	return store, dir
 }
 
+// isCaseSensitiveFS reports whether dir's filesystem distinguishes
+// "probe" from "PROBE" as separate directory entries.
+func isCaseSensitiveFS(t *testing.T, dir string) bool {
+	t.Helper()
+	probe := filepath.Join(dir, "casefold-probe")
+	if err := os.MkdirAll(probe, 0755); err != nil {
+		t.Fatalf("isCaseSensitiveFS: %v", err)
+	}
+	_, err := os.Stat(filepath.Join(dir, "CASEFOLD-PROBE"))
+	return os.IsNotExist(err)
+}
+
 func TestNextChildID(t *testing.T) {
 	store, dir := setupTestStore(t)
 	alphaDir := filepath.Join(dir, "alpha")
@@ -247,6 +259,50 @@ func TestResolveProject(t *testing.T) {
 			if got != "MyProj" {
 				t.Errorf("ResolveProject(%q) = %q, want %q", input, got, "MyProj")
 			}
+		}
+	})
+
+	t.Run("mixed-case dir does not break an unrelated exact lowercase match", func(t *testing.T) {
+		// A folded-exact candidate must not shadow a byte-exact one just
+		// because it sorts first; "alpha" itself already sorts first among
+		// {"alpha","alphatwo","albeta"}, so add a mixed-case dir that folds
+		// to "alpha" too and sorts ahead of it.
+		mixedDir := filepath.Join(dir, "AlphaX")
+		os.MkdirAll(mixedDir, 0755)
+		WriteProject(filepath.Join(mixedDir, "project.yaml"), &Project{Name: "AlphaX"})
+
+		got, err := store.ResolveProject("alpha")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "alpha" {
+			t.Errorf("got %q, want %q", got, "alpha")
+		}
+	})
+
+	t.Run("byte-exact match wins over a folded-exact one", func(t *testing.T) {
+		store2, dir2 := setupTestStore(t)
+		if !isCaseSensitiveFS(t, dir2) {
+			t.Skip("host filesystem is case-insensitive: \"Alpha\" and \"alpha\" cannot coexist as distinct dirs")
+		}
+		mixedDir := filepath.Join(dir2, "Alpha")
+		os.MkdirAll(mixedDir, 0755)
+		WriteProject(filepath.Join(mixedDir, "project.yaml"), &Project{Name: "Alpha"})
+
+		got, err := store2.ResolveProject("alpha")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "alpha" {
+			t.Errorf("got %q, want %q", got, "alpha")
+		}
+
+		got, err = store2.ResolveProject("Alpha")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "Alpha" {
+			t.Errorf("got %q, want %q", got, "Alpha")
 		}
 	})
 }
