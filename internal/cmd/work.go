@@ -306,10 +306,30 @@ func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*s
 		projects = append(projects, cwdSlug)
 	}
 
+	// unreadable notes a project ONCE (across all three tiers) when a lookup
+	// in it failed for a reason OTHER than "no such task" / "several
+	// matches" - i.e. the project itself could not be read (permissions, a
+	// corrupt file). Without this, a scan that silently drops such a project
+	// reports the same "not found in any project" as a genuine miss, and the
+	// user never learns a project was skipped.
+	noted := make(map[string]bool)
+	noteUnreadable := func(slug string, err error) {
+		if noted[slug] {
+			return
+		}
+		noted[slug] = true
+		fmt.Fprintf(os.Stderr, "pm: skipping project %s - cannot read its tasks: %v\n", slug, err)
+	}
+
 	var exact []projectHit
 	for _, slug := range projects {
-		if t, err := store.FindTaskExact(slug, query); err == nil {
+		t, err := store.FindTaskExact(slug, query)
+		if err == nil {
 			exact = append(exact, projectHit{task: t, slug: slug, label: slug + "/" + t.Meta.ID})
+			continue
+		}
+		if !errors.Is(err, storage.ErrTaskNotFound) {
+			noteUnreadable(slug, err)
 		}
 	}
 	if len(exact) > 0 {
@@ -323,6 +343,7 @@ func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*s
 	for _, slug := range projects {
 		tasks, err := store.GetTasks(slug)
 		if err != nil {
+			noteUnreadable(slug, err)
 			continue
 		}
 		var hits []*storage.Task
@@ -355,6 +376,10 @@ func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*s
 			// ambiguous in alpha and matches one task in beta silently
 			// resolves to beta - first-wins again, by another route.
 			fuzzy = append(fuzzy, projectHit{slug: slug, label: slug + "/<several>"})
+		case errors.Is(err, storage.ErrTaskNotFound):
+			// Ordinary miss - nothing to report.
+		default:
+			noteUnreadable(slug, err)
 		}
 	}
 	if len(fuzzy) == 0 {

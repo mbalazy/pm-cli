@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -212,6 +213,101 @@ func TestResolveWorkTaskUniqueAcrossProjects(t *testing.T) {
 	}
 	if slug != "beta" || task.Meta.ID != "beta-1" {
 		t.Fatalf("resolved %s/%s, want beta/beta-1", slug, task.Meta.ID)
+	}
+}
+
+// unreadableProjectStore wraps a real TaskStore and makes every read on ONE
+// slug fail with a synthetic error distinct from the "no such task" / "several
+// matches" sentinels - simulating a project directory that cannot be read
+// (permissions, a corrupt file) rather than one that is merely readable and
+// empty of matches.
+type unreadableProjectStore struct {
+	storage.TaskStore
+	slug string
+	err  error
+}
+
+func (s *unreadableProjectStore) GetTasks(projectSlug string) ([]*storage.Task, error) {
+	if projectSlug == s.slug {
+		return nil, s.err
+	}
+	return s.TaskStore.GetTasks(projectSlug)
+}
+
+func (s *unreadableProjectStore) FindTask(projectSlug, query string) (*storage.Task, error) {
+	if projectSlug == s.slug {
+		return nil, s.err
+	}
+	return s.TaskStore.FindTask(projectSlug, query)
+}
+
+func (s *unreadableProjectStore) FindTaskExact(projectSlug, taskID string) (*storage.Task, error) {
+	if projectSlug == s.slug {
+		return nil, s.err
+	}
+	return s.TaskStore.FindTaskExact(projectSlug, taskID)
+}
+
+// TestResolveWorkTaskReportsUnreadableProject: a project whose directory
+// cannot be read must not be silently dropped from the scan - the user gets a
+// stderr note naming it, and the OTHER project's task still resolves.
+func TestResolveWorkTaskReportsUnreadableProject(t *testing.T) {
+	store := twoProjectStore(t)
+	addTask(t, store, "alpha", storage.TaskMeta{ID: "alpha-1", Title: "Fix auth refresh", Status: storage.StatusTodo}, "")
+	addTask(t, store, "beta", storage.TaskMeta{ID: "beta-1", Title: "Unrelated", Status: storage.StatusTodo}, "")
+
+	readErr := errors.New("open beta: permission denied")
+	broken := &unreadableProjectStore{TaskStore: store, slug: "beta", err: readErr}
+
+	var task *storage.Task
+	var slug string
+	var err error
+	stderr := captureStderr(t, func() {
+		task, slug, err = resolveWorkTask(broken, []string{"alpha-1"}, "work")
+	})
+	if err != nil {
+		t.Fatalf("readable project's exact id must still resolve: %v", err)
+	}
+	if slug != "alpha" || task.Meta.ID != "alpha-1" {
+		t.Fatalf("resolved %s/%s, want alpha/alpha-1", slug, task.Meta.ID)
+	}
+	if got := strings.Count(stderr, "skipping project beta"); got != 1 {
+		t.Fatalf("want exactly one note about beta, got %d in: %q", got, stderr)
+	}
+	if !strings.Contains(stderr, readErr.Error()) {
+		t.Fatalf("note must carry the underlying error, got: %q", stderr)
+	}
+
+	// A task that lives ONLY in the unreadable project stays not-found, but
+	// the note still fires.
+	stderr = captureStderr(t, func() {
+		_, _, err = resolveWorkTask(broken, []string{"beta-1"}, "work")
+	})
+	if err == nil {
+		t.Fatal("a task in an unreadable project must not resolve")
+	}
+	if !strings.Contains(stderr, "skipping project beta") {
+		t.Fatalf("want a note about beta, got: %q", stderr)
+	}
+}
+
+// TestResolveWorkTaskPlainMissPrintsNoNote: when every project is readable
+// and the query simply matches nothing, no unreadable-project note should
+// appear.
+func TestResolveWorkTaskPlainMissPrintsNoNote(t *testing.T) {
+	store := twoProjectStore(t)
+	addTask(t, store, "alpha", storage.TaskMeta{ID: "alpha-1", Title: "Fix auth refresh", Status: storage.StatusTodo}, "")
+	addTask(t, store, "beta", storage.TaskMeta{ID: "beta-1", Title: "Unrelated", Status: storage.StatusTodo}, "")
+
+	var err error
+	stderr := captureStderr(t, func() {
+		_, _, err = resolveWorkTask(store, []string{"nothing-matches-this"}, "work")
+	})
+	if err == nil {
+		t.Fatal("expected not-found error")
+	}
+	if stderr != "" {
+		t.Fatalf("plain miss must print no note, got: %q", stderr)
 	}
 }
 
