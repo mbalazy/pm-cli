@@ -36,6 +36,13 @@ const (
 	subAborted = "aborted"
 )
 
+// zeroProgressPrefix tags a crash note whose worker died before it produced
+// any result envelope or any commit - as opposed to one that worked for a
+// while and then failed verify. pm-cli-75: without this the two read
+// identically in the summary and a human has to open the branch to tell them
+// apart.
+const zeroProgressPrefix = "worker died before producing any work (no result envelope, no commits): "
+
 // greenSubResult reports whether a sub result means "the worker delivered and
 // the manager did its part" - the two landing words, whatever the mode.
 func greenSubResult(result string) bool {
@@ -780,7 +787,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	}
 
 	if independentMode {
-		printEpicSummary(opts.stdout(), tracker, "independent, off "+baseBranch, outcomes)
+		printEpicSummary(opts.stdout(), tracker, "independent, off "+baseBranch, outcomes, slug, plan.startStatus, rerunSkips(store, slug, outcomes, plan.startStatus))
 		fmt.Fprintf(errOut, "\nEach sub lives on its own branch (pushed to origin when it carried commits). Finish + verify every task by hand, then open per-task PRs - nothing was merged anywhere.\n")
 		maybeChainFinish()
 		return nil
@@ -792,7 +799,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	// only affects which branch is checked out at exit.
 	_ = gitEnsureBranch(workDir, epicBranch, "")
 
-	printEpicSummary(opts.stdout(), tracker, "integration: "+epicBranch, outcomes)
+	printEpicSummary(opts.stdout(), tracker, "integration: "+epicBranch, outcomes, slug, plan.startStatus, rerunSkips(store, slug, outcomes, plan.startStatus))
 
 	if !opts.noPR && anyMerged(outcomes) {
 		openEpicPR(errOut, workDir, epicBranch, baseBranch, tracker)
@@ -1232,12 +1239,47 @@ func printEpicPlan(w io.Writer, tracker *storage.Task, epicBranch, base string, 
 	}
 }
 
+// rerunSkip names a sub a plain re-run will silently skip as "not ready":
+// classifySub only drives a sub sitting on the start status, and a sub that
+// went non-green in THIS run was already moved to doing and (in independent
+// mode) left there - so without this line the human sees nothing next time.
+type rerunSkip struct {
+	id     string
+	status storage.TaskStatus
+}
+
+// rerunSkips scans the non-green outcomes of a finished run and reports which
+// ones now sit on a status other than startStatus - the ones classifySub will
+// skip on the next run. Green outcomes (merged/pushed) need no re-run;
+// skipped/manual/aborted subs were never driven this run (or were returned to
+// startStatus already) so they read as ready on their own.
+func rerunSkips(store storage.TaskStore, slug string, outcomes []subOutcome, startStatus storage.TaskStatus) []rerunSkip {
+	var skips []rerunSkip
+	for _, o := range outcomes {
+		if greenSubResult(o.result) || o.result == subSkipped || o.result == subManual || o.result == subAborted {
+			continue
+		}
+		sub, err := store.FindTaskExact(slug, o.id)
+		if err != nil {
+			continue
+		}
+		if sub.Meta.Status != startStatus {
+			skips = append(skips, rerunSkip{id: o.id, status: sub.Meta.Status})
+		}
+	}
+	return skips
+}
+
 // printEpicSummary renders the per-sub outcomes under a header describing WHERE
 // the work went. The caller passes that label whole ("integration: epic/x", or
 // "independent, off main"): the header used to hardcode "integration: %s", so
 // an independent run - which has no integration branch at all - printed
 // "(integration: independent, off main)".
-func printEpicSummary(w io.Writer, tracker *storage.Task, label string, outcomes []subOutcome) {
+//
+// skips (pm-cli-75) lists subs a plain re-run will pass over as "not ready"
+// because their status moved off the start status without going green - the
+// exact silence the reporter hit. Empty skips prints nothing extra.
+func printEpicSummary(w io.Writer, tracker *storage.Task, label string, outcomes []subOutcome, slug string, startStatus storage.TaskStatus, skips []rerunSkip) {
 	fmt.Fprintf(w, "\n# Epic %s summary (%s)\n", tracker.Meta.ID, label)
 	for _, o := range outcomes {
 		line := fmt.Sprintf("  %-9s %s", o.result, o.id)
@@ -1246,4 +1288,13 @@ func printEpicSummary(w io.Writer, tracker *storage.Task, label string, outcomes
 		}
 		fmt.Fprintln(w, line)
 	}
+	if len(skips) == 0 {
+		return
+	}
+	parts := make([]string, len(skips))
+	for i, s := range skips {
+		parts[i] = fmt.Sprintf("%s (status %s)", s.id, s.status)
+	}
+	fmt.Fprintf(w, "\nA re-run will NOT pick up: %s - move them back to %s first (`pm mv %s <id> %s`) or re-run with the sub's status fixed.\n",
+		strings.Join(parts, ", "), startStatus, slug, startStatus)
 }

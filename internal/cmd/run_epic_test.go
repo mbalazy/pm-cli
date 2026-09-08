@@ -595,8 +595,8 @@ func TestPrintEpicSummaryLabel(t *testing.T) {
 	outcomes := []subOutcome{{"p-1-1", "merged", "ok", "feat/one"}}
 
 	var integration, independent strings.Builder
-	printEpicSummary(&integration, tracker, "integration: epic/p-1", outcomes)
-	printEpicSummary(&independent, tracker, "independent, off main", outcomes)
+	printEpicSummary(&integration, tracker, "integration: epic/p-1", outcomes, "p", storage.StatusTodo, nil)
+	printEpicSummary(&independent, tracker, "independent, off main", outcomes, "p", storage.StatusTodo, nil)
 
 	if !strings.Contains(integration.String(), "(integration: epic/p-1)") {
 		t.Errorf("integration summary should name the integration branch:\n%s", integration.String())
@@ -612,6 +612,55 @@ func TestPrintEpicSummaryLabel(t *testing.T) {
 		if !strings.Contains(out, "merged    p-1-1  - ok") {
 			t.Errorf("summary missing the sub line:\n%s", out)
 		}
+	}
+}
+
+// TestPrintEpicSummaryRerunSkips: pm-cli-75's silent re-run. A non-green sub
+// left off the start status gets a trailing sentence naming it and how to fix
+// it; an empty skip list prints nothing beyond the per-sub lines.
+func TestPrintEpicSummaryRerunSkips(t *testing.T) {
+	tracker := &storage.Task{Meta: storage.TaskMeta{ID: "p-1", Title: "Epic"}}
+	outcomes := []subOutcome{{"p-1-1", "failed", "claude worker failed: exit status 1", "feat/one"}}
+
+	var withSkips strings.Builder
+	printEpicSummary(&withSkips, tracker, "independent, off main", outcomes, "p", storage.StatusTodo,
+		[]rerunSkip{{id: "p-1-1", status: storage.StatusDoing}})
+	got := withSkips.String()
+	if !strings.Contains(got, "A re-run will NOT pick up: p-1-1 (status doing)") {
+		t.Errorf("summary should name the skipped sub and its status:\n%s", got)
+	}
+	if !strings.Contains(got, "pm mv p <id> todo") {
+		t.Errorf("summary should hint the fix command:\n%s", got)
+	}
+
+	var noSkips strings.Builder
+	printEpicSummary(&noSkips, tracker, "independent, off main", outcomes, "p", storage.StatusTodo, nil)
+	if strings.Contains(noSkips.String(), "re-run") {
+		t.Errorf("empty skip list must print nothing extra:\n%s", noSkips.String())
+	}
+}
+
+// TestRerunSkips exercises the classification itself: green/skipped/manual/
+// aborted subs are never listed even off the start status; a failed sub still
+// sitting on doing is; a failed sub a caller already returned to todo is not.
+func TestRerunSkips(t *testing.T) {
+	store, slug := tempStore(t)
+	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1", Title: "Tracker", Status: storage.StatusTodo}, "")
+	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-1", Title: "stuck failed", Status: storage.StatusDoing, Parent: "proj-1"}, "")
+	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-2", Title: "returned to start", Status: storage.StatusTodo, Parent: "proj-1"}, "")
+	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-3", Title: "landed", Status: storage.StatusDone, Parent: "proj-1"}, "")
+	addTask(t, store, slug, storage.TaskMeta{ID: "proj-1-4", Title: "manual", Status: storage.StatusTodo, Parent: "proj-1"}, "")
+
+	outcomes := []subOutcome{
+		{"proj-1-1", subFailed, "died", "feat/1"},
+		{"proj-1-2", subFailed, "died then returned", "feat/2"},
+		{"proj-1-3", subMerged, "ok", "feat/3"},
+		{"proj-1-4", subManual, "manual sub", ""},
+	}
+
+	got := rerunSkips(store, slug, outcomes, storage.StatusTodo)
+	if len(got) != 1 || got[0].id != "proj-1-1" || got[0].status != storage.StatusDoing {
+		t.Fatalf("rerunSkips = %+v, want exactly proj-1-1 (doing)", got)
 	}
 }
 

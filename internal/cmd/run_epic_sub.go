@@ -208,6 +208,15 @@ func driveSubIndependent(store storage.TaskStore, workDir, slug string, tracker,
 			if pushNote := pushIfAhead(dir, branch, baseBranch); pushNote != "" {
 				note += "; " + pushNote
 			}
+			// A dead worker that never got as far as one commit reads very
+			// differently from one that worked and then failed verify - tag it so
+			// a human triaging the summary doesn't have to open the branch to
+			// tell them apart. An ahead-check that itself failed is NOT zero
+			// progress (matches pushIfAhead's own "push anyway" rule): silence
+			// there must not read as "nothing happened".
+			if ahead, err := gitAheadCount(dir, branch, baseBranch); err == nil && ahead == 0 {
+				note = zeroProgressPrefix + note
+			}
 			return note
 		},
 		note: func(dir, branch, note string) string {

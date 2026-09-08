@@ -119,6 +119,67 @@ func TestDriveSubIndependentPushesOnWorkerCrash(t *testing.T) {
 	}
 }
 
+// TestZeroProgressCrashNote covers the pm-cli-75 tag: a worker that dies
+// before committing anything gets a distinct prefix from one that dies after
+// making progress - so a human triaging the summary doesn't have to open the
+// branch to tell "never started" from "worked, then died" apart.
+func TestZeroProgressCrashNote(t *testing.T) {
+	t.Run("no commits", func(t *testing.T) {
+		fakeClaude(t, "exit 1") // dies immediately, nothing committed
+		store, sub, _, opts := executorFixture(t)
+		proj, _ := store.GetProject("app")
+		addTask(t, store, "app", storage.TaskMeta{ID: "app-t", Title: "Batch", Status: storage.StatusDoing}, "")
+		tracker, err := store.FindTask("app", "app-t")
+		if err != nil {
+			t.Fatal(err)
+		}
+		rw := storage.NewRunWriter(store.ProjectDir("app"), &storage.RunState{
+			TaskID: "app-t", Project: "app", Kind: "run-epic", Status: storage.RunStatusRunning, PID: os.Getpid(),
+		})
+		opts.standalone = false
+		opts.independent = true
+		base := gitHeadBranch(t, proj.Path)
+
+		oc := driveSubIndependent(store, proj.Path, "app", tracker, sub, base, storage.StatusDone, opts, rw, false)
+
+		if oc.result != subFailed {
+			t.Fatalf("outcome = %+v, want failed", oc)
+		}
+		if !strings.HasPrefix(oc.note, zeroProgressPrefix) {
+			t.Errorf("zero-progress note should carry the prefix, got %q", oc.note)
+		}
+	})
+
+	t.Run("one commit before dying", func(t *testing.T) {
+		fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\nexit 1")
+		store, sub, _, opts := executorFixture(t)
+		proj, _ := store.GetProject("app")
+		addTask(t, store, "app", storage.TaskMeta{ID: "app-t", Title: "Batch", Status: storage.StatusDoing}, "")
+		tracker, err := store.FindTask("app", "app-t")
+		if err != nil {
+			t.Fatal(err)
+		}
+		rw := storage.NewRunWriter(store.ProjectDir("app"), &storage.RunState{
+			TaskID: "app-t", Project: "app", Kind: "run-epic", Status: storage.RunStatusRunning, PID: os.Getpid(),
+		})
+		opts.standalone = false
+		opts.independent = true
+		base := gitHeadBranch(t, proj.Path)
+
+		oc := driveSubIndependent(store, proj.Path, "app", tracker, sub, base, storage.StatusDone, opts, rw, false)
+
+		if oc.result != subFailed {
+			t.Fatalf("outcome = %+v, want failed", oc)
+		}
+		if strings.HasPrefix(oc.note, zeroProgressPrefix) {
+			t.Errorf("a sub that made progress must not carry the zero-progress prefix, got %q", oc.note)
+		}
+		if !strings.HasPrefix(oc.note, "claude worker failed") {
+			t.Errorf("crash note should still lead with the worker error, got %q", oc.note)
+		}
+	})
+}
+
 // epicRunFixture builds a store + git repo ready for a real executeEpic run:
 // the done status is `done` (in the project's default statuses) and the repo
 // sits on `main`, which independent mode requires to exist.
