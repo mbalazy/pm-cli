@@ -632,12 +632,36 @@ func TestExecuteEpicIndependentInASlotNeverTouchesTheLocalBase(t *testing.T) {
 	if log := gitLogAll(t, slot, "feat/only-sub"); !strings.Contains(log, "worker commit") {
 		t.Errorf("the sub's branch should carry the worker's commit:\n%s", log)
 	}
+
+	// Every sub forks from ORIGIN's tip. Both halves matter: it is not the
+	// stale local base (which is a commit behind), and it is not wherever the
+	// slot happened to stand - after the first sub that is the first sub's own
+	// branch, and an independent batch must never stack one sub on another.
+	originTip := gitReadT(t, repo, "rev-parse", "origin/main")
+	if originTip == baseBefore {
+		t.Fatal("fixture is wrong: origin/main equals the local main, so the fork ref proves nothing")
+	}
+	for _, b := range []string{"feat/only-sub", "feat/second-sub"} {
+		if got := gitReadT(t, slot, "rev-parse", b+"^"); got != originTip {
+			t.Errorf("%s forked from %s, want origin/main %s", b, got, originTip)
+		}
+	}
 }
 
 // epicSlotFixture is epicRunFixture with an origin and a worktree slot: the
 // project is a clone whose main checkout stays on `main`, and the executor has
 // one slot plus a prepare and a baseline (the two steps that used to check the
 // base branch out).
+//
+// Two properties of the fixture are load-bearing, not decoration:
+//   - origin/main is ONE COMMIT AHEAD of the clone's local main, so "forked
+//     from the fork ref" is distinguishable from "forked from the local base";
+//   - there are TWO subs, so "each sub forks from the fork ref" is
+//     distinguishable from "each sub forks from wherever the slot happens to
+//     stand", which after the first sub is the first sub's own branch.
+//
+// It also pushes an ORIGIN-ONLY branch (never fetched into a local branch) for
+// the base-resolution gate below.
 func epicSlotFixture(t *testing.T) (*storage.Store, string, string) {
 	t.Helper()
 	store := &storage.Store{Root: t.TempDir()}
@@ -655,6 +679,16 @@ func epicSlotFixture(t *testing.T) (*storage.Store, string, string) {
 	gitT(t, repo, "commit", "-q", "-m", "init")
 	gitT(t, repo, "push", "-q", "-u", "origin", "main")
 
+	// A throwaway clone moves origin/main ahead and adds the origin-only
+	// branch, so the fixture's own clone stays behind and never learns of it.
+	other := filepath.Join(root, "other")
+	gitT(t, root, "clone", "-q", origin, other)
+	gitT(t, other, "config", "user.email", "t@t")
+	gitT(t, other, "config", "user.name", "t")
+	gitT(t, other, "commit", "-q", "--allow-empty", "-m", "origin only")
+	gitT(t, other, "push", "-q", "origin", "main")
+	gitT(t, other, "push", "-q", "origin", "main:refs/heads/origin-only")
+
 	slot := filepath.Join(root, "slot1")
 	if err := store.CreateProject("app", &storage.Project{Name: "App", Path: repo, Executor: &storage.Executor{
 		Enabled: true, StartStatus: "todo", DoneStatus: "done",
@@ -665,5 +699,65 @@ func epicSlotFixture(t *testing.T) (*storage.Store, string, string) {
 	}
 	addTask(t, store, "app", storage.TaskMeta{ID: "app-1", Title: "Epic", Status: storage.StatusDoing}, "")
 	addTask(t, store, "app", storage.TaskMeta{ID: "app-1-1", Title: "Only Sub", Status: storage.StatusTodo, Parent: "app-1", Order: 10}, "")
+	addTask(t, store, "app", storage.TaskMeta{ID: "app-1-2", Title: "Second Sub", Status: storage.StatusTodo, Parent: "app-1", Order: 20}, "")
 	return store, repo, slot
+}
+
+// TestExecuteEpicIndependentSlotBaseResolution covers the base-resolution gate
+// of an independent run: in a slot the base only has to RESOLVE (origin/<base>
+// alone is enough, because the local branch is never checked out or moved),
+// while the main checkout still needs the local branch it is about to
+// fast-forward and work on.
+func TestExecuteEpicIndependentSlotBaseResolution(t *testing.T) {
+	t.Run("a base that resolves nowhere is refused in a slot", func(t *testing.T) {
+		fakeClaude(t, "echo '"+envelope("merged", "unreached")+"'")
+		store, _, _ := epicSlotFixture(t)
+		err := runEpicErr(t, store, epicOptions{independent: true, additional: true, base: "no-such-base"})
+		if err == nil || !strings.Contains(err.Error(), "resolves to neither") {
+			t.Fatalf("want a base-resolution error, got %v", err)
+		}
+	})
+
+	t.Run("an origin-only base is enough in a slot", func(t *testing.T) {
+		fakeClaude(t, "git commit -q --allow-empty -m 'worker commit'\necho '"+envelope("merged", "all green")+"'")
+		store, repo, slot := epicSlotFixture(t)
+		if branchExists(repo, "origin-only") {
+			t.Fatal("fixture is wrong: the origin-only branch exists locally")
+		}
+		if err := runEpicErr(t, store, epicOptions{independent: true, additional: true, base: "origin-only"}); err != nil {
+			t.Fatalf("a slot run off an origin-only base must be allowed: %v", err)
+		}
+		tip := gitReadT(t, repo, "rev-parse", "origin/origin-only")
+		if got := gitReadT(t, slot, "rev-parse", "feat/only-sub^"); got != tip {
+			t.Errorf("feat/only-sub forked from %s, want origin/origin-only %s", got, tip)
+		}
+	})
+
+	t.Run("the main checkout still needs the local branch", func(t *testing.T) {
+		fakeClaude(t, "echo '"+envelope("merged", "unreached")+"'")
+		store, _, _ := epicSlotFixture(t)
+		err := runEpicErr(t, store, epicOptions{independent: true, base: "origin-only"})
+		if err == nil || !strings.Contains(err.Error(), "does not exist at") {
+			t.Fatalf("want the main-checkout base error, got %v", err)
+		}
+	})
+}
+
+// runEpicErr is runEpic for the cases where executeEpic is EXPECTED to fail:
+// same defaults, the error returned instead of failing the test.
+func runEpicErr(t *testing.T, store *storage.Store, opts epicOptions) error {
+	t.Helper()
+	var out, errOut strings.Builder
+	opts.out, opts.errOut = &out, &errOut
+	if opts.timeout == 0 {
+		opts.timeout = 30 * time.Second
+	}
+	if opts.maxTurns == 0 {
+		opts.maxTurns = 10
+	}
+	plan, err := planEpic(store, []string{"app", "app-1"}, opts)
+	if err != nil {
+		t.Fatalf("planEpic: %v", err)
+	}
+	return executeEpic(store, plan, opts)
 }
