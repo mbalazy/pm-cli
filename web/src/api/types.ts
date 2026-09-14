@@ -294,6 +294,31 @@ export interface Shift {
   report?: string
 }
 
+/** review.Review - one PR code review (GET /api/reviews, /api/reviews/{id}). */
+export interface Review {
+  id: string
+  url: string
+  /** owner/repo */
+  repo: string
+  number: number
+  project: string
+  dir: string
+  config_dir: string
+  pid: number
+  started: string
+  state: 'running' | 'done' | 'error' | string
+  finished?: string
+  error?: string
+  tokens?: { input: number; cache_creation: number; cache_read: number; output: number }
+  /** The review markdown; only on GET /api/reviews/{id}. */
+  report?: string
+}
+
+/** GET /api/reviews */
+export interface ReviewsResult {
+  reviews: Review[]
+}
+
 /** service.SoloResult - GET /api/solo */
 export interface SoloResult {
   shifts: Shift[]

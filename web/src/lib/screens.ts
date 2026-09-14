@@ -4,5 +4,6 @@ export const SCREENS = [
   { to: '/', label: 'Today', key: '1' },
   { to: '/changes', label: 'Changes', key: '2' },
   { to: '/runs', label: 'Runs', key: '3' },
+  { to: '/review', label: 'Review', key: '4' },
   { to: '/settings', label: 'Settings', key: ',' },
 ] as const

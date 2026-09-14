@@ -17,6 +17,8 @@ import type {
   ProjectsResult,
   RefreshResult,
   ReportState,
+  Review,
+  ReviewsResult,
   RunFlags,
   RunPlan,
   RunsResult,
@@ -44,6 +46,8 @@ export const keys = {
   config: () => ['config'] as const,
   report: () => ['report'] as const,
   solo: () => ['solo'] as const,
+  reviews: () => ['reviews'] as const,
+  review: (id: string) => ['review', id] as const,
   soloReport: (project: string, shift: string) => ['solo-report', project, shift] as const,
   runPlan: (project: string, id: string, action: string, flags: RunFlags) =>
     ['run-plan', project, id, action, flags.yolo === true, flags.additional === true] as const,
@@ -204,6 +208,26 @@ export function useRunPlan(project: string, id: string, action: string, flags: R
     enabled: project !== '' && id !== '' && action !== '',
     staleTime: 0,
     retry: false,
+  })
+}
+
+/** The PR code reviews, newest first; polled every 5 s while one runs. */
+export function useReviews() {
+  return useQuery({
+    queryKey: keys.reviews(),
+    queryFn: () => apiGet<ReviewsResult>('/api/reviews'),
+    refetchInterval: (q) =>
+      q.state.data?.reviews.some((r) => r.state === 'running') ? 5000 : false,
+  })
+}
+
+/** One review with its report; polled while it runs. */
+export function useReview(id: string) {
+  return useQuery({
+    queryKey: keys.review(id),
+    queryFn: () => apiGet<Review>(`/api/reviews/${encodeURIComponent(id)}`),
+    enabled: id !== '',
+    refetchInterval: (q) => (q.state.data?.state === 'running' ? 5000 : false),
   })
 }
 
