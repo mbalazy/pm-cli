@@ -54,10 +54,12 @@ func findPRURL(text string) (PR, bool) {
 
 // SlackLink is a parsed Slack message permalink.
 type SlackLink struct {
-	Workspace string // the subdomain
-	Channel   string
-	TS        string // the message
-	ThreadTS  string // the thread it belongs to; the message itself when absent
+	Workspace string `json:"workspace"` // the subdomain
+	Channel   string `json:"channel"`
+	TS        string `json:"ts"`        // the message
+	ThreadTS  string `json:"thread_ts"` // the thread it belongs to; the message itself when absent
+	// Server is the Slack MCP server (a ~/.claude.json name) that read it.
+	Server string `json:"server"`
 }
 
 var slackPermalink = regexp.MustCompile(`https://([a-z0-9-]+)\.slack\.com/archives/([A-Z0-9]+)/p(\d{10})(\d{6})(\S*)`)
@@ -119,42 +121,53 @@ func (c *Controller) candidates() ([]candidate, error) {
 	return out, nil
 }
 
-// Resolve turns the pasted input into a PR (see the steps above). The
-// returned context is the Slack message when one was read.
-func (c *Controller) Resolve(ctx context.Context, input string) (PR, string, error) {
+// Resolution is what Resolve found: the PR, and the Slack message it came
+// from when the input was a Slack link (the server that read it is the one
+// that reacts to it after an approve).
+type Resolution struct {
+	PR        PR
+	Slack     *SlackLink
+	SlackText string
+}
+
+// Resolve turns the pasted input into a PR (see the steps above).
+func (c *Controller) Resolve(ctx context.Context, input string) (Resolution, error) {
 	text := strings.TrimSpace(input)
 	if text == "" {
-		return PR{}, "", &InputError{Msg: "paste a PR URL, a Slack link or a sentence naming the PR"}
+		return Resolution{}, &InputError{Msg: "paste a PR URL, a Slack link or a sentence naming the PR"}
 	}
-	if pr, ok := findPRURL(text); ok {
-		return pr, "", nil
-	}
+	var res Resolution
 	request := text
-	slackText := ""
 	if link, ok := findSlackLink(text); ok {
-		msg, err := c.readSlack(ctx, link)
+		msg, server, err := c.readSlack(ctx, link)
 		if err != nil {
-			return PR{}, "", &InputError{Msg: "read the Slack message: " + err.Error()}
+			return Resolution{}, &InputError{Msg: "read the Slack message: " + err.Error()}
 		}
-		slackText = msg
+		link.Server = server
+		res.Slack, res.SlackText = &link, msg
 		if pr, ok := findPRURL(msg); ok {
-			return pr, slackText, nil
+			res.PR = pr
+			return res, nil
 		}
 		request = text + "\n\nThe linked Slack message (and its thread):\n" + msg
 	}
+	if pr, ok := findPRURL(text); ok {
+		res.PR = pr
+		return res, nil
+	}
 	cands, err := c.candidates()
 	if err != nil {
-		return PR{}, slackText, err
+		return res, err
 	}
 	if len(cands) == 0 {
-		return PR{}, slackText, &InputError{Msg: "no pm project checks out a GitHub repository"}
+		return res, &InputError{Msg: "no pm project checks out a GitHub repository"}
 	}
 	answer, err := c.askModel(ctx, resolvePrompt(request, cands))
 	if err != nil {
-		return PR{}, slackText, fmt.Errorf("resolve the request with %s: %w", ResolveModel, err)
+		return res, fmt.Errorf("resolve the request with %s: %w", ResolveModel, err)
 	}
-	pr, err := parseResolveAnswer(answer, cands)
-	return pr, slackText, err
+	res.PR, err = parseResolveAnswer(answer, cands)
+	return res, err
 }
 
 func resolvePrompt(request string, cands []candidate) string {
@@ -209,13 +222,14 @@ func (c *Controller) askModel(ctx context.Context, prompt string) (string, error
 	return oc.Text, nil
 }
 
-func (c *Controller) readSlack(ctx context.Context, link SlackLink) (string, error) {
+// readSlack returns the message's text and the server that read it.
+func (c *Controller) readSlack(ctx context.Context, link SlackLink) (string, string, error) {
 	if c.ReadSlack != nil {
 		return c.ReadSlack(ctx, link)
 	}
 	names, err := feed.ClaudeServerNames("")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var slack []string
 	for _, n := range names {
@@ -224,53 +238,56 @@ func (c *Controller) readSlack(ctx context.Context, link SlackLink) (string, err
 		}
 	}
 	if len(slack) == 0 {
-		return "", errors.New("no Slack MCP server in ~/.claude.json")
+		return "", "", errors.New("no Slack MCP server in ~/.claude.json")
 	}
 	// Which server is which workspace is not written anywhere: ask them all,
 	// the first that has the message wins.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type result struct {
-		text string
-		err  error
+		server, text string
+		err          error
 	}
 	results := make(chan result, len(slack))
 	for _, name := range slack {
 		go func(name string) {
-			text, err := readSlackWith(ctx, name, link)
+			text, err := callSlack(ctx, name, nil, "conversations_replies", map[string]any{"channel_id": link.Channel, "thread_ts": link.ThreadTS})
 			if err != nil {
 				err = fmt.Errorf("%s: %w", name, err)
 			}
-			results <- result{text, err}
+			results <- result{name, text, err}
 		}(name)
 	}
 	var errs []error
 	for range slack {
 		r := <-results
 		if r.err == nil && strings.TrimSpace(r.text) != "" {
-			return r.text, nil
+			return r.text, r.server, nil
 		}
 		if r.err != nil {
 			errs = append(errs, r.err)
 		}
 	}
 	if len(errs) == 0 {
-		return "", errors.New("the message is empty")
+		return "", "", errors.New("the message is empty")
 	}
-	return "", errors.Join(errs...)
+	return "", "", errors.Join(errs...)
 }
 
-func readSlackWith(ctx context.Context, server string, link SlackLink) (string, error) {
+// callSlack runs one tool on a Slack MCP server from ~/.claude.json, with
+// extra environment for that process only.
+func callSlack(ctx context.Context, server string, env []string, tool string, args map[string]any) (string, error) {
 	spec, err := feed.ResolveServer(storage.SlackServer{ClaudeServer: server}, "")
 	if err != nil {
 		return "", err
 	}
+	spec.Env = append(spec.Env, env...)
 	s, err := feed.DialStdio(ctx, spec)
 	if err != nil {
 		return "", err
 	}
 	defer s.Close()
-	return s.CallText(ctx, "conversations_replies", map[string]any{"channel_id": link.Channel, "thread_ts": link.ThreadTS})
+	return s.CallText(ctx, tool, args)
 }
 
 // viewPR confirms the PR exists and returns its title.

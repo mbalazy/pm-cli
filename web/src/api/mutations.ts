@@ -39,6 +39,7 @@ export type MutationRequest =
   | { kind: 'restore'; section: string }
   | { kind: 'review_start'; input: string }
   | { kind: 'review_cancel'; id: string }
+  | { kind: 'review_approve'; id: string }
 
 export type MutationResult =
   | TaskDetail
@@ -80,6 +81,8 @@ export function runMutation(req: MutationRequest): Promise<MutationResult> {
       return apiPost<Review>('/api/reviews', { input: req.input })
     case 'review_cancel':
       return apiPost<Review>(`/api/reviews/${encodeURIComponent(req.id)}/cancel`)
+    case 'review_approve':
+      return apiPost<Review>(`/api/reviews/${encodeURIComponent(req.id)}/approve`)
     case 'run':
       return apiPost<RunActionResult>(
         `/api/runs/${encodeURIComponent(req.project)}/${encodeURIComponent(req.taskId)}/${req.action}`,
@@ -110,7 +113,11 @@ export function useRowMutation() {
       }
       if (req.kind === 'report_write' || req.kind === 'report_dismiss') inv(keys.report())
       if (req.kind === 'dismiss' || req.kind === 'restore') inv(keys.context(''))
-      if (req.kind === 'review_start' || req.kind === 'review_cancel') {
+      if (
+        req.kind === 'review_start' ||
+        req.kind === 'review_cancel' ||
+        req.kind === 'review_approve'
+      ) {
         inv(keys.reviews())
         inv(['review'])
       }

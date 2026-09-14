@@ -31,6 +31,40 @@ export function durationText(ms: number): string {
   return `${Math.floor(min / 60)}h ${min % 60}m`
 }
 
+export interface ApproveView {
+  /** The approve button is offered (a done review not approved yet). */
+  offer: boolean
+  label: string
+  /** The confirmation question. */
+  question: string
+  /** Set when the report did not say "No issues found". */
+  warning: string
+  /** Lines saying what happened: approved, the Slack ✅, failures. */
+  status: string[]
+  /** An approved review whose Slack ✅ failed: the button retries it. */
+  retryReaction: boolean
+}
+
+export function approveView(r: Review, now: Date = new Date()): ApproveView {
+  const onSlack = r.slack ? ' and react ✅ on the Slack message' : ''
+  const status: string[] = []
+  if (r.approved) status.push(`approved on GitHub ${relativeTime(r.approved, now)}`)
+  if (r.approve_error && !r.approved) status.push(`approve failed: ${r.approve_error}`)
+  if (r.slack_reacted) status.push('✅ added on the Slack message')
+  if (r.slack_react_error && !r.slack_reacted)
+    status.push(`Slack ✅ failed: ${r.slack_react_error}`)
+  return {
+    offer: r.state === 'done' && !r.approved,
+    label: r.no_issues ? 'approve on GitHub' : 'approve anyway',
+    question: `Approve ${r.repo}#${r.number} on GitHub${onSlack}? Only an approve, no comment.`,
+    warning: r.no_issues
+      ? ''
+      : 'The review did not say "No issues found" - read it before approving.',
+    status,
+    retryReaction: !!r.approved && !!r.slack && !r.slack_reacted,
+  }
+}
+
 export function reviewRow(r: Review, now: Date = new Date()): ReviewRow {
   const start = Date.parse(r.started)
   const end = r.state === 'running' || !r.finished ? now.getTime() : Date.parse(r.finished)

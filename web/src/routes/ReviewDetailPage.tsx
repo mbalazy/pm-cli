@@ -1,23 +1,31 @@
 import { Link } from '@tanstack/react-router'
-import { Square } from 'lucide-react'
+import { Check, Square } from 'lucide-react'
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { useRowMutation } from '../api/mutations'
 import { useReview } from '../api/queries'
-import { reviewRow } from '../lib/reviewView'
+import { approveView, reviewRow } from '../lib/reviewView'
 
 // One PR code review: the state while it runs (with cancel), the error when
-// it failed, the report's markdown when it is done.
+// it failed, the report's markdown when it is done - and the approve: one
+// click asks, the second approves on GitHub (and reacts ✅ on the Slack
+// message the request came from).
 
 export function ReviewDetailPage({ id }: { id: string }) {
   const review = useReview(id)
   const cancel = useRowMutation()
+  const approve = useRowMutation()
+  const [confirming, setConfirming] = useState(false)
 
   if (review.isPending) return <p className="text-ink-3">loading…</p>
   if (review.isError) return <p className="text-crit">error: {review.error.message}</p>
   const r = review.data
   const row = reviewRow(r)
+  const av = approveView(r)
+  const runApprove = () =>
+    approve.mutate({ kind: 'review_approve', id: r.id }, { onSettled: () => setConfirming(false) })
 
   return (
     <div className="space-y-5">
@@ -56,6 +64,55 @@ export function ReviewDetailPage({ id }: { id: string }) {
           </p>
         )}
       </header>
+
+      {r.state === 'done' && (
+        <section aria-label="Approve" className="space-y-2">
+          {av.status.map((line) => (
+            <p key={line} className="text-sm">
+              {line}
+            </p>
+          ))}
+          {av.offer && !confirming && (
+            <button type="button" className="ghost-btn" onClick={() => setConfirming(true)}>
+              <Check aria-hidden="true" className="size-3" strokeWidth={1.75} />
+              {av.label}
+            </button>
+          )}
+          {av.offer && av.warning && <p className="text-xs text-warn">{av.warning}</p>}
+          {av.offer && confirming && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm">{av.question}</span>
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={approve.isPending}
+                onClick={runApprove}
+              >
+                {approve.isPending ? 'approving…' : 'yes, approve'}
+              </button>
+              <button type="button" className="ghost-btn" onClick={() => setConfirming(false)}>
+                cancel
+              </button>
+            </div>
+          )}
+          {av.retryReaction && (
+            <button
+              type="button"
+              className="ghost-btn"
+              disabled={approve.isPending}
+              onClick={runApprove}
+            >
+              retry ✅ on Slack
+            </button>
+          )}
+          {approve.isError && (
+            <p role="alert" className="text-sm text-crit">
+              {approve.error.message}
+            </p>
+          )}
+        </section>
+      )}
+
       {r.state === 'running' && (
         <p className="text-sm text-ink-2">
           Running /review in the checkout - a few minutes for a normal PR. This page refreshes by

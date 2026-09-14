@@ -36,7 +36,8 @@ func TestReviews(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := newServer(t, store, Options{Review: &review.Controller{
-		Store: store, Exe: exe,
+		Store: store, Exe: exe, WorktreeRoot: t.TempDir(),
+		ApprovePR: func(context.Context, *storage.Project, review.PR) error { return nil },
 		AskModel: func(_ context.Context, prompt string) (string, error) {
 			if strings.Contains(prompt, "pr 8") {
 				return `{"repo":"org/app","number":8}`, nil
@@ -75,5 +76,9 @@ func TestReviews(t *testing.T) {
 	if len(list) != 2 {
 		t.Fatalf("list = %v", list)
 	}
+	if a := postJSON(t, srv.URL+"/api/reviews/"+id+"/approve", `{}`, 200); a["approved"] == "" || a["approved"] == nil {
+		t.Fatalf("approve = %v", a)
+	}
+	postJSON(t, srv.URL+"/api/reviews/nosuch/approve", `{}`, 404)
 	getJSON(t, srv.URL+"/api/reviews/nosuch", 404)
 }

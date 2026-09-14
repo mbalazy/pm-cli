@@ -171,6 +171,7 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux.HandleFunc("POST /api/report/dismiss", requireClient(h.dismissSuggestion))
 	mux.HandleFunc("POST /api/reviews", requireClient(h.startReview))
 	mux.HandleFunc("POST /api/reviews/{id}/cancel", requireClient(h.cancelReview))
+	mux.HandleFunc("POST /api/reviews/{id}/approve", requireClient(h.approveReview))
 	mux.HandleFunc("POST /api/attention/dismiss", requireClient(h.dismissRows))
 	mux.HandleFunc("POST /api/attention/restore", requireClient(h.restoreRows))
 	mux.HandleFunc("GET /api/events", h.events)
