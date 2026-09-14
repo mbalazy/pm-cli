@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Review } from '../api/types'
-import { durationText, parsePRUrl, reviewRow } from './reviewView'
+import { approveView, durationText, parsePRUrl, reviewRow } from './reviewView'
 
 const review = (over: Partial<Review>): Review => ({
   id: 'x',
@@ -38,5 +38,38 @@ describe('reviewView', () => {
     expect(running.duration).toBe('1h 30m')
     expect(reviewRow(review({ state: 'error' }), now).glyph).toBe('✗')
     expect(durationText(-5)).toBe('0m')
+  })
+
+  it('approveView offers approve on a done review and words what happened', () => {
+    const now = new Date('2026-09-14T11:30:00Z')
+    const slack = {
+      workspace: 'atlas',
+      channel: 'C1',
+      ts: '1.2',
+      thread_ts: '1.2',
+      server: 'slack-orbit',
+    }
+    const clean = approveView(review({ no_issues: true, slack }), now)
+    expect(clean.offer).toBe(true)
+    expect(clean.label).toBe('approve on GitHub')
+    expect(clean.warning).toBe('')
+    expect(clean.question).toBe(
+      'Approve o/r#7 on GitHub and react ✅ on the Slack message? Only an approve, no comment.',
+    )
+    const issues = approveView(review({}), now)
+    expect(issues.label).toBe('approve anyway')
+    expect(issues.warning).toMatch(/did not say "No issues found"/)
+    expect(issues.question).not.toMatch(/Slack/)
+    expect(approveView(review({ state: 'running' }), now).offer).toBe(false)
+    const half = approveView(
+      review({ approved: '2026-09-14T11:00:00Z', slack, slack_react_error: 'not_in_channel' }),
+      now,
+    )
+    expect(half.offer).toBe(false)
+    expect(half.retryReaction).toBe(true)
+    expect(half.status[1]).toBe('Slack ✅ failed: not_in_channel')
+    expect(approveView(review({ approve_error: 'own PR' }), now).status).toEqual([
+      'approve failed: own PR',
+    ])
   })
 })

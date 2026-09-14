@@ -61,6 +61,17 @@ func (h *handler) startReview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, rv)
 }
 
+// approveReview approves the review's PR on GitHub (an approve, no comment)
+// and reacts ✅ on the Slack message the request came from.
+func (h *handler) approveReview(w http.ResponseWriter, r *http.Request) {
+	rv, err := h.reviews.Approve(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeReviewError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rv)
+}
+
 func (h *handler) cancelReview(w http.ResponseWriter, r *http.Request) {
 	rv, err := h.reviews.Cancel(r.PathValue("id"))
 	if err != nil {

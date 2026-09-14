@@ -33,16 +33,16 @@ func TestResolve(t *testing.T) {
 
 	t.Run("a PR URL inside a sentence needs no model", func(t *testing.T) {
 		prompt = ""
-		pr, _, err := c.Resolve(bg, "zrob review https://github.com/Org/Other/pull/12/files pls")
-		if err != nil || pr.Slug() != "Org/Other" || pr.Number != 12 || prompt != "" {
-			t.Fatalf("pr = %+v err = %v prompt = %q", pr, err, prompt)
+		res, err := c.Resolve(bg, "zrob review https://github.com/Org/Other/pull/12/files pls")
+		if err != nil || res.PR.Slug() != "Org/Other" || res.PR.Number != 12 || res.Slack != nil || prompt != "" {
+			t.Fatalf("res = %+v err = %v prompt = %q", res, err, prompt)
 		}
 	})
 
 	t.Run("free text goes to the model with the repositories", func(t *testing.T) {
-		pr, _, err := c.Resolve(bg, "pr 555 w repo app")
-		if err != nil || pr.Slug() != "org/app" || pr.Number != 555 {
-			t.Fatalf("pr = %+v err = %v", pr, err)
+		res, err := c.Resolve(bg, "pr 555 w repo app")
+		if err != nil || res.PR.Slug() != "org/app" || res.PR.Number != 555 {
+			t.Fatalf("res = %+v err = %v", res, err)
 		}
 		for _, want := range []string{"- org/app - app", "- org/other - other", "pr 555 w repo app"} {
 			if !strings.Contains(prompt, want) {
@@ -51,32 +51,37 @@ func TestResolve(t *testing.T) {
 		}
 	})
 
-	t.Run("a Slack link with a PR URL in the message", func(t *testing.T) {
+	t.Run("a Slack link with a PR URL in the message keeps the message", func(t *testing.T) {
 		prompt = ""
-		c.ReadSlack = func(_ context.Context, l SlackLink) (string, error) {
+		c.ReadSlack = func(_ context.Context, l SlackLink) (string, string, error) {
 			if l.Channel != "C1" {
 				t.Errorf("channel = %s", l.Channel)
 			}
-			return "ts,user,text\n1,anna,możesz zerknąć? https://github.com/org/app/pull/31", nil
+			return "ts,user,text\n1,anna,możesz zerknąć? https://github.com/org/app/pull/31", "slack-orbit", nil
 		}
-		pr, msg, err := c.Resolve(bg, "https://example.slack.com/archives/C1/p1694012345123456")
-		if err != nil || pr.Number != 31 || !strings.Contains(msg, "zerknąć") || prompt != "" {
-			t.Fatalf("pr = %+v msg = %q err = %v", pr, msg, err)
+		res, err := c.Resolve(bg, "https://example.slack.com/archives/C1/p1694012345123456")
+		if err != nil || res.PR.Number != 31 || !strings.Contains(res.SlackText, "zerknąć") || prompt != "" {
+			t.Fatalf("res = %+v err = %v", res, err)
+		}
+		if res.Slack == nil || res.Slack.Server != "slack-orbit" || res.Slack.TS != "1694012345.123456" {
+			t.Fatalf("slack = %+v", res.Slack)
 		}
 	})
 
 	t.Run("a Slack message without a URL goes to the model with its text", func(t *testing.T) {
-		c.ReadSlack = func(context.Context, SlackLink) (string, error) { return "anna: review PR 555 w mobile?", nil }
-		pr, _, err := c.Resolve(bg, "https://example.slack.com/archives/C1/p1694012345123456")
-		if err != nil || pr.Number != 555 || !strings.Contains(prompt, "anna: review PR 555 w mobile?") {
-			t.Fatalf("pr = %+v err = %v prompt = %q", pr, err, prompt)
+		c.ReadSlack = func(context.Context, SlackLink) (string, string, error) {
+			return "anna: review PR 555 w mobile?", "slack-orbit", nil
+		}
+		res, err := c.Resolve(bg, "https://example.slack.com/archives/C1/p1694012345123456")
+		if err != nil || res.PR.Number != 555 || res.Slack == nil || !strings.Contains(prompt, "anna: review PR 555 w mobile?") {
+			t.Fatalf("res = %+v err = %v prompt = %q", res, err, prompt)
 		}
 	})
 
 	t.Run("failures are input errors", func(t *testing.T) {
 		var ie *InputError
-		c.ReadSlack = func(context.Context, SlackLink) (string, error) { return "", errors.New("not_in_channel") }
-		if _, _, err := c.Resolve(bg, "https://example.slack.com/archives/C1/p1694012345123456"); !errors.As(err, &ie) || !strings.Contains(err.Error(), "not_in_channel") {
+		c.ReadSlack = func(context.Context, SlackLink) (string, string, error) { return "", "", errors.New("not_in_channel") }
+		if _, err := c.Resolve(bg, "https://example.slack.com/archives/C1/p1694012345123456"); !errors.As(err, &ie) || !strings.Contains(err.Error(), "not_in_channel") {
 			t.Fatalf("slack err = %v", err)
 		}
 		for answer, want := range map[string]string{
@@ -86,11 +91,11 @@ func TestResolve(t *testing.T) {
 			`I think it is app`:             "the model answered",
 		} {
 			c.AskModel = func(context.Context, string) (string, error) { return answer, nil }
-			if _, _, err := c.Resolve(bg, "review something"); !errors.As(err, &ie) || !strings.Contains(err.Error(), want) {
+			if _, err := c.Resolve(bg, "review something"); !errors.As(err, &ie) || !strings.Contains(err.Error(), want) {
 				t.Errorf("%s: err = %v", answer, err)
 			}
 		}
-		if _, _, err := c.Resolve(bg, "  "); !errors.As(err, &ie) {
+		if _, err := c.Resolve(bg, "  "); !errors.As(err, &ie) {
 			t.Errorf("empty: %v", err)
 		}
 	})
@@ -114,7 +119,7 @@ func TestStartConfirmsThePRAndKeepsTheInput(t *testing.T) {
 	}
 	waitState(t, c, r.ID, StateDone)
 	got, _ := c.Get(r.ID)
-	if got.Title != "Fix login" || got.Input != "pr 9 w app" {
+	if got.Title != "Fix login" || got.Input != "pr 9 w app" || !got.NoIssues {
 		t.Fatalf("stored = %+v", got)
 	}
 	r, err = c.Start(bg, "https://github.com/org/app/pull/5")

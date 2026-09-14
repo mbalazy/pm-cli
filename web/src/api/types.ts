@@ -319,6 +319,16 @@ export interface Review {
   tokens?: { input: number; cache_creation: number; cache_read: number; output: number }
   /** The review markdown; only on GET /api/reviews/{id}. */
   report?: string
+  /** A done review whose report says "No issues found". */
+  no_issues?: boolean
+  /** The Slack message the request came from, when it was a Slack link. */
+  slack?: { workspace: string; channel: string; ts: string; thread_ts: string; server: string }
+  /** When the PR was approved from the cockpit, or why the last try failed. */
+  approved?: string
+  approve_error?: string
+  /** The ✅ on the Slack message after the approve. */
+  slack_reacted?: string
+  slack_react_error?: string
 }
 
 /** GET /api/reviews */

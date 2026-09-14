@@ -129,6 +129,18 @@ type Review struct {
 	Tokens   *storage.TokenUsage `json:"tokens,omitempty"`
 	// Report is the review's markdown; filled by Get only.
 	Report string `json:"report,omitempty"`
+	// NoIssues is a done review whose report says "No issues found".
+	NoIssues bool `json:"no_issues,omitempty"`
+
+	// Slack is the message the request came from, when it was a Slack link.
+	Slack *SlackLink `json:"slack,omitempty"`
+	// Approved is when the PR was approved from the cockpit; ApproveError
+	// the last failed attempt. SlackReacted / SlackReactError: the ✅ on the
+	// Slack message after the approve.
+	Approved        string `json:"approved,omitempty"`
+	ApproveError    string `json:"approve_error,omitempty"`
+	SlackReacted    string `json:"slack_reacted,omitempty"`
+	SlackReactError string `json:"slack_react_error,omitempty"`
 }
 
 // Controller starts and reads reviews under <pm-root>/.cockpit/reviews.
@@ -144,8 +156,14 @@ type Controller struct {
 	// AskModel, ReadSlack and ViewPR replace the resolution's outside calls
 	// (haiku, the Slack MCP servers, gh pr view) in tests; nil = the real ones.
 	AskModel  func(ctx context.Context, prompt string) (string, error)
-	ReadSlack func(ctx context.Context, link SlackLink) (string, error)
+	ReadSlack func(ctx context.Context, link SlackLink) (text, server string, err error)
 	ViewPR    func(ctx context.Context, proj *storage.Project, pr PR) (title string, err error)
+	// ApprovePR and ReactSlack replace the approve's outside calls (gh pr
+	// review --approve, the Slack reaction) in tests.
+	ApprovePR  func(ctx context.Context, proj *storage.Project, pr PR) error
+	ReactSlack func(ctx context.Context, link SlackLink, emoji string) error
+	// WorktreeRoot is where review worktrees go; empty = $TMPDIR/pm-review.
+	WorktreeRoot string
 }
 
 // New is a controller over the store with the real binaries.
@@ -202,10 +220,11 @@ var validID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 func (c *Controller) Start(ctx context.Context, input string) (*Review, error) {
 	ctx, cancel := context.WithTimeout(ctx, ResolveTimeout)
 	defer cancel()
-	pr, _, err := c.Resolve(ctx, input)
+	res, err := c.Resolve(ctx, input)
 	if err != nil {
 		return nil, err
 	}
+	pr := res.PR
 	slug, proj, err := c.Match(pr)
 	if err != nil {
 		return nil, err
@@ -224,6 +243,7 @@ func (c *Controller) Start(ctx context.Context, input string) (*Review, error) {
 	if _, err := ParseURL(input); err != nil {
 		r.Input = strings.TrimSpace(input)
 	}
+	r.Slack = res.Slack
 	if err := os.MkdirAll(c.dir(), 0o755); err != nil {
 		return nil, err
 	}
@@ -417,6 +437,7 @@ func (c *Controller) load(id string, withReport bool) (*Review, error) {
 			break
 		}
 		r.State, r.Finished, r.Tokens = StateDone, finished, oc.Tokens
+		r.NoIssues = strings.Contains(strings.ToLower(oc.Text), "no issues found")
 		if withReport {
 			r.Report = oc.Text
 		}
@@ -434,10 +455,14 @@ func (c *Controller) load(id string, withReport bool) (*Review, error) {
 			r.Error = "claude exited without a result"
 		}
 	}
+	c.applyApproval(&r)
 	return &r, nil
 }
 
 func (c *Controller) worktreeDir(id string) string {
+	if c.WorktreeRoot != "" {
+		return filepath.Join(c.WorktreeRoot, id)
+	}
 	return filepath.Join(os.TempDir(), "pm-review", id)
 }
 

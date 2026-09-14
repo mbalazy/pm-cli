@@ -51,12 +51,14 @@ func setup(t *testing.T) (*Controller, string, string) {
 	t.Setenv("FAKE_OUT", out)
 	t.Setenv("FAKE_MODE", "")
 	return &Controller{
-		Store: store, Exe: exe,
+		Store: store, Exe: exe, WorktreeRoot: t.TempDir(),
 		// Never a real model, Slack or gh in tests.
 		AskModel: func(context.Context, string) (string, error) {
 			return `{"error":"no PR number"}`, nil
 		},
-		ReadSlack: func(context.Context, SlackLink) (string, error) { return "", fmt.Errorf("no slack in tests") },
+		ReadSlack: func(context.Context, SlackLink) (string, string, error) {
+			return "", "", fmt.Errorf("no slack in tests")
+		},
 		ViewPR: func(_ context.Context, _ *storage.Project, pr PR) (string, error) {
 			return fmt.Sprintf("PR %d", pr.Number), nil
 		},
@@ -146,7 +148,7 @@ func TestStartRunsTheReviewInAWorktree(t *testing.T) {
 	}
 	data, _ := os.ReadFile(argvFile)
 	lines := strings.Split(string(data), "\n")
-	wtRoot, _ := filepath.EvalSymlinks(filepath.Join(os.TempDir(), "pm-review"))
+	wtRoot, _ := filepath.EvalSymlinks(c.WorktreeRoot)
 	realCheckout, _ := filepath.EvalSymlinks(checkout)
 	if lines[0] != filepath.Join(wtRoot, r.ID) || lines[0] == realCheckout || lines[1] != "/tmp/cfg-company" || lines[2] != "tracked-file-present" {
 		t.Errorf("cwd/config dir/files = %q", lines[:3])

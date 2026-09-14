@@ -1373,6 +1373,58 @@ describe('review screen', () => {
   })
 })
 
+describe('review approve', () => {
+  const done = {
+    id: 'org-app-7-1',
+    url: 'https://github.com/org/app/pull/7',
+    repo: 'org/app',
+    number: 7,
+    project: 'alpha',
+    dir: '/repos/app',
+    config_dir: '/home/.claude',
+    pid: 1,
+    started: '2026-01-02T09:00:00Z',
+    finished: '2026-01-02T09:08:00Z',
+    state: 'done',
+    no_issues: true,
+    slack: { workspace: 'atlas', channel: 'C1', ts: '1.2', thread_ts: '1.2', server: 'slack-orbit' },
+    report: '### Code review - PR #7\n\nNo issues found.',
+  }
+
+  it('asks once, then posts the approve', async () => {
+    vi.stubGlobal('fetch', fakeFetch({ ...api, '/api/reviews/org-app-7-1': done }))
+    const user = userEvent.setup()
+    renderAt('/review/org-app-7-1')
+    await user.click(await screen.findByRole('button', { name: 'approve on GitHub' }))
+    expect(posts).toHaveLength(0)
+    expect(
+      screen.getByText(
+        'Approve org/app#7 on GitHub and react ✅ on the Slack message? Only an approve, no comment.',
+      ),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'yes, approve' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].path).toBe('/api/reviews/org-app-7-1/approve')
+  })
+
+  it('an approved review says so and offers no approve', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fakeFetch({
+        ...api,
+        '/api/reviews/org-app-7-1': {
+          ...done,
+          approved: '2026-01-02T09:10:00Z',
+          slack_reacted: '2026-01-02T09:10:01Z',
+        },
+      }),
+    )
+    renderAt('/review/org-app-7-1')
+    expect(await screen.findByText('✅ added on the Slack message')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /approve/ })).toBeNull()
+  })
+})
+
 describe('solo report rows', () => {
   it('the title opens the shift report', async () => {
     const solo = {
