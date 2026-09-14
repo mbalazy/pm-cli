@@ -47,6 +47,12 @@ type Project struct {
 	// never mapped - the feed carries them always, project-less. Nil = the
 	// project has no Slack side. The TUI and CLI ignore it and preserve it.
 	Slack *SlackConfig `yaml:"slack,omitempty"`
+	// GHAccount names the gh account (`gh auth status`) whose token the
+	// cockpit's change feed uses for this repo's PRs. Empty = gh's active
+	// account. Needed because `pm serve` never loads a per-repo direnv
+	// GH_TOKEN, so a repo only another account can see would read as
+	// "Could not resolve to a Repository". The TUI and CLI ignore it.
+	GHAccount string `yaml:"gh_account,omitempty"`
 	// Journals declares which subsystems this project keeps a running record
 	// of (see journal.go). This list IS the whole of the journal mechanism's
 	// project-awareness: pm never infers a subject, so nothing in the code

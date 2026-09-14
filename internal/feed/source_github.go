@@ -58,6 +58,13 @@ func (s *GitHubSource) Fetch(ctx context.Context, from, to time.Time, projects [
 		if p.Path == "" || !isGitRepo(p.Path) {
 			continue // the git source already reports a bad checkout
 		}
+		ctx, ok, err := githubContext(ctx, s.Run, p)
+		if !ok {
+			if err != nil {
+				errs = append(errs, &ProjectError{Project: p.Slug, Err: err})
+			}
+			continue
+		}
 		prs, err := listOpenPRs(ctx, s.Run, p)
 		if err != nil {
 			errs = append(errs, &ProjectError{Project: p.Slug, Err: err})

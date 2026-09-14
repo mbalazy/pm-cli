@@ -17,6 +17,23 @@ import (
 // below is the same discipline in miniature.
 type Runner func(ctx context.Context, dir, name string, args ...string) (string, error)
 
+type envKey struct{}
+
+// WithEnv returns a context whose Runner calls add kv ("KEY=value") to the
+// command's environment, after the inherited one so they win. A Runner's
+// signature carries no env, and a token must never travel in argv (ps
+// shows argv to every local user).
+func WithEnv(ctx context.Context, kv ...string) context.Context {
+	env := append(append([]string(nil), EnvFrom(ctx)...), kv...)
+	return context.WithValue(ctx, envKey{}, env)
+}
+
+// EnvFrom is the extra environment WithEnv put on ctx; every Runner appends it.
+func EnvFrom(ctx context.Context) []string {
+	env, _ := ctx.Value(envKey{}).([]string)
+	return env
+}
+
 // CommandTimeout bounds ONE external command. A `gh` call against a slow
 // API or a `git log` on a huge repo must never hold the feed - or the
 // scheduler behind it - for longer than this.
@@ -41,6 +58,7 @@ func DefaultRunner(ctx context.Context, dir, name string, args ...string) (strin
 	// No terminal, no pager, no prompts: gh in particular would otherwise
 	// wait on a tty that is not there.
 	c.Env = append(c.Environ(), "GH_PAGER=cat", "PAGER=cat", "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1", "NO_COLOR=1")
+	c.Env = append(c.Env, EnvFrom(ctx)...)
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr
 	err := c.Run()

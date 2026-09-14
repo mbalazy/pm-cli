@@ -179,8 +179,36 @@ func listOpenPRs(ctx context.Context, run Runner, p Project) ([]pr, error) {
 	return prs, nil
 }
 
+// githubContext decides whether gh has anything to say about p and, if so,
+// with whose token. A checkout with no GitHub remote (GitLab, or no remote
+// at all) has no PRs gh could list - that is not an error, so ok is false
+// and nothing is reported. A project naming gh_account gets that account's
+// token on the returned context (WithEnv), because `pm serve` never loads
+// the repo's direnv GH_TOKEN.
+func githubContext(ctx context.Context, run Runner, p Project) (context.Context, bool, error) {
+	remotes, err := run(ctx, p.Path, "git", "remote", "-v")
+	if err != nil {
+		return ctx, false, err
+	}
+	if !strings.Contains(remotes, "github.com") {
+		return ctx, false, nil
+	}
+	if p.GHAccount == "" {
+		return ctx, true, nil
+	}
+	tok, err := run(ctx, p.Path, "gh", "auth", "token", "--user", p.GHAccount)
+	if err != nil {
+		return ctx, false, fmt.Errorf("gh_account %s: %w", p.GHAccount, err)
+	}
+	return WithEnv(ctx, "GH_TOKEN="+strings.TrimSpace(tok)), true, nil
+}
+
 // openPRs emits one event per open PR touched in the window.
 func (s *GitSource) openPRs(ctx context.Context, p Project, from, to time.Time) ([]Event, error) {
+	ctx, ok, err := githubContext(ctx, s.Run, p)
+	if !ok {
+		return nil, err
+	}
 	prs, err := listOpenPRs(ctx, s.Run, p)
 	if err != nil {
 		return nil, err
