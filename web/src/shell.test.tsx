@@ -998,6 +998,27 @@ describe('changes screen', () => {
     await vi.waitFor(() => expect(posts).toHaveLength(2))
     expect(posts[1].body).toEqual({ ts: '2026-01-02T09:10:00Z' })
   })
+
+  it('dismiss all posts the seen mark with no dialog; dismissed rows hide until shown', async () => {
+    const oneSeen = {
+      ...changes,
+      events: [changes.events[0], { ...changes.events[1], seen: true }],
+      unseen: 1,
+    }
+    vi.stubGlobal('fetch', fakeFetch({ ...api, '/api/changes': oneSeen }))
+    const user = userEvent.setup()
+    renderAt('/changes')
+    const feed = await screen.findByRole('region', { name: 'Feed' })
+    expect(await within(feed).findAllByRole('listitem')).toHaveLength(1)
+    expect(within(feed).queryByText('alpha event')).toBeNull()
+    await user.click(within(feed).getByRole('button', { name: '1 dismissed · show' }))
+    expect(within(feed).getAllByRole('listitem')).toHaveLength(2)
+    await user.click(within(feed).getByRole('button', { name: 'hide dismissed' }))
+    expect(within(feed).getAllByRole('listitem')).toHaveLength(1)
+    await user.click(within(feed).getByRole('button', { name: 'dismiss all (1)' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toEqual({ path: '/api/changes/seen', header: 'cockpit', body: undefined })
+  })
 })
 
 describe('settings screen', () => {

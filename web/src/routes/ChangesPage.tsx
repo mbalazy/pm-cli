@@ -21,6 +21,7 @@ import {
   sourceChips,
   sourceCounts,
   toggleSource,
+  visibleEvents,
 } from '../lib/changesView'
 import { isPendingKind } from '../lib/confirmText'
 import { groupHotkeys, groupSearch } from '../lib/groupFilter'
@@ -44,6 +45,7 @@ export function ChangesPage({ group }: { group: string }) {
   const action = useConfirmedAction()
   const navigate = useNavigate()
   const [sources, setSources] = useState<Set<string>>(new Set())
+  const [showSeen, setShowSeen] = useState(false)
 
   const hotkeys = groupHotkeys(attention.data?.groups ?? [])
   useShortcuts({
@@ -57,6 +59,9 @@ export function ChangesPage({ group }: { group: string }) {
   const all = changes.data?.events ?? []
   const byGroup = filterEvents(all, { sources: new Set(), group })
   const shown = filterEvents(byGroup, { sources, group: '' })
+  const visible = visibleEvents(shown, showSeen)
+  const unseenShown = shown.filter((e) => !e.seen).length
+  const dismissedCount = shown.length - unseenShown
   const chips = sourceChips(changes.data?.sources, now)
   const names = chips.map((c) => c.name)
   const times = refreshTimes(
@@ -159,21 +164,43 @@ export function ChangesPage({ group }: { group: string }) {
       <section aria-label="Feed">
         <SectionHead
           title="Raw feed"
-          count={`${shown.length}${shown.length !== all.length ? ` of ${all.length}` : ''}`}
-          why="deterministic, zero tokens · unseen rows are highlighted"
+          count={`${visible.length}${visible.length !== all.length ? ` of ${all.length}` : ''}`}
+          why="deterministic, zero tokens · dismissed rows are hidden"
         />
+        {changes.data && (unseenShown > 0 || dismissedCount > 0) && (
+          <p className="mb-1 flex flex-wrap items-center gap-2 px-2 text-xs text-ink-2">
+            {unseenShown > 0 && (
+              <button
+                type="button"
+                className="ghost-btn"
+                disabled={dismiss.isPending}
+                onClick={() => dismiss.mutate({ kind: 'seen' })}
+              >
+                <CheckCheck aria-hidden="true" className="size-3" strokeWidth={1.75} />
+                dismiss all ({unseenShown})
+              </button>
+            )}
+            {dismissedCount > 0 && (
+              <button type="button" className="ghost-btn" onClick={() => setShowSeen((v) => !v)}>
+                {showSeen ? 'hide dismissed' : `${dismissedCount} dismissed · show`}
+              </button>
+            )}
+          </p>
+        )}
         {changes.isPending && <p className="text-ink-3">loading…</p>}
         {changes.isError && <p className="text-crit">error: {changes.error.message}</p>}
-        {changes.data && shown.length === 0 && (
+        {changes.data && visible.length === 0 && (
           <p className="px-2 py-1 text-sm text-ink-3">
             {all.length === 0
               ? 'Nothing changed since the cutoff (or nothing fetched yet - refresh now).'
-              : 'Nothing matches the filters.'}
+              : shown.length > 0
+                ? 'Everything dismissed.'
+                : 'Nothing matches the filters.'}
           </p>
         )}
-        {changes.data && shown.length > 0 && (
+        {changes.data && visible.length > 0 && (
           <ul className="text-sm">
-            {shown.map((e) => (
+            {visible.map((e) => (
               <EventRow
                 key={e.id}
                 event={e}

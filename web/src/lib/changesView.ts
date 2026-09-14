@@ -21,6 +21,14 @@ export function filterEvents(events: ChangeEvent[], f: ChangesFilter): ChangeEve
   )
 }
 
+/**
+ * The raw feed's dismiss view: seen (dismissed) events leave the list unless
+ * the user asks to see them again.
+ */
+export function visibleEvents(events: ChangeEvent[], showSeen: boolean): ChangeEvent[] {
+  return showSeen ? events : events.filter((e) => !e.seen)
+}
+
 /** Events per source, for the chip counts (before the source filter, after the group filter). */
 export function sourceCounts(events: ChangeEvent[]): Map<string, number> {
   const m = new Map<string, number>()
