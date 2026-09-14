@@ -288,6 +288,11 @@ func (w *Writer) Run(ctx context.Context, prompt, model string) (*Outcome, error
 	return decode(stdout.Bytes())
 }
 
+// Decode reads the CLI's `--output-format json` output (an object, or a
+// message array whose last result message counts) into an Outcome; the
+// review runner (internal/review) reads its stdout file with it.
+func Decode(data []byte) (*Outcome, error) { return decode(data) }
+
 // Environ is the worker's environment rule: ANTHROPIC_API_KEY /
 // ANTHROPIC_AUTH_TOKEN stripped so the subscription pays, PM_HEADLESS=1 so
 // project hooks can tell a headless run apart.

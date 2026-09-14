@@ -4,6 +4,7 @@ import {
   CircleDashed,
   CircleX,
   Eye,
+  GitPullRequest,
   Hourglass,
   Newspaper,
   Play,
@@ -55,6 +56,7 @@ const SCREEN_ICON: Record<string, React.ComponentType<LucideProps>> = {
   '/': Newspaper,
   '/changes': Activity,
   '/runs': Play,
+  '/review': GitPullRequest,
   '/settings': Settings2,
 }
 

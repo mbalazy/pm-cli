@@ -12,6 +12,8 @@ import { ProjectPage } from './ProjectPage'
 import { RootLayout } from './RootLayout'
 import { RunsPage } from './RunsPage'
 import { ChangesPage } from './ChangesPage'
+import { ReviewDetailPage } from './ReviewDetailPage'
+import { ReviewPage } from './ReviewPage'
 import { SettingsPage } from './SettingsPage'
 import { SoloReportPage } from './SoloReportPage'
 import { TaskPage } from './TaskPage'
@@ -85,6 +87,19 @@ export const changesRoute = createRoute({
   component: () => <ChangesPage group={changesRoute.useSearch().g ?? ''} />,
 })
 
+// PR code reviews: the list + start form, and one review's report.
+const reviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/review',
+  component: ReviewPage,
+})
+
+export const reviewDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/review/$id',
+  component: () => <ReviewDetailPage id={reviewDetailRoute.useParams().id} />,
+})
+
 // One /solo shift's report (pm-cli-136).
 export const soloRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -107,6 +122,8 @@ const routeTree = rootRoute.addChildren([
   projectRoute.addChildren([taskRoute]),
   runsRoute,
   changesRoute,
+  reviewRoute,
+  reviewDetailRoute,
   soloRoute,
   settingsRoute,
 ])

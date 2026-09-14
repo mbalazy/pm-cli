@@ -54,6 +54,7 @@ export function RootLayout() {
     today: () => void navigate({ to: '/' }),
     changes: () => void navigate({ to: '/changes' }),
     runs: () => void navigate({ to: '/runs' }),
+    review: () => void navigate({ to: '/review' }),
     settings: () => void navigate({ to: '/settings' }),
   })
 

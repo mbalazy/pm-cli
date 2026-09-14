@@ -10,6 +10,7 @@ import type {
   Report,
   ReportState,
   RestoreResult,
+  Review,
   RunActionResult,
   RunFlags,
   SettingsPatch,
@@ -36,6 +37,8 @@ export type MutationRequest =
   | { kind: 'report_dismiss'; id: string }
   | { kind: 'dismiss'; rows: DismissRow[] }
   | { kind: 'restore'; section: string }
+  | { kind: 'review_start'; url: string }
+  | { kind: 'review_cancel'; id: string }
 
 export type MutationResult =
   | TaskDetail
@@ -47,6 +50,7 @@ export type MutationResult =
   | Report
   | DismissResult
   | RestoreResult
+  | Review
   | { seen: string }
 
 export function runMutation(req: MutationRequest): Promise<MutationResult> {
@@ -72,6 +76,10 @@ export function runMutation(req: MutationRequest): Promise<MutationResult> {
       return apiPost<DismissResult>('/api/attention/dismiss', { rows: req.rows })
     case 'restore':
       return apiPost<RestoreResult>('/api/attention/restore', { section: req.section })
+    case 'review_start':
+      return apiPost<Review>('/api/reviews', { url: req.url })
+    case 'review_cancel':
+      return apiPost<Review>(`/api/reviews/${encodeURIComponent(req.id)}/cancel`)
     case 'run':
       return apiPost<RunActionResult>(
         `/api/runs/${encodeURIComponent(req.project)}/${encodeURIComponent(req.taskId)}/${req.action}`,
@@ -102,6 +110,10 @@ export function useRowMutation() {
       }
       if (req.kind === 'report_write' || req.kind === 'report_dismiss') inv(keys.report())
       if (req.kind === 'dismiss' || req.kind === 'restore') inv(keys.context(''))
+      if (req.kind === 'review_start' || req.kind === 'review_cancel') {
+        inv(keys.reviews())
+        inv(['review'])
+      }
       if (req.kind === 'run') {
         // A spawn seeds a run-state, a kill stamps one, a claim writes a
         // claim file: the runs table and the queue read all three.

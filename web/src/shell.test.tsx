@@ -1306,6 +1306,61 @@ describe('dismiss on home', () => {
   })
 })
 
+describe('review screen', () => {
+  const reviewDone = {
+    id: 'org-app-7-1',
+    url: 'https://github.com/org/app/pull/7',
+    repo: 'org/app',
+    number: 7,
+    project: 'alpha',
+    dir: '/repos/app',
+    config_dir: '/home/.claude',
+    pid: 1,
+    started: '2026-01-02T09:00:00Z',
+    finished: '2026-01-02T09:08:00Z',
+    state: 'done',
+  }
+  it('starts a review from a pasted PR URL and lists the reviews', async () => {
+    vi.stubGlobal('fetch', fakeFetch({ ...api, '/api/reviews': { reviews: [reviewDone] } }))
+    const user = userEvent.setup()
+    renderAt('/review')
+    const table = await screen.findByRole('table', { name: 'Reviews' })
+    expect(within(table).getByRole('link', { name: 'org/app#7' })).toHaveAttribute(
+      'href',
+      '/review/org-app-7-1',
+    )
+    expect(within(table).getByText('8m')).toBeInTheDocument()
+    const input = screen.getByRole('textbox', { name: 'PR URL' })
+    expect(screen.getByRole('button', { name: /^review/ })).toBeDisabled()
+    await user.type(input, 'https://github.com/OrbitOrg/app.orbit/pull/1003/changes')
+    await user.click(
+      screen.getByRole('button', { name: 'review OrbitOrg/app.orbit#1003' }),
+    )
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toEqual({
+      path: '/api/reviews',
+      header: 'cockpit',
+      body: { url: 'https://github.com/OrbitOrg/app.orbit/pull/1003/changes' },
+    })
+  })
+
+  it('a review page renders the report', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fakeFetch({
+        ...api,
+        '/api/reviews/org-app-7-1': {
+          ...reviewDone,
+          report: '### Code review - PR #7\n\nNo issues found.',
+        },
+      }),
+    )
+    renderAt('/review/org-app-7-1')
+    expect(await screen.findByRole('heading', { name: 'Code review - PR #7' })).toBeInTheDocument()
+    expect(screen.getByText('No issues found.')).toBeInTheDocument()
+  })
+})
+
 describe('solo report rows', () => {
   it('the title opens the shift report', async () => {
     const solo = {

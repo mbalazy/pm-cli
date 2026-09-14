@@ -11,6 +11,7 @@ export type Action =
   | 'today'
   | 'changes'
   | 'runs'
+  | 'review'
   | 'settings'
   | 'focus'
   | 'groupPrefix'
@@ -27,6 +28,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { keys: '1', action: 'today', description: 'Today (home)' },
   { keys: '2', action: 'changes', description: 'Changes' },
   { keys: '3', action: 'runs', description: 'Runs' },
+  { keys: '4', action: 'review', description: 'Review' },
   { keys: ',', action: 'settings', description: 'Settings' },
   { keys: 'j', action: 'down', description: 'next row' },
   { keys: 'k', action: 'up', description: 'previous row' },
@@ -106,6 +108,8 @@ export function shortcutFor(e: KeyLike): Action | null {
       return 'changes'
     case '3':
       return 'runs'
+    case '4':
+      return 'review'
     case ',':
       return 'settings'
     case 't':
