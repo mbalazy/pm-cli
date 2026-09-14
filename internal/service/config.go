@@ -57,9 +57,10 @@ func cockpitResult(c *storage.CockpitConfig) *ConfigResult {
 				Sort:      c.Sidebar.Sort,
 				Width:     c.Sidebar.Width,
 			},
-			Git:    GitResult{AllBranches: c.Git.AllBranches},
-			Report: ReportResult{Model: c.Report.Model, Language: c.Report.Language},
-			Slack:  slackResult(&c.Slack),
+			Git:          GitResult{AllBranches: c.Git.AllBranches},
+			Report:       ReportResult{Model: c.Report.Model, Language: c.Report.Language},
+			Slack:        slackResult(&c.Slack),
+			ShowExecutor: c.ShowExecutor,
 		},
 	}
 }
@@ -96,6 +97,7 @@ type UpdateSettingsInput struct {
 	Groups               []ConfigGroupPatch `json:"groups,omitempty"`
 	Git                  *GitPatch          `json:"git,omitempty"`
 	Report               *ReportPatch       `json:"report,omitempty"`
+	ShowExecutor         *bool              `json:"show_executor,omitempty"`
 }
 
 // ReportPatch patches cockpit.report.
@@ -173,6 +175,9 @@ func UpdateSettings(store storage.TaskStore, in UpdateSettingsInput) (*ConfigRes
 			if in.Refresh.Window != nil {
 				c.Refresh.Window = strings.TrimSpace(*in.Refresh.Window)
 			}
+		}
+		if in.ShowExecutor != nil {
+			c.ShowExecutor = *in.ShowExecutor
 		}
 		if len(in.Sections) > 0 {
 			if c.Sections == nil {

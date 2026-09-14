@@ -28,6 +28,7 @@ export interface SettingsForm {
   git_all_branches: boolean
   report_model: string
   report_language: string
+  show_executor: boolean
   /** The configured groups: name + order per slug (unknown groups come from `groupRows`). */
   groups: Record<string, { name: string; order: number }>
 }
@@ -49,6 +50,7 @@ export function formFromConfig(c: CockpitConfig): SettingsForm {
     git_all_branches: c.git.all_branches,
     report_model: c.report.model,
     report_language: c.report.language,
+    show_executor: c.show_executor === true,
     groups,
   }
 }
@@ -89,6 +91,7 @@ export function patchFromForm(base: SettingsForm, edited: SettingsForm): Setting
   if (edited.report_language.trim() !== base.report_language)
     report.language = edited.report_language.trim()
   if (Object.keys(report).length > 0) p.report = report
+  if (edited.show_executor !== base.show_executor) p.show_executor = edited.show_executor
   const groups: NonNullable<SettingsPatch['groups']> = []
   for (const [slug, g] of Object.entries(edited.groups)) {
     const b = base.groups[slug] ?? { name: '', order: 0 }

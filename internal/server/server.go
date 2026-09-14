@@ -147,6 +147,8 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux.HandleFunc("GET /api/attention", h.attention)
 	mux.HandleFunc("GET /api/changes", h.changes)
 	mux.HandleFunc("GET /api/report", h.getReport)
+	mux.HandleFunc("GET /api/solo", h.soloShifts)
+	mux.HandleFunc("GET /api/solo/{project}/{shift}/report", h.soloReport)
 	// Mutations. Every POST under /api/ needs the client header (see
 	// requireClient); GETs stay open.
 	mux.HandleFunc("POST /api/changes/refresh", requireClient(h.refresh))
@@ -158,6 +160,8 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux.HandleFunc("POST /api/runs/{project}/{id}/{action}", requireClient(h.runAction))
 	mux.HandleFunc("POST /api/report", requireClient(h.writeReport))
 	mux.HandleFunc("POST /api/report/dismiss", requireClient(h.dismissSuggestion))
+	mux.HandleFunc("POST /api/attention/dismiss", requireClient(h.dismissRows))
+	mux.HandleFunc("POST /api/attention/restore", requireClient(h.restoreRows))
 	mux.HandleFunc("GET /api/events", h.events)
 	// Anything else under /api/ is unknown, never the SPA: a typo'd endpoint
 	// answering with index.html would read as "the server is fine, the data

@@ -6,7 +6,9 @@ import type { AttentionRow } from '../api/types'
 // the mutation subs flip `pending` as they land (batch 1, pm-cli-118-16, is
 // in; sleep_project came with the settings screen, pm-cli-118-18; run
 // control - claim, release_claim, rerun_finish, resume_run, kill - with
-// pm-cli-118-21, each through the dialog with the argv preview).
+// pm-cli-118-21, each through the dialog with the argv preview; dismiss and
+// open_report with pm-cli-125, both WITHOUT a dialog - dismiss is undone by
+// the section's "restore").
 
 export type RowAction =
   | 'open'
@@ -22,6 +24,8 @@ export type RowAction =
   | 'sleep_project'
   | 'open_pr'
   | 'release_claim'
+  | 'dismiss'
+  | 'open_report'
 
 export interface ActionMeta {
   label: string
@@ -43,10 +47,17 @@ const META: Record<RowAction, ActionMeta> = {
   sleep_project: { label: 'sleep', pending: '' },
   open_pr: { label: 'PR', pending: 'needs the task link' },
   release_claim: { label: 'release claim', pending: '' },
+  dismiss: { label: 'dismiss', pending: '' },
+  open_report: { label: 'read report', pending: '' },
 }
 
 export function actionMeta(action: string): ActionMeta {
   return META[action as RowAction] ?? { label: action, pending: 'unknown action' }
+}
+
+/** Actions a row performs straight away, without the confirmation dialog. */
+export function isDirectAction(action: string): boolean {
+  return action === 'dismiss'
 }
 
 /** Where `open` goes: the task detail, or the project board for a project row. */
@@ -57,4 +68,12 @@ export type OpenTarget =
 export function openTarget(row: Pick<AttentionRow, 'project' | 'task_id'>): OpenTarget {
   if (row.task_id) return { to: '/p/$slug/t/$id', params: { slug: row.project, id: row.task_id } }
   return { to: '/p/$slug', params: { slug: row.project } }
+}
+
+/** Where `open_report` goes: the solo shift's report page. */
+export function reportTarget(row: Pick<AttentionRow, 'project' | 'shift'>) {
+  return {
+    to: '/solo/$project/$shift' as const,
+    params: { project: row.project, shift: row.shift ?? '' },
+  }
 }

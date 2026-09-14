@@ -23,7 +23,8 @@ import { TrackerTable } from '../components/TrackerTable'
 import { useConfirmedAction } from '../hooks/useConfirmedAction'
 import { useShortcuts } from '../hooks/useShortcuts'
 import { ageLabel, clockLabel } from '../lib/ageLabel'
-import { capSection } from '../lib/attentionView'
+import { useRowMutation } from '../api/mutations'
+import { capSection, dismissRowOf } from '../lib/attentionView'
 import { isPendingKind } from '../lib/confirmText'
 import { activityAgeSeconds, doingByActivity, isIdle, trackerIndex } from '../lib/doingView'
 import {
@@ -58,6 +59,7 @@ export function GroupPage({ group, tab, repo }: Props) {
   const runs = useRuns()
   const changes = useChanges()
   const action = useConfirmedAction()
+  const rows = useRowMutation()
   const navigate = useNavigate()
 
   const members = groupMembers(projects.data?.projects, group)
@@ -81,8 +83,11 @@ export function GroupPage({ group, tab, repo }: Props) {
   const now = new Date()
 
   const onAction = (kind: string, row: AttentionRow) => {
-    if (isPendingKind(kind)) action.ask({ kind, subject: row })
+    if (kind === 'dismiss') rows.mutate({ kind: 'dismiss', rows: [dismissRowOf(row)] })
+    else if (isPendingKind(kind)) action.ask({ kind, subject: row })
   }
+  const onDismissRows = (rs: AttentionRow[]) =>
+    rows.mutate({ kind: 'dismiss', rows: rs.map(dismissRowOf) })
   const editNotes = (p: Project) =>
     action.ask({ kind: 'edit_notes', subject: { project: p.slug, title: p.name, notes: p.notes } })
 
@@ -173,6 +178,8 @@ export function GroupPage({ group, tab, repo }: Props) {
                 expanded
                 onToggle={() => {}}
                 onAction={onAction}
+                onDismissRows={onDismissRows}
+                onRestore={() => rows.mutate({ kind: 'restore', section: needsMe.name })}
               />
             )}
             {waiting && (

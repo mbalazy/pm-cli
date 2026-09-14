@@ -21,6 +21,8 @@ import type {
   RunPlan,
   RunsResult,
   SeenResult,
+  SoloReportResult,
+  SoloResult,
   TaskDetail,
 } from './types'
 
@@ -41,6 +43,8 @@ export const keys = {
   changes: () => ['changes'] as const,
   config: () => ['config'] as const,
   report: () => ['report'] as const,
+  solo: () => ['solo'] as const,
+  soloReport: (project: string, shift: string) => ['solo-report', project, shift] as const,
   runPlan: (project: string, id: string, action: string, flags: RunFlags) =>
     ['run-plan', project, id, action, flags.yolo === true, flags.additional === true] as const,
 }
@@ -200,6 +204,26 @@ export function useRunPlan(project: string, id: string, action: string, flags: R
     enabled: project !== '' && id !== '' && action !== '',
     staleTime: 0,
     retry: false,
+  })
+}
+
+/** Every /solo shift across the active projects, open ones first, then newest. */
+export function useSolo() {
+  return useQuery({
+    queryKey: keys.solo(),
+    queryFn: () => apiGet<SoloResult>('/api/solo'),
+  })
+}
+
+/** One shift's report (or its state file while there is none). */
+export function useSoloReport(project: string, shift: string) {
+  return useQuery({
+    queryKey: keys.soloReport(project, shift),
+    queryFn: () =>
+      apiGet<SoloReportResult>(
+        `/api/solo/${encodeURIComponent(project)}/${encodeURIComponent(shift)}/report`,
+      ),
+    enabled: project !== '' && shift !== '',
   })
 }
 

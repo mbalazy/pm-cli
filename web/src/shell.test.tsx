@@ -311,6 +311,7 @@ const config = (sidebar: Record<string, unknown>) => ({
     sections: {},
     sources: {},
     sidebar: { variant: 'columns', show_repos: true, sort: 'worst', width: 0, ...sidebar },
+    show_executor: true,
     git: { all_branches: false },
     report: { model: 'haiku', language: 'pl' },
     slack: { workspaces: [] },
@@ -421,6 +422,7 @@ const api = {
   '/api/changes': changes,
   '/api/groups': groupsApi,
   '/api/report': reportOff,
+  '/api/solo': { shifts: [] },
   '/api/runs/alpha/alpha-9/plan?action=resume_run': {
     action: 'resume_run',
     project: 'alpha',
@@ -1186,7 +1188,7 @@ describe('report panel', () => {
     expect(within(items[1]).getByRole('button', { name: 'do' })).toBeDisabled()
   })
 
-  it('"do" opens the mapped action\'s dialog on the task; dismiss posts the id; "write now" asks first and costs a POST', async () => {
+  it('"do" opens the mapped action\'s dialog on the task; dismiss posts the id; "write again" posts with no dialog', async () => {
     vi.stubGlobal('fetch', fakeFetch({ ...api, '/api/report': reportDone }))
     const user = userEvent.setup()
     renderAt('/changes')
@@ -1211,12 +1213,75 @@ describe('report panel', () => {
       header: 'cockpit',
       body: { id: 'sg2' },
     })
+    // "write again" posts straight away - the panel already says it costs tokens.
     await user.click(within(panel).getByRole('button', { name: 'write again' }))
-    expect(within(dialog).getByText(/costs tokens/)).toBeInTheDocument()
-    expect(posts).toHaveLength(2)
-    await user.click(within(dialog).getByRole('button', { name: 'write report' }))
     await vi.waitFor(() => expect(posts).toHaveLength(3))
     expect(posts[2]).toEqual({ path: '/api/report', header: 'cockpit', body: undefined })
+  })
+})
+
+describe('dismiss on home', () => {
+  it('dismisses a row with no dialog, bulk-dismisses the old ones, restores the hidden', async () => {
+    const needs = {
+      name: 'needs_me',
+      total: 2,
+      dismissed: 3,
+      rows: [
+        row('needs_me', 'alpha', 'alpha-1', 'Old one', {
+          actions: ['open', 'dismiss'],
+          age_seconds: 20 * 86400,
+          since: '2026-01-01T00:00:00Z',
+        }),
+        row('needs_me', 'alpha', 'alpha-2', 'Fresh one', {
+          actions: ['open', 'dismiss'],
+          age_seconds: 3600,
+          since: '2026-01-02T00:00:00Z',
+        }),
+      ],
+    }
+    vi.stubGlobal(
+      'fetch',
+      fakeFetch({ ...api, '/api/attention': { ...attention, sections: [needs] } }),
+    )
+    const user = userEvent.setup()
+    renderAt('/')
+    const sec = await screen.findByRole('region', { name: 'Needs me' })
+    const items = within(sec).getAllByRole('listitem')
+    await user.click(within(items[1]).getByRole('button', { name: 'dismiss' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toEqual({
+      path: '/api/attention/dismiss',
+      header: 'cockpit',
+      body: {
+        rows: [
+          {
+            section: 'needs_me',
+            project: 'alpha',
+            task_id: 'alpha-2',
+            since: '2026-01-02T00:00:00Z',
+          },
+        ],
+      },
+    })
+    await user.click(within(sec).getByRole('button', { name: 'dismiss older than 14d (1)' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(2))
+    expect(posts[1].body).toEqual({
+      rows: [
+        {
+          section: 'needs_me',
+          project: 'alpha',
+          task_id: 'alpha-1',
+          since: '2026-01-01T00:00:00Z',
+        },
+      ],
+    })
+    await user.click(within(sec).getByRole('button', { name: '3 hidden · restore' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(3))
+    expect(posts[2]).toEqual({
+      path: '/api/attention/restore',
+      header: 'cockpit',
+      body: { section: 'needs_me' },
+    })
   })
 })
 

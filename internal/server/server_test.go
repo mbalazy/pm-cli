@@ -550,8 +550,8 @@ func TestAttention(t *testing.T) {
 	m := getJSON(t, srv.URL+"/api/attention", 200)
 	wantKeys(t, m, "generated", "wip", "sections", "groups")
 	sections := m["sections"].([]any)
-	if len(sections) != 7 {
-		t.Fatalf("sections = %d, want the seven defaults", len(sections))
+	if len(sections) != 8 {
+		t.Fatalf("sections = %d, want the eight defaults", len(sections))
 	}
 	var waiting map[string]any
 	for _, s := range sections {
@@ -1075,6 +1075,9 @@ func TestRunControl(t *testing.T) {
 		// The killed run above outranks a live claim in needs_me (a failed
 		// run is rank a, a claim rank f); drop its state so the claim row shows.
 		if err := os.Remove(storage.ExecutorRunPath(store.ProjectDir("test"), "t-2")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  show_executor: true\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		m := postJSON(t, srv.URL+"/api/runs/test/t-2/claim", "", 200)

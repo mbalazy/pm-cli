@@ -30,6 +30,7 @@ import (
 // never a literal at a call site.
 const (
 	SectionNeedsMe        = "needs_me"
+	SectionSoloReports    = "solo_reports"
 	SectionLandedNoPR     = "landed_no_pr"
 	SectionFocus          = "focus"
 	SectionInProgress     = "in_progress"
@@ -85,6 +86,12 @@ const (
 	// (a claim whose session carries the cockpit prefix, on this host) -
 	// the one claim a web button may release without taking it from anyone.
 	ActionReleaseClaim = "release_claim"
+	// ActionDismiss hides a row of a DismissableSections section until its
+	// condition starts again (dismissed.go); no dialog, the section's
+	// "restore" undoes it.
+	ActionDismiss = "dismiss"
+	// ActionOpenReport opens a closed solo shift's report.
+	ActionOpenReport = "open_report"
 )
 
 // Flags a row may carry.
@@ -102,7 +109,9 @@ type AttentionRow struct {
 	Project  string `json:"project"`
 	Group    string `json:"group"`
 	TaskID   string `json:"task_id,omitempty"`
-	Title    string `json:"title"`
+	// Shift is the solo shift id on a solo_reports row (Shift.ID).
+	Shift string `json:"shift,omitempty"`
+	Title string `json:"title"`
 	// Status is the task's status, for a chip; empty on project rows.
 	Status string `json:"status,omitempty"`
 	// Reason is one display-ready sentence: WHY the row is here.
@@ -132,6 +141,12 @@ type AttentionSection struct {
 	Total int            `json:"total"`
 	// Note explains an empty or unsupported section ("no change feed yet").
 	Note string `json:"note,omitempty"`
+	// Dismissed counts the rows the user dismissed (not in Rows, not in
+	// Total) - what the section's "N hidden · restore" says.
+	Dismissed int `json:"dismissed,omitempty"`
+
+	// hidden are the dismissed rows, kept so Scope can recount Dismissed.
+	hidden []AttentionRow
 }
 
 // GroupSummary is the sidebar's line for one group: the worst severity among
@@ -219,6 +234,12 @@ func (a *Attention) Scope(project, group string) *Attention {
 			}
 		}
 		ns.Total = len(ns.Rows)
+		for _, r := range sec.hidden {
+			if keep(r.Project, r.Group) {
+				ns.hidden = append(ns.hidden, r)
+			}
+		}
+		ns.Dismissed = len(ns.hidden)
 		out.Sections = append(out.Sections, ns)
 	}
 	out.Groups = []GroupSummary{}
@@ -322,9 +343,15 @@ func BuildAttention(store TaskStore, cfg *CockpitConfig, opts AttentionOptions) 
 	byName := map[string][]AttentionRow{}
 	stuckRepos := map[string]int{} // group -> quiet count
 	for _, v := range views {
-		byName[SectionNeedsMe] = append(byName[SectionNeedsMe], needsMeRows(v, now)...)
-		byName[SectionLandedNoPR] = append(byName[SectionLandedNoPR], landedNoPRRows(v, now)...)
-		byName[SectionInProgress] = append(byName[SectionInProgress], inProgressRows(v, now)...)
+		// The executor's three sections read run-state files only; with the
+		// executor frozen (cockpit.show_executor off, the default since
+		// pm-cli-125) those files are history, not a to-do.
+		if cfg.ShowExecutor {
+			byName[SectionNeedsMe] = append(byName[SectionNeedsMe], needsMeRows(v, now)...)
+			byName[SectionLandedNoPR] = append(byName[SectionLandedNoPR], landedNoPRRows(v, now)...)
+			byName[SectionInProgress] = append(byName[SectionInProgress], inProgressRows(v, now)...)
+		}
+		byName[SectionSoloReports] = append(byName[SectionSoloReports], soloReportRows(v, now)...)
 		byName[SectionWaiting] = append(byName[SectionWaiting], waitingRows(v, cfg, now)...)
 		if row, stuck := stuckProjectRow(v, cfg, onFocus, now); stuck {
 			byName[SectionStuckProjects] = append(byName[SectionStuckProjects], row)
@@ -339,12 +366,34 @@ func BuildAttention(store TaskStore, cfg *CockpitConfig, opts AttentionOptions) 
 	sortByAgeDesc(byName[SectionLandedNoPR])
 	sortByAgeDesc(byName[SectionStuckProjects])
 	sortByAgeAsc(byName[SectionNewSinceCutoff])
+	sortByAgeAsc(byName[SectionSoloReports])
+
+	// Dismissed rows leave the queue (and the sidebar's counters) here, once.
+	// An unreadable dismissed.json hides nothing: a broken file must not
+	// make the queue look emptier than it is.
+	dismissed, _ := ReadDismissed(store.RootDir())
+	hidden := map[string][]AttentionRow{}
+	for _, name := range DismissableSections {
+		var keep []AttentionRow
+		for _, r := range byName[name] {
+			if _, gone := dismissed[r.DismissKey()]; gone {
+				hidden[name] = append(hidden[name], r)
+				continue
+			}
+			r.Actions = append(r.Actions, ActionDismiss)
+			keep = append(keep, r)
+		}
+		byName[name] = keep
+	}
 
 	for _, name := range CockpitSections {
 		if !cfg.SectionEnabled(name) {
 			continue
 		}
-		sec := AttentionSection{Name: name, Rows: byName[name]}
+		sec := AttentionSection{Name: name, Rows: byName[name], hidden: hidden[name], Dismissed: len(hidden[name])}
+		if !cfg.ShowExecutor && isExecutorSection(name) {
+			sec.Note = NoteExecutorHidden
+		}
 		switch name {
 		case SectionChanges:
 			sec = changesSection(opts)
@@ -363,8 +412,76 @@ func BuildAttention(store TaskStore, cfg *CockpitConfig, opts AttentionOptions) 
 		a.Sections = append(a.Sections, sec)
 	}
 
-	a.Groups = groupSummaries(views, groups, byName, stuckRepos)
+	a.Groups = groupSummaries(views, groups, byName, stuckRepos, cfg.ShowExecutor)
 	return a, nil
+}
+
+// NoteExecutorHidden is the note of an executor section while
+// cockpit.show_executor is off.
+const NoteExecutorHidden = "executor runs hidden (cockpit.show_executor is off)"
+
+// isExecutorSection: the sections computed from executor run-states only.
+func isExecutorSection(name string) bool {
+	return name == SectionNeedsMe || name == SectionLandedNoPR || name == SectionInProgress
+}
+
+// --- solo_reports ---
+
+// SoloReportDays is how long a closed solo shift's report stays on the home
+// screen unread.
+const SoloReportDays = 14
+
+// soloReportRows: one row per solo shift closed in the last SoloReportDays
+// that left a report - the morning read (pm-cli-136). Dismiss = read.
+func soloReportRows(v *projectView, now time.Time) []AttentionRow {
+	var rows []AttentionRow
+	for _, sh := range ReadShifts(v.dir, v.slug) {
+		if sh.Open || sh.Report == "" {
+			continue
+		}
+		r := AttentionRow{
+			Section: SectionSoloReports, Severity: SeverityInfo, Project: v.slug, Group: v.group,
+			Shift: sh.ID, Title: shiftTitle(sh),
+			Actions: []string{ActionOpenReport},
+		}
+		r.Since, r.AgeSeconds = ageFrom(sh.Closed, now)
+		if r.AgeSeconds == nil {
+			// No closing stamp at all: the date the file name carries.
+			r.Since, r.AgeSeconds = ageFrom(sh.Date, now)
+		}
+		if r.AgeSeconds != nil && *r.AgeSeconds > int64(SoloReportDays)*86400 {
+			continue
+		}
+		r.Reason = "solo shift closed"
+		if len(sh.Tasks) > 0 {
+			var st []string
+			for _, t := range sh.Tasks {
+				if t.Status != "" {
+					st = append(st, t.ID+" "+t.Status)
+				}
+			}
+			if len(st) > 0 {
+				r.Reason += " · " + strings.Join(st, ", ")
+			}
+		}
+		rows = append(rows, r)
+	}
+	return rows
+}
+
+// shiftTitle names a shift by its queue: the one task's title, or the ids.
+func shiftTitle(sh Shift) string {
+	switch len(sh.Tasks) {
+	case 0:
+		return "solo shift " + sh.Date
+	case 1:
+		return sh.Tasks[0].ID + " · " + sh.Tasks[0].Title
+	}
+	ids := make([]string, len(sh.Tasks))
+	for i, t := range sh.Tasks {
+		ids[i] = t.ID
+	}
+	return fmt.Sprintf("%d tasks: %s", len(sh.Tasks), strings.Join(ids, ", "))
 }
 
 // --- needs_me ---
@@ -867,7 +984,7 @@ func wipCount(v *projectView, now time.Time) int {
 
 // --- groups ---
 
-func groupSummaries(views []*projectView, groups []ProjectGroup, byName map[string][]AttentionRow, quiet map[string]int) []GroupSummary {
+func groupSummaries(views []*projectView, groups []ProjectGroup, byName map[string][]AttentionRow, quiet map[string]int, showExecutor bool) []GroupSummary {
 	out := make([]GroupSummary, 0, len(groups))
 	idx := map[string]int{}
 	for _, g := range groups {
@@ -906,6 +1023,9 @@ func groupSummaries(views []*projectView, groups []ProjectGroup, byName map[stri
 			continue
 		}
 		for _, st := range v.accepts {
+			if !showExecutor {
+				break
+			}
 			// The same rule as needs_me (closedByHuman): a tracker on done or
 			// archived is closed whatever its finish.json still says, so its
 			// claims are not a 👁 count with no row behind it.

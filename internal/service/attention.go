@@ -113,7 +113,9 @@ func DigestAttention(a *storage.Attention) *AttentionDigest {
 			d.Waiting = append(d.Waiting, rows...)
 		default:
 			d.Counts[sec.Name] = sec.Total
-			if sec.Note != "" && sec.Name != storage.SectionChanges {
+			// The executor-hidden note is the user's setting, not news for
+			// every session start.
+			if sec.Note != "" && sec.Name != storage.SectionChanges && sec.Note != storage.NoteExecutorHidden {
 				notes = append(notes, sec.Name+": "+sec.Note)
 			}
 		}

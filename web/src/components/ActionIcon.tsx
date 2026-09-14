@@ -1,8 +1,10 @@
 import {
   ArrowUpRight,
+  BookOpen,
   Circle,
   CircleDot,
   Eye,
+  EyeOff,
   FileText,
   GitPullRequest,
   Hourglass,
@@ -35,6 +37,8 @@ const ICONS: Record<string, React.ComponentType<LucideProps>> = {
   sleep_project: Moon,
   open_pr: GitPullRequest,
   focus: Circle,
+  dismiss: EyeOff,
+  open_report: BookOpen,
 }
 
 export function ActionIcon({ action, className }: { action: string; className?: string }) {

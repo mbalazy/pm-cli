@@ -2,6 +2,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 
+import { useRowMutation } from '../api/mutations'
 import { useAttention, useChanges, useConfig, useFocus, useRefreshChanges } from '../api/queries'
 import type { AttentionRow } from '../api/types'
 import { AttentionSection } from '../components/AttentionSection'
@@ -10,11 +11,11 @@ import { GroupChips } from '../components/GroupChips'
 import { Toast } from '../components/Toast'
 import { useConfirmedAction } from '../hooks/useConfirmedAction'
 import { useShortcuts } from '../hooks/useShortcuts'
-import { capSection, rowKey } from '../lib/attentionView'
+import { capSection, dismissRowOf, rowKey } from '../lib/attentionView'
 import { isPendingKind } from '../lib/confirmText'
 import { groupHotkeys, groupSearch } from '../lib/groupFilter'
 import { refreshTimes } from '../lib/refreshTimes'
-import { openTarget } from '../lib/rowActions'
+import { openTarget, reportTarget } from '../lib/rowActions'
 
 // The home screen - the front page: a masthead with the date, then the
 // attention queue in the API's section order, narrowed to one group when
@@ -30,6 +31,7 @@ export function TodayPage({ group }: { group: string }) {
   const refresh = useRefreshChanges()
   const focus = useFocus()
   const action = useConfirmedAction()
+  const rows = useRowMutation()
   const navigate = useNavigate()
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [selectedKey, setSelectedKey] = useState<string>()
@@ -58,6 +60,7 @@ export function TodayPage({ group }: { group: string }) {
     open: () => {
       // Only a row the API lets us open (a project-less Slack row has no page).
       if (selected?.actions.includes('open')) void navigate(openTarget(selected))
+      else if (selected?.actions.includes('open_report')) void navigate(reportTarget(selected))
     },
     focus: () => {
       if (selected?.actions.includes('focus_toggle')) onAction('focus_toggle', selected)
@@ -78,6 +81,9 @@ export function TodayPage({ group }: { group: string }) {
   // Every action the API lists and this build knows opens the dialog; the
   // run-control actions (pm-cli-118-21) stay disabled in the row itself.
   const onAction = (kind: string, row: AttentionRow) => {
+    // Dismiss is instant: "N hidden · restore" undoes it, a dialog would
+    // only slow down clearing a pile of rows.
+    if (kind === 'dismiss') return rows.mutate({ kind: 'dismiss', rows: [dismissRowOf(row)] })
     if (!isPendingKind(kind)) return
     action.ask({ kind, subject: row }, focus.data?.task_ids.includes(row.task_id ?? ''))
   }
@@ -146,8 +152,11 @@ export function TodayPage({ group }: { group: string }) {
           onToggle={() => toggle(section.name)}
           selectedKey={selectedKey}
           onAction={onAction}
+          onDismissRows={(rs) => rows.mutate({ kind: 'dismiss', rows: rs.map(dismissRowOf) })}
+          onRestore={() => rows.mutate({ kind: 'restore', section: section.name })}
         />
       ))}
+      {rows.isError && <p className="text-sm text-crit">{rows.error.message}</p>}
       {attention.data && sections.length === 0 && (
         <p className="text-ink-3">every section is switched off in config.yaml</p>
       )}

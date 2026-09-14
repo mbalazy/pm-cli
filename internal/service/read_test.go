@@ -505,6 +505,10 @@ func TestJournal(t *testing.T) {
 func attentionFixture(t *testing.T, store *storage.Store) {
 	t.Helper()
 	seedProject(t, store, 1)
+	// The fixture is about the executor's rows (off by default since pm-cli-125).
+	if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  show_executor: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.MutateProject("beta", func(p *storage.Project) error {
 		p.Statuses = []string{"todo", "doing", "waiting", "merged", "done"}
 		return nil

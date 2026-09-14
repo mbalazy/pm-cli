@@ -21,10 +21,14 @@ func TestCockpitDefaultsWithoutFileOrBlock(t *testing.T) {
 		if got.Sidebar.Variant != "columns" || !got.Sidebar.ShowRepos || got.Sidebar.Sort != "worst" {
 			t.Errorf("sidebar = %+v", got.Sidebar)
 		}
-		for i, name := range CockpitSections {
-			if got.SectionEnabled(name) != (i < 7) {
-				t.Errorf("section %s enabled = %v, want %v", name, got.SectionEnabled(name), i < 7)
+		for _, name := range CockpitSections {
+			want := name != "new_since_cutoff" && name != "recent"
+			if got.SectionEnabled(name) != want {
+				t.Errorf("section %s enabled = %v, want %v", name, got.SectionEnabled(name), want)
 			}
+		}
+		if got.ShowExecutor {
+			t.Error("show_executor must default to off")
 		}
 		if !got.SourceEnabled("pm") || got.SourceEnabled("slack") || got.SourceEnabled("nosuch") {
 			t.Errorf("sources = %v", got.Sources)

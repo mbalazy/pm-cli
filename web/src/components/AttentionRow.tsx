@@ -6,7 +6,7 @@ import { cn } from '@/components/ui/cn'
 import type { AttentionRow as Row } from '../api/types'
 import { ageLabel } from '../lib/ageLabel'
 import { rowGlyph } from '../lib/glyphs'
-import { actionMeta, openTarget } from '../lib/rowActions'
+import { actionMeta, openTarget, reportTarget } from '../lib/rowActions'
 import { ActionIcon } from './ActionIcon'
 import { Glyph } from './Glyph'
 
@@ -71,6 +71,15 @@ export function AttentionRow({ row, selected, onAction }: Props) {
               if (a === 'open') {
                 return (
                   <Link key={a} to={target.to} params={target.params} className="ghost-btn">
+                    <ActionIcon action={a} />
+                    {meta.label}
+                  </Link>
+                )
+              }
+              if (a === 'open_report') {
+                const report = reportTarget(row)
+                return (
+                  <Link key={a} to={report.to} params={report.params} className="ghost-btn">
                     <ActionIcon action={a} />
                     {meta.label}
                   </Link>

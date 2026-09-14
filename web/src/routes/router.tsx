@@ -13,6 +13,7 @@ import { RootLayout } from './RootLayout'
 import { RunsPage } from './RunsPage'
 import { ChangesPage } from './ChangesPage'
 import { SettingsPage } from './SettingsPage'
+import { SoloReportPage } from './SoloReportPage'
 import { TaskPage } from './TaskPage'
 import { TodayPage } from './TodayPage'
 
@@ -84,6 +85,16 @@ export const changesRoute = createRoute({
   component: () => <ChangesPage group={changesRoute.useSearch().g ?? ''} />,
 })
 
+// One /solo shift's report (pm-cli-136).
+export const soloRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/solo/$project/$shift',
+  component: () => {
+    const { project, shift } = soloRoute.useParams()
+    return <SoloReportPage project={project} shift={shift} />
+  },
+})
+
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
@@ -96,6 +107,7 @@ const routeTree = rootRoute.addChildren([
   projectRoute.addChildren([taskRoute]),
   runsRoute,
   changesRoute,
+  soloRoute,
   settingsRoute,
 ])
 
