@@ -6,15 +6,17 @@ import { useRowMutation } from '../api/mutations'
 import { useReviews } from '../api/queries'
 import { parsePRUrl, reviewRow } from '../lib/reviewView'
 
-// The Review screen: paste a GitHub PR URL, pm finds the project checking
-// that repository out and runs `/review <url>` there headless; the list
-// shows every review with its state, the report opens on its own page.
+// The Review screen: paste a GitHub PR URL, a Slack link to a message asking
+// for a review, or a sentence naming the PR; pm resolves it to one PR, finds
+// the project checking that repository out and runs `/review <url>` there
+// headless; the list shows every review with its state, the report opens on
+// its own page.
 
 export function ReviewPage() {
   const reviews = useReviews()
   const start = useRowMutation()
-  const [url, setUrl] = useState('')
-  const pr = parsePRUrl(url)
+  const [input, setInput] = useState('')
+  const pr = parsePRUrl(input)
   const now = new Date()
   const rows = (reviews.data?.reviews ?? []).map((r) => reviewRow(r, now))
 
@@ -32,21 +34,25 @@ export function ReviewPage() {
           className="flex flex-wrap items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault()
-            if (!pr) return
-            start.mutate({ kind: 'review_start', url }, { onSuccess: () => setUrl('') })
+            if (input.trim() === '') return
+            start.mutate({ kind: 'review_start', input }, { onSuccess: () => setInput('') })
           }}
         >
           <input
-            type="url"
-            aria-label="PR URL"
-            placeholder="https://github.com/owner/repo/pull/123"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            type="text"
+            aria-label="PR to review"
+            placeholder="PR URL, Slack link, or e.g. “pr 555 w repo orbit mobile”"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
             className="field min-w-0 flex-1 basis-80"
           />
-          <button type="submit" className="ghost-btn" disabled={!pr || start.isPending}>
+          <button
+            type="submit"
+            className="ghost-btn"
+            disabled={input.trim() === '' || start.isPending}
+          >
             <GitPullRequest aria-hidden="true" className="size-3" strokeWidth={1.75} />
-            {start.isPending ? 'starting…' : pr ? `review ${pr.repo}#${pr.number}` : 'review'}
+            {start.isPending ? 'finding the PR…' : pr ? `review ${pr.repo}#${pr.number}` : 'review'}
           </button>
         </form>
         {start.isError && (
@@ -59,7 +65,9 @@ export function ReviewPage() {
       {reviews.isPending && <p className="text-ink-3">loading…</p>}
       {reviews.isError && <p className="text-crit">error: {reviews.error.message}</p>}
       {reviews.data && rows.length === 0 && (
-        <p className="px-2 text-sm text-ink-3">No reviews yet - paste a PR URL above.</p>
+        <p className="px-2 text-sm text-ink-3">
+          No reviews yet - paste a PR URL, a Slack link or a sentence above.
+        </p>
       )}
       {rows.length > 0 && (
         <div className="overflow-x-auto">
@@ -86,6 +94,7 @@ export function ReviewPage() {
                     >
                       {r.label}
                     </Link>
+                    {r.review.title && <div className="text-sm text-ink-2">{r.review.title}</div>}
                   </td>
                   <td className="font-mono text-xs">{r.review.project}</td>
                   <td className="whitespace-nowrap text-ink-2">{r.when}</td>

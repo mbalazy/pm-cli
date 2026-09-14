@@ -301,8 +301,15 @@ export interface Review {
   /** owner/repo */
   repo: string
   number: number
+  /** The PR title, from gh when the review started. */
+  title?: string
+  /** What the user pasted, when it was not the bare PR URL. */
+  input?: string
   project: string
+  /** The project's checkout; the review runs in `worktree` at `commit`. */
   dir: string
+  worktree?: string
+  commit?: string
   config_dir: string
   pid: number
   started: string

@@ -1330,7 +1330,7 @@ describe('review screen', () => {
       '/review/org-app-7-1',
     )
     expect(within(table).getByText('8m')).toBeInTheDocument()
-    const input = screen.getByRole('textbox', { name: 'PR URL' })
+    const input = screen.getByRole('textbox', { name: 'PR to review' })
     expect(screen.getByRole('button', { name: /^review/ })).toBeDisabled()
     await user.type(input, 'https://github.com/OrbitOrg/app.orbit/pull/1003/changes')
     await user.click(
@@ -1340,8 +1340,20 @@ describe('review screen', () => {
     expect(posts[0]).toEqual({
       path: '/api/reviews',
       header: 'cockpit',
-      body: { url: 'https://github.com/OrbitOrg/app.orbit/pull/1003/changes' },
+      body: { input: 'https://github.com/OrbitOrg/app.orbit/pull/1003/changes' },
     })
+  })
+
+  it('free text is sent as it was typed', async () => {
+    vi.stubGlobal('fetch', fakeFetch({ ...api, '/api/reviews': { reviews: [] } }))
+    const user = userEvent.setup()
+    renderAt('/review')
+    await user.type(
+      await screen.findByRole('textbox', { name: 'PR to review' }),
+      'pr 555 w repo orbit mobile{Enter}',
+    )
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].body).toEqual({ input: 'pr 555 w repo orbit mobile' })
   })
 
   it('a review page renders the report', async () => {

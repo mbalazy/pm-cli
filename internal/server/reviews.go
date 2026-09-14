@@ -42,13 +42,18 @@ func (h *handler) getReview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) startReview(w http.ResponseWriter, r *http.Request) {
+	// input = a PR URL, a Slack link or a sentence; url is the older name.
 	var in struct {
-		URL string `json:"url"`
+		Input string `json:"input"`
+		URL   string `json:"url"`
 	}
 	if !decodeBody(w, r, &in) {
 		return
 	}
-	rv, err := h.reviews.Start(in.URL)
+	if in.Input == "" {
+		in.Input = in.URL
+	}
+	rv, err := h.reviews.Start(r.Context(), in.Input)
 	if err != nil {
 		writeReviewError(w, err)
 		return

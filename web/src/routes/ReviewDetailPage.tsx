@@ -47,6 +47,14 @@ export function ReviewDetailPage({ id }: { id: string }) {
             all reviews
           </Link>
         </p>
+        {r.title && <p className="display text-base">{r.title}</p>}
+        {r.input && <p className="text-xs text-ink-3">asked as: {r.input}</p>}
+        {r.commit && (
+          <p className="text-xs text-ink-3">
+            ran in a throwaway worktree at <span className="font-mono">{r.commit}</span> - your
+            checkout is never touched
+          </p>
+        )}
       </header>
       {r.state === 'running' && (
         <p className="text-sm text-ink-2">
