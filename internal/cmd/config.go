@@ -102,6 +102,7 @@ func renderCockpitConfig(b *strings.Builder, c *storage.CockpitConfig) {
 	fmt.Fprintf(b, "  cutoff hour: %02d:00\n", c.CutoffHour)
 	fmt.Fprintf(b, "  refresh: every %s within %s\n", c.Refresh.Every, c.Refresh.Window)
 	fmt.Fprintf(b, "  sections: %s\n", toggles(storage.CockpitSections, c.Sections))
+	fmt.Fprintf(b, "  executor runs on the cockpit: %v\n", c.ShowExecutor)
 	fmt.Fprintf(b, "  sources: %s\n", toggles(storage.CockpitSources, c.Sources))
 	fmt.Fprintf(b, "  sidebar: %s · repos %s · sort %s · width %s\n",
 		c.Sidebar.Variant, onOff(c.Sidebar.ShowRepos), c.Sidebar.Sort, widthOrDefault(c.Sidebar.Width))

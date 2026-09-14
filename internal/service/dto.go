@@ -278,6 +278,7 @@ type CockpitResult struct {
 	Git                  GitResult       `json:"git"`
 	Report               ReportResult    `json:"report"`
 	Slack                SlackResult     `json:"slack"`
+	ShowExecutor         bool            `json:"show_executor"`
 }
 
 // SlackResult is the read-only view of cockpit.slack: which workspaces

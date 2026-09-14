@@ -1,4 +1,4 @@
-import type { AttentionRow, AttentionSection } from '../api/types'
+import type { AttentionRow, AttentionSection, DismissRow } from '../api/types'
 
 // The home screen's section vocabulary: a title, one sentence saying how the
 // section is computed (the wireframe's "why" line) and the sentence shown
@@ -17,6 +17,11 @@ const META: Record<string, SectionMeta> = {
     title: 'Needs me',
     why: 'worst first: failed › visual claims › landed without acceptance › partial › live claim',
     empty: 'Nothing needs you.',
+  },
+  solo_reports: {
+    title: 'Solo reports',
+    why: 'closed /solo shifts of the last 14 days · dismiss = read',
+    empty: 'No solo report to read.',
   },
   landed_no_pr: {
     title: 'Accepted, no PR',
@@ -101,5 +106,30 @@ export function capSection(section: AttentionSection, expanded: boolean): Capped
  * as the id.
  */
 export function rowKey(row: AttentionRow): string {
-  return `${row.section}/${row.project}/${row.task_id ?? ''}/${row.since ?? ''}/${row.title}`
+  return `${row.section}/${row.project}/${row.task_id ?? row.shift ?? ''}/${row.since ?? ''}/${row.title}`
+}
+
+/** The bulk dismiss's age: rows older than this many days. */
+export const DISMISS_OLDER_DAYS = 14
+
+/** What POST /api/attention/dismiss needs to name one row. */
+export function dismissRowOf(row: AttentionRow): DismissRow {
+  return {
+    section: row.section,
+    project: row.project,
+    task_id: row.task_id,
+    shift: row.shift,
+    since: row.since,
+  }
+}
+
+/**
+ * The rows the bulk "dismiss older than N days" takes: dismissable (the API
+ * put `dismiss` on them) and of a KNOWN age past the threshold - an unknown
+ * age ("since ?") is not old, it is unknown, and stays.
+ */
+export function olderThan(rows: AttentionRow[], days: number): AttentionRow[] {
+  return rows.filter(
+    (r) => r.actions.includes('dismiss') && r.age_seconds !== null && r.age_seconds >= days * 86400,
+  )
 }

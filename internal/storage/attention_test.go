@@ -108,6 +108,11 @@ func build(t *testing.T, store *Store, cfgBody string, opts AttentionOptions) *A
 	if opts.Now.IsZero() {
 		opts.Now = attentionNow
 	}
+	// The fixture is about the executor's rows; a body that names the switch
+	// tests the switch itself.
+	if !strings.Contains(cfgBody, "show_executor") {
+		cfg.Cockpit.ShowExecutor = true
+	}
 	a, err := BuildAttention(store, &cfg.Cockpit, opts)
 	if err != nil {
 		t.Fatal(err)
@@ -395,7 +400,7 @@ func TestAttentionSectionsFollowConfig(t *testing.T) {
 	for _, s := range a.Sections {
 		names = append(names, s.Name)
 	}
-	want := "needs_me,landed_no_pr,focus,in_progress,changes,stuck_projects,new_since_cutoff"
+	want := "needs_me,solo_reports,landed_no_pr,focus,in_progress,changes,stuck_projects,new_since_cutoff"
 	if strings.Join(names, ",") != want {
 		t.Errorf("sections = %v", names)
 	}

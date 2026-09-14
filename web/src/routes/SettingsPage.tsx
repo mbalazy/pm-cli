@@ -233,6 +233,16 @@ export function SettingsPage() {
               </label>
             ))}
           </div>
+          <label className="flex items-center gap-1">
+            <input
+              type="checkbox"
+              className="accent-ink"
+              checked={form.show_executor}
+              onChange={(e) => set({ show_executor: e.target.checked })}
+            />
+            show executor runs (needs me, accepted no PR, in progress, the Runs table) - the
+            executor is frozen, off by default
+          </label>
         </SettingsGroup>
 
         <SettingsGroup label="Sidebar">

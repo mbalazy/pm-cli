@@ -75,6 +75,12 @@ type CockpitConfig struct {
 	// Slack configures the feed's slack source (pm-cli-118-19): which MCP
 	// servers to run, one per workspace. The switch is Sources["slack"].
 	Slack SlackSourceConfig `yaml:"slack"`
+
+	// ShowExecutor puts the executor's runs back on the cockpit (needs_me,
+	// landed_no_pr, in_progress, the sidebar's visual count, the Runs
+	// screen's executor table). Off by default: the executor is frozen in
+	// favour of /solo (2026-09-09) and its old run-states are history.
+	ShowExecutor bool `yaml:"show_executor"`
 }
 
 // SlackSourceConfig is the `cockpit.slack` block: the Slack MCP servers
@@ -170,12 +176,15 @@ type SidebarConfig struct {
 	Width int `yaml:"width"`
 }
 
-// CockpitSections are the home screen's sections, in display order. The
-// first seven are on by default; the last two are opt-in.
+// CockpitSections are the home screen's sections, in display order. Every
+// one is on by default except optInSections.
 var CockpitSections = []string{
-	"needs_me", "landed_no_pr", "focus", "in_progress", "waiting", "changes",
+	"needs_me", "solo_reports", "landed_no_pr", "focus", "in_progress", "waiting", "changes",
 	"stuck_projects", "new_since_cutoff", "recent",
 }
+
+// optInSections are the sections a fresh config leaves off.
+var optInSections = map[string]bool{"new_since_cutoff": true, "recent": true}
 
 // CockpitSources are the change feed's sources. pm reads pm's own files; git
 // and github run `git`/`gh` in the project's checkout; slack and report are
@@ -194,8 +203,8 @@ var SidebarSorts = []string{"worst", "last_activity", "manual"}
 // hence all in the file and none in the code that reads them).
 func DefaultCockpitConfig() CockpitConfig {
 	sections := make(map[string]bool, len(CockpitSections))
-	for i, name := range CockpitSections {
-		sections[name] = i < 7
+	for _, name := range CockpitSections {
+		sections[name] = !optInSections[name]
 	}
 	return CockpitConfig{
 		DoingIdleDays:        7,

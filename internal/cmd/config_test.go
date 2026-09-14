@@ -128,7 +128,7 @@ func TestConfigShowRendersCockpit(t *testing.T) {
 		"doing idle 7d",
 		"cutoff hour: 18:00",
 		"every 30m0s within 07:00-20:00",
-		"needs_me landed_no_pr focus in_progress waiting changes stuck_projects -new_since_cutoff -recent",
+		"needs_me solo_reports landed_no_pr focus in_progress waiting changes stuck_projects -new_since_cutoff -recent",
 		"pm git github -slack -report",
 		"sidebar: columns · repos on · sort worst · width default",
 	} {

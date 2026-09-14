@@ -55,6 +55,7 @@ func newTodayCmd(store storage.TaskStore) *cobra.Command {
 // with, per section. The browser has colour; the terminal has these.
 var sectionGlyphs = map[string]string{
 	storage.SectionNeedsMe:        "!",
+	storage.SectionSoloReports:    "✎",
 	storage.SectionLandedNoPR:     "⇡",
 	storage.SectionFocus:          "★",
 	storage.SectionInProgress:     "▶",
@@ -68,6 +69,7 @@ var sectionGlyphs = map[string]string{
 // sectionTitles are the section headers, in the user's words.
 var sectionTitles = map[string]string{
 	storage.SectionNeedsMe:        "needs me",
+	storage.SectionSoloReports:    "solo reports",
 	storage.SectionLandedNoPR:     "accepted, no PR",
 	storage.SectionFocus:          "focus",
 	storage.SectionInProgress:     "in progress",

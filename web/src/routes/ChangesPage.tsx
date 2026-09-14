@@ -142,9 +142,7 @@ export function ChangesPage({ group }: { group: string }) {
 
       <ReportPanel
         view={reportView(report.data)}
-        onWrite={() =>
-          action.ask({ kind: 'write_report', subject: { project: '', title: 'Report' } })
-        }
+        onWrite={() => dismiss.mutate({ kind: 'report_write' })}
         onDo={(s: ReportSuggestion) => {
           // The suggestion names one of the cockpit's own actions; "do" is
           // that action's ordinary dialog on the task it names.

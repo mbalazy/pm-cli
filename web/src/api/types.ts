@@ -227,6 +227,8 @@ export interface AttentionRow {
   project: string
   group: string
   task_id?: string
+  /** The solo shift id on a solo_reports row. */
+  shift?: string
   title: string
   status?: string
   /** One display-ready sentence: why the row is here. */
@@ -248,6 +250,60 @@ export interface AttentionSection {
   /** Row count before any cap (changes: the feed's own count). */
   total: number
   note?: string
+  /** Rows the user dismissed - not in rows, not in total. */
+  dismissed?: number
+}
+
+/** service.DismissRow - what POST /api/attention/dismiss names a row by. */
+export interface DismissRow {
+  section: string
+  project: string
+  task_id?: string
+  shift?: string
+  since?: string
+}
+
+/** service.DismissResult */
+export interface DismissResult {
+  dismissed: number
+}
+
+/** service.RestoreResult */
+export interface RestoreResult {
+  restored: number
+}
+
+/** storage.ShiftTask */
+export interface ShiftTask {
+  id: string
+  title: string
+  status?: string
+}
+
+/** storage.Shift - one /solo shift off its state file. */
+export interface Shift {
+  project: string
+  id: string
+  kind: string
+  date: string
+  open: boolean
+  closed?: string
+  status_line: string
+  tasks: ShiftTask[]
+  file: string
+  report?: string
+}
+
+/** service.SoloResult - GET /api/solo */
+export interface SoloResult {
+  shifts: Shift[]
+}
+
+/** service.SoloReportResult - GET /api/solo/{project}/{shift}/report */
+export interface SoloReportResult {
+  shift: Shift
+  kind: 'report' | 'state'
+  markdown: string
 }
 
 /** storage.GroupSummary - the sidebar's line for one group. */
@@ -361,6 +417,8 @@ export interface CockpitConfig {
   report: { model: string; language: string }
   /** cockpit.slack, without secrets: which workspaces have an MCP server (hand-edited in config.yaml). */
   slack: { workspaces: { workspace: string; source: string; has_me: boolean }[] }
+  /** Executor runs on the cockpit (needs me, accepted no PR, in progress, the Runs table). */
+  show_executor?: boolean
 }
 
 /** service.UpdateSettingsInput - POST /api/settings: a PATCH, absent = keep. */
@@ -377,6 +435,7 @@ export interface SettingsPatch {
   groups?: { slug: string; name?: string; order?: number }[]
   git?: { all_branches?: boolean }
   report?: { model?: string; language?: string }
+  show_executor?: boolean
 }
 
 /** The fields POST /api/projects/{slug} accepts from the cockpit (service.UpdateProjectInput subset). */
