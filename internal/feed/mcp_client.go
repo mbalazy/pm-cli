@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -108,32 +109,9 @@ func ResolveServer(sv storage.SlackServer, claudeConfig string) (ServerSpec, err
 	if sv.Command != "" {
 		return ServerSpec{Command: sv.Command, Args: sv.Args, Env: envList(sv.Env)}, nil
 	}
-	path := claudeConfig
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ServerSpec{}, err
-		}
-		path = filepath.Join(home, ".claude.json")
-	} else if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ServerSpec{}, err
-		}
-		path = filepath.Join(home, path[2:])
-	}
-	data, err := os.ReadFile(path)
+	doc, path, err := readClaudeConfig(claudeConfig)
 	if err != nil {
-		return ServerSpec{}, fmt.Errorf("claude config %s: %w", path, err)
-	}
-	var doc struct {
-		MCPServers map[string]claudeServer `json:"mcpServers"`
-		Projects   map[string]struct {
-			MCPServers map[string]claudeServer `json:"mcpServers"`
-		} `json:"projects"`
-	}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return ServerSpec{}, fmt.Errorf("claude config %s: %w", path, err)
+		return ServerSpec{}, err
 	}
 	if cs, ok := doc.MCPServers[sv.ClaudeServer]; ok {
 		return cs.spec()
@@ -144,6 +122,62 @@ func ResolveServer(sv storage.SlackServer, claudeConfig string) (ServerSpec, err
 		}
 	}
 	return ServerSpec{}, fmt.Errorf("claude config %s has no mcpServers entry %q (top-level or under a project)", path, sv.ClaudeServer)
+}
+
+type claudeConfigDoc struct {
+	MCPServers map[string]claudeServer `json:"mcpServers"`
+	Projects   map[string]struct {
+		MCPServers map[string]claudeServer `json:"mcpServers"`
+	} `json:"projects"`
+}
+
+// readClaudeConfig reads Claude Code's config (~/.claude.json by default).
+func readClaudeConfig(claudeConfig string) (*claudeConfigDoc, string, error) {
+	path := claudeConfig
+	if path == "" || strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, "", err
+		}
+		if path == "" {
+			path = filepath.Join(home, ".claude.json")
+		} else {
+			path = filepath.Join(home, path[2:])
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, path, fmt.Errorf("claude config %s: %w", path, err)
+	}
+	var doc claudeConfigDoc
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return nil, path, fmt.Errorf("claude config %s: %w", path, err)
+	}
+	return &doc, path, nil
+}
+
+// ClaudeServerNames lists the distinct mcpServers names of Claude Code's
+// config (top-level and under every project), sorted.
+func ClaudeServerNames(claudeConfig string) ([]string, error) {
+	doc, _, err := readClaudeConfig(claudeConfig)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for n := range doc.MCPServers {
+		seen[n] = true
+	}
+	for _, p := range doc.Projects {
+		for n := range p.MCPServers {
+			seen[n] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 type claudeServer struct {

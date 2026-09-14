@@ -1,7 +1,8 @@
 // Package review runs a code review of a GitHub pull request from the
-// cockpit: the user pastes a PR URL, pm finds the local checkout of that
-// repository among its projects, starts a headless `claude -p "/review <url>"`
-// there under the project's Claude account, and keeps the report.
+// cockpit: the user pastes a PR URL (or a Slack link, or a sentence - see
+// resolve.go), pm finds the local checkout of that repository among its
+// projects, starts a headless `claude -p "/review <url>"` in a throwaway
+// worktree of it under the project's Claude account, and keeps the report.
 //
 // The run is DETACHED (its own session, stdout and stderr written to files,
 // not pipes), so a review survives a restart of `pm serve`; its state is
@@ -9,7 +10,8 @@
 // finished review, a live pid is a running one, anything else failed. The
 // review itself is the user's /review command (~/.claude/commands/review.md),
 // which reports in the conversation only and never writes to GitHub; the
-// tool allowlist below is read-only on top of that.
+// deny list below and the worktree make sure of it whatever the account's
+// settings allow.
 package review
 
 import (
@@ -46,8 +48,28 @@ const (
 var AllowedTools = []string{
 	"Read", "Grep", "Glob", "LS", "Task", "Agent", "TodoWrite",
 	"Bash(gh pr view:*)", "Bash(gh pr diff:*)", "Bash(gh pr list:*)", "Bash(gh pr checks:*)",
-	"Bash(gh issue view:*)", "Bash(gh issue list:*)", "Bash(gh search:*)",
+	"Bash(gh issue view:*)", "Bash(gh issue list:*)", "Bash(gh search:*)", "Bash(gh api:*)",
 	"Bash(git log:*)", "Bash(git blame:*)", "Bash(git show:*)", "Bash(git diff:*)", "Bash(git grep:*)",
+}
+
+// DisallowedTools is denied whatever the account's settings allow. An
+// allowlist only ADDS permissions: the company account's settings.json
+// allows git checkout/reset/stash, and on 2026-09-14 a reviewer sub-agent ran
+// `git checkout origin/<branch> -- .` in the user's checkout and lost an
+// uncommitted change. Deny rules win over allow rules, so every write to the
+// tree, to git state and to GitHub is listed here - on top of the review
+// running in its own worktree (see prepareWorktree), never the user's.
+var DisallowedTools = []string{
+	"Edit", "Write", "NotebookEdit",
+	"Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git restore:*)", "Bash(git reset:*)",
+	"Bash(git stash:*)", "Bash(git clean:*)", "Bash(git add:*)", "Bash(git commit:*)",
+	"Bash(git push:*)", "Bash(git pull:*)", "Bash(git merge:*)", "Bash(git rebase:*)",
+	"Bash(git cherry-pick:*)", "Bash(git revert:*)", "Bash(git worktree:*)", "Bash(git branch:*)",
+	"Bash(gh pr checkout:*)", "Bash(gh pr review:*)", "Bash(gh pr comment:*)", "Bash(gh pr merge:*)",
+	"Bash(gh pr edit:*)", "Bash(gh pr close:*)", "Bash(gh pr ready:*)", "Bash(gh issue comment:*)",
+	"Bash(gh api *-X*)", "Bash(gh api *--method*)", "Bash(gh api *-f *)", "Bash(gh api *-F *)",
+	"Bash(gh api *--field*)", "Bash(gh api *--raw-field*)", "Bash(gh api *--input*)",
+	"Bash(rm:*)", "Bash(mv:*)",
 }
 
 // ErrNotFound is an unknown review id.
@@ -84,12 +106,19 @@ func ParseURL(raw string) (PR, error) {
 
 // Review is one review, as stored plus what is derived on read.
 type Review struct {
-	ID        string `json:"id"`
-	URL       string `json:"url"`
-	Repo      string `json:"repo"`
-	Number    int    `json:"number"`
-	Project   string `json:"project"`
+	ID     string `json:"id"`
+	URL    string `json:"url"`
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	Title  string `json:"title,omitempty"`
+	// Input is what the user pasted, when it was not the PR URL itself.
+	Input   string `json:"input,omitempty"`
+	Project string `json:"project"`
+	// Dir is the project's checkout; the review runs in Worktree, a
+	// throwaway detached worktree of it at Commit.
 	Dir       string `json:"dir"`
+	Worktree  string `json:"worktree,omitempty"`
+	Commit    string `json:"commit,omitempty"`
 	ConfigDir string `json:"config_dir"`
 	PID       int    `json:"pid"`
 	Started   string `json:"started"`
@@ -112,6 +141,11 @@ type Controller struct {
 	Now func() time.Time
 	// Timeout overrides the package Timeout (tests).
 	Timeout time.Duration
+	// AskModel, ReadSlack and ViewPR replace the resolution's outside calls
+	// (haiku, the Slack MCP servers, gh pr view) in tests; nil = the real ones.
+	AskModel  func(ctx context.Context, prompt string) (string, error)
+	ReadSlack func(ctx context.Context, link SlackLink) (string, error)
+	ViewPR    func(ctx context.Context, proj *storage.Project, pr PR) (title string, err error)
 }
 
 // New is a controller over the store with the real binaries.
@@ -130,36 +164,14 @@ func (c *Controller) now() time.Time {
 // project.yaml `repo` names the repository, else a git remote of its `path`
 // does. Active projects only; the first match in slug order wins.
 func (c *Controller) Match(pr PR) (slug string, proj *storage.Project, err error) {
-	slugs, err := c.Store.ListActiveProjects()
+	cands, err := c.candidates()
 	if err != nil {
 		return "", nil, err
 	}
-	sort.Strings(slugs)
 	want := strings.ToLower(pr.Slug())
-	var byRemote []string
-	for _, s := range slugs {
-		p, err := c.Store.GetProject(s)
-		if err != nil || p.Archived || p.Path == "" {
-			continue
-		}
-		if fi, err := os.Stat(p.Path); err != nil || !fi.IsDir() {
-			continue
-		}
-		if repoSlug(p.Repo) == want {
-			return s, p, nil
-		}
-		byRemote = append(byRemote, s)
-	}
-	for _, s := range byRemote {
-		p, _ := c.Store.GetProject(s)
-		out, err := exec.Command("git", "-C", p.Path, "remote", "-v").Output()
-		if err != nil {
-			continue
-		}
-		for _, f := range strings.Fields(string(out)) {
-			if repoSlug(f) == want {
-				return s, p, nil
-			}
+	for _, cd := range cands {
+		if cd.Repo == want {
+			return cd.Slug, cd.Proj, nil
 		}
 	}
 	return "", nil, &InputError{Msg: fmt.Sprintf("no pm project checks out %s - set `repo: https://github.com/%s` in that project's project.yaml (its `path` must exist)", pr.Slug(), pr.Slug())}
@@ -184,9 +196,13 @@ func repoSlug(s string) string {
 var idUnsafe = regexp.MustCompile(`[^a-z0-9._-]+`)
 var validID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
-// Start matches the PR to a project and spawns the review in the background.
-func (c *Controller) Start(rawURL string) (*Review, error) {
-	pr, err := ParseURL(rawURL)
+// Start resolves the input to a PR (a URL, a Slack link, a sentence - see
+// resolve.go), matches it to a project, confirms the PR exists and spawns
+// the review in the background.
+func (c *Controller) Start(ctx context.Context, input string) (*Review, error) {
+	ctx, cancel := context.WithTimeout(ctx, ResolveTimeout)
+	defer cancel()
+	pr, _, err := c.Resolve(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -194,12 +210,19 @@ func (c *Controller) Start(rawURL string) (*Review, error) {
 	if err != nil {
 		return nil, err
 	}
+	title, err := c.viewPR(ctx, proj, pr)
+	if err != nil {
+		return nil, err
+	}
 	now := c.now()
 	id := idUnsafe.ReplaceAllString(strings.ToLower(fmt.Sprintf("%s-%s-%d-%s", pr.Owner, pr.Repo, pr.Number, now.Format("20060102-150405"))), "-")
 	url := fmt.Sprintf("https://github.com/%s/pull/%d", pr.Slug(), pr.Number)
 	r := &Review{
-		ID: id, URL: url, Repo: pr.Slug(), Number: pr.Number, Project: slug,
+		ID: id, URL: url, Repo: pr.Slug(), Number: pr.Number, Title: title, Project: slug,
 		Dir: proj.Path, ConfigDir: proj.ResolveClaudeConfigDir(), Started: now.Format(time.RFC3339),
+	}
+	if _, err := ParseURL(input); err != nil {
+		r.Input = strings.TrimSpace(input)
 	}
 	if err := os.MkdirAll(c.dir(), 0o755); err != nil {
 		return nil, err
@@ -217,6 +240,18 @@ func (c *Controller) Start(rawURL string) (*Review, error) {
 		env = append(withoutKey(env, "GH_TOKEN"), "GH_TOKEN="+tok)
 	}
 
+	wt, commit, err := prepareWorktree(ctx, proj.Path, pr, c.worktreeDir(id), env)
+	if err != nil {
+		return nil, fmt.Errorf("prepare a worktree for the review (it never runs in your checkout): %w", err)
+	}
+	r.Worktree, r.Commit = wt, commit
+	started := false
+	defer func() {
+		if !started {
+			removeWorktree(proj.Path, wt)
+		}
+	}()
+
 	stdout, err := os.Create(c.path(id, ".out"))
 	if err != nil {
 		return nil, err
@@ -230,9 +265,11 @@ func (c *Controller) Start(rawURL string) (*Review, error) {
 	if exe == "" {
 		exe = "claude"
 	}
-	args := append([]string{"-p", "/review " + url, "--output-format", "json", "--allowedTools"}, AllowedTools...)
+	// dontAsk: whatever is not allowed is refused, never classified by auto.
+	args := append([]string{"-p", "/review " + url, "--output-format", "json", "--permission-mode", "dontAsk", "--allowedTools"}, AllowedTools...)
+	args = append(append(args, "--disallowedTools"), DisallowedTools...)
 	cmd := exec.Command(exe, args...)
-	cmd.Dir = r.Dir
+	cmd.Dir = r.Worktree
 	cmd.Env = env
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -246,6 +283,7 @@ func (c *Controller) Start(rawURL string) (*Review, error) {
 		_ = syscall.Kill(-r.PID, syscall.SIGKILL)
 		return nil, err
 	}
+	started = true
 	timeout := c.Timeout
 	if timeout == 0 {
 		timeout = Timeout
@@ -259,6 +297,7 @@ func (c *Controller) Start(rawURL string) (*Review, error) {
 		timer.Stop()
 		stdout.Close()
 		stderr.Close()
+		removeWorktree(r.Dir, r.Worktree)
 	}()
 	r.State = StateRunning
 	return r, nil
@@ -358,6 +397,11 @@ func (c *Controller) load(id string, withReport bool) (*Review, error) {
 	if err := jsonUnmarshal(data, &r); err != nil {
 		return nil, err
 	}
+	if !alive(r.PID) && r.Worktree != "" && fileExists(r.Worktree) {
+		// A review whose pm serve restarted before it ended: nobody else
+		// removes its worktree.
+		removeWorktree(r.Dir, r.Worktree)
+	}
 	out, _ := os.ReadFile(c.path(id, ".out"))
 	finished := ""
 	if fi, err := os.Stat(c.path(id, ".out")); err == nil {
@@ -391,6 +435,67 @@ func (c *Controller) load(id string, withReport bool) (*Review, error) {
 		}
 	}
 	return &r, nil
+}
+
+func (c *Controller) worktreeDir(id string) string {
+	return filepath.Join(os.TempDir(), "pm-review", id)
+}
+
+// prepareWorktree adds a detached worktree of repo at dir, at the PR's head
+// when it can be fetched from origin, else at the checkout's HEAD (the
+// review still reads the diff through gh). It returns the dir and a label
+// of the commit. The user's checkout is never touched: a worktree has its
+// own files and index.
+func prepareWorktree(ctx context.Context, repo string, pr PR, dir string, env []string) (string, string, error) {
+	git := func(args ...string) (string, error) {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(append([]string{}, env...), "GIT_TERMINAL_PROMPT=0")
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("git %s: %s", args[0], firstLines(stderr.String()+" "+err.Error(), 1))
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	ref := fmt.Sprintf("refs/pull/%d/head", pr.Number)
+	rev, label := "", ""
+	lsOut, err := git("ls-remote", "origin", ref)
+	if err == nil && len(strings.Fields(lsOut)) > 0 {
+		sha := strings.Fields(lsOut)[0]
+		if _, err = git("fetch", "--quiet", "--no-tags", "origin", ref); err == nil {
+			if _, err = git("rev-parse", "--verify", "--quiet", sha+"^{commit}"); err == nil {
+				rev, label = sha, sha[:min(12, len(sha))]+" (PR head)"
+			}
+		}
+	} else if err == nil {
+		err = fmt.Errorf("origin has no %s", ref)
+	}
+	if rev == "" {
+		head, herr := git("rev-parse", "--verify", "HEAD")
+		if herr != nil {
+			return "", "", herr
+		}
+		rev, label = head, head[:min(12, len(head))]+" (your checkout's HEAD - the PR head was not fetched: "+err.Error()+")"
+	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return "", "", err
+	}
+	if _, err := git("worktree", "add", "--detach", dir, rev); err != nil {
+		return "", "", err
+	}
+	return dir, label, nil
+}
+
+// removeWorktree removes a review's worktree; best effort.
+func removeWorktree(repo, dir string) {
+	if dir == "" {
+		return
+	}
+	if err := exec.Command("git", "-C", repo, "worktree", "remove", "--force", dir).Run(); err != nil {
+		_ = os.RemoveAll(dir)
+		_ = exec.Command("git", "-C", repo, "worktree", "prune").Run()
+	}
 }
 
 func alive(pid int) bool {

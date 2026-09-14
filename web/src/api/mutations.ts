@@ -37,7 +37,7 @@ export type MutationRequest =
   | { kind: 'report_dismiss'; id: string }
   | { kind: 'dismiss'; rows: DismissRow[] }
   | { kind: 'restore'; section: string }
-  | { kind: 'review_start'; url: string }
+  | { kind: 'review_start'; input: string }
   | { kind: 'review_cancel'; id: string }
 
 export type MutationResult =
@@ -77,7 +77,7 @@ export function runMutation(req: MutationRequest): Promise<MutationResult> {
     case 'restore':
       return apiPost<RestoreResult>('/api/attention/restore', { section: req.section })
     case 'review_start':
-      return apiPost<Review>('/api/reviews', { url: req.url })
+      return apiPost<Review>('/api/reviews', { input: req.input })
     case 'review_cancel':
       return apiPost<Review>(`/api/reviews/${encodeURIComponent(req.id)}/cancel`)
     case 'run':
