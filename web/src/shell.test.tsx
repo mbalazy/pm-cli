@@ -1285,6 +1285,38 @@ describe('dismiss on home', () => {
   })
 })
 
+describe('solo report rows', () => {
+  it('the title opens the shift report', async () => {
+    const solo = {
+      name: 'solo_reports',
+      total: 1,
+      rows: [
+        {
+          section: 'solo_reports',
+          severity: 'info',
+          project: 'alpha',
+          group: 'alpha',
+          shift: 'abc',
+          title: 'alpha-1 · First',
+          reason: 'solo shift closed',
+          age_seconds: 3600,
+          actions: ['open_report', 'dismiss'],
+        },
+      ],
+    }
+    vi.stubGlobal(
+      'fetch',
+      fakeFetch({ ...api, '/api/attention': { ...attention, sections: [solo] } }),
+    )
+    renderAt('/')
+    const sec = await screen.findByRole('region', { name: 'Solo reports' })
+    expect(within(sec).getByRole('link', { name: 'alpha-1 · First' })).toHaveAttribute(
+      'href',
+      '/solo/alpha/abc',
+    )
+  })
+})
+
 describe('home rows the API cannot open', () => {
   const dup = {
     ...attention,

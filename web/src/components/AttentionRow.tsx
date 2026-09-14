@@ -51,6 +51,15 @@ export function AttentionRow({ row, selected, onAction }: Props) {
             {row.task_id && <span className="id mr-1.5">{row.task_id}</span>}
             <span className="font-medium">{row.title}</span>
           </Link>
+        ) : row.actions.includes('open_report') ? (
+          // A solo shift row has no task page; its title opens the report.
+          <Link
+            to={reportTarget(row).to}
+            params={reportTarget(row).params}
+            className="hover:underline"
+          >
+            <span className="font-medium">{row.title}</span>
+          </Link>
         ) : (
           <span>
             {row.task_id && <span className="id mr-1.5">{row.task_id}</span>}
