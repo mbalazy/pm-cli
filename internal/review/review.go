@@ -437,7 +437,7 @@ func (c *Controller) load(id string, withReport bool) (*Review, error) {
 			break
 		}
 		r.State, r.Finished, r.Tokens = StateDone, finished, oc.Tokens
-		r.NoIssues = strings.Contains(strings.ToLower(oc.Text), "no issues found")
+		r.NoIssues = noIssues(oc.Text)
 		if withReport {
 			r.Report = oc.Text
 		}
@@ -458,6 +458,13 @@ func (c *Controller) load(id string, withReport bool) (*Review, error) {
 	c.applyApproval(&r)
 	return &r, nil
 }
+
+// noIssuesLine matches the /review skill's verdict when nothing was found,
+// in the spellings it writes: "No issues found." and "No issues survived
+// the confidence filter." (lower-confidence findings filtered out).
+var noIssuesLine = regexp.MustCompile(`(?im)^\s*no issues (found|survived)\b`)
+
+func noIssues(report string) bool { return noIssuesLine.MatchString(report) }
 
 func (c *Controller) worktreeDir(id string) string {
 	if c.WorktreeRoot != "" {

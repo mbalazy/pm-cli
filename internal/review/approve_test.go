@@ -11,6 +11,19 @@ import (
 	"github.com/mbalazy/pm/internal/storage"
 )
 
+func TestNoIssues(t *testing.T) {
+	for report, want := range map[string]bool{
+		"### Code review - PR #7\n\nNo issues found. Checked for bugs.":                                      true,
+		"### Code review - PR #1005\n\nNo issues survived the confidence filter. Checked for bugs.":          true,
+		"### Code review\n\nFound 2 issues:\n1. a bug\n\n(no issues found in tests is not the verdict line)": false,
+		"": false,
+	} {
+		if got := noIssues(report); got != want {
+			t.Errorf("%q = %v", report, got)
+		}
+	}
+}
+
 func TestApprove(t *testing.T) {
 	c, _, _ := setup(t)
 	n := 0
