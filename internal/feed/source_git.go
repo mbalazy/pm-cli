@@ -14,8 +14,9 @@ import (
 )
 
 // GitSource reads, per project with a checkout: commits on every branch a
-// pm task names (`git log --since`), and the open pull requests of the repo
-// (`gh pr list`). That is the v1 scope the user chose - branches pinned to
+// pm task names (`git log --since`), and the pull requests of the repo that
+// changed since the cutoff, in any state (`gh pr list --state all`), so a
+// merge or a close is a change too. That is the v1 scope the user chose - branches pinned to
 // tasks and open PRs, not the whole repo's activity; AllBranches is the one
 // switch that widens it to every ref, so growing the scope is an option
 // rather than a rewrite.
@@ -27,7 +28,13 @@ type GitSource struct {
 	Run Runner
 	// AllBranches widens the commit scan from task branches to every ref.
 	AllBranches bool
+	// prs is the last Fetch's PR listing as current states (PRSnapshotter).
+	prs []PRState
 }
+
+// PRStates hands the feed the current state of every PR the last Fetch
+// listed (feed.PRSnapshotter).
+func (s *GitSource) PRStates() []PRState { return s.prs }
 
 func (s *GitSource) Name() string { return "git" }
 
@@ -45,6 +52,7 @@ const gitLogFormat = "%H%x1f%aI%x1f%an%x1f%s%x1e"
 func (s *GitSource) Fetch(ctx context.Context, from, to time.Time, projects []Project) ([]Event, error) {
 	var out []Event
 	var errs []error
+	s.prs = nil
 	for _, p := range projects {
 		if ctx.Err() != nil {
 			return out, ctx.Err()
@@ -61,7 +69,7 @@ func (s *GitSource) Fetch(ctx context.Context, from, to time.Time, projects []Pr
 		if err != nil {
 			errs = append(errs, &ProjectError{Project: p.Slug, Err: err})
 		}
-		prs, err := s.openPRs(ctx, p, from, to)
+		prs, err := s.prEvents(ctx, p, from, to)
 		out = append(out, prs...)
 		if err != nil {
 			errs = append(errs, &ProjectError{Project: p.Slug, Err: err})
@@ -142,9 +150,13 @@ func (s *GitSource) commits(ctx context.Context, p Project, from, to time.Time) 
 	return out, firstErr
 }
 
-// prListFields is what both git (open PRs) and github (their discussions)
+// prListFields is what both git (PR events) and github (their discussions)
 // ask gh for; one spelling so the two sources parse one shape.
-const prListFields = "number,title,url,updatedAt,createdAt,headRefName,author,isDraft,reviewDecision,reviewRequests"
+const prListFields = "number,title,url,state,updatedAt,createdAt,mergedAt,closedAt,mergedBy,headRefName,author,isDraft,reviewDecision,reviewRequests"
+
+// prListLimit caps one listing; a day of PR activity in one repo stays far
+// below it.
+const prListLimit = "100"
 
 // pr is one row of `gh pr list --json`.
 type pr struct {
@@ -156,7 +168,14 @@ type pr struct {
 	HeadRefName    string `json:"headRefName"`
 	IsDraft        bool   `json:"isDraft"`
 	ReviewDecision string `json:"reviewDecision"`
-	Author         struct {
+	// State is OPEN, MERGED or CLOSED (empty reads as open).
+	State    string `json:"state"`
+	MergedAt string `json:"mergedAt"`
+	ClosedAt string `json:"closedAt"`
+	MergedBy struct {
+		Login string `json:"login"`
+	} `json:"mergedBy"`
+	Author struct {
 		Login string `json:"login"`
 	} `json:"author"`
 	// ReviewRequests holds users (login set) and teams (login empty).
@@ -165,11 +184,12 @@ type pr struct {
 	} `json:"reviewRequests"`
 }
 
-// listOpenPRs runs `gh pr list` in the checkout and keeps only the PRs that
-// concern the user (concernsUser) - both the git and the github source read
-// PRs through here, so neither shows other people's PRs.
-func listOpenPRs(ctx context.Context, run Runner, p Project) ([]pr, error) {
-	prs, err := listAllOpenPRs(ctx, run, p)
+// listPRs runs `gh pr list` in the checkout for the PRs updated since from,
+// in any state, and keeps only the PRs that concern the user (concernsUser)
+// - both the git and the github source read PRs through here, so neither
+// shows other people's PRs.
+func listPRs(ctx context.Context, run Runner, p Project, from time.Time) ([]pr, error) {
+	prs, err := listAllPRs(ctx, run, p, from)
 	if err != nil || len(prs) == 0 {
 		return nil, err
 	}
@@ -218,9 +238,12 @@ func concernsUser(p Project, login string, r pr) bool {
 	return taskForBranch(p, r.HeadRefName) != ""
 }
 
-// listAllOpenPRs runs `gh pr list` in the checkout, unfiltered.
-func listAllOpenPRs(ctx context.Context, run Runner, p Project) ([]pr, error) {
-	stdout, err := run(ctx, p.Path, "gh", "pr", "list", "--state", "open", "--limit", "50", "--json", prListFields)
+// listAllPRs runs `gh pr list` in the checkout, unfiltered by author. The
+// search is by DATE (GitHub's updated: qualifier), one day early so no
+// zone offset can drop a PR; the exact window is applied per event.
+func listAllPRs(ctx context.Context, run Runner, p Project, from time.Time) ([]pr, error) {
+	since := from.UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	stdout, err := run(ctx, p.Path, "gh", "pr", "list", "--state", "all", "--search", "updated:>="+since, "--limit", prListLimit, "--json", prListFields)
 	if err != nil {
 		if isNotFound(err) {
 			return nil, fmt.Errorf("gh is not installed")
@@ -258,18 +281,44 @@ func githubContext(ctx context.Context, run Runner, p Project) (context.Context,
 	return WithEnv(ctx, "GH_TOKEN="+strings.TrimSpace(tok)), true, nil
 }
 
-// openPRs emits one event per open PR touched in the window.
-func (s *GitSource) openPRs(ctx context.Context, p Project, from, to time.Time) ([]Event, error) {
+// prEvents emits, per PR touched in the window: "merged" or "closed" when
+// that happened in the window (instead of "updated" - the merge IS the
+// update), else "opened"/"updated", with the state named when the PR is no
+// longer open. Every listed PR also lands in the snapshot of current states.
+func (s *GitSource) prEvents(ctx context.Context, p Project, from, to time.Time) ([]Event, error) {
 	ctx, ok, err := githubContext(ctx, s.Run, p)
 	if !ok {
 		return nil, err
 	}
-	prs, err := listOpenPRs(ctx, s.Run, p)
+	prs, err := listPRs(ctx, s.Run, p, from)
 	if err != nil {
 		return nil, err
 	}
 	var out []Event
 	for _, r := range prs {
+		taskID := taskForBranch(p, r.HeadRefName)
+		state := prStateWord(r)
+		s.prs = append(s.prs, PRState{
+			Project: p.Slug, Number: r.Number, Title: r.Title, URL: r.URL, State: state,
+			Draft: r.IsDraft, ReviewDecision: r.ReviewDecision, UpdatedAt: r.UpdatedAt, TaskID: taskID,
+		})
+		ev := Event{Project: p.Slug, Group: p.Group, TaskID: taskID, Title: r.Title, URL: r.URL, Severity: SeverityInfo}
+		if ts, ok := inWindow(r.MergedAt, from, to); ok && state == "merged" {
+			by := r.MergedBy.Login
+			if by == "" {
+				by = "someone"
+			}
+			ev.ID, ev.TS, ev.Severity = EventID("git", "pr-merged", p.Slug, fmt.Sprint(r.Number)), ts.Format(time.RFC3339), SeverityOK
+			ev.Detail = fmt.Sprintf("PR #%d by %s merged by %s", r.Number, r.Author.Login, by)
+			out = append(out, ev)
+			continue
+		}
+		if ts, ok := inWindow(r.ClosedAt, from, to); ok && state == "closed" {
+			ev.ID, ev.TS = EventID("git", "pr-closed", p.Slug, fmt.Sprint(r.Number)), ts.Format(time.RFC3339)
+			ev.Detail = fmt.Sprintf("PR #%d by %s closed without merging", r.Number, r.Author.Login)
+			out = append(out, ev)
+			continue
+		}
 		ts, ok := inWindow(r.UpdatedAt, from, to)
 		if !ok {
 			continue
@@ -281,13 +330,24 @@ func (s *GitSource) openPRs(ctx context.Context, p Project, from, to time.Time) 
 		if r.IsDraft {
 			detail += " (draft)"
 		}
-		out = append(out, Event{
-			ID: EventID("git", "pr", p.Slug, fmt.Sprint(r.Number), r.UpdatedAt), TS: ts.Format(time.RFC3339),
-			Project: p.Slug, Group: p.Group, TaskID: taskForBranch(p, r.HeadRefName), Title: r.Title,
-			Detail: detail, URL: r.URL, Severity: SeverityInfo,
-		})
+		if state != "open" {
+			detail += " (already " + state + ")"
+		}
+		ev.ID, ev.TS, ev.Detail = EventID("git", "pr", p.Slug, fmt.Sprint(r.Number), r.UpdatedAt), ts.Format(time.RFC3339), detail
+		out = append(out, ev)
 	}
 	return out, nil
+}
+
+// prStateWord is gh's state in the feed's words: open, merged, closed.
+func prStateWord(r pr) string {
+	switch strings.ToUpper(r.State) {
+	case "MERGED":
+		return "merged"
+	case "CLOSED":
+		return "closed"
+	}
+	return "open"
 }
 
 // taskForBranch finds the pm task whose branch is the PR's head.

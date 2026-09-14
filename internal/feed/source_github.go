@@ -9,11 +9,12 @@ import (
 	"time"
 )
 
-// GitHubSource reads the discussion under the repo's open PRs: comments,
-// reviews and the review decision (changes requested / approved), through
-// `gh pr view --json` per PR. Only PRs touched in the window are opened -
-// one gh call per PR is the cost, and a PR nobody wrote on since the cutoff
-// has nothing new to say.
+// GitHubSource reads the discussion under the repo's PRs (open, and merged
+// or closed ones too - an approval or a question after the merge is still
+// news): comments, reviews and the review decision, through `gh pr view
+// --json` per PR. Only PRs touched in the window are opened - one gh call
+// per PR is the cost, and a PR nobody wrote on since the cutoff has nothing
+// new to say. Machine chatter is dropped (noiseComment).
 type GitHubSource struct {
 	Run Runner
 }
@@ -65,7 +66,7 @@ func (s *GitHubSource) Fetch(ctx context.Context, from, to time.Time, projects [
 			}
 			continue
 		}
-		prs, err := listOpenPRs(ctx, s.Run, p)
+		prs, err := listPRs(ctx, s.Run, p, from)
 		if err != nil {
 			errs = append(errs, &ProjectError{Project: p.Slug, Err: err})
 			continue
@@ -87,7 +88,7 @@ func (s *GitHubSource) Fetch(ctx context.Context, from, to time.Time, projects [
 			taskID := taskForBranch(p, r.HeadRefName)
 			for _, c := range v.Comments {
 				ts, ok := inWindow(c.CreatedAt, from, to)
-				if !ok {
+				if !ok || noiseComment(c.Author.Login, c.Body) {
 					continue
 				}
 				out = append(out, Event{
@@ -122,6 +123,31 @@ func (s *GitHubSource) Fetch(ctx context.Context, from, to time.Time, projects [
 		}
 	}
 	return out, errors.Join(errs...)
+}
+
+// noiseAuthors post machine chatter under a PR: CI summaries, preview
+// links, tracker linkbacks. A review bot (claude[bot]) is NOT here - its
+// comments are findings, which the user reads as part of "CI green".
+var noiseAuthors = map[string]bool{
+	"github-actions": true, "github-actions[bot]": true,
+	"linear": true, "linear[bot]": true, "linear-code": true,
+	"vercel": true, "vercel[bot]": true, "netlify": true, "netlify[bot]": true,
+	"dependabot": true, "dependabot[bot]": true, "codecov": true, "codecov[bot]": true,
+}
+
+// noiseComment is a comment that says nothing to a person: one from a
+// noiseAuthors account, a tracker linkback, or a slash command (`/preview`)
+// that exists to trigger a bot.
+func noiseComment(login, body string) bool {
+	if noiseAuthors[strings.ToLower(login)] {
+		return true
+	}
+	b := strings.TrimSpace(body)
+	if strings.Contains(b, "<!-- linear-linkback -->") {
+		return true
+	}
+	// A slash command is one short line: "/preview", "/deploy staging".
+	return strings.HasPrefix(b, "/") && !strings.Contains(b, "\n") && len(strings.Fields(b)) <= 3
 }
 
 func excerpt(body string) string {

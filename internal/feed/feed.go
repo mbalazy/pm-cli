@@ -93,6 +93,28 @@ type Configurable interface {
 	Configure(cfg *storage.CockpitConfig)
 }
 
+// PRSnapshotter is implemented by a source that knows the CURRENT state of
+// the PRs it listed (the git source). Events are history - "Marta tests the
+// preview" stays true of 11:20 after the PR merged at 14:00 - so a reader
+// that describes the present (the report) needs the state beside them.
+type PRSnapshotter interface {
+	PRStates() []PRState
+}
+
+// PRState is one PR as of the last refresh that listed it.
+type PRState struct {
+	Project string `json:"project"`
+	Number  int    `json:"number"`
+	Title   string `json:"title"`
+	URL     string `json:"url,omitempty"`
+	// State is open, merged or closed.
+	State          string `json:"state"`
+	Draft          bool   `json:"draft,omitempty"`
+	ReviewDecision string `json:"review_decision,omitempty"`
+	UpdatedAt      string `json:"updated_at"`
+	TaskID         string `json:"task_id,omitempty"`
+}
+
 // ProjectError is a source's failure on ONE project (no checkout, no gh);
 // Fetch may return it wrapped in errors.Join with the events of the others.
 type ProjectError struct {
@@ -208,6 +230,8 @@ func (f *Feed) Refresh(ctx context.Context, store storage.TaskStore, cfg *storag
 	}
 
 	var fresh []Event
+	var snap []PRState
+	snapped := false
 	for _, src := range f.sources {
 		name := src.Name()
 		status := SourceStatus{Name: name, Enabled: cfg.SourceEnabled(name)}
@@ -222,6 +246,9 @@ func (f *Feed) Refresh(ctx context.Context, store storage.TaskStore, cfg *storag
 			c.Configure(cfg)
 		}
 		events, ferr := src.Fetch(ctx, from, now, projects)
+		if ps, ok := src.(PRSnapshotter); ok {
+			snap, snapped = append(snap, ps.PRStates()...), true
+		}
 		status.LastFetch = now.Format(time.RFC3339)
 		if ferr != nil {
 			status.Error = ferr.Error()
@@ -259,6 +286,11 @@ func (f *Feed) Refresh(ctx context.Context, store storage.TaskStore, cfg *storag
 		return nil, err
 	}
 	f.rotate(now)
+	if snapped {
+		if err := f.mergePRStates(snap, now); err != nil {
+			return nil, err
+		}
+	}
 	cur := f.readState()
 	cur.Sources = st.Sources
 	if err := f.writeState(cur); err != nil {
@@ -413,6 +445,65 @@ func (f *Feed) writeState(st state) error {
 		return err
 	}
 	return atomicWrite(filepath.Join(f.dir(), stateFile), data)
+}
+
+// prsFile holds the PR snapshot: the newest known state per PR.
+const prsFile = "prs.json"
+
+func (f *Feed) readPRStates() []PRState {
+	var rows []PRState
+	data, err := os.ReadFile(filepath.Join(f.dir(), prsFile))
+	if err != nil {
+		return nil
+	}
+	_ = json.Unmarshal(data, &rows)
+	return rows
+}
+
+// mergePRStates writes the fresh rows over the stored ones, PR by PR. A PR
+// the fresh listing lacks keeps its older row (its project's gh failed this
+// time, or it went quiet); rows not updated for keepDays are dropped.
+func (f *Feed) mergePRStates(fresh []PRState, now time.Time) error {
+	key := func(r PRState) string { return r.Project + "#" + fmt.Sprint(r.Number) }
+	seen := map[string]bool{}
+	rows := append([]PRState{}, fresh...)
+	for _, r := range fresh {
+		seen[key(r)] = true
+	}
+	horizon := now.AddDate(0, 0, -keepDays)
+	for _, r := range f.readPRStates() {
+		if seen[key(r)] {
+			continue
+		}
+		if ts, ok := storage.ParseStamp(r.UpdatedAt); ok && ts.Before(horizon) {
+			continue
+		}
+		rows = append(rows, r)
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return key(rows[i]) < key(rows[j]) })
+	if err := os.MkdirAll(f.dir(), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(rows, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Join(f.dir(), prsFile), data)
+}
+
+// PRStates returns the snapshot's PRs updated at or after since: the
+// current state of every PR the feed's window can mention.
+func (f *Feed) PRStates(since time.Time) []PRState {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []PRState
+	for _, r := range f.readPRStates() {
+		if ts, ok := storage.ParseStamp(r.UpdatedAt); ok && ts.Before(since) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // appendEvents adds the events the cache does not hold yet, one JSONL file

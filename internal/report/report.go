@@ -98,6 +98,19 @@ type Input struct {
 	Attention *storage.Attention
 	Groups    []storage.ProjectGroup
 	Language  string
+	// PRs and Tasks are the CURRENT state of what the events mention: the
+	// events are history, these say where each thing stands now.
+	PRs   []feed.PRState
+	Tasks []TaskState
+}
+
+// TaskState is a task's status at write time.
+type TaskState struct {
+	Project    string
+	ID         string
+	Title      string
+	Status     string
+	WaitingFor string
 }
 
 // BuildPrompt renders the input as the prompt: the facts in fixed sections,
@@ -136,6 +149,30 @@ func BuildPrompt(in Input) string {
 	if len(in.Events) == 0 {
 		b.WriteString("(nothing)\n")
 	}
+	b.WriteString("\n## Current state (as of the end of the window - the events above are the history that led here)\n")
+	for _, p := range in.PRs {
+		line := fmt.Sprintf("- PR %s #%d %q: %s", p.Project, p.Number, p.Title, p.State)
+		if p.State == "open" && p.Draft {
+			line += " (draft)"
+		}
+		if p.ReviewDecision != "" {
+			line += ", review " + strings.ToLower(strings.ReplaceAll(p.ReviewDecision, "_", " "))
+		}
+		if p.TaskID != "" {
+			line += ", task " + p.TaskID
+		}
+		b.WriteString(line + "\n")
+	}
+	for _, t := range in.Tasks {
+		line := fmt.Sprintf("- task %s %s %q: status %s", t.Project, t.ID, t.Title, t.Status)
+		if t.WaitingFor != "" {
+			line += ", waiting for " + t.WaitingFor
+		}
+		b.WriteString(line + "\n")
+	}
+	if len(in.PRs) == 0 && len(in.Tasks) == 0 {
+		b.WriteString("(nothing known)\n")
+	}
 	b.WriteString("\n## What needs the person now (the attention queue)\n")
 	rows := 0
 	if in.Attention != nil {
@@ -166,7 +203,7 @@ func BuildPrompt(in Input) string {
 	}
 	fmt.Fprintf(&b, `
 ## Instructions
-Write the report in the language with code "%s". Markdown, at most 250 words: one short paragraph per project group that had anything happen (bold the group name), then a paragraph for what needs a decision. Facts only - every sentence must come from the lists above; never invent a state. Skip groups with nothing.
+Write the report in the language with code "%s". Markdown, at most 250 words: one short paragraph per project group that had anything happen (bold the group name), then a paragraph for what needs a decision. Facts only - every sentence must come from the lists above; never invent a state. Describe every PR and task by its CURRENT state from the "Current state" list; an event is something that happened, not something still going on - never write about a merged or closed PR, or a done task, as if it were in progress. Skip groups with nothing.
 Then, on separate lines at the very end, up to 5 suggestions in EXACTLY this format, one per line, or none:
 - SUGGEST <task_id> <action>: <one sentence why>
 where <action> is one of: %s. Use a task id exactly as listed above. Do not wrap the suggestions in a heading.

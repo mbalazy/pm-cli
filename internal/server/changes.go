@@ -191,8 +191,13 @@ func (h *handler) seen(w http.ResponseWriter, r *http.Request) {
 // on its own goroutine. The interval is re-read from the config on every
 // tick, so an edit takes effect on the next one; an interval of zero
 // disables the automatic refresh entirely (a manual one still works).
+//
+// The first refresh runs at once, not one interval in: `pm serve` restarts
+// (an upgrade, a crash) would otherwise push every refresh back by a whole
+// interval each time and leave the cockpit on a stale cache.
 func (s *Handler) RunScheduler(ctx context.Context) {
 	h := s.h
+	first := true
 	for {
 		every := defaultRefreshEvery
 		if cfg, err := h.cockpitConfig(); err == nil && cfg.Refresh.Every.Duration() >= 0 {
@@ -209,6 +214,10 @@ func (s *Handler) RunScheduler(ctx context.Context) {
 			case <-timer.C:
 			}
 			continue
+		}
+		if first {
+			first = false
+			h.schedulerTick(ctx)
 		}
 		timer := time.NewTimer(every)
 		select {

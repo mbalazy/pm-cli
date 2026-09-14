@@ -347,8 +347,15 @@ func TestGitAndGitHubSourcesParseGH(t *testing.T) {
 	}
 	writeTask(t, store, "alpha", storage.TaskMeta{ID: "a-1", Title: "the task", Status: storage.StatusDoing, Branch: "feat/task-branch", Created: "2026-09-01", Updated: at(time.Hour)})
 	prList := fmt.Sprintf(`[{"number":7,"title":"Add b","url":"https://gh/x/pull/7","updatedAt":%q,"createdAt":%q,"headRefName":"feat/task-branch","author":{"login":"mart"},"isDraft":true,"reviewDecision":"CHANGES_REQUESTED"},
-	{"number":3,"title":"Stale","url":"https://gh/x/pull/3","updatedAt":%q,"createdAt":%q,"headRefName":"other","author":{"login":"x"}}]`,
-		at(30*time.Minute), at(30*time.Minute), at(72*time.Hour), at(96*time.Hour))
+	{"number":3,"title":"Stale","url":"https://gh/x/pull/3","updatedAt":%q,"createdAt":%q,"headRefName":"other","author":{"login":"x"}},
+	{"number":9,"title":"Merged one","url":"https://gh/x/pull/9","state":"MERGED","updatedAt":%[5]q,"createdAt":%[4]q,"mergedAt":%[5]q,"mergedBy":{"login":"lead"},"headRefName":"feat/task-branch","author":{"login":"mart"}},
+	{"number":10,"title":"Dropped","url":"https://gh/x/pull/10","state":"CLOSED","updatedAt":%[6]q,"createdAt":%[4]q,"closedAt":%[6]q,"headRefName":"feat/task-branch","author":{"login":"mart"}}]`,
+		at(30*time.Minute), at(30*time.Minute), at(72*time.Hour), at(96*time.Hour), at(10*time.Minute), at(5*time.Minute))
+	prView9 := fmt.Sprintf(`{"number":9,"title":"Merged one","url":"https://gh/x/pull/9","comments":[
+	{"id":"n1","body":"### PR preview published","createdAt":%[1]q,"author":{"login":"github-actions"}},
+	{"id":"n2","body":"<!-- linear-linkback -->\nAPP-1","createdAt":%[1]q,"author":{"login":"linear-code"}},
+	{"id":"n3","body":"/preview","createdAt":%[1]q,"author":{"login":"mart"}},
+	{"id":"n4","body":"thanks, verified after the merge","createdAt":%[1]q,"author":{"login":"rev"}}],"reviews":[]}`, at(8*time.Minute))
 	prView := fmt.Sprintf(`{"number":7,"title":"Add b","url":"https://gh/x/pull/7","reviewDecision":"CHANGES_REQUESTED",
 	"comments":[{"id":"c1","body":"looks off\nsecond line","createdAt":%q,"url":"https://gh/x/pull/7#c1","author":{"login":"rev"}},{"id":"c0","body":"old","createdAt":%q,"author":{"login":"rev"}}],
 	"reviews":[{"id":"r1","state":"CHANGES_REQUESTED","body":"","submittedAt":%q,"author":{"login":"rev"}}]}`, at(20*time.Minute), at(50*time.Hour), at(15*time.Minute))
@@ -365,6 +372,10 @@ func TestGitAndGitHubSourcesParseGH(t *testing.T) {
 			return prList, nil
 		case args[1] == "view" && args[2] == "7":
 			return prView, nil
+		case args[1] == "view" && args[2] == "9":
+			return prView9, nil
+		case args[1] == "view" && args[2] == "10":
+			return `{"number":10,"title":"Dropped","comments":[],"reviews":[]}`, nil
 		}
 		return "", fmt.Errorf("unexpected gh call %v", args)
 	}
@@ -398,9 +409,70 @@ func TestGitAndGitHubSourcesParseGH(t *testing.T) {
 		}
 	}
 	// The stale PR #3 was never opened with gh pr view.
+	listedAll := false
 	for _, c := range calls {
 		if strings.Contains(c, "view 3") {
 			t.Errorf("gh pr view on an untouched PR: %s", c)
+		}
+		if strings.Contains(c, "pr list --state all --search updated:>=") {
+			listedAll = true
+		}
+	}
+	if !listedAll {
+		t.Errorf("PRs not listed in every state since the cutoff: %v", calls)
+	}
+	// A merge and a close in the window are events of their own (not
+	// "updated"); talk under a merged PR is still read, machine chatter is not.
+	if e, ok := kinds["git:PR #9 by mart merged by lead"]; !ok || e.Severity != SeverityOK || e.TaskID != "a-1" {
+		t.Errorf("merge event missing/wrong: %v", keysOf(kinds))
+	}
+	if _, ok := kinds["git:PR #10 by mart closed without merging"]; !ok {
+		t.Errorf("close event missing: %v", keysOf(kinds))
+	}
+	if _, ok := kinds["github:PR #9 comment by rev: thanks, verified after the merge"]; !ok {
+		t.Errorf("comment under a merged PR missing: %v", keysOf(kinds))
+	}
+	for k := range kinds {
+		if strings.Contains(k, "#9 by mart updated") || strings.Contains(k, "github-actions") || strings.Contains(k, "linear-code") || strings.Contains(k, "/preview") {
+			t.Errorf("noise or duplicate event: %s", k)
+		}
+	}
+	// The snapshot says where each PR stands now.
+	states := map[int]PRState{}
+	for _, s := range f.PRStates(feedFrom) {
+		states[s.Number] = s
+	}
+	if states[9].State != "merged" || states[9].TaskID != "a-1" || states[7].State != "open" || !states[7].Draft || states[10].State != "closed" {
+		t.Errorf("PR states = %+v", states)
+	}
+	// A later refresh that lists nothing keeps the known states.
+	stateAt := time.Now()
+	if err := f.mergePRStates(nil, stateAt); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.PRStates(feedFrom)) < 3 {
+		t.Errorf("snapshot lost rows: %+v", f.PRStates(feedFrom))
+	}
+}
+
+func TestNoiseComment(t *testing.T) {
+	for _, c := range []struct {
+		login, body string
+		want        bool
+	}{
+		{"github-actions", "# Performance Comparison Report", true},
+		{"linear-code", "<!-- linear-linkback -->\nAPP-1", true},
+		{"someone", "<!-- linear-linkback --> moved", true},
+		{"mbalazy", "/preview", true},
+		{"mbalazy", "  /deploy staging  ", true},
+		{"claude", "Found 2 issues", false},
+		{"claude[bot]", "### Code review", false},
+		{"reviewer-two", "@mbalazy I'm testing the PR preview", false},
+		{"rev", "/src/app.ts is wrong because the zone is dropped here", false},
+		{"rev", "/preview\nand also this looks off", false},
+	} {
+		if got := noiseComment(c.login, c.body); got != c.want {
+			t.Errorf("noiseComment(%q, %q) = %v", c.login, c.body, got)
 		}
 	}
 }
