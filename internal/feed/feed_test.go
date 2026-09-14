@@ -359,6 +359,8 @@ func TestGitAndGitHubSourcesParseGH(t *testing.T) {
 			return DefaultRunner(ctx, dir, name, args...)
 		}
 		switch {
+		case args[0] == "api":
+			return "mart\n", nil
 		case args[1] == "list":
 			return prList, nil
 		case args[1] == "view" && args[2] == "7":
@@ -466,6 +468,119 @@ func TestGitHubContext(t *testing.T) {
 	_, err := (&GitSource{Run: run}).Fetch(context.Background(), feedFrom, feedNow, []Project{p})
 	if err == nil || !strings.Contains(err.Error(), "gh_account work") {
 		t.Fatalf("a failing token lookup must name the account, got %v", err)
+	}
+}
+
+// TestOpenPRsOnlyTheUsers: both PR sources drop a PR by someone else with no
+// review request to the user and a non-task head (never `gh pr view` it),
+// and keep the user's own PR, a PR with a review requested from the user and
+// a stranger's PR on a task branch. gh_account is the login as is; without
+// it `gh api user` is asked once per project.
+func TestOpenPRsOnlyTheUsers(t *testing.T) {
+	listFor := func(login string) string {
+		return fmt.Sprintf(`[
+		{"number":1,"title":"Theirs","updatedAt":%[1]q,"createdAt":%[2]q,"headRefName":"feat/random","author":{"login":"Muhameti-centralsoft"},"reviewRequests":[{"login":"somebody"},{"name":"team"}]},
+		{"number":2,"title":"Mine","updatedAt":%[1]q,"createdAt":%[2]q,"headRefName":"feat/mine","author":{"login":%[3]q}},
+		{"number":3,"title":"Review me","updatedAt":%[1]q,"createdAt":%[2]q,"headRefName":"feat/review","author":{"login":"vernon"},"reviewRequests":[{"login":%[4]q}]},
+		{"number":4,"title":"On my task","updatedAt":%[1]q,"createdAt":%[2]q,"headRefName":"feat/task-branch","author":{"login":"vernon"}}]`,
+			at(30*time.Minute), at(40*time.Minute), login, strings.ToUpper(login))
+	}
+	var calls []string
+	run := func(ctx context.Context, dir, name string, args ...string) (string, error) {
+		if name == "git" {
+			return DefaultRunner(ctx, dir, name, args...)
+		}
+		calls = append(calls, dir+": "+strings.Join(args, " "))
+		switch {
+		case args[0] == "auth":
+			return "tok\n", nil
+		case args[0] == "api":
+			return "mart\n", nil
+		case args[1] == "list":
+			if len(EnvFrom(ctx)) > 0 {
+				return listFor("Work-Account"), nil // the gh_account project
+			}
+			return listFor("mart"), nil
+		case args[1] == "view":
+			return fmt.Sprintf(`{"number":%s,"title":"t","comments":[{"id":"c","body":"hi","createdAt":%q,"author":{"login":"rev"}}]}`, args[2], at(10*time.Minute)), nil
+		}
+		return "", fmt.Errorf("unexpected gh call %v", args)
+	}
+	task := &storage.Task{Meta: storage.TaskMeta{ID: "a-1", Branch: "feat/task-branch"}}
+	active, account := gitRepo(t), gitRepo(t)
+	addRemote(t, active, "https://github.com/x/active.git")
+	addRemote(t, account, "https://github.com/x/account.git")
+	projects := []Project{
+		{Slug: "active", Path: active, Tasks: []*storage.Task{task}},
+		{Slug: "account", Path: account, Tasks: []*storage.Task{task}, GHAccount: "work-account"},
+	}
+
+	for _, src := range []Source{&GitSource{Run: run}, &GitHubSource{Run: run}} {
+		calls = nil
+		events, err := src.Fetch(context.Background(), feedFrom, feedNow, projects)
+		if err != nil {
+			t.Fatalf("%s: %v", src.Name(), err)
+		}
+		got := map[string]map[string]bool{}
+		for _, e := range events {
+			if got[e.Project] == nil {
+				got[e.Project] = map[string]bool{}
+			}
+			for _, n := range []string{"1", "2", "3", "4"} {
+				if strings.HasPrefix(e.Detail, "PR #"+n+" ") {
+					got[e.Project][n] = true
+				}
+			}
+		}
+		for _, slug := range []string{"active", "account"} {
+			for _, n := range []string{"2", "3", "4"} {
+				if !got[slug][n] {
+					t.Errorf("%s/%s: PR #%s dropped, want kept (events %+v)", src.Name(), slug, n, events)
+				}
+			}
+			if got[slug]["1"] {
+				t.Errorf("%s/%s: someone else's PR #1 kept", src.Name(), slug)
+			}
+		}
+		apiCalls := map[string]int{}
+		for _, c := range calls {
+			if strings.HasSuffix(c, "view 1 --json "+prViewFields) {
+				t.Errorf("%s: gh pr view on a dropped PR: %s", src.Name(), c)
+			}
+			if strings.Contains(c, ": api user") {
+				apiCalls[strings.SplitN(c, ":", 2)[0]]++
+			}
+		}
+		if apiCalls[active] != 1 || apiCalls[account] != 0 {
+			t.Errorf("%s: gh api user calls = %v, want once for the project without gh_account only", src.Name(), apiCalls)
+		}
+	}
+
+	// A failing login lookup is that project's error; the other still runs.
+	failing := func(ctx context.Context, dir, name string, args ...string) (string, error) {
+		if name == "gh" && args[0] == "api" {
+			return "", fmt.Errorf("gh: exit status 1: not logged in")
+		}
+		return run(ctx, dir, name, args...)
+	}
+	events, err := (&GitSource{Run: failing}).Fetch(context.Background(), feedFrom, feedNow, projects)
+	var pe *ProjectError
+	if !errors.As(err, &pe) || pe.Project != "active" || !strings.Contains(err.Error(), "gh api user") {
+		t.Fatalf("login failure = %v", err)
+	}
+	accountPRs := 0
+	for _, e := range events {
+		if !strings.HasPrefix(e.Detail, "PR #") {
+			continue // commits on the fixture's task branch are not PRs
+		}
+		if e.Project == "active" {
+			t.Errorf("PR of a project whose login failed leaked: %+v", e)
+		} else {
+			accountPRs++
+		}
+	}
+	if accountPRs != 3 {
+		t.Errorf("the gh_account project's PRs = %d events, want 3", accountPRs)
 	}
 }
 
