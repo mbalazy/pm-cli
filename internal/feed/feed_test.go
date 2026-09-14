@@ -295,6 +295,7 @@ func gitRepo(t *testing.T) string {
 func TestGitSourceOnATempRepo(t *testing.T) {
 	store := feedStore(t)
 	repo := gitRepo(t)
+	addRemote(t, repo, "https://github.com/x/y.git")
 	if _, err := store.MutateProject("alpha", func(p *storage.Project) error { p.Path = repo; return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -340,6 +341,7 @@ func TestGitSourceOnATempRepo(t *testing.T) {
 func TestGitAndGitHubSourcesParseGH(t *testing.T) {
 	store := feedStore(t)
 	repo := gitRepo(t)
+	addRemote(t, repo, "git@github.com-alias:x/y.git")
 	if _, err := store.MutateProject("alpha", func(p *storage.Project) error { p.Path = repo; return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -398,6 +400,72 @@ func TestGitAndGitHubSourcesParseGH(t *testing.T) {
 		if strings.Contains(c, "view 3") {
 			t.Errorf("gh pr view on an untouched PR: %s", c)
 		}
+	}
+}
+
+func addRemote(t *testing.T, repo, url string) {
+	t.Helper()
+	if out, err := exec.Command("git", "-C", repo, "remote", "add", "origin", url).CombinedOutput(); err != nil {
+		t.Fatalf("git remote add: %v %s", err, out)
+	}
+}
+
+// TestGitHubContext: a checkout with no GitHub remote is skipped without an
+// error (GitLab, no remote at all), and gh_account puts that account's token
+// on the context every later gh call runs with.
+func TestGitHubContext(t *testing.T) {
+	var ghCalls []string
+	var listEnv []string
+	tokenErr := false
+	run := func(ctx context.Context, dir, name string, args ...string) (string, error) {
+		if name == "git" {
+			return DefaultRunner(ctx, dir, name, args...)
+		}
+		ghCalls = append(ghCalls, strings.Join(args, " "))
+		switch {
+		case args[0] == "auth" && tokenErr:
+			return "", fmt.Errorf("gh: exit status 1: no account")
+		case args[0] == "auth":
+			return "tok-123\n", nil
+		case args[1] == "list":
+			listEnv = EnvFrom(ctx)
+			return "[]", nil
+		}
+		return "", fmt.Errorf("unexpected gh call %v", args)
+	}
+
+	none := gitRepo(t)
+	gitlab := gitRepo(t)
+	addRemote(t, gitlab, "git@gitlab.com:group/repo.git")
+	for name, path := range map[string]string{"no remote": none, "gitlab": gitlab} {
+		for _, src := range []Source{&GitSource{Run: run}, &GitHubSource{Run: run}} {
+			_, err := src.Fetch(context.Background(), feedFrom, feedNow, []Project{{Slug: "p", Path: path}})
+			if err != nil {
+				t.Errorf("%s/%s: want no error, got %v", name, src.Name(), err)
+			}
+		}
+	}
+	if len(ghCalls) != 0 {
+		t.Fatalf("gh called for a repo without a GitHub remote: %v", ghCalls)
+	}
+
+	hub := gitRepo(t)
+	addRemote(t, hub, "https://github.com/x/y.git")
+	p := Project{Slug: "p", Path: hub, GHAccount: "work"}
+	if _, err := (&GitHubSource{Run: run}).Fetch(context.Background(), feedFrom, feedNow, []Project{p}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ghCalls) < 1 || ghCalls[0] != "auth token --user work" {
+		t.Fatalf("gh calls = %v", ghCalls)
+	}
+	if strings.Join(listEnv, " ") != "GH_TOKEN=tok-123" {
+		t.Fatalf("gh pr list env = %v", listEnv)
+	}
+
+	tokenErr = true
+	_, err := (&GitSource{Run: run}).Fetch(context.Background(), feedFrom, feedNow, []Project{p})
+	if err == nil || !strings.Contains(err.Error(), "gh_account work") {
+		t.Fatalf("a failing token lookup must name the account, got %v", err)
 	}
 }
 

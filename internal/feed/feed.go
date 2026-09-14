@@ -69,6 +69,9 @@ type Project struct {
 	Dir   string // the pm project dir (.executor/ lives under it)
 	Tasks []*storage.Task
 	Slack *storage.SlackConfig
+	// GHAccount is project.yaml's gh_account: the gh account whose token
+	// the git and github sources hand gh (see githubContext).
+	GHAccount string
 }
 
 // Source is the one interface every feed source implements. Fetch returns
@@ -588,6 +591,7 @@ func activeProjects(store storage.TaskStore) ([]Project, error) {
 		if proj != nil {
 			p.Path = proj.Path
 			p.Slack = proj.Slack
+			p.GHAccount = proj.GHAccount
 		}
 		out = append(out, p)
 	}

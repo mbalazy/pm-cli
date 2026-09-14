@@ -22,6 +22,13 @@ type AttentionInput struct {
 // and a queue computed on defaults because the file has a typo would be a
 // different queue presented as the user's.
 func Attention(store storage.TaskStore, in AttentionInput) (*storage.Attention, error) {
+	return AttentionAt(store, in, time.Now())
+}
+
+// AttentionAt is Attention against an explicit clock: `pm serve` hands in
+// its injected Options.Clock, so the queue's ages and the changes digest's
+// cutoff agree with the cutoff /api/changes uses on the same request.
+func AttentionAt(store storage.TaskStore, in AttentionInput, now time.Time) (*storage.Attention, error) {
 	cfg, err := store.LoadConfig()
 	if err != nil {
 		return nil, err
@@ -34,7 +41,7 @@ func Attention(store storage.TaskStore, in AttentionInput) (*storage.Attention, 
 		}
 		project = slug
 	}
-	opts := storage.AttentionOptions{Now: time.Now()}
+	opts := storage.AttentionOptions{Now: now}
 	// The change feed's digest comes off its CACHE - the aggregation never
 	// fetches. Best-effort: an unreadable cache is a section without a
 	// feed, and the section's note says so.

@@ -107,6 +107,7 @@ func feedRunner(ctx context.Context, dir, name string, args ...string) (string, 
 	c := groupCmd(ctx, name, args...)
 	c.Dir = dir
 	c.Env = append(c.Environ(), "GH_PAGER=cat", "PAGER=cat", "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1", "NO_COLOR=1")
+	c.Env = append(c.Env, feed.EnvFrom(ctx)...)
 	var stdout, stderr bytes.Buffer
 	c.Stdout, c.Stderr = &stdout, &stderr
 	err := c.Run()

@@ -413,7 +413,7 @@ func (h *handler) focus(w http.ResponseWriter, r *http.Request) {
 // files, and the SSE feed tells the client when to ask again.
 func (h *handler) attention(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	res, err := service.Attention(h.store, service.AttentionInput{Project: q.Get("project"), Group: q.Get("group")})
+	res, err := service.AttentionAt(h.store, service.AttentionInput{Project: q.Get("project"), Group: q.Get("group")}, h.clock())
 	writeResult(w, res, err)
 }
 

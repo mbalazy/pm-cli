@@ -16,11 +16,13 @@ interface Props {
 const GLYPH: Record<SourceChip['state'], string> = { ok: '', never: '·', error: '✗', off: '–' }
 
 /** The collapsed line: "N projects errored" when the text is a joined
- *  per-project list (the feed joins them as "slug: msg slug: msg"), else just
- *  "error" - the text itself is shown once, under the summary. */
+ *  per-project list (the feed joins them one per line, "slug: msg"), else just
+ *  "error" - the text itself is shown once, under the summary. Only a line's
+ *  start names a project: "gh: exit status 1" inside a message is not one, and
+ *  a project erroring twice counts once. */
 function errorSummary(text: string): string {
-  const projects = text.match(/(^|\s)[a-z0-9._-]+: /g)
-  if (projects && projects.length > 1) return `${projects.length} projects errored`
+  const projects = new Set([...text.matchAll(/^([a-z0-9._-]+): /gm)].map((m) => m[1]))
+  if (projects.size > 1) return `${projects.size} projects errored`
   return 'error'
 }
 
