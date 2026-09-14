@@ -144,7 +144,7 @@ func (s *GitSource) commits(ctx context.Context, p Project, from, to time.Time) 
 
 // prListFields is what both git (open PRs) and github (their discussions)
 // ask gh for; one spelling so the two sources parse one shape.
-const prListFields = "number,title,url,updatedAt,createdAt,headRefName,author,isDraft,reviewDecision"
+const prListFields = "number,title,url,updatedAt,createdAt,headRefName,author,isDraft,reviewDecision,reviewRequests"
 
 // pr is one row of `gh pr list --json`.
 type pr struct {
@@ -159,12 +159,67 @@ type pr struct {
 	Author         struct {
 		Login string `json:"login"`
 	} `json:"author"`
+	// ReviewRequests holds users (login set) and teams (login empty).
+	ReviewRequests []struct {
+		Login string `json:"login"`
+	} `json:"reviewRequests"`
 }
 
-// listOpenPRs runs `gh pr list` in the checkout. gh's own auth applies -
-// the user's per-repo GH_TOKEN through direnv, which pm knows nothing
-// about beyond running gh in the project's path.
+// listOpenPRs runs `gh pr list` in the checkout and keeps only the PRs that
+// concern the user (concernsUser) - both the git and the github source read
+// PRs through here, so neither shows other people's PRs.
 func listOpenPRs(ctx context.Context, run Runner, p Project) ([]pr, error) {
+	prs, err := listAllOpenPRs(ctx, run, p)
+	if err != nil || len(prs) == 0 {
+		return nil, err
+	}
+	login, err := ghLogin(ctx, run, p)
+	if err != nil {
+		return nil, err
+	}
+	var mine []pr
+	for _, r := range prs {
+		if concernsUser(p, login, r) {
+			mine = append(mine, r)
+		}
+	}
+	return mine, nil
+}
+
+// ghLogin is the user's GitHub login for p: gh_account when the project
+// names one (githubContext already put that account's token on ctx),
+// otherwise gh's active account. Called once per project per Fetch.
+func ghLogin(ctx context.Context, run Runner, p Project) (string, error) {
+	if p.GHAccount != "" {
+		return p.GHAccount, nil
+	}
+	out, err := run(ctx, p.Path, "gh", "api", "user", "--jq", ".login")
+	if err != nil {
+		return "", fmt.Errorf("gh api user: %w", err)
+	}
+	login := strings.TrimSpace(out)
+	if login == "" {
+		return "", fmt.Errorf("gh api user: empty login")
+	}
+	return login, nil
+}
+
+// concernsUser keeps a PR the user wrote, one waiting on the user's review,
+// or one whose head is a pm task's branch. Logins compare case-insensitively.
+func concernsUser(p Project, login string, r pr) bool {
+	if strings.EqualFold(r.Author.Login, login) {
+		return true
+	}
+	for _, rr := range r.ReviewRequests {
+		if rr.Login != "" && strings.EqualFold(rr.Login, login) {
+			return true
+		}
+	}
+	return taskForBranch(p, r.HeadRefName) != ""
+}
+
+// listAllOpenPRs runs `gh pr list` in the checkout, unfiltered.
+func listAllOpenPRs(ctx context.Context, run Runner, p Project) ([]pr, error) {
 	stdout, err := run(ctx, p.Path, "gh", "pr", "list", "--state", "open", "--limit", "50", "--json", prListFields)
 	if err != nil {
 		if isNotFound(err) {
