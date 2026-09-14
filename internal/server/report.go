@@ -98,7 +98,7 @@ func (h *handler) writeReport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "the report is off (Settings › Sources › report) - nothing was started")
 		return
 	}
-	if !h.startReport(cfg, cutoff, period) {
+	if !h.startReport(cfg, cutoff, period, true) {
 		writeError(w, http.StatusConflict, "a report for "+period+" is already being written")
 		return
 	}
@@ -106,8 +106,11 @@ func (h *handler) writeReport(w http.ResponseWriter, r *http.Request) {
 }
 
 // startReport launches the background write unless one is in flight for
-// the period. Returns whether it started.
-func (h *handler) startReport(cfg *storage.CockpitConfig, cutoff time.Time, period string) bool {
+// the period. Returns whether it started. refresh runs the feed's sources
+// first (a "write now" must not describe a cache from the last tick, which
+// can be half an hour old or older after a restart); the automatic write
+// passes false because it runs right after a refresh.
+func (h *handler) startReport(cfg *storage.CockpitConfig, cutoff time.Time, period string, refresh bool) bool {
 	h.reports.mu.Lock()
 	if h.reports.writing[period] {
 		h.reports.mu.Unlock()
@@ -124,10 +127,17 @@ func (h *handler) startReport(cfg *storage.CockpitConfig, cutoff time.Time, peri
 			h.reports.mu.Unlock()
 			h.bus.publish("report", `{"period":`+quote(period)+`}`)
 		}()
+		if refresh {
+			// A failed refresh still leaves the cache; the report is written
+			// from what there is (the sources' errors show on /changes).
+			_, _ = h.runRefresh(context.Background())
+		}
 		in := report.Input{Cutoff: cutoff, Now: h.clock(), Language: lang}
 		if ch, err := h.feed.Read(cutoff); err == nil {
 			in.Events = ch.Events
 		}
+		in.PRs = h.feed.PRStates(cutoff)
+		in.Tasks = h.taskStates(in.Events, in.PRs)
 		if a, err := storage.BuildAttention(h.store, cfg, storage.AttentionOptions{Now: h.clock()}); err == nil {
 			in.Attention = a
 		}
@@ -152,7 +162,32 @@ func (h *handler) autoReport(cfg *storage.CockpitConfig, cutoff time.Time) {
 	if rep, err := h.reportStore().Read(period); err != nil || rep != nil {
 		return
 	}
-	h.startReport(cfg, cutoff, period)
+	h.startReport(cfg, cutoff, period, false)
+}
+
+// taskStates reads the current status of every task the events or the PRs
+// name, once each; a task that is gone is left out.
+func (h *handler) taskStates(events []feed.Event, prs []feed.PRState) []report.TaskState {
+	var out []report.TaskState
+	seen := map[string]bool{}
+	add := func(project, id string) {
+		if project == "" || id == "" || seen[project+"/"+id] {
+			return
+		}
+		seen[project+"/"+id] = true
+		t, err := h.store.FindTaskExact(project, id)
+		if err != nil {
+			return
+		}
+		out = append(out, report.TaskState{Project: project, ID: id, Title: t.Meta.Title, Status: string(t.Meta.Status), WaitingFor: t.Meta.WaitingFor})
+	}
+	for _, e := range events {
+		add(e.Project, e.TaskID)
+	}
+	for _, p := range prs {
+		add(p.Project, p.TaskID)
+	}
+	return out
 }
 
 // dismissRequest is POST /api/report/dismiss's body.

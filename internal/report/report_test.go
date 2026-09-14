@@ -48,6 +48,20 @@ func TestBuildPromptAndParse(t *testing.T) {
 	if strings.Contains(p, "ignored here") {
 		t.Error("the changes section is the feed itself and must not be repeated")
 	}
+	if !strings.Contains(p, "(nothing known)") {
+		t.Error("an empty current state must say so")
+	}
+	// The current state rides beside the events, and the instructions put it
+	// above them.
+	in := input()
+	in.PRs = []feed.PRState{{Project: "acme-api", Number: 5, Title: "Fix", State: "merged", ReviewDecision: "APPROVED", TaskID: "acme-api-1"}, {Project: "acme-api", Number: 6, Title: "WIP", State: "open", Draft: true}}
+	in.Tasks = []TaskState{{Project: "acme-api", ID: "acme-api-1", Title: "Acme-api thing", Status: "waiting", WaitingFor: "review Anna"}}
+	withState := BuildPrompt(in)
+	for _, want := range []string{`- PR acme-api #5 "Fix": merged, review approved, task acme-api-1`, `- PR acme-api #6 "WIP": open (draft)`, `- task acme-api acme-api-1 "Acme-api thing": status waiting, waiting for review Anna`, "never write about a merged or closed PR"} {
+		if !strings.Contains(withState, want) {
+			t.Errorf("prompt lacks %q:\n%s", want, withState)
+		}
+	}
 	prose, sugg := ParseSuggestions("2026-09-04T18", "Text.\n\n- SUGGEST acme-api-1 back_to_todo: reason\n- SUGGEST x-1 dance: no\n", func(id string) string {
 		if id == "acme-api-1" {
 			return "acme-api"

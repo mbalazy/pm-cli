@@ -866,6 +866,23 @@ func TestSchedulerHonoursTheWindow(t *testing.T) {
 	if n := run(t, 22); n != 0 {
 		t.Errorf("outside the window the scheduler refreshed %d times", n)
 	}
+	// The first refresh runs at start, not one interval in: a restart must
+	// not leave the cache stale for a whole interval.
+	{
+		store := newTestStore(t)
+		if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  refresh:\n    every: 1h\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		src := &fakeFeedSource{name: "pm"}
+		clock := func() time.Time { return time.Date(2026, 9, 9, 12, 30, 0, 0, time.Local) }
+		h := NewHandler(store, Options{Feed: feed.New(store.Root, []feed.Source{src}), Clock: clock})
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		h.RunScheduler(ctx)
+		cancel()
+		if src.calls != 1 {
+			t.Errorf("start-up refresh: calls = %d, want 1", src.calls)
+		}
+	}
 	// A manual refresh works outside the window regardless.
 	store := newTestStore(t)
 	src := &fakeFeedSource{name: "pm"}
@@ -1205,6 +1222,10 @@ func TestReport(t *testing.T) {
 		if !strings.Contains(string(b), "t-1: Test Task - moved") || !strings.Contains(string(b), `language with code "en"`) || !strings.Contains(string(b), "--model haiku") {
 			t.Fatalf("prompt = %s", b)
 		}
+		// ...and the task's status as of the write, beside the history.
+		if !strings.Contains(string(b), "- task test t-1 ") {
+			t.Fatalf("prompt lacks the task's current state: %s", b)
+		}
 		// Dismiss: recorded and announced; an unknown id is 400.
 		id := sugg[0].(map[string]any)["id"].(string)
 		d := postJSON(t, srv.URL+"/api/report/dismiss", `{"id":"`+id+`"}`, 200)
@@ -1219,6 +1240,9 @@ func TestReport(t *testing.T) {
 		if err := os.WriteFile(failFlag, []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		// An event only a NEW refresh can bring: "write now" must describe
+		// the present, not the cache of the last tick.
+		src.events = append(src.events, feed.Event{ID: "e2", TS: now.Add(-time.Minute).Format(time.RFC3339), Project: "test", Group: "test", Title: "Fresh since the last tick", Detail: "merged"})
 		m := postJSON(t, srv.URL+"/api/report", "", 202)
 		if m["state"] != "writing" {
 			t.Fatalf("accepted = %v", m)
@@ -1230,6 +1254,9 @@ func TestReport(t *testing.T) {
 		}
 		if n := countCalls(); n != 2 {
 			t.Fatalf("claude calls = %d, want 2", n)
+		}
+		if b, _ := os.ReadFile(prompts); !strings.Contains(string(b), "Fresh since the last tick") {
+			t.Fatalf("write now did not refresh the feed first: %s", b)
 		}
 		// GET on the POST-only route is the catch-all 404; no header is 403.
 		if st, _, _ := get(t, srv.URL+"/api/report/dismiss"); st != 404 {
