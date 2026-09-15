@@ -908,7 +908,7 @@ describe('group page', () => {
 
     const left = screen.getByRole('region', { name: 'Where we left off' })
     // acme-zap keeps a timeline: the state with its date, the entries after it
-    // in order with kind and date, the stale line - and no notes action.
+    // in order with kind and date, the stale line.
     const acme-zap = within(left).getByRole('listitem', { name: 'acme-zap' })
     expect(
       await within(acme-zap).findByText('Stan 15.09: the zap runs on the new webhook'),
@@ -923,7 +923,9 @@ describe('group page', () => {
     expect(
       within(entries[1]).getByRole('link', { name: 'https://example.com/thread' }),
     ).toHaveAttribute('href', 'https://example.com/thread')
-    expect(within(acme-zap).queryByRole('button', { name: /notes/ })).toBeNull()
+    // The notes box gives way to the timeline; the notes action stays.
+    expect(within(acme-zap).queryByText('no notes yet')).toBeNull()
+    expect(within(acme-zap).getByRole('button', { name: 'add notes' })).toBeInTheDocument()
     // acme-api has an empty timeline: its notes and the edit action, as before.
     const acme-api = within(left).getByRole('listitem', { name: 'acme-api' })
     expect(within(acme-api).getByText('ACME-60 in two repos')).toBeInTheDocument()

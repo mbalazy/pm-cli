@@ -34,10 +34,11 @@ export function LeftOff({ rows, onEdit }: Props) {
           <li key={m.slug} aria-label={m.slug} className="text-sm">
             <div className="mb-1 flex items-center gap-2">
               {rows.length > 1 && <span className="chip">{m.slug}</span>}
-              {view.kind === 'notes' && onEdit && (
+              {/* Kept beside a timeline too: this is the one place notes are edited from the web. */}
+              {onEdit && (
                 <button type="button" className="ghost-btn" onClick={() => onEdit(m)}>
                   <PenLine aria-hidden="true" className="size-3" strokeWidth={1.75} />
-                  {view.notes ? 'edit notes' : 'add notes'}
+                  {m.notes ? 'edit notes' : 'add notes'}
                 </button>
               )}
             </div>
