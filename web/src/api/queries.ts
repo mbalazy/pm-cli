@@ -1,7 +1,7 @@
 // react-query hooks, one per endpoint. The KEYS are a contract shared with the
 // live feed (118-9 invalidates by them) - keep them exactly as listed:
 //   ['projects'] ['groups'] ['tasks', slug] ['task', slug, id] ['context', slug] ['runs'] ['focus']
-//   ['attention', project, group] ['changes'] ['config']
+//   ['attention', project, group] ['changes'] ['config'] ['timeline', slug]
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { apiGet, apiPost, query } from './client'
@@ -26,6 +26,7 @@ import type {
   SoloReportResult,
   SoloResult,
   TaskDetail,
+  TimelineRead,
 } from './types'
 
 /** The API's hard cap on `limit` (service.MaxListLimit). */
@@ -37,6 +38,7 @@ export const keys = {
   tasks: (slug: string) => ['tasks', slug] as const,
   task: (slug: string, id: string) => ['task', slug, id] as const,
   context: (slug: string) => ['context', slug] as const,
+  timeline: (slug: string) => ['timeline', slug] as const,
   runs: () => ['runs'] as const,
   /** Deliberately NOT under ['runs']: a `runs` event must never trigger an ssh round-trip. */
   runsRemote: () => ['runs-remote'] as const,
@@ -90,6 +92,19 @@ export function contextQuery(slug: string) {
     queryFn: () => apiGet<ProjectContextResult>(`/api/context${query({ project: slug })}`),
     enabled: slug !== '',
   }
+}
+
+/** The query options of one project's timeline: the latest state and the entries after it. */
+export function timelineQuery(slug: string) {
+  return {
+    queryKey: keys.timeline(slug),
+    queryFn: () => apiGet<TimelineRead>(`/api/timeline/${encodeURIComponent(slug)}`),
+    enabled: slug !== '',
+  }
+}
+
+export function useTimeline(slug: string) {
+  return useQuery(timelineQuery(slug))
 }
 
 export function useTask(slug: string, id: string) {

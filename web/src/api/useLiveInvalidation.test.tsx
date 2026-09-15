@@ -50,6 +50,7 @@ describe('useLiveInvalidation', () => {
       ['tasks', 'alpha'],
       ['task', 'alpha'],
       ['context', 'alpha'],
+      ['timeline', 'alpha'],
       ['projects'],
       ['groups'],
       ['attention'],
