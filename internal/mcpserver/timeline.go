@@ -29,7 +29,7 @@ func registerTimelineTools(s *mcp.Server, store storage.TaskStore) {
 	// pm_timeline_list
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "pm_timeline_list",
-		Description: "Read a project's timeline. With no since/kind/limit: the default read - the latest `state` in full plus every entry written after it, oldest first, with `stale` (10+ entries or 7+ days since that state: time to write a new one) and a note; with no state yet, the newest entries. Never read a state alone - it goes out of date with the first entry after it. " +
+		Description: "Read a project's timeline. With no since/kind/limit: the default read - the latest `state` in full plus every entry written after it, oldest first, with `stale` (10+ entries or 7+ days since that state: time to write a new one) and a `note` when there is something to act on (no entries, no state yet, stale); with no state yet, the newest entries. Never read a state alone - it goes out of date with the first entry after it. " +
 			"With since (YYYY-MM-DD), kind or limit: the matching entries newest first, capped, with total vs shown. " +
 			"Come here when the state does not say WHY (a decision), for what happened between two dates, or when a task contradicts the state; pm_context already carries the default read for its project.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in service.TimelineListInput) (*mcp.CallToolResult, any, error) {
