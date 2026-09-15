@@ -11,13 +11,19 @@ import (
 )
 
 // seedTimeline appends an entry dated daysAgo (plus minutes, to order entries
-// within a day) straight through storage.
+// within a day) straight through storage. Days are whole 24-hour spans, the
+// unit the stale check counts in, so a daylight-saving change inside the span
+// cannot turn 8 days into 7.
 func seedTimeline(t *testing.T, store *storage.Store, kind, text string, daysAgo, minutes int) {
 	t.Helper()
-	ts := time.Now().AddDate(0, 0, -daysAgo).Add(time.Duration(minutes) * time.Minute).Format(time.RFC3339)
+	ts := daysBack(daysAgo).Add(time.Duration(minutes) * time.Minute).Format(time.RFC3339)
 	if err := storage.AppendTimelineEntry(store.ProjectDir("test"), &storage.TimelineEntry{Kind: kind, Text: text, TS: ts}); err != nil {
 		t.Fatalf("seed %q: %v", text, err)
 	}
+}
+
+func daysBack(days int) time.Time {
+	return time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 }
 
 func timelineEntries(t *testing.T, store *storage.Store) []storage.TimelineEntry {
@@ -244,7 +250,7 @@ func TestE2EContextTimelineBlock(t *testing.T) {
 		}
 
 		ptr := crossProject().Projects[0].TimelineState
-		wantDate := time.Now().AddDate(0, 0, -8).Format("2006-01-02")
+		wantDate := daysBack(8).Format("2006-01-02")
 		if ptr != wantDate+": line 01 of the state (stale)" {
 			t.Fatalf("timeline_state = %q", ptr)
 		}
