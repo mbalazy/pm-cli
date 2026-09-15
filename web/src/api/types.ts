@@ -379,9 +379,67 @@ export interface ReviewsResult {
   reviews: Review[]
 }
 
-/** service.SoloResult - GET /api/solo */
+/** solo.Input - the launch form of POST /api/solo and GET /api/solo/plan. */
+export interface SoloInput {
+  project: string
+  /** A tracker id, task ids, a ticket key, a link or a sentence - handed to /solo verbatim. */
+  queue: string
+  /** '' (the skill decides) | 'sim' | 'web' | 'off'. */
+  runtime?: string
+  base?: string
+  model?: string
+  push?: boolean
+  pr?: boolean
+  max_tasks?: number
+  max_hours?: number
+}
+
+/** solo.Plan - GET /api/solo/plan: the exact `claude --bg` launch, the dialog's preview. */
+export interface SoloPlan {
+  project: string
+  input: SoloInput
+  exe: string
+  /** claude's arguments (claude itself excluded); the "/solo ..." prompt is last. */
+  argv: string[]
+  prompt: string
+  cwd: string
+  config_dir: string
+  name: string
+  warnings?: string[]
+  ask_rules: number
+}
+
+/** solo.Launch - one background solo session pm started, with the supervisor's live state. */
+export interface SoloLaunch {
+  /** The short id `claude --bg` printed; attach/logs/stop take it. */
+  id: string
+  /** The session UUID (= the shift id), once the supervisor reported it. */
+  session_id?: string
+  project: string
+  input: SoloInput
+  argv: string[]
+  cwd: string
+  config_dir: string
+  name: string
+  started: string
+  log: string
+  error?: string
+  stopped?: string
+  /** starting | working | blocked | done | failed | stopped | unknown | error. */
+  state: string
+  /** busy | waiting | idle, while the process is alive. */
+  status?: string
+  waiting_for?: string
+  pid?: number
+  /** The commands to paste in a terminal. */
+  attach: string
+  logs: string
+}
+
+/** server.soloResult - GET /api/solo: the shifts the skill wrote + the launches pm started. */
 export interface SoloResult {
   shifts: Shift[]
+  launches: SoloLaunch[]
 }
 
 /** service.SoloReportResult - GET /api/solo/{project}/{shift}/report */

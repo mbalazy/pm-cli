@@ -1,5 +1,5 @@
 import type { MutationRequest } from '../api/mutations'
-import type { RunFlags, RunPlan } from '../api/types'
+import type { RunFlags, RunPlan, SoloInput, SoloLaunch, SoloPlan } from '../api/types'
 
 // Every mutation goes through one confirmation dialog (the user's rule: "I do
 // not want to fire something by accident"). This file decides, for a pending
@@ -22,6 +22,10 @@ export interface ActionSubject {
   notes?: string
   /** move_repo: the group the project moves to ('' = its own). */
   group?: string
+  /** solo_start: the launch form. */
+  solo?: SoloInput
+  /** solo_stop: the launch to end. */
+  launch?: SoloLaunch
 }
 
 /** A task detail as an action subject (the detail carries `id`, a row `task_id`). */
@@ -56,6 +60,8 @@ export type PendingKind =
   | 'wake_project'
   | 'move_repo'
   | 'write_report'
+  | 'solo_start'
+  | 'solo_stop'
   | RunKind
 
 /** The run-control kinds (pm-cli-118-21): a POST /api/runs/{p}/{id}/{action}. */
@@ -131,6 +137,8 @@ export function isPendingKind(k: string): k is PendingKind {
     k === 'wake_project' ||
     k === 'move_repo' ||
     k === 'write_report' ||
+    k === 'solo_start' ||
+    k === 'solo_stop' ||
     isRunKind(k)
   )
 }
@@ -199,11 +207,31 @@ export function previewOf(plan: RunPlan | undefined): string {
   return plan.target ?? ''
 }
 
+/** Shell-quotes one argv element for the preview (single quotes, the shell's own rule). */
+export function shellQuote(a: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * The launch line of a solo plan as a terminal would take it:
+ * `cd <cwd> && [CLAUDE_CONFIG_DIR=<dir> ]claude <argv>`; the config dir
+ * is spelled out only when it is not the default ~/.claude.
+ */
+export function previewOfSolo(plan: SoloPlan | undefined): string {
+  if (!plan) return ''
+  const env =
+    plan.config_dir && !/\/\.claude$/.test(plan.config_dir)
+      ? `CLAUDE_CONFIG_DIR=${plan.config_dir} `
+      : ''
+  return `cd ${plan.cwd} && ${env}claude ${plan.argv.map(shellQuote).join(' ')}`
+}
+
 export function describeAction(
   p: PendingAction,
   value: string,
   focused?: boolean,
   plan?: RunPlan,
+  soloPlan?: SoloPlan,
 ): ConfirmText {
   const s = p.subject
   const id = s.task_id ?? s.project
@@ -211,6 +239,24 @@ export function describeAction(
   const base = { heading, project: s.project }
   if (isRunKind(p.kind)) return describeRun(p.kind, id, base, plan)
   switch (p.kind) {
+    case 'solo_start':
+      return {
+        ...base,
+        heading: `solo · ${s.solo?.queue ?? s.title}`,
+        sentence:
+          'Starts an unattended /solo session in the background (claude --bg, bypass permissions) in the project checkout. It spends tokens until the queue is done or --max-hours; jump in from a terminal with the attach command the Solo table shows.',
+        confirmLabel: 'launch solo',
+        preview: previewOfSolo(soloPlan),
+        warnings: soloPlan?.warnings,
+        loading: soloPlan === undefined,
+      }
+    case 'solo_stop':
+      return {
+        ...base,
+        heading: `solo · ${s.launch?.name ?? s.title}`,
+        sentence: `Runs claude stop ${s.launch?.id ?? ''} - the session ends, its conversation is kept, and \`${s.launch?.attach ?? 'claude attach'}\` reopens it.`,
+        confirmLabel: 'stop solo',
+      }
     case 'focus_toggle':
       return {
         ...base,
@@ -386,6 +432,10 @@ export function requestFor(p: PendingAction, value: string, flags: RunFlags = {}
     return { kind: 'run', project: s.project, taskId, action: p.kind, flags }
   }
   switch (p.kind) {
+    case 'solo_start':
+      return { kind: 'solo_start', input: s.solo ?? { project: s.project, queue: s.title } }
+    case 'solo_stop':
+      return { kind: 'solo_stop', id: s.launch?.id ?? '' }
     case 'focus_toggle':
       return { kind: 'focus', project: s.project, taskId }
     case 'set_waiting_for':

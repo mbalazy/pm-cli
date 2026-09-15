@@ -1,10 +1,21 @@
-import { Cloud } from 'lucide-react'
+import { Cloud, Rocket } from 'lucide-react'
 import { useState } from 'react'
 
-import { useAttention, useConfig, useRemoteRuns, useRuns, useSolo } from '../api/queries'
+import {
+  useAttention,
+  useConfig,
+  useProjects,
+  useRemoteRuns,
+  useRuns,
+  useSolo,
+} from '../api/queries'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { RunsTable } from '../components/RunsTable'
 import { SectionHead } from '../components/SectionHead'
+import { SoloLaunchForm } from '../components/SoloLaunchForm'
 import { SoloTable } from '../components/SoloTable'
+import { Toast } from '../components/Toast'
+import { useConfirmedAction } from '../hooks/useConfirmedAction'
 import { mergeRunRows } from '../lib/mergeRunRows'
 import { relativeTime } from '../lib/relativeTime'
 import {
@@ -20,7 +31,10 @@ import {
 import { soloRows } from '../lib/soloView'
 
 // The Runs screen (and the group page's Runs tab, via `projects`): the /solo
-// shifts first (pm-cli-136), then the executor's runs - only while
+// shifts first (pm-cli-136) with the "launch solo" form above them
+// (pm-cli-141: the form opens the ONE confirmation dialog with the server's
+// command preview, and the table shows each launched session's state, its
+// attach command and a stop), then the executor's runs - only while
 // cockpit.show_executor is on (pm-cli-137; the executor is frozen). Executor
 // rows: local on every `runs` event, remote only on the button; ordered
 // "needs me first" by default through the attention queue's own ranking,
@@ -37,8 +51,15 @@ interface Props {
 export function RunsPage({ projects, heading = 'Runs' }: Props) {
   const config = useConfig()
   const solo = useSolo()
+  const allProjects = useProjects()
+  const action = useConfirmedAction()
+  const [launching, setLaunching] = useState(false)
   const showExecutor = config.data?.cockpit.show_executor === true
-  const shifts = soloRows(solo.data?.shifts, projects)
+  const shifts = soloRows(solo.data?.shifts, projects, solo.data?.launches)
+  const keep = projects ? new Set(projects) : undefined
+  const launchable = (allProjects.data?.projects ?? []).filter(
+    (p) => !p.archived && (!keep || keep.has(p.slug)),
+  )
 
   return (
     <div className="space-y-6">
@@ -48,12 +69,56 @@ export function RunsPage({ projects, heading = 'Runs' }: Props) {
           <span className="num text-ink-2">{shifts.length} solo shifts</span>
         </header>
       )}
-      <section aria-label="Solo">
+      <section aria-label="Solo" className="space-y-3">
         <SectionHead title="Solo" count={shifts.length} why="/solo shifts · open first, newest" />
+        <div>
+          <button
+            type="button"
+            className="ghost-btn"
+            aria-expanded={launching}
+            onClick={() => setLaunching((v) => !v)}
+          >
+            <Rocket aria-hidden="true" className="size-3" strokeWidth={1.75} />
+            {launching ? 'hide the launch form' : 'launch solo'}
+          </button>
+        </div>
+        {launching && (
+          <SoloLaunchForm
+            projects={launchable}
+            project={projects?.[0]}
+            onSubmit={(input) =>
+              action.ask({
+                kind: 'solo_start',
+                subject: { project: input.project, title: input.queue, solo: input },
+              })
+            }
+          />
+        )}
         {solo.isPending && <p className="text-ink-3">loading…</p>}
         {solo.isError && <p className="text-crit">error: {solo.error.message}</p>}
-        {solo.data && <SoloTable rows={shifts} />}
+        {solo.data && (
+          <SoloTable
+            rows={shifts}
+            onStop={(l) =>
+              action.ask({
+                kind: 'solo_stop',
+                subject: { project: l.project, title: l.name, launch: l },
+              })
+            }
+          />
+        )}
       </section>
+      <ConfirmDialog
+        open={action.pending !== null}
+        text={action.text}
+        value={action.value}
+        onChange={action.setValue}
+        onConfirm={action.confirm}
+        onCancel={action.cancel}
+        busy={action.busy}
+        error={action.error}
+      />
+      <Toast message={action.toast.message} error={action.toast.error} />
       {showExecutor ? (
         <ExecutorRuns projects={projects} />
       ) : (
