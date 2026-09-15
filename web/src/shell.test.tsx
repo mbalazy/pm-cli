@@ -405,6 +405,8 @@ const reportDone = {
 
 // acme-zap keeps a timeline (a stale state + two entries after it); acme-api keeps
 // none, so the group page falls back to its notes.
+// Local noon, so the dates the page shows do not depend on the test machine's zone.
+const localNoon = (day: number) => new Date(2026, 8, day, 12, 0).toISOString()
 const timelineEntry = (id: string, ts: string, kind: string, text: string, refs?: string[]) => ({
   id,
   ts,
@@ -416,18 +418,13 @@ const acme-zapTimeline = {
   project: 'acme-zap',
   state: timelineEntry(
     '2026-09-15-aa01',
-    '2026-09-15T12:00:00Z',
+    localNoon(15),
     'state',
     'Stan 15.09: the zap runs on the new webhook',
   ),
   since: [
-    timelineEntry(
-      '2026-09-16-bb02',
-      '2026-09-16T12:00:00Z',
-      'decision',
-      'keep the old webhook for a week',
-    ),
-    timelineEntry('2026-09-17-cc03', '2026-09-17T12:00:00Z', 'event', 'the client confirmed', [
+    timelineEntry('2026-09-16-bb02', localNoon(16), 'decision', 'keep the old webhook for a week'),
+    timelineEntry('2026-09-17-cc03', localNoon(17), 'event', 'the client confirmed', [
       'https://example.com/thread',
     ]),
   ],
