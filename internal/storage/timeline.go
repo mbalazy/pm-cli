@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -210,19 +211,26 @@ func readTimelineFile(path string) ([]TimelineEntry, error) {
 	}
 	defer f.Close()
 	var out []TimelineEntry
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for sc.Scan() {
+	// A reader, not a Scanner: the write side accepts any text length, so a
+	// line-length cap here would turn one long state (JSON escaping alone
+	// grows pasted HTML sixfold) into a timeline nobody can read again.
+	r := bufio.NewReader(f)
+	for {
+		line, err := r.ReadBytes('\n')
 		var e TimelineEntry
-		if json.Unmarshal(sc.Bytes(), &e) != nil || strings.TrimSpace(e.Text) == "" || ValidateTimelineKind(e.Kind) != nil {
-			continue
+		if len(line) > 0 && json.Unmarshal(line, &e) == nil && strings.TrimSpace(e.Text) != "" && ValidateTimelineKind(e.Kind) == nil {
+			if e.ID == "" {
+				e.ID = timelineEntryID(e.TS, e.Kind, e.Text)
+			}
+			out = append(out, e)
 		}
-		if e.ID == "" {
-			e.ID = timelineEntryID(e.TS, e.Kind, e.Text)
+		if err == io.EOF {
+			return out, nil
 		}
-		out = append(out, e)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return out, sc.Err()
 }
 
 // sortTimeline orders by the PARSED instant (RFC3339 permits offsets, so the

@@ -170,6 +170,26 @@ func TestReadTimelineSkipsBadLinesAndSortsUndatedLast(t *testing.T) {
 	}
 }
 
+// Whatever the write side accepts, the read side must read back: a long state
+// must not lock the whole timeline behind a line-length limit.
+func TestReadTimelineLongLine(t *testing.T) {
+	dir := t.TempDir()
+	long := strings.Repeat("<", 400_000) // JSON-escaped to 2.4 MB on disk
+	if err := AppendTimelineEntry(dir, &TimelineEntry{Kind: TimelineState, Text: long, TS: day(1)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendTimelineEntry(dir, &TimelineEntry{Kind: TimelineEvent, Text: "after", TS: day(2)}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadTimeline(dir)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got) != 2 || got[0].Text != long || got[1].Text != "after" {
+		t.Fatalf("read %d entries", len(got))
+	}
+}
+
 func TestReadTimelineMissingDir(t *testing.T) {
 	dir := t.TempDir()
 	r, err := ReadTimelineDefault(dir, time.Now())
