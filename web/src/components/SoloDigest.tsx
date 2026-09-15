@@ -69,9 +69,11 @@ export function SoloDigest({ view }: { view: DigestView }) {
                         {t.outcome.label}
                       </span>
                     </span>
-                    {t.lead && <span className="block text-sm text-ink-2">{t.lead}</span>}
+                    {t.lead && (
+                      <span className="block text-sm text-ink-2 group-open:hidden">{t.lead}</span>
+                    )}
                     {t.beforePR && (
-                      <span className="block text-sm">
+                      <span className="block text-sm group-open:hidden">
                         <span className="kicker mr-1.5">before the PR</span>
                         {t.beforePR}
                       </span>
