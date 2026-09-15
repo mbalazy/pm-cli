@@ -82,6 +82,7 @@ func TestAppendTimelineEntryRejectsWithoutWriting(t *testing.T) {
 		{"empty text", TimelineEntry{Kind: TimelineEvent, Text: ""}},
 		{"blank text", TimelineEntry{Kind: TimelineEvent, Text: " \n\t"}},
 		{"unparseable ts", TimelineEntry{Kind: TimelineEvent, Text: "x", TS: "2026-09-15"}},
+		{"dated tomorrow", TimelineEntry{Kind: TimelineState, Text: "x", TS: tomorrowMidnight()}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -94,6 +95,25 @@ func TestAppendTimelineEntryRejectsWithoutWriting(t *testing.T) {
 				t.Fatalf("timeline dir created for a rejected entry: %v", err)
 			}
 		})
+	}
+}
+
+func tomorrowMidnight() string {
+	now := time.Now()
+	return time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location()).Format(time.RFC3339)
+}
+
+// Today stays writable to its last second, so a back-date to today's
+// midnight and a stamp of "now" both pass.
+func TestAppendTimelineEntryAcceptsToday(t *testing.T) {
+	now := time.Now()
+	for _, ts := range []string{
+		time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Format(time.RFC3339),
+		now.Format(time.RFC3339),
+	} {
+		if err := AppendTimelineEntry(t.TempDir(), &TimelineEntry{Kind: TimelineEvent, Text: "x", TS: ts}); err != nil {
+			t.Fatalf("ts %s: %v", ts, err)
+		}
 	}
 }
 

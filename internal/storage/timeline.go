@@ -138,6 +138,14 @@ func AppendTimelineEntry(projectDir string, e *TimelineEntry) error {
 	if !ok {
 		return fmt.Errorf("timeline entry ts %q is not RFC3339", e.TS)
 	}
+	// An entry records something that already happened. A future date - a
+	// typo'd back-date, typically - would sit after every real entry: as a
+	// state it would empty the default read and mute the stale signal until
+	// that day, and an append-only file offers no way to correct it.
+	now := time.Now()
+	if !when.Before(time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())) {
+		return fmt.Errorf("timeline entry dated %s is in the future - an entry records something that already happened", when.Format("2006-01-02"))
+	}
 	e.Refs = cleanRefs(e.Refs)
 	if e.ID == "" {
 		e.ID = timelineEntryID(e.TS, e.Kind, e.Text)
