@@ -56,15 +56,16 @@ export function LeftOff({ rows, onEdit }: Props) {
                 <p className="text-xs text-ink-3 italic">{view.heading}</p>
                 {view.entries.length > 0 && (
                   <ol aria-label={`${m.slug} timeline entries`} className="space-y-1">
-                    {view.entries.map((e) => (
-                      <li key={e.id} className="flex flex-wrap items-baseline gap-x-2">
+                    {/* Ids and refs can repeat (the same entry written twice), so keys carry the position. */}
+                    {view.entries.map((e, i) => (
+                      <li key={`${i}-${e.id}`} className="flex flex-wrap items-baseline gap-x-2">
                         <span className="num text-xs text-ink-3">{e.date}</span>
                         <span className="text-xs text-ink-2">{e.kind}</span>
                         <span className="whitespace-pre-line">{e.text}</span>
-                        {e.refs.map((r) =>
+                        {e.refs.map((r, j) =>
                           r.href ? (
                             <a
-                              key={r.label}
+                              key={`${j}-${r.label}`}
                               href={r.href}
                               target="_blank"
                               rel="noreferrer"
@@ -73,7 +74,7 @@ export function LeftOff({ rows, onEdit }: Props) {
                               {r.label}
                             </a>
                           ) : (
-                            <span key={r.label} className="id text-xs text-ink-3">
+                            <span key={`${j}-${r.label}`} className="id text-xs text-ink-3">
                               {r.label}
                             </span>
                           ),
