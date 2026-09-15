@@ -170,6 +170,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	})
 
 	registerJournalTools(s, store)
+	registerTimelineTools(s, store)
 }
 
 // --- Context helpers kept under their old names for the tests ---
