@@ -452,16 +452,22 @@ func soloReportRows(v *projectView, now time.Time) []AttentionRow {
 		if r.AgeSeconds != nil && *r.AgeSeconds > int64(SoloReportDays)*86400 {
 			continue
 		}
+		// The reason is what came out and what the user is asked to do - the
+		// queue's statuses are the ones the shift STARTED from, never news.
 		r.Reason = "solo shift closed"
-		if len(sh.Tasks) > 0 {
-			var st []string
-			for _, t := range sh.Tasks {
-				if t.Status != "" {
-					st = append(st, t.ID+" "+t.Status)
-				}
+		if s := sh.Summary; s != nil {
+			var parts []string
+			if c := s.Counts(); c != "" {
+				parts = append(parts, c)
 			}
-			if len(st) > 0 {
-				r.Reason += " · " + strings.Join(st, ", ")
+			if s.Next != "" {
+				parts = append(parts, s.Next)
+			}
+			if len(parts) > 0 {
+				r.Reason = strings.Join(parts, " · ")
+			}
+			if s.Unfinished() {
+				r.Severity = SeverityWarn
 			}
 		}
 		rows = append(rows, r)
@@ -469,8 +475,12 @@ func soloReportRows(v *projectView, now time.Time) []AttentionRow {
 	return rows
 }
 
-// shiftTitle names a shift by its queue: the one task's title, or the ids.
+// shiftTitle names a shift: by its report (summary title), else by its
+// queue - the one task's title, or the ids.
 func shiftTitle(sh Shift) string {
+	if sh.Summary != nil && sh.Summary.Title != "" {
+		return sh.Summary.Title
+	}
 	switch len(sh.Tasks) {
 	case 0:
 		return "solo shift " + sh.Date

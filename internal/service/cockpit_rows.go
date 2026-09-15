@@ -132,6 +132,9 @@ type SoloReportResult struct {
 	// own state file, for a shift still open or closed without a report).
 	Kind     string `json:"kind"`
 	Markdown string `json:"markdown"`
+	// Digest is the report split into parts (storage.ParseShiftReport); only
+	// for kind "report".
+	Digest *storage.ShiftReport `json:"digest,omitempty"`
 }
 
 // SoloReport reads one shift's report. The shift id is looked up among the
@@ -156,6 +159,9 @@ func SoloReport(store storage.TaskStore, project, shift string) (*SoloReportResu
 			return nil, err
 		}
 		res.Markdown = string(data)
+		if res.Kind == "report" {
+			res.Digest = storage.ParseShiftReport(res.Markdown)
+		}
 		return res, nil
 	}
 	return nil, fmt.Errorf("%w: no solo shift %q in %s", storage.ErrTaskNotFound, shift, slug)

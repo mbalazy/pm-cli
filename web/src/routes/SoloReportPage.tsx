@@ -1,15 +1,16 @@
 import { Link } from '@tanstack/react-router'
 import { EyeOff } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 
 import { useRowMutation } from '../api/mutations'
 import { useSoloReport } from '../api/queries'
+import { Markdown, OutcomeChips, SoloDigest } from '../components/SoloDigest'
 import { relativeTime } from '../lib/relativeTime'
+import { digestOf, digestView, outcomeChips, reportTitle } from '../lib/soloReportView'
 
-// One solo shift's report (pm-cli-136): the markdown the skill wrote, or the
-// shift's state file while there is no report. "mark read" is the home
-// row's dismiss.
+// One solo shift's report (pm-cli-136): the digest of what came out and
+// what the user is asked to do, the long parts folded; a report the server
+// could not split (or a shift with no report yet) renders whole. "mark read"
+// is the home row's dismiss.
 
 export function SoloReportPage({ project, shift }: { project: string; shift: string }) {
   const report = useSoloReport(project, shift)
@@ -18,15 +19,22 @@ export function SoloReportPage({ project, shift }: { project: string; shift: str
   if (report.isPending) return <p className="text-ink-3">loading…</p>
   if (report.isError) return <p className="text-crit">error: {report.error.message}</p>
   const { shift: sh, kind, markdown } = report.data
+  const digest = digestOf(report.data)
 
   return (
-    <div className="space-y-5">
+    <div className="max-w-[88ch] space-y-5">
       <header className="space-y-2 border-b-2 border-ink pb-3">
+        <p className="text-xs text-ink-2">
+          solo shift · {sh.project} · {sh.date} ·{' '}
+          {sh.open ? 'still open' : `closed ${sh.closed ? relativeTime(sh.closed) : ''}`}
+          {kind === 'state' && ' · no report yet, showing the shift file'}
+          {' · '}
+          <Link to="/runs" className="underline">
+            all shifts
+          </Link>
+        </p>
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-          <h1 className="masthead">Solo report</h1>
-          <span className="display text-lg text-ink-2">
-            {sh.project} · {sh.date}
-          </span>
+          <h1 className="masthead">{reportTitle(report.data)}</h1>
           {!sh.open && sh.report && (
             <button
               type="button"
@@ -51,21 +59,16 @@ export function SoloReportPage({ project, shift }: { project: string; shift: str
             </button>
           )}
         </div>
-        <p className="text-xs text-ink-2">
-          {sh.open ? 'shift still open' : `closed ${sh.closed ? relativeTime(sh.closed) : ''}`}
-          {' · '}
-          {sh.tasks.map((t) => `${t.id} ${t.status ?? ''}`.trim()).join(', ') || 'no queue'}
-          {kind === 'state' && ' · no report yet, showing the shift file'}
-          {' · '}
-          <Link to="/runs" className="underline">
-            all shifts
-          </Link>
-        </p>
+        <OutcomeChips chips={outcomeChips(sh.summary)} />
         {mark.isError && <p className="text-sm text-crit">{mark.error.message}</p>}
       </header>
-      <article className="markdown max-w-[88ch] space-y-3 text-[0.9375rem] leading-relaxed [&_code]:font-mono [&_code]:text-[0.85em] [&_h1]:display [&_h1]:text-xl [&_h2]:display [&_h2]:mt-5 [&_h2]:text-lg [&_h3]:font-semibold [&_li]:ml-5 [&_ol]:list-decimal [&_pre]:overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_td]:border [&_td]:border-rule [&_td]:px-2 [&_th]:border [&_th]:border-rule [&_th]:px-2 [&_ul]:list-disc">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
-      </article>
+      {digest ? (
+        <SoloDigest view={digestView(digest, markdown)} />
+      ) : (
+        <article aria-label="Report">
+          <Markdown md={markdown} className="text-[0.9375rem]" />
+        </article>
+      )}
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import type { Shift } from '../api/types'
 import { relativeTime } from './relativeTime'
+import { countsText, unfinished } from './soloReportView'
 
 // The Runs screen's solo table (pm-cli-136): one line per /solo shift, open
 // ones first (the API's order), narrowed to a group's projects when asked.
@@ -10,8 +11,12 @@ export interface SoloRow {
   glyph: string
   /** "open" or "closed <relative time>". */
   when: string
-  /** "<id> <status>" per queued task. */
-  tasks: string
+  /** The report's name for the shift, else the queued task ids. */
+  title: string
+  /** "6 done · 1 untouched"; '' until a report or the Progress says anything. */
+  outcome: string
+  /** warn when a task came back unfinished, ok when something got done. */
+  tone: string
 }
 
 export function soloRows(shifts: Shift[] | undefined, projects?: string[]): SoloRow[] {
@@ -22,6 +27,8 @@ export function soloRows(shifts: Shift[] | undefined, projects?: string[]): Solo
       shift: s,
       glyph: s.open ? '▶' : s.report ? '✎' : '○',
       when: s.open ? 'open' : s.closed ? `closed ${relativeTime(s.closed)}` : 'closed',
-      tasks: s.tasks.map((t) => (t.status ? `${t.id} ${t.status}` : t.id)).join(', '),
+      title: s.summary?.title || s.tasks.map((t) => t.id).join(', '),
+      outcome: countsText(s.summary),
+      tone: unfinished(s.summary) ? 'warn' : s.summary?.done ? 'ok' : '',
     }))
 }

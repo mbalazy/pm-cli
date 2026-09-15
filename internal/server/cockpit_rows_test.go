@@ -21,7 +21,7 @@ func TestAttentionDismissAndSolo(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "2026-09-13-abc.md"), []byte("# solo abc\n## Status: closed "+closed+"\n## Queue\nt-1 · First · done\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "2026-09-13-abc-report.md"), []byte("# report abc\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "2026-09-13-abc-report.md"), []byte("# Raport: abc\n\n## 1. Co z taskami\n\n### t-1 First\n\n- Stan: **zrobione**. Działa.\n\n## TL;DR\n\nZrobione. Od Ciebie: wypchnij gałąź.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	srv := newServer(t, store, Options{})
@@ -43,7 +43,8 @@ func TestAttentionDismissAndSolo(t *testing.T) {
 	}
 	row := rows[0].(map[string]any)
 	acts := row["actions"].([]any)
-	if row["shift"] != "abc" || len(acts) != 2 || acts[0] != "open_report" || acts[1] != "dismiss" {
+	if row["shift"] != "abc" || len(acts) != 2 || acts[0] != "open_report" || acts[1] != "dismiss" ||
+		row["title"] != "abc" || row["reason"] != "1 done · Od Ciebie: wypchnij gałąź." {
 		t.Fatalf("row = %v", row)
 	}
 
@@ -69,8 +70,15 @@ func TestAttentionDismissAndSolo(t *testing.T) {
 		t.Fatalf("shifts = %v", shifts)
 	}
 	rep := getJSON(t, srv.URL+"/api/solo/test/abc/report", 200)
-	if rep["kind"] != "report" || !strings.Contains(rep["markdown"].(string), "# report abc") {
+	if rep["kind"] != "report" || !strings.Contains(rep["markdown"].(string), "# Raport: abc") {
 		t.Fatalf("report = %v", rep)
+	}
+	dg := rep["digest"].(map[string]any)
+	if tasks := dg["tasks"].([]any); len(tasks) != 1 || tasks[0].(map[string]any)["outcome"] != "done" || dg["next"] != "Od Ciebie: wypchnij gałąź." {
+		t.Fatalf("digest = %v", dg)
+	}
+	if sum := rep["shift"].(map[string]any)["summary"].(map[string]any); sum["done"].(float64) != 1 || sum["title"] != "abc" {
+		t.Fatalf("summary = %v", sum)
 	}
 	getJSON(t, srv.URL+"/api/solo/test/nosuch/report", 404)
 	getJSON(t, srv.URL+"/api/solo/test/..%2F..%2Fconfig/report", 404)
