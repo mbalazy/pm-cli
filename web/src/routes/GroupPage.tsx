@@ -114,7 +114,7 @@ export function GroupPage({ group, tab, repo }: Props) {
   const board = activeRepo(members, repo)
   const leftOff = members.map((project, i) => ({
     project,
-    view: leftOffView(project, timelines[i]?.data),
+    view: leftOffView(project, timelines[i]?.data, timelines[i]?.isPending ?? false),
   }))
 
   return (

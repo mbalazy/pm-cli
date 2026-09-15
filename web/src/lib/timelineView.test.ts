@@ -45,6 +45,15 @@ describe('leftOffView', () => {
     expect(leftOffView(project(), undefined)).toEqual({ kind: 'notes', notes: '' })
   })
 
+  it('waits for a read in flight instead of showing the notes', () => {
+    expect(leftOffView(project('old notes'), undefined, true)).toEqual({ kind: 'loading' })
+    // A failed read is not loading: the notes stay.
+    expect(leftOffView(project('old notes'), undefined, false)).toEqual({
+      kind: 'notes',
+      notes: 'old notes',
+    })
+  })
+
   it('shows the state and the entries after it, oldest first, instead of the notes', () => {
     const v = leftOffView(
       project('old notes'),

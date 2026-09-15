@@ -86,6 +86,8 @@ export function LeftOff({ rows, onEdit }: Props) {
                 )}
                 {view.stale && <p className="text-xs text-warn">{view.stale}</p>}
               </div>
+            ) : view.kind === 'loading' ? (
+              <p className="text-ink-3">loading…</p>
             ) : view.notes ? (
               <div className="markdown border-l-2 border-rule-strong pl-3">
                 <Markdown remarkPlugins={[remarkGfm]}>{view.notes}</Markdown>

@@ -33,6 +33,7 @@ export type LeftOffView =
       stale: string
     }
   | { kind: 'notes'; notes: string }
+  | { kind: 'loading' }
 
 const URL_REF = /^https?:\/\//
 
@@ -72,12 +73,17 @@ export function entriesHeading(read: TimelineRead): string {
 }
 
 /**
- * What a repo shows: its timeline when it has one, else its notes. No read
- * (still loading, or the request failed) and an empty timeline both fall
- * back to the notes, so the section is never blank for a repo that has not
- * started a timeline.
+ * What a repo shows: its timeline when it has one, else its notes. A failed
+ * read and an empty timeline both fall back to the notes, so the section is
+ * never blank for a repo that has not started a timeline; a read still in
+ * flight waits, rather than flashing notes a timeline is about to replace.
  */
-export function leftOffView(project: Project, read: TimelineRead | undefined): LeftOffView {
+export function leftOffView(
+  project: Project,
+  read: TimelineRead | undefined,
+  loading = false,
+): LeftOffView {
+  if (read === undefined && loading) return { kind: 'loading' }
   if (read === undefined || read.total === 0) return { kind: 'notes', notes: project.notes ?? '' }
   return {
     kind: 'timeline',
