@@ -129,6 +129,9 @@ func TimelineDefaultRead(store storage.TaskStore, project string) (*TimelineRead
 // kind or limit is given, else the matching entries newest first
 // (*TimelineEntriesResult) under the limit budget.
 func TimelineList(store storage.TaskStore, in TimelineListInput) (any, error) {
+	// Trimmed like TimelineAdd trims it, so a kind accepted on write is
+	// never refused on read.
+	in.Kind = strings.TrimSpace(in.Kind)
 	if in.Since == "" && in.Kind == "" && in.Limit == 0 {
 		return TimelineDefaultRead(store, in.Project)
 	}

@@ -73,6 +73,16 @@ func TestTimelineListService(t *testing.T) {
 		t.Fatalf("limit -1: %#v", got)
 	}
 
+	// The kind is trimmed on read as on write.
+	seedServiceTimeline(t, store, storage.TimelineState, "S", 0, 0)
+	got, err = TimelineList(store, TimelineListInput{Project: "test", Kind: " state "})
+	if err != nil {
+		t.Fatalf("padded kind: %v", err)
+	}
+	if r, ok := got.(*TimelineEntriesResult); !ok || r.Total != 1 || r.Entries[0].Text != "S" {
+		t.Fatalf("padded kind: %#v", got)
+	}
+
 	if _, err := TimelineDefaultRead(store, "nope"); !errors.Is(err, storage.ErrProjectNotFound) {
 		t.Fatalf("unknown project: %v", err)
 	}
