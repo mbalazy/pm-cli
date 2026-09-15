@@ -369,6 +369,9 @@ export interface Review {
   /** The ✅ on the Slack message after the approve. */
   slack_reacted?: string
   slack_react_error?: string
+  /** The 👀 on the Slack message when the review started. */
+  slack_seen?: string
+  slack_seen_error?: string
 }
 
 /** GET /api/reviews */

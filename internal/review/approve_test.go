@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +40,9 @@ func TestApprove(t *testing.T) {
 		return nil
 	}
 	c.ReactSlack = func(_ context.Context, l SlackLink, emoji string) error {
+		if emoji == StartEmoji {
+			return nil // the start's 👀, from its own goroutine - TestStartReactsEyes
+		}
 		if reactErr != nil {
 			return reactErr
 		}
@@ -123,4 +127,81 @@ func TestApprove(t *testing.T) {
 			t.Fatalf("got = %+v err = %v reacted %v", got, err, reacted)
 		}
 	})
+}
+
+func TestStartReactsEyes(t *testing.T) {
+	c, _, _ := setup(t)
+	n := 0
+	c.Now = func() time.Time { n++; return time.Date(2026, 9, 15, 9, 0, n, 0, time.Local) } // distinct ids
+	calls := make(chan string, 4)
+	var mu sync.Mutex
+	var reactErr error
+	c.ReactSlack = func(_ context.Context, l SlackLink, emoji string) error {
+		calls <- l.Server + " " + l.Channel + " " + l.TS + " " + emoji
+		mu.Lock()
+		defer mu.Unlock()
+		return reactErr
+	}
+	c.ReadSlack = func(context.Context, SlackLink) (string, string, error) {
+		return "anna: https://github.com/org/app/pull/7", "slack-orbit", nil
+	}
+	const link = "https://example.slack.com/archives/C1/p1694012345123456"
+	nextCall := func() string {
+		t.Helper()
+		select {
+		case got := <-calls:
+			return got
+		case <-time.After(10 * time.Second):
+			t.Fatal("no reaction")
+			return ""
+		}
+	}
+	waitSeen := func(id string) *Review {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+			r, err := c.Get(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.SlackSeen != "" || r.SlackSeenError != "" || time.Now().After(deadline) {
+				return r
+			}
+		}
+	}
+
+	r, err := c.Start(bg, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := nextCall(); got != "slack-orbit C1 1694012345.123456 eyes" {
+		t.Fatalf("reaction = %q", got)
+	}
+	if seen := waitSeen(r.ID); seen.SlackSeen == "" || seen.SlackSeenError != "" {
+		t.Fatalf("seen = %+v", seen)
+	}
+	waitState(t, c, r.ID, StateDone)
+
+	mu.Lock()
+	reactErr = errors.New("reactions_add: not_in_channel")
+	mu.Unlock()
+	r2, err := c.Start(bg, link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextCall()
+	if seen := waitSeen(r2.ID); seen.SlackSeen != "" || !strings.Contains(seen.SlackSeenError, "not_in_channel") || seen.State == StateError {
+		t.Fatalf("a failed 👀 must not fail the review: %+v", seen)
+	}
+	waitState(t, c, r2.ID, StateDone)
+
+	r3, err := c.Start(bg, "https://github.com/org/app/pull/7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, c, r3.ID, StateDone)
+	select {
+	case got := <-calls:
+		t.Fatalf("a PR URL input reacted: %s", got)
+	default:
+	}
 }

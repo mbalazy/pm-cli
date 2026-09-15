@@ -59,6 +59,9 @@ func setup(t *testing.T) (*Controller, string, string) {
 		ReadSlack: func(context.Context, SlackLink) (string, string, error) {
 			return "", "", fmt.Errorf("no slack in tests")
 		},
+		ReactSlack: func(context.Context, SlackLink, string) error {
+			return fmt.Errorf("no slack in tests")
+		},
 		ViewPR: func(_ context.Context, _ *storage.Project, pr PR) (string, error) {
 			return fmt.Sprintf("PR %d", pr.Number), nil
 		},

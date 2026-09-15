@@ -141,6 +141,10 @@ type Review struct {
 	ApproveError    string `json:"approve_error,omitempty"`
 	SlackReacted    string `json:"slack_reacted,omitempty"`
 	SlackReactError string `json:"slack_react_error,omitempty"`
+	// SlackSeen is when the 👀 went on the Slack message as the review
+	// started; SlackSeenError the failed attempt.
+	SlackSeen      string `json:"slack_seen,omitempty"`
+	SlackSeenError string `json:"slack_seen_error,omitempty"`
 }
 
 // Controller starts and reads reviews under <pm-root>/.cockpit/reviews.
@@ -304,6 +308,9 @@ func (c *Controller) Start(ctx context.Context, input string) (*Review, error) {
 		return nil, err
 	}
 	started = true
+	if r.Slack != nil {
+		go c.reactStarted(*r.Slack, id)
+	}
 	timeout := c.Timeout
 	if timeout == 0 {
 		timeout = Timeout
