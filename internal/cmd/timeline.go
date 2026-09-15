@@ -112,7 +112,9 @@ func newTimelineAddCmd(store storage.TaskStore) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&e.Kind, "kind", "", "event, decision or state (required)")
 	cmd.Flags().StringVar(&e.Text, "text", "", "the entry text; \"-\" reads it from stdin (required)")
-	cmd.Flags().StringSliceVar(&e.Refs, "ref", nil, "a reference - task id, path or URL (repeatable)")
+	// An array, not a slice flag: a slice flag splits on commas, and a URL
+	// with a comma in its query is still one reference.
+	cmd.Flags().StringArrayVar(&e.Refs, "ref", nil, "a reference - task id, path or URL, stored verbatim (repeatable)")
 	cmd.Flags().StringVar(&e.Session, "session", "", "Claude session id (default: detected when run inside Claude Code)")
 	cmd.Flags().StringVar(&date, "date", "", "back-date the entry (YYYY-MM-DD) when seeding history")
 	return cmd

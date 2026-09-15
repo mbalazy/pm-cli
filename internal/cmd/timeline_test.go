@@ -142,6 +142,19 @@ func TestTimelineAddCLI(t *testing.T) {
 		}
 	})
 
+	t.Run("refs stored verbatim", func(t *testing.T) {
+		store, slug := timelineStore(t)
+		mustTimeline(t, store, "add", "-p", slug, "--kind", "event", "--text", "x",
+			"--ref", "https://x.test/a?ids=1,2", "--ref", `say "hi"`)
+		entries, err := storage.ReadTimeline(store.ProjectDir(slug))
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("entries = %+v, err %v", entries, err)
+		}
+		if refs := entries[0].Refs; len(refs) != 2 || refs[0] != "https://x.test/a?ids=1,2" || refs[1] != `say "hi"` {
+			t.Fatalf("refs = %q", refs)
+		}
+	})
+
 	t.Run("rejected without writing", func(t *testing.T) {
 		store, slug := timelineStore(t)
 		for _, args := range [][]string{
