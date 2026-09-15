@@ -148,6 +148,7 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux.HandleFunc("GET /api/tasks", h.tasks)
 	mux.HandleFunc("GET /api/tasks/{project}/{id}", h.task)
 	mux.HandleFunc("GET /api/context", h.context)
+	mux.HandleFunc("GET /api/timeline/{project}", h.timeline)
 	mux.HandleFunc("GET /api/runs", h.runRows)
 	mux.HandleFunc("GET /api/runs/{project}/{id}/plan", h.runPlan)
 	mux.HandleFunc("GET /api/focus", h.focus)
@@ -370,6 +371,14 @@ func (h *handler) task(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) context(w http.ResponseWriter, r *http.Request) {
 	res, err := service.Context(h.store, service.ContextInput{Project: r.URL.Query().Get("project")})
+	writeResult(w, res, err)
+}
+
+// timeline is the project timeline's default read - the latest state and
+// every entry after it - in the shape pm_timeline_list answers with no
+// filters. Read-only: entries are written over MCP and the CLI.
+func (h *handler) timeline(w http.ResponseWriter, r *http.Request) {
+	res, err := service.TimelineDefaultRead(h.store, r.PathValue("project"))
 	writeResult(w, res, err)
 }
 

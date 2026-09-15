@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/mbalazy/pm/internal/storage"
 )
 
 // The SSE feed says WHAT CHANGED, never what it changed to: `event: tasks`
@@ -102,8 +104,12 @@ func (h *handler) snapshots() map[string]snapshot {
 	for _, slug := range slugs {
 		dir := h.store.ProjectDir(slug)
 		out[slug] = snapshot{
+			// A timeline entry is a tasks change too: the clients that read
+			// the project's tasks are the ones showing where it stands.
 			tasks: dirShape(dir, func(name string) bool {
 				return strings.HasSuffix(name, ".md") || name == "project.yaml"
+			}) + "|" + dirShape(storage.TimelineDir(dir), func(name string) bool {
+				return strings.HasSuffix(name, ".jsonl")
 			}),
 			runs: dirShape(filepath.Join(dir, ".executor"), func(name string) bool {
 				// Run-states, acceptance states and claims all live here;
