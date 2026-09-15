@@ -1391,20 +1391,19 @@ describe('review approve', () => {
     report: '### Code review - PR #7\n\nNo issues found.',
   }
 
-  it('asks once, then posts the approve', async () => {
+  it('one click posts the approve, no confirmation step', async () => {
     vi.stubGlobal('fetch', fakeFetch({ ...api, '/api/reviews/org-app-7-1': done }))
     const user = userEvent.setup()
     renderAt('/review/org-app-7-1')
-    await user.click(await screen.findByRole('button', { name: 'approve on GitHub' }))
-    expect(posts).toHaveLength(0)
-    expect(
-      screen.getByText(
-        'Approve org/app#7 on GitHub and react ✅ on the Slack message? Only an approve, no comment.',
-      ),
-    ).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'yes, approve' }))
+    const button = await screen.findByRole('button', { name: 'approve on GitHub' })
+    expect(button).toHaveAttribute(
+      'title',
+      'Approve org/app#7 on GitHub and react ✅ on the Slack message? Only an approve, no comment.',
+    )
+    await user.click(button)
     await vi.waitFor(() => expect(posts).toHaveLength(1))
     expect(posts[0].path).toBe('/api/reviews/org-app-7-1/approve')
+    expect(screen.queryByRole('button', { name: 'yes, approve' })).toBeNull()
   })
 
   it('an approved review says so and offers no approve', async () => {

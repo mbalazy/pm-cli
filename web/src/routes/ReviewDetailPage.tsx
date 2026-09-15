@@ -1,6 +1,5 @@
 import { Link } from '@tanstack/react-router'
 import { Check, Square } from 'lucide-react'
-import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -9,23 +8,23 @@ import { useReview } from '../api/queries'
 import { approveView, reviewRow, slackSeenLine } from '../lib/reviewView'
 
 // One PR code review: the state while it runs (with cancel), the error when
-// it failed, the report's markdown when it is done - and the approve: one
-// click asks, the second approves on GitHub (and reacts ✅ on the Slack
-// message the request came from).
+// it failed, the report's markdown when it is done - and the approve: ONE
+// click approves on GitHub (and reacts ✅ on the Slack message the request
+// came from). No confirmation step, the user's call: the button only exists
+// on a finished review, and its label says "approve anyway" with a warning
+// when the report found issues.
 
 export function ReviewDetailPage({ id }: { id: string }) {
   const review = useReview(id)
   const cancel = useRowMutation()
   const approve = useRowMutation()
-  const [confirming, setConfirming] = useState(false)
 
   if (review.isPending) return <p className="text-ink-3">loading…</p>
   if (review.isError) return <p className="text-crit">error: {review.error.message}</p>
   const r = review.data
   const row = reviewRow(r)
   const av = approveView(r)
-  const runApprove = () =>
-    approve.mutate({ kind: 'review_approve', id: r.id }, { onSettled: () => setConfirming(false) })
+  const runApprove = () => approve.mutate({ kind: 'review_approve', id: r.id })
 
   return (
     <div className="space-y-5">
@@ -73,29 +72,19 @@ export function ReviewDetailPage({ id }: { id: string }) {
               {line}
             </p>
           ))}
-          {av.offer && !confirming && (
-            <button type="button" className="ghost-btn" onClick={() => setConfirming(true)}>
+          {av.offer && (
+            <button
+              type="button"
+              className="ghost-btn"
+              title={av.question}
+              disabled={approve.isPending}
+              onClick={runApprove}
+            >
               <Check aria-hidden="true" className="size-3" strokeWidth={1.75} />
-              {av.label}
+              {approve.isPending ? 'approving…' : av.label}
             </button>
           )}
           {av.offer && av.warning && <p className="text-xs text-warn">{av.warning}</p>}
-          {av.offer && confirming && (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm">{av.question}</span>
-              <button
-                type="button"
-                className="ghost-btn"
-                disabled={approve.isPending}
-                onClick={runApprove}
-              >
-                {approve.isPending ? 'approving…' : 'yes, approve'}
-              </button>
-              <button type="button" className="ghost-btn" onClick={() => setConfirming(false)}>
-                cancel
-              </button>
-            </div>
-          )}
           {av.retryReaction && (
             <button
               type="button"
