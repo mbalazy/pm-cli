@@ -409,3 +409,30 @@ func TestStartFailures(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// The default config dir is NEVER put on the environment: an explicit
+// CLAUDE_CONFIG_DIR=~/.claude keys the keychain login differently and claude
+// answers "Not logged in" (the first cockpit launch, 2026-09-15).
+func TestPinConfigDir(t *testing.T) {
+	home, _ := os.UserHomeDir()
+	def := filepath.Join(home, ".claude")
+	if PinConfigDir(def) || PinConfigDir(def+"/") || PinConfigDir("") {
+		t.Fatal("the default dir must not be pinned")
+	}
+	if !PinConfigDir(filepath.Join(home, ".claude-alt")) {
+		t.Fatal("a non-default dir must be pinned")
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", "/tmp/leaked-from-pm-serve")
+	for _, kv := range Environ(def) {
+		if strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {
+			t.Fatalf("default dir on the environment: %s", kv)
+		}
+	}
+	var pinned bool
+	for _, kv := range Environ("/tmp/cfg-company") {
+		pinned = pinned || kv == "CLAUDE_CONFIG_DIR=/tmp/cfg-company"
+	}
+	if !pinned {
+		t.Fatal("non-default dir missing from the environment")
+	}
+}

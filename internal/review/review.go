@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/mbalazy/pm/internal/report"
+	"github.com/mbalazy/pm/internal/solo"
 	"github.com/mbalazy/pm/internal/storage"
 )
 
@@ -252,8 +253,14 @@ func (c *Controller) Start(ctx context.Context, input string) (*Review, error) {
 		return nil, err
 	}
 
+	// The config dir goes on the environment only when it is not the default:
+	// claude keys its keychain login by the dir CLAUDE_CONFIG_DIR names, so an
+	// explicit ~/.claude reads as a separate, never-logged-in profile
+	// (solo.PinConfigDir - the executor's workerEnv rule).
 	env := withoutKey(report.Environ(), "CLAUDE_CONFIG_DIR")
-	env = append(env, "CLAUDE_CONFIG_DIR="+r.ConfigDir)
+	if solo.PinConfigDir(r.ConfigDir) {
+		env = append(env, "CLAUDE_CONFIG_DIR="+r.ConfigDir)
+	}
 	if proj.GHAccount != "" {
 		// pm serve never loads a repo's direnv token: the project's gh account
 		// goes on the environment, never argv (the feed's rule).

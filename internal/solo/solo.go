@@ -458,13 +458,27 @@ func gitWarnings(cwd, base, defaultBase string) []string {
 	return out
 }
 
+// PinConfigDir says whether a launch must carry CLAUDE_CONFIG_DIR=<dir>: only
+// for a NON-default dir. Setting the variable to the default ~/.claude is not
+// a no-op: claude keys its keychain login by the config dir the variable
+// names, so an explicit default reads as a separate, never-logged-in
+// profile ("Not logged in · Please run /login") - the executor's workerEnv
+// rule, learnt again on the first cockpit solo launch (2026-09-15).
+func PinConfigDir(configDir string) bool {
+	if configDir == "" {
+		return false
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Clean(configDir) != filepath.Join(home, ".claude")
+}
+
 // Environ is the session's environment: pm serve's own, minus the API key
 // (the subscription pays), minus every Claude Code marker of the session pm
 // serve itself may have been started from (CLAUDE_CODE_SESSION_ID is what
 // `pm session-id` reads first - the shift id and the guard marker hang on
-// it), plus the project's config dir and the launch source. Never
-// PM_HEADLESS: a solo session drives the runtime, and project hooks read
-// that variable as "no simulator".
+// it), plus the project's config dir when it is not the default
+// (PinConfigDir) and the launch source. Never PM_HEADLESS: a solo session
+// drives the runtime, and project hooks read that variable as "no simulator".
 func Environ(configDir string) []string {
 	src := os.Environ()
 	out := make([]string, 0, len(src)+2)
@@ -478,7 +492,10 @@ func Environ(configDir string) []string {
 		}
 		out = append(out, kv)
 	}
-	return append(out, "CLAUDE_CONFIG_DIR="+configDir, storage.LaunchSourceEnv+"="+LaunchSource)
+	if PinConfigDir(configDir) {
+		out = append(out, "CLAUDE_CONFIG_DIR="+configDir)
+	}
+	return append(out, storage.LaunchSourceEnv+"="+LaunchSource)
 }
 
 // backgroundedLine is what `claude --bg` prints: "backgrounded · 7c5dcf5d · name".
@@ -653,7 +670,7 @@ func (c *Controller) load(id string) (*Launch, error) {
 // derive fills the live part of a launch from the supervisor's row.
 func (c *Controller) derive(l *Launch) {
 	prefix := ""
-	if l.ConfigDir != "" && l.ConfigDir != storage.DefaultClaudeConfigDir() {
+	if PinConfigDir(l.ConfigDir) {
 		prefix = "CLAUDE_CONFIG_DIR=" + l.ConfigDir + " "
 	}
 	l.Attach = prefix + "claude attach " + l.ID
