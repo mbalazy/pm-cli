@@ -178,7 +178,10 @@ type ProjectContextResult struct {
 	JournalsNote    string                 `json:"journals_note,omitempty"`
 	Project         ProjectMeta            `json:"project"`
 	TaskCounts      map[string]int         `json:"task_counts"`
-	Trackers        []storage.Tracker      `json:"trackers,omitempty"`
+	// Timeline is the project timeline's default read under a budget; absent
+	// when the project has no timeline entries.
+	Timeline *TimelineContext  `json:"timeline,omitempty"`
+	Trackers []storage.Tracker `json:"trackers,omitempty"`
 }
 
 // ProjectSummary is one project's row in the cross-project Context.
@@ -189,6 +192,9 @@ type ProjectSummary struct {
 	TaskCounts map[string]int    `json:"task_counts"`
 	DoingTasks []TaskSummary     `json:"doing_tasks,omitempty"`
 	Trackers   []storage.Tracker `json:"trackers,omitempty"`
+	// TimelineState is "<date>: <first line>" of the latest timeline state
+	// ("(stale)" appended when due); absent when the project has no state.
+	TimelineState string `json:"timeline_state,omitempty"`
 }
 
 // CrossProjectContextResult is the cross-project Context shape. Field order

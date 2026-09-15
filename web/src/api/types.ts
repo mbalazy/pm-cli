@@ -79,6 +79,34 @@ export interface JournalCount {
   open: number
 }
 
+/** storage.TimelineEntry - one line of a project's timeline. */
+export interface TimelineEntry {
+  id: string
+  ts: string
+  /** event | decision | state */
+  kind: string
+  text: string
+  /** Task ids, paths, URLs - free text, never validated. */
+  refs?: string[]
+  session?: string
+}
+
+/** service.TimelineReadResult - /api/timeline/{project}: the latest state and every entry after it. */
+export interface TimelineRead {
+  project: string
+  /** The latest state; null when the project has none yet. */
+  state: TimelineEntry | null
+  /** Oldest first. With no state: the newest few entries. */
+  since: TimelineEntry[]
+  /** Time to write a new state (enough entries or days after this one). */
+  stale: boolean
+  entries_since: number
+  days_since: number
+  /** Every entry of the timeline, states included; 0 = no timeline. */
+  total: number
+  note?: string
+}
+
 /** service.ProjectMeta */
 export interface ProjectMeta {
   slug: string

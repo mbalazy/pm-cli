@@ -36,6 +36,8 @@ export function useLiveInvalidation(url = '/api/events') {
       // ['task', slug] is a prefix of every ['task', slug, id].
       void client.invalidateQueries({ queryKey: ['task', slug] })
       void client.invalidateQueries({ queryKey: keys.context(slug) })
+      // A timeline entry is a tasks event too (the server's fingerprint).
+      void client.invalidateQueries({ queryKey: keys.timeline(slug) })
       // The sidebar counts live here and move with every task edit; the
       // groups move with a project.yaml edit, which the same event covers.
       void client.invalidateQueries({ queryKey: keys.projects() })

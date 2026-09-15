@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mbalazy/pm/internal/storage"
 )
@@ -109,6 +110,11 @@ func ProjectContext(store storage.TaskStore, slug string) (*ProjectContextResult
 		result.JournalsNote = "subsystems this project keeps a running incident record for. Call pm_journal_list with the name BEFORE touching one of them; record what bit you with pm_journal_add."
 	}
 
+	// The timeline's default read, unlike the journal's counts: its reader is
+	// every session that starts on the project, and the delta after a state
+	// stays small because the stale signal asks for a new state at 10 entries.
+	result.Timeline = contextTimeline(store.ProjectDir(slug), time.Now())
+
 	result.FocusTasks = FocusTaskSummaries(store)
 	result.Attention, result.AttentionNote = contextAttention(store, AttentionInput{Project: slug})
 	return result, nil
@@ -158,6 +164,7 @@ func CrossProjectContext(store storage.TaskStore, note string) (*CrossProjectCon
 		sort.Slice(ps.DoingTasks, func(i, j int) bool {
 			return ps.DoingTasks[i].Updated > ps.DoingTasks[j].Updated
 		})
+		ps.TimelineState = timelineStatePointer(store.ProjectDir(slug), time.Now())
 		result = append(result, ps)
 	}
 

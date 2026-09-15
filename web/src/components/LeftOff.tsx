@@ -3,30 +3,38 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import type { Project } from '../api/types'
+import type { LeftOffView } from '../lib/timelineView'
 import { SectionHead } from './SectionHead'
 
-// "Where we left off": the notes of every member repo (v1 = hand-written; a
-// generated evening brief is a later epic). One block per repo that has
-// notes, an "add" button for one that has none; the edit ASKS - the page
-// opens the confirmation dialog.
+// "Where we left off": one block per member repo. A repo with a timeline
+// shows its latest state, the entries after it and the stale line; a repo
+// without one shows its hand-written notes with the edit action, which ASKS -
+// the page opens the confirmation dialog. What each repo shows is decided in
+// lib/timelineView.
+
+export interface LeftOffRow {
+  project: Project
+  view: LeftOffView
+}
 
 interface Props {
-  members: Project[]
+  rows: LeftOffRow[]
   onEdit?: (project: Project) => void
 }
 
-export function LeftOff({ members, onEdit }: Props) {
+export function LeftOff({ rows, onEdit }: Props) {
   return (
     <section aria-label="Where we left off">
       <SectionHead
         title="Where we left off"
-        why="v1: project notes, written by hand · later: a brief written at the end of the day"
+        why="each repo's latest timeline state and what happened since · notes where a repo keeps no timeline"
       />
       <ul className="space-y-4">
-        {members.map((m) => (
-          <li key={m.slug} className="text-sm">
+        {rows.map(({ project: m, view }) => (
+          <li key={m.slug} aria-label={m.slug} className="text-sm">
             <div className="mb-1 flex items-center gap-2">
-              {members.length > 1 && <span className="chip">{m.slug}</span>}
+              {rows.length > 1 && <span className="chip">{m.slug}</span>}
+              {/* Kept beside a timeline too: this is the one place notes are edited from the web. */}
               {onEdit && (
                 <button type="button" className="ghost-btn" onClick={() => onEdit(m)}>
                   <PenLine aria-hidden="true" className="size-3" strokeWidth={1.75} />
@@ -34,9 +42,55 @@ export function LeftOff({ members, onEdit }: Props) {
                 </button>
               )}
             </div>
-            {m.notes ? (
+            {view.kind === 'timeline' ? (
+              <div className="space-y-2">
+                {view.state && (
+                  <div className="border-l-2 border-rule-strong pl-3">
+                    <p className="text-xs text-ink-3">
+                      state · <span className="num">{view.state.date}</span>
+                    </p>
+                    <div className="markdown">
+                      <Markdown remarkPlugins={[remarkGfm]}>{view.state.text}</Markdown>
+                    </div>
+                  </div>
+                )}
+                <p className="text-xs text-ink-3 italic">{view.heading}</p>
+                {view.entries.length > 0 && (
+                  <ol aria-label={`${m.slug} timeline entries`} className="space-y-1">
+                    {/* Ids and refs can repeat (the same entry written twice), so keys carry the position. */}
+                    {view.entries.map((e, i) => (
+                      <li key={`${i}-${e.id}`} className="flex flex-wrap items-baseline gap-x-2">
+                        <span className="num text-xs text-ink-3">{e.date}</span>
+                        <span className="text-xs text-ink-2">{e.kind}</span>
+                        <span className="whitespace-pre-line">{e.text}</span>
+                        {e.refs.map((r, j) =>
+                          r.href ? (
+                            <a
+                              key={`${j}-${r.label}`}
+                              href={r.href}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs underline"
+                            >
+                              {r.label}
+                            </a>
+                          ) : (
+                            <span key={`${j}-${r.label}`} className="id text-xs text-ink-3">
+                              {r.label}
+                            </span>
+                          ),
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                )}
+                {view.stale && <p className="text-xs text-warn">{view.stale}</p>}
+              </div>
+            ) : view.kind === 'loading' ? (
+              <p className="text-ink-3">loading…</p>
+            ) : view.notes ? (
               <div className="markdown border-l-2 border-rule-strong pl-3">
-                <Markdown remarkPlugins={[remarkGfm]}>{m.notes}</Markdown>
+                <Markdown remarkPlugins={[remarkGfm]}>{view.notes}</Markdown>
               </div>
             ) : (
               <p className="text-ink-3 italic">no notes yet</p>

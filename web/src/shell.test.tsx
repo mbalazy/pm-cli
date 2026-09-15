@@ -403,8 +403,52 @@ const reportDone = {
   },
 }
 
+// acme-zap keeps a timeline (a stale state + two entries after it); acme-api keeps
+// none, so the group page falls back to its notes.
+// Local noon, so the dates the page shows do not depend on the test machine's zone.
+const localNoon = (day: number) => new Date(2026, 8, day, 12, 0).toISOString()
+const timelineEntry = (id: string, ts: string, kind: string, text: string, refs?: string[]) => ({
+  id,
+  ts,
+  kind,
+  text,
+  ...(refs ? { refs } : {}),
+})
+const acme-zapTimeline = {
+  project: 'acme-zap',
+  state: timelineEntry(
+    '2026-09-15-aa01',
+    localNoon(15),
+    'state',
+    'Stan 15.09: the zap runs on the new webhook',
+  ),
+  since: [
+    timelineEntry('2026-09-16-bb02', localNoon(16), 'decision', 'keep the old webhook for a week'),
+    timelineEntry('2026-09-17-cc03', localNoon(17), 'event', 'the client confirmed', [
+      'https://example.com/thread',
+    ]),
+  ],
+  stale: true,
+  entries_since: 2,
+  days_since: 9,
+  total: 3,
+  note: 'stale: 2 entries and 9 days since the state - time to write a new state',
+}
+const emptyTimeline = (project: string) => ({
+  project,
+  state: null,
+  since: [],
+  stale: false,
+  entries_since: 0,
+  days_since: 0,
+  total: 0,
+  note: 'no timeline entries yet',
+})
+
 const api = {
   '/api/focus': focusPlan,
+  '/api/timeline/acme-zap': acme-zapTimeline,
+  '/api/timeline/acme-api': emptyTimeline('acme-api'),
   '/api/projects': projects,
   '/api/tasks': tasks,
   '/api/tasks/alpha/alpha-1': detail,
@@ -863,9 +907,34 @@ describe('group page', () => {
     expect(within(tabs).getByRole('tab', { selected: true })).toHaveTextContent('overview')
 
     const left = screen.getByRole('region', { name: 'Where we left off' })
-    expect(within(left).getByText('ACME-60 in two repos')).toBeInTheDocument()
-    expect(within(left).getByRole('button', { name: 'add notes' })).toBeInTheDocument()
-    expect(within(left).getByRole('button', { name: 'edit notes' })).toBeInTheDocument()
+    // acme-zap keeps a timeline: the state with its date, the entries after it
+    // in order with kind and date, the stale line.
+    const acme-zap = within(left).getByRole('listitem', { name: 'acme-zap' })
+    expect(
+      await within(acme-zap).findByText('Stan 15.09: the zap runs on the new webhook'),
+    ).toBeInTheDocument()
+    expect(acme-zap).toHaveTextContent('state · 2026-09-15')
+    const entries = within(
+      within(acme-zap).getByRole('list', { name: 'acme-zap timeline entries' }),
+    ).getAllByRole('listitem')
+    expect(entries).toHaveLength(2)
+    expect(entries[0]).toHaveTextContent('2026-09-16decisionkeep the old webhook for a week')
+    expect(entries[1]).toHaveTextContent('2026-09-17eventthe client confirmed')
+    expect(
+      within(entries[1]).getByRole('link', { name: 'https://example.com/thread' }),
+    ).toHaveAttribute('href', 'https://example.com/thread')
+    // The notes box gives way to the timeline; the notes action stays.
+    expect(within(acme-zap).queryByText('no notes yet')).toBeNull()
+    expect(within(acme-zap).getByRole('button', { name: 'add notes' })).toBeInTheDocument()
+    // acme-api has an empty timeline: its notes and the edit action, as before.
+    const acme-api = within(left).getByRole('listitem', { name: 'acme-api' })
+    expect(within(acme-api).getByText('ACME-60 in two repos')).toBeInTheDocument()
+    expect(within(acme-api).getByRole('button', { name: 'edit notes' })).toBeInTheDocument()
+    // The stale line is acme-zap's alone.
+    expect(within(left).getAllByText(/time to write a new one/)).toHaveLength(1)
+    expect(acme-zap).toHaveTextContent(
+      'this state is 9 days old with 2 entries after it - time to write a new one',
+    )
 
     // The queue, narrowed to acme by the API (?group=acme route).
     const waiting = screen.getByRole('region', { name: 'Waiting on' })

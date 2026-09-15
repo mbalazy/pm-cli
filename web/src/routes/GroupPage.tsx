@@ -6,6 +6,7 @@ import { cn } from '@/components/ui/cn'
 import {
   contextQuery,
   tasksQuery,
+  timelineQuery,
   useAttention,
   useChanges,
   useConfig,
@@ -38,6 +39,7 @@ import {
   type GroupTab,
 } from '../lib/groupView'
 import { relativeTime } from '../lib/relativeTime'
+import { leftOffView } from '../lib/timelineView'
 import { BoardPane } from './BoardPane'
 import { RunsPage } from './RunsPage'
 
@@ -66,6 +68,7 @@ export function GroupPage({ group, tab, repo }: Props) {
   const slugs = members.map((m) => m.slug)
   const taskLists = useQueries({ queries: slugs.map((s) => tasksQuery(s)) })
   const contexts = useQueries({ queries: slugs.map((s) => contextQuery(s)) })
+  const timelines = useQueries({ queries: slugs.map((s) => timelineQuery(s)) })
 
   const go = (t: GroupTab) =>
     void navigate({ to: '/g/$group', params: { group }, search: { tab: t, repo } })
@@ -109,6 +112,10 @@ export function GroupPage({ group, tab, repo }: Props) {
     runs.data?.rows,
   )
   const board = activeRepo(members, repo)
+  const leftOff = members.map((project, i) => ({
+    project,
+    view: leftOffView(project, timelines[i]?.data, timelines[i]?.isPending ?? false),
+  }))
 
   return (
     <div className="space-y-6">
@@ -168,7 +175,7 @@ export function GroupPage({ group, tab, repo }: Props) {
 
       {tab === 'overview' && (
         <div className="space-y-8">
-          <LeftOff members={members} onEdit={editNotes} />
+          <LeftOff rows={leftOff} onEdit={editNotes} />
           {attention.isError && <p className="text-crit">error: {attention.error.message}</p>}
           <div className="grid gap-8 wide:grid-cols-2">
             {needsMe && (

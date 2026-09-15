@@ -32,6 +32,8 @@ func TestDocsClaudePrintsInstallableGuide(t *testing.T) {
 		"Spec / Log body zones",
 		"a merged PR closes the task, everything else the user closes",
 		"pm docs authoring",
+		"**Timeline** (`pm_timeline_list` / `pm_timeline_add`",
+		"never the state alone",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("pm docs claude output missing %q", want)

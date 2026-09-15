@@ -46,6 +46,7 @@ func NewRootCmd() *cobra.Command {
 		newConfigCmd(store),
 		newExecutorCmd(store),
 		newJournalCmd(store),
+		newTimelineCmd(store),
 		newMcpCmd(store),
 		newMigrateIDsCmd(store),
 		newSessionIDCmd(),
