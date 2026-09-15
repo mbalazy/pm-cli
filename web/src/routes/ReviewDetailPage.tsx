@@ -6,7 +6,7 @@ import remarkGfm from 'remark-gfm'
 
 import { useRowMutation } from '../api/mutations'
 import { useReview } from '../api/queries'
-import { approveView, reviewRow } from '../lib/reviewView'
+import { approveView, reviewRow, slackSeenLine } from '../lib/reviewView'
 
 // One PR code review: the state while it runs (with cancel), the error when
 // it failed, the report's markdown when it is done - and the approve: one
@@ -57,6 +57,7 @@ export function ReviewDetailPage({ id }: { id: string }) {
         </p>
         {r.title && <p className="display text-base">{r.title}</p>}
         {r.input && <p className="text-xs text-ink-3">asked as: {r.input}</p>}
+        {slackSeenLine(r) && <p className="text-xs text-ink-2">{slackSeenLine(r)}</p>}
         {r.commit && (
           <p className="text-xs text-ink-3">
             ran in a throwaway worktree at <span className="font-mono">{r.commit}</span> - your

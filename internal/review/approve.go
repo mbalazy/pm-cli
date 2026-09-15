@@ -22,8 +22,13 @@ import (
 // config. The outcome lives in files next to the review
 // (<id>.approved / .approve_error / .reacted / .react_error).
 
-// ApproveEmoji is the reaction added after an approve.
-const ApproveEmoji = "white_check_mark"
+// ApproveEmoji is the reaction added after an approve; StartEmoji (👀) the
+// one added when a review starts from a Slack link, so the person who asked
+// sees it is being looked at.
+const (
+	ApproveEmoji = "white_check_mark"
+	StartEmoji   = "eyes"
+)
 
 // SlackTimeout caps one Slack server start + call.
 const SlackTimeout = 90 * time.Second
@@ -79,6 +84,21 @@ func (c *Controller) applyApproval(r *Review) {
 	}
 	r.Approved, r.ApproveError = read(".approved"), read(".approve_error")
 	r.SlackReacted, r.SlackReactError = read(".reacted"), read(".react_error")
+	r.SlackSeen, r.SlackSeenError = read(".seen"), read(".seen_error")
+}
+
+// reactStarted puts 👀 on the Slack message a review was started from and
+// records the outcome (<id>.seen / .seen_error). It runs in the background
+// with its own context: starting the Slack server takes seconds, and the
+// request that started the review has already been answered. The stamp uses
+// time.Now, not c.now - the injected clock belongs to the caller's goroutine.
+func (c *Controller) reactStarted(link SlackLink, id string) {
+	err := c.reactSlack(context.Background(), link, StartEmoji)
+	if err != nil && !strings.Contains(err.Error(), "already_reacted") {
+		_ = os.WriteFile(c.path(id, ".seen_error"), []byte(err.Error()+"\n"), 0o644)
+		return
+	}
+	_ = os.WriteFile(c.path(id, ".seen"), []byte(time.Now().Format(time.RFC3339)+"\n"), 0o644)
 }
 
 func (c *Controller) approvePR(ctx context.Context, proj *storage.Project, pr PR) error {

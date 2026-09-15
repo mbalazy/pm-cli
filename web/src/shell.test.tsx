@@ -1563,6 +1563,39 @@ describe('solo report page', () => {
     ).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Your move' })).toBeNull()
   })
+
+  it('the Runs screen links the shift, its project and the executor rows; a row click opens the report', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fakeFetch({
+        ...api,
+        '/api/solo': { shifts: [shift] },
+        '/api/solo/alpha/abc/report': { shift, kind: 'report', markdown: '# whole', digest },
+      }),
+    )
+    const user = userEvent.setup()
+    renderAt('/runs')
+    const solo = await screen.findByRole('table', { name: 'Solo shifts' })
+    expect(within(solo).getByRole('link', { name: 'ACME-1, trzy ekrany' })).toHaveAttribute(
+      'href',
+      '/solo/alpha/abc',
+    )
+    expect(within(solo).getByRole('link', { name: 'alpha' })).toHaveAttribute('href', '/p/alpha')
+    expect(within(solo).getByText('2 done · 1 untouched')).toBeInTheDocument()
+    const runs = await screen.findByRole('table', { name: 'Runs' })
+    expect(within(runs).getByRole('link', { name: 'alpha-9' })).toHaveAttribute(
+      'href',
+      '/p/alpha/t/alpha-9',
+    )
+    expect(within(runs).getAllByRole('link', { name: 'alpha' })[0]).toHaveAttribute(
+      'href',
+      '/p/alpha',
+    )
+    await user.click(within(solo).getByText('2026-09-14'))
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'ACME-1, trzy ekrany' }),
+    ).toBeInTheDocument()
+  })
 })
 
 describe('home rows the API cannot open', () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Review } from '../api/types'
-import { approveView, durationText, parsePRUrl, reviewRow } from './reviewView'
+import { approveView, durationText, parsePRUrl, reviewRow, slackSeenLine } from './reviewView'
 
 const review = (over: Partial<Review>): Review => ({
   id: 'x',
@@ -71,5 +71,25 @@ describe('reviewView', () => {
     expect(approveView(review({ approve_error: 'own PR' }), now).status).toEqual([
       'approve failed: own PR',
     ])
+  })
+
+  it('slackSeenLine words the 👀 the start puts on the Slack message, in any state', () => {
+    const slack = {
+      workspace: 'atlas',
+      channel: 'C1',
+      ts: '1.2',
+      thread_ts: '1.2',
+      server: 'slack-orbit',
+    }
+    expect(slackSeenLine(review({ state: 'running', slack }))).toBe(
+      '👀 going on the Slack message…',
+    )
+    expect(
+      slackSeenLine(review({ state: 'running', slack, slack_seen: '2026-09-14T11:00:00Z' })),
+    ).toBe('👀 added on the Slack message')
+    expect(slackSeenLine(review({ slack, slack_seen_error: 'not_in_channel' }))).toBe(
+      'Slack 👀 failed: not_in_channel',
+    )
+    expect(slackSeenLine(review({ state: 'running' }))).toBe('')
   })
 })

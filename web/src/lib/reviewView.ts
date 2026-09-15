@@ -65,6 +65,14 @@ export function approveView(r: Review, now: Date = new Date()): ApproveView {
   }
 }
 
+/** The 👀 the start put on the Slack message (any state), '' for a non-Slack review. */
+export function slackSeenLine(r: Review): string {
+  if (r.slack_seen) return '👀 added on the Slack message'
+  if (r.slack_seen_error) return `Slack 👀 failed: ${r.slack_seen_error}`
+  if (r.slack && r.state === 'running') return '👀 going on the Slack message…'
+  return ''
+}
+
 export function reviewRow(r: Review, now: Date = new Date()): ReviewRow {
   const start = Date.parse(r.started)
   const end = r.state === 'running' || !r.finished ? now.getTime() : Date.parse(r.finished)
