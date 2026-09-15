@@ -123,7 +123,12 @@ func TestTimelineEntryIDStable(t *testing.T) {
 		t.Fatal("same inputs, different id")
 	}
 	if !strings.HasPrefix(a, "20260915-") {
-		t.Fatalf("id does not lead with the UTC day: %q", a)
+		t.Fatalf("id does not lead with the entry's day: %q", a)
+	}
+	// A back-dated entry at local midnight east of UTC is still the 1st in
+	// its id, not the 31st the UTC clock would say.
+	if b := timelineEntryID("2026-08-01T00:00:00+02:00", TimelineEvent, "x"); !strings.HasPrefix(b, "20260801-") {
+		t.Fatalf("id does not lead with the entry's own day: %q", b)
 	}
 	if a == timelineEntryID("2026-09-15T10:00:00+02:00", TimelineDecision, "x") {
 		t.Fatal("kind does not change the id")

@@ -87,12 +87,16 @@ func (e TimelineEntry) When() (time.Time, bool) {
 	return t, err == nil
 }
 
-// timelineEntryID derives a short, stable handle: the UTC day plus a hash of
-// the fields that make the entry what it is (the incidentID shape).
+// timelineEntryID derives a short, stable handle: the entry's own calendar day
+// plus a hash of the fields that make the entry what it is (the incidentID
+// shape). The day is taken in the ts's OWN offset, not UTC: a back-dated
+// entry for the 1st written at +02:00 would otherwise carry the 31st in its
+// id while every listing prints the 1st, and in a timeline the date is the
+// point.
 func timelineEntryID(ts, kind, text string) string {
 	day := "undated"
 	if t, err := time.Parse(time.RFC3339, ts); err == nil {
-		day = t.UTC().Format("20060102")
+		day = t.Format("20060102")
 	}
 	sum := sha256.Sum256([]byte(ts + "\x00" + kind + "\x00" + text))
 	return fmt.Sprintf("%s-%x", day, sum[:2])
