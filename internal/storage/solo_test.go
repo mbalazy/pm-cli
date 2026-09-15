@@ -3,8 +3,10 @@ package storage
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func writeShift(t *testing.T, projectDir, name, body string, report bool) {
@@ -57,6 +59,114 @@ func TestReadShifts(t *testing.T) {
 	}
 	if ReadShifts(t.TempDir(), "x") != nil {
 		t.Error("no .shift dir must be no shifts")
+	}
+}
+
+// sampleReport carries every spelling the /solo skill's reports have used
+// for a task block (2026-09-09..14): "### heading" with bold labels, a bold
+// heading line with bullet labels and nested bullets, bold label-and-word,
+// "Stan uzupełnienie", and the three ways an untouched task is written.
+const sampleReport = "# Raport zmiany solo - 2026-09-14\n\n## 1. Co z taskami\n\n" +
+	"### APP-1 - lista nie pokazuje klienta\n\n**Bug:** klient znika z listy.\n\n**Stan:** **naprawione** (częściowo w jednym punkcie). Lista pokazuje klienta.\n\n**Sprawdzone:** na symulatorze.\n\n**Przed PR-em:** nic.\n\n" +
+	"**APP-2, krok 2: ekran pozycji**\n- Bug: nie było ekranu.\n- Stan: **zrobione**. Ekran pokazuje dług.\n\n  Pod nim jest lista.\n- Sprawdzone: w przeglądarce.\n- Przed PR-em: scalić po kroku 1. Decyzje do potwierdzenia:\n  - Skala z konfiguracji.\n  - 404 to brak pozycji.\n\n" +
+	"### APP-3 - eksport\n\n- **Bug:** brak eksportu.\n- **Stan: nie zrobione.** Eksport nadal pada.\n- **Stan uzupełnienie:** przyczyna w API.\n\n" +
+	"**APP-4, krok 4: kontrakt**: nie ruszone, bo czeka na zamrożenie.\n\n" +
+	"### Zadania nie ruszone\n\n- **APP-5** - nie ruszone, bo czeka na makietę.\n\n" +
+	"### APP-6 - atrapa\n\nNie ruszone, bo czeka na APP-3.\n\n" +
+	"## 2. Decyzje podjete za Ciebie\n\n- Wybrałem A zamiast B.\n  Bo B psuje C.\n- Odrzuciłem D.\n\n" +
+	"## 3. Pomysły na nowe tickety\n\n1. Ticket jeden.\n2. Ticket dwa.\n\n" +
+	"## 4. Sprzatanie i stan runtime\n\n- serwer zatrzymany\n\n" +
+	"## 5. Szczegóły techniczne\n\n`a1b2c3d` commit\n\n" +
+	"## TL;DR\n\nZrobione dwa z trzech,\nnic nie wypchnięte. Twój ruch: wypchnij `APP-2` i otwórz PR.\n"
+
+func TestParseShiftReport(t *testing.T) {
+	rep := ParseShiftReport(sampleReport)
+	type want struct{ heading, outcome string }
+	wants := []want{
+		{"APP-1 - lista nie pokazuje klienta", OutcomePartial},
+		{"APP-2, krok 2: ekran pozycji", OutcomeDone},
+		{"APP-3 - eksport", OutcomeNotDone},
+		{"APP-4, krok 4: kontrakt", OutcomeUntouched},
+		{"APP-5", OutcomeUntouched},
+		{"APP-6 - atrapa", OutcomeUntouched},
+	}
+	if len(rep.Tasks) != len(wants) {
+		t.Fatalf("tasks = %+v", rep.Tasks)
+	}
+	for i, w := range wants {
+		if got := rep.Tasks[i]; got.Heading != w.heading || got.Outcome != w.outcome {
+			t.Errorf("task %d = %q %q, want %q %q", i, got.Heading, got.Outcome, w.heading, w.outcome)
+		}
+	}
+	a1, a2, a3 := rep.Tasks[0], rep.Tasks[1], rep.Tasks[2]
+	if a1.Problem != "klient znika z listy." || a1.Checked != "na symulatorze." || a1.BeforePR != "nic." {
+		t.Errorf("APP-1 fields = %+v", a1)
+	}
+	if a2.State != "zrobione. Ekran pokazuje dług.\n\nPod nim jest lista." || a2.BeforePR != "scalić po kroku 1. Decyzje do potwierdzenia:\n- Skala z konfiguracji.\n- 404 to brak pozycji." {
+		t.Errorf("APP-2 continuation = %q / %q", a2.State, a2.BeforePR)
+	}
+	if a3.State != "nie zrobione. Eksport nadal pada.\n\nprzyczyna w API." {
+		t.Errorf("APP-3 Stan uzupełnienie = %q", a3.State)
+	}
+	if rep.Tasks[3].State != "nie ruszone, bo czeka na zamrożenie." || rep.Tasks[5].State != "Nie ruszone, bo czeka na APP-3." {
+		t.Errorf("untouched = %q / %q", rep.Tasks[3].State, rep.Tasks[5].State)
+	}
+	if len(rep.Decisions) != 2 || rep.Decisions[0] != "Wybrałem A zamiast B.\nBo B psuje C." || rep.Decisions[1] != "Odrzuciłem D." {
+		t.Errorf("decisions = %q", rep.Decisions)
+	}
+	if len(rep.Ideas) != 2 || rep.Ideas[1] != "Ticket dwa." {
+		t.Errorf("ideas = %q", rep.Ideas)
+	}
+	if rep.Cleanup != "- serwer zatrzymany" || rep.Technical != "`a1b2c3d` commit" {
+		t.Errorf("cleanup %q technical %q", rep.Cleanup, rep.Technical)
+	}
+	if rep.Summary != "Zrobione dwa z trzech, nic nie wypchnięte." || rep.Next != "Twój ruch: wypchnij `APP-2` i otwórz PR." {
+		t.Errorf("tl;dr = %q | %q", rep.Summary, rep.Next)
+	}
+	if got := ParseShiftReport("## 2. Decyzje podjęte za Ciebie\n\nBrak.\n"); len(got.Decisions) != 0 || len(got.Tasks) != 0 {
+		t.Errorf("brak = %+v", got)
+	}
+}
+
+func TestShiftProgressAndSummary(t *testing.T) {
+	dir := t.TempDir()
+	writeShift(t, dir, "2026-09-10-prog", "# solo prog\n## Status: closed 2026-09-10 14:01\n## Queue\nsolo-1 · a · todo\nsolo-2 · b · todo\nsolo-3 · c · todo\n"+
+		"## Progress\n- solo-1 · done (local) · feat/a@abc1234 · 10 min\nsolo-2 * 13:34 * step 10 * parked: bramka * smoke/b@99c755e\n## Progress (cont.)\nsolo-3 · 21:22 · DONE (local, not pushed) · x/y@0123456789\n", false)
+	sh := ReadShifts(dir, "p")[0]
+	got := ""
+	for _, tk := range sh.Tasks {
+		got += tk.ID + "=" + tk.Outcome + "@" + tk.Branch + " "
+	}
+	if got != "solo-1=done@feat/a solo-2=parked@smoke/b solo-3=done@x/y " {
+		t.Errorf("progress = %s", got)
+	}
+	if sh.Summary == nil || sh.Summary.Counts() != "2 done · 1 parked" || !sh.Summary.Unfinished() || sh.Summary.Title != "" {
+		t.Errorf("summary off Progress = %+v", sh.Summary)
+	}
+
+	// With a report, the report's verdicts and its TL;DR win.
+	if err := os.WriteFile(filepath.Join(dir, ShiftDir, "2026-09-10-prog-report.md"), []byte(sampleReport), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := ReadShifts(dir, "p")[0].Summary
+	if s == nil || s.Counts() != "1 done · 1 partial · 1 not done · 3 untouched" || s.Title != "APP-1 - lista nie pokazuje klienta (+2 more)" || s.Next != "Twój ruch: wypchnij APP-2 i otwórz PR." {
+		t.Errorf("summary off the report = %+v", s)
+	}
+	if long := plainLine(strings.Repeat("słowo ", 60), 40); utf8.RuneCountInString(long) > 41 || !strings.HasSuffix(long, "…") {
+		t.Errorf("plainLine = %q", long)
+	}
+}
+
+func TestAttentionSoloRowSaysWhatCameOut(t *testing.T) {
+	store := attentionStore(t)
+	writeShift(t, store.ProjectDir("solo"), "2026-09-08-out", "# solo out\n## Status: closed "+stampAgo(2*time.Hour)+"\n## Queue\nsolo-1 · waits on client · todo\n", false)
+	if err := os.WriteFile(filepath.Join(store.ProjectDir("solo"), ShiftDir, "2026-09-08-out-report.md"), []byte(sampleReport), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	row := build(t, store, "", AttentionOptions{}).Section(SectionSoloReports).Rows[0]
+	if row.Title != "APP-1 - lista nie pokazuje klienta (+2 more)" || row.Severity != SeverityWarn ||
+		row.Reason != "1 done · 1 partial · 1 not done · 3 untouched · Twój ruch: wypchnij APP-2 i otwórz PR." {
+		t.Errorf("row = %q | %q | %s", row.Title, row.Reason, row.Severity)
 	}
 }
 

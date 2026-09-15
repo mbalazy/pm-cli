@@ -1,9 +1,12 @@
 import { Link } from '@tanstack/react-router'
 
 import type { SoloRow } from '../lib/soloView'
+import { toneClass } from './tone'
+import { cn } from './ui/cn'
 
-// The solo shifts table: glyph, project, date, the queue with statuses, when
-// it closed, and the report link. Rows come worded by lib/soloView.
+// The solo shifts table: glyph, project, date, what the shift was, how it
+// came out, when it closed, and the report link. Rows come worded by
+// lib/soloView.
 
 export function SoloTable({ rows }: { rows: SoloRow[] }) {
   if (rows.length === 0) return <p className="px-2 py-1 text-sm text-ink-3">no solo shifts</p>
@@ -15,7 +18,8 @@ export function SoloTable({ rows }: { rows: SoloRow[] }) {
             <th className="w-6" aria-label="state" />
             <th>project</th>
             <th>date</th>
-            <th>tasks</th>
+            <th>shift</th>
+            <th>outcome</th>
             <th>state</th>
             <th />
           </tr>
@@ -26,7 +30,10 @@ export function SoloTable({ rows }: { rows: SoloRow[] }) {
               <td className="text-center">{r.glyph}</td>
               <td className="font-mono text-xs">{r.shift.project}</td>
               <td className="num whitespace-nowrap">{r.shift.date}</td>
-              <td className="text-sm">{r.tasks || '-'}</td>
+              <td className="text-sm">{r.title || '-'}</td>
+              <td className={cn('whitespace-nowrap text-sm', r.tone && toneClass(r.tone))}>
+                {r.outcome || '-'}
+              </td>
               <td className="whitespace-nowrap text-ink-2">{r.when}</td>
               <td>
                 <Link

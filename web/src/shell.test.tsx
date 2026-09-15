@@ -1457,6 +1457,114 @@ describe('solo report rows', () => {
   })
 })
 
+describe('solo report page', () => {
+  const shift = {
+    project: 'alpha',
+    id: 'abc',
+    kind: 'solo',
+    date: '2026-09-14',
+    open: false,
+    closed: '2026-09-14T21:24:00Z',
+    status_line: '',
+    file: '/f.md',
+    report: '/r.md',
+    tasks: [{ id: 'alpha-1', title: 'First', status: 'todo', outcome: 'done' }],
+    summary: {
+      title: 'ACME-1, trzy ekrany',
+      done: 2,
+      partial: 0,
+      not_done: 0,
+      parked: 0,
+      untouched: 1,
+      next: 'Od Ciebie: wypchnij feat/a.',
+    },
+  }
+  const digest = {
+    title: 'ACME-1, trzy ekrany',
+    summary: 'Dwa kroki zrobione.',
+    next: 'Od Ciebie: wypchnij `feat/a`.',
+    tasks: [
+      {
+        heading: 'krok 1: dane',
+        outcome: 'done',
+        problem: 'brak danych.',
+        state: '**zrobione**. Aplikacja ma typy.',
+        checked: 'automatycznie.',
+        before_pr: 'scalić po kroku 0. Decyzje:\n- A.\n- B.',
+      },
+      {
+        heading: 'krok 2: ekran',
+        outcome: 'done',
+        state: 'zrobione. Ekran jest.',
+        before_pr: 'nic.',
+      },
+      { heading: 'krok 3: kontrakt', outcome: 'untouched', state: 'nie ruszone, bo czeka.' },
+    ],
+    decisions: ['Wybrałem A.', 'Odrzuciłem B.'],
+    ideas: [],
+    cleanup: '- serwer zatrzymany',
+  }
+
+  it('leads with the move and one line per task, the long parts folded', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fakeFetch({
+        ...api,
+        '/api/solo/alpha/abc/report': { shift, kind: 'report', markdown: '# whole report', digest },
+      }),
+    )
+    renderAt('/solo/alpha/abc')
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'ACME-1, trzy ekrany' }),
+    ).toBeInTheDocument()
+    const move = screen.getByRole('region', { name: 'Your move' })
+    expect(within(move).getByText(/Od Ciebie: wypchnij/)).toBeInTheDocument()
+    expect(within(move).getByText('Dwa kroki zrobione.')).toBeInTheDocument()
+    const chips = screen.getByRole('list', { name: 'Outcomes' })
+    expect(
+      within(chips)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['2 done', '1 untouched'])
+    // Direct children only: an opened card's markdown has lists of its own.
+    const items = Array.from(screen.getByRole('list', { name: 'Tasks' }).children) as HTMLElement[]
+    expect(items).toHaveLength(3)
+    expect(within(items[0]).getByText('Aplikacja ma typy.')).toBeInTheDocument()
+    expect(
+      within(items[0]).getByText('Scalić po kroku 0. Decyzje: (+2 points)'),
+    ).toBeInTheDocument()
+    expect(within(items[1]).queryByText('before the PR')).toBeNull()
+    expect(within(items[2]).getByLabelText('outcome: untouched')).toBeInTheDocument()
+    expect(screen.getByText('Decisions made for you (2)')).toBeInTheDocument()
+    expect(screen.getByText('Cleanup and runtime')).toBeInTheDocument()
+    expect(screen.queryByText(/Ideas for new tickets/)).toBeNull()
+    expect(screen.getByText('Whole report')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'mark read' })).toBeInTheDocument()
+  })
+
+  it('renders a report it could not split whole', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fakeFetch({
+        ...api,
+        '/api/solo/alpha/abc/report': {
+          shift: { ...shift, summary: undefined },
+          kind: 'report',
+          markdown: '# Notatki\n\nWolny tekst.',
+          digest: { tasks: [], decisions: [], ideas: [] },
+        },
+      }),
+    )
+    renderAt('/solo/alpha/abc')
+    const article = await screen.findByRole('article', { name: 'Report' })
+    expect(within(article).getByText('Wolny tekst.')).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'alpha · 2026-09-14' }),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Your move' })).toBeNull()
+  })
+})
+
 describe('home rows the API cannot open', () => {
   const dup = {
     ...attention,

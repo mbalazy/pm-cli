@@ -3,6 +3,7 @@ package storage
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -38,13 +39,21 @@ type Shift struct {
 	// File and Report are absolute paths; Report is empty when there is none.
 	File   string `json:"file"`
 	Report string `json:"report,omitempty"`
+	// Summary is the outcome at a glance (solo_report.go): off the report
+	// when there is one, else off the Progress lines; nil when neither says.
+	Summary *ShiftSummary `json:"summary,omitempty"`
 }
 
 // ShiftTask is one line of a shift's queue.
 type ShiftTask struct {
-	ID     string `json:"id"`
-	Title  string `json:"title"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// Status is the queue line's - the task's status when the shift STARTED.
 	Status string `json:"status,omitempty"`
+	// Outcome and Branch come off the task's "## Progress" line: done,
+	// parked, untouched or doing, and the branch the work is on.
+	Outcome string `json:"outcome,omitempty"`
+	Branch  string `json:"branch,omitempty"`
 }
 
 // ReadShifts reads every shift of one project, newest first. A missing
@@ -96,7 +105,9 @@ func parseShift(path, slug string) (Shift, bool) {
 		sh.Report = report
 	}
 
-	inQueue := false
+	inQueue, inProgress := false, false
+	type progress struct{ outcome, branch string }
+	progressOf := map[string]progress{}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimRight(line, "\r")
 		switch {
@@ -106,15 +117,32 @@ func parseShift(path, slug string) (Shift, bool) {
 			}
 		case strings.HasPrefix(line, "## Status:"):
 			sh.StatusLine = strings.TrimSpace(strings.TrimPrefix(line, "## Status:"))
-			inQueue = false
+			inQueue, inProgress = false, false
 		case strings.HasPrefix(line, "## "):
 			inQueue = strings.TrimSpace(line) == "## Queue"
+			inProgress = strings.HasPrefix(line, "## Progress") // "## Progress (cont.)" too
 		case inQueue:
 			if t, ok := parseShiftTask(line); ok {
 				sh.Tasks = append(sh.Tasks, t)
 			}
+		case inProgress:
+			if id, outcome, branch, ok := parseProgressLine(line); ok {
+				progressOf[id] = progress{outcome, branch}
+			}
 		}
 	}
+	for i := range sh.Tasks {
+		if p, ok := progressOf[sh.Tasks[i].ID]; ok {
+			sh.Tasks[i].Outcome, sh.Tasks[i].Branch = p.outcome, p.branch
+		}
+	}
+	var rep *ShiftReport
+	if sh.Report != "" {
+		if data, err := os.ReadFile(sh.Report); err == nil {
+			rep = ParseShiftReport(string(data))
+		}
+	}
+	sh.Summary = summarizeShift(sh, rep)
 
 	lower := strings.ToLower(sh.StatusLine)
 	if !strings.HasPrefix(lower, "closed") {
@@ -151,6 +179,42 @@ func parseShiftTask(line string) (ShiftTask, bool) {
 		t.Status = strings.TrimSpace(parts[2])
 	}
 	return t, true
+}
+
+var (
+	progressSep = regexp.MustCompile(` [·*] `)
+	branchAtSHA = regexp.MustCompile(`^([A-Za-z0-9._/-]+)@[0-9a-f]{7,40}\b`)
+)
+
+// parseProgressLine reads "<task-id> · ... · <done|parked: why|untouched:
+// ...|doing> ... · <branch>@<sha> · ..." in the spellings the skill wrote:
+// " · " or " * " between fields, a leading "- ", the word in any case and
+// with a note after it ("done (doing in pm)", "DONE (local, not pushed)").
+func parseProgressLine(line string) (id, outcome, branch string, ok bool) {
+	parts := progressSep.Split(strings.TrimPrefix(strings.TrimSpace(line), "- "), -1)
+	if len(parts) < 2 {
+		return "", "", "", false
+	}
+	id = strings.TrimSpace(parts[0])
+	if id == "" || strings.ContainsAny(id, " ()") {
+		return "", "", "", false
+	}
+	for _, p := range parts[1:] {
+		p = strings.TrimSpace(p)
+		if outcome == "" {
+			low := strings.ToLower(p)
+			for _, w := range []string{OutcomeDone, OutcomeParked, OutcomeUntouched, OutcomeDoing} {
+				if strings.HasPrefix(low, w) {
+					outcome = w
+					break
+				}
+			}
+		}
+		if m := branchAtSHA.FindStringSubmatch(p); branch == "" && m != nil {
+			branch = m[1]
+		}
+	}
+	return id, outcome, branch, true
 }
 
 // shiftStampLayouts are the closing-stamp spellings the skill has written so

@@ -277,7 +277,46 @@ export interface RestoreResult {
 export interface ShiftTask {
   id: string
   title: string
+  /** The queue line's status - the task's status when the shift STARTED. */
   status?: string
+  /** Off the task's Progress line: done | parked | untouched | doing. */
+  outcome?: string
+  branch?: string
+}
+
+/** storage.ShiftSummary - a shift at a glance, plain text. */
+export interface ShiftSummary {
+  title?: string
+  done: number
+  partial: number
+  not_done: number
+  parked: number
+  untouched: number
+  /** The TL;DR's sentence addressed to the user, cut to one line. */
+  next?: string
+}
+
+/** storage.ReportTask - one task block of a solo report; markdown fields. */
+export interface ReportTask {
+  heading: string
+  /** done | partial | not_done | untouched, empty when the report says none. */
+  outcome?: string
+  problem?: string
+  state?: string
+  checked?: string
+  before_pr?: string
+}
+
+/** storage.ShiftReport - a solo report split into parts; markdown fields. */
+export interface ShiftReport {
+  title?: string
+  next?: string
+  summary?: string
+  tasks: ReportTask[]
+  decisions: string[]
+  ideas: string[]
+  cleanup?: string
+  technical?: string
 }
 
 /** storage.Shift - one /solo shift off its state file. */
@@ -292,6 +331,7 @@ export interface Shift {
   tasks: ShiftTask[]
   file: string
   report?: string
+  summary?: ShiftSummary
 }
 
 /** review.Review - one PR code review (GET /api/reviews, /api/reviews/{id}). */
@@ -346,6 +386,8 @@ export interface SoloReportResult {
   shift: Shift
   kind: 'report' | 'state'
   markdown: string
+  /** The report split into parts; only for kind "report". */
+  digest?: ShiftReport
 }
 
 /** storage.GroupSummary - the sidebar's line for one group. */
