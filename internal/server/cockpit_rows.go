@@ -27,11 +27,6 @@ func (h *handler) restoreRows(w http.ResponseWriter, r *http.Request) {
 	writeResult(w, res, err)
 }
 
-func (h *handler) soloShifts(w http.ResponseWriter, r *http.Request) {
-	res, err := service.SoloShifts(h.store)
-	writeResult(w, res, err)
-}
-
 func (h *handler) soloReport(w http.ResponseWriter, r *http.Request) {
 	res, err := service.SoloReport(h.store, r.PathValue("project"), r.PathValue("shift"))
 	writeResult(w, res, err)

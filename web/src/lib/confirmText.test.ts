@@ -9,6 +9,7 @@ import {
   isPendingKind,
   requestFor,
   subjectOfTask,
+  previewOfSolo,
 } from './confirmText'
 
 const body = (r: MutationRequest) => (r.kind === 'task' ? r.body : undefined)
@@ -261,5 +262,88 @@ describe('run actions', () => {
         warnings: ['claim held by x - `pm finish` will refuse'],
       }).blocked,
     ).toMatch(/release or wait out the claim/)
+  })
+})
+
+describe('solo actions', () => {
+  const input = {
+    project: 'pm-cli',
+    queue: 'pm-cli-140',
+    runtime: 'off',
+    base: 'main',
+    model: 'opus',
+  }
+  const plan = {
+    project: 'pm-cli',
+    input,
+    exe: '/usr/local/bin/claude',
+    argv: [
+      '--dangerously-skip-permissions',
+      '--autocompact',
+      '400k',
+      '--settings',
+      '{"worktree":{"bgIsolation":"none"}}',
+      '--model',
+      'opus',
+      '--name',
+      'solo-pm-cli',
+      '--bg',
+      '/solo pm-cli-140 --no-runtime --base main',
+    ],
+    prompt: '/solo pm-cli-140 --no-runtime --base main',
+    cwd: '/repos/pm-cli',
+    config_dir: '/home/u/.claude',
+    name: 'solo-pm-cli',
+    warnings: ['3 uncommitted changes in the checkout'],
+    ask_rules: 0,
+  }
+  it('the preview is the quoted launch line, loading until the plan, the request is the input', () => {
+    const p = {
+      kind: 'solo_start' as const,
+      subject: { project: 'pm-cli', title: 'pm-cli-140', solo: input },
+    }
+    const t = describeAction(p, '', undefined, undefined, plan)
+    expect(t.heading).toBe('solo · pm-cli-140')
+    expect(t.preview).toBe(
+      'cd /repos/pm-cli && claude --dangerously-skip-permissions --autocompact 400k --settings \'{"worktree":{"bgIsolation":"none"}}\' --model opus --name solo-pm-cli --bg \'/solo pm-cli-140 --no-runtime --base main\'',
+    )
+    expect(t.warnings).toEqual(['3 uncommitted changes in the checkout'])
+    expect(t.loading).toBe(false)
+    expect(t.confirmLabel).toBe('launch solo')
+    expect(t.sentence).toMatch(/claude --bg/)
+    expect(describeAction(p, '').loading).toBe(true)
+    expect(requestFor(p, '')).toEqual({ kind: 'solo_start', input })
+    // A non-default config dir is spelled out, so the line is pasteable as is.
+    expect(previewOfSolo({ ...plan, config_dir: '/home/u/.claude-alt' })).toMatch(
+      /^cd \/repos\/pm-cli && CLAUDE_CONFIG_DIR=\/home\/u\/.claude-alt claude /,
+    )
+    expect(previewOfSolo(undefined)).toBe('')
+  })
+  it('stop names the claude stop command and how the session comes back', () => {
+    const launch = {
+      id: 'ab12cd34',
+      project: 'pm-cli',
+      input,
+      argv: [],
+      cwd: '/repos/pm-cli',
+      config_dir: '/home/u/.claude',
+      name: 'solo-pm-cli',
+      started: '2026-09-15T10:00:00+02:00',
+      log: '/l',
+      state: 'working',
+      attach: 'claude attach ab12cd34',
+      logs: 'claude logs ab12cd34',
+    }
+    const p = {
+      kind: 'solo_stop' as const,
+      subject: { project: 'pm-cli', title: 'solo-pm-cli', launch },
+    }
+    const t = describeAction(p, '')
+    expect(t.heading).toBe('solo · solo-pm-cli')
+    expect(t.sentence).toMatch(/claude stop ab12cd34/)
+    expect(t.sentence).toMatch(/claude attach ab12cd34/)
+    expect(t.confirmLabel).toBe('stop solo')
+    expect(t.loading).toBeFalsy()
+    expect(requestFor(p, '')).toEqual({ kind: 'solo_stop', id: 'ab12cd34' })
   })
 })

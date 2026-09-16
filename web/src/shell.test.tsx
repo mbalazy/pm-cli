@@ -182,6 +182,16 @@ function fakeFetch(routes: Record<string, unknown>) {
           { status: 200 },
         )
       }
+      if (url.includes('/api/solo')) {
+        return new Response(
+          JSON.stringify({
+            ...soloLaunch,
+            state: url.endsWith('/stop') ? 'stopped' : 'starting',
+            stopped: url.endsWith('/stop') ? '2026-09-15T12:00:00+02:00' : undefined,
+          }),
+          { status: url.endsWith('/stop') ? 200 : 202 },
+        )
+      }
       if (url.includes('/api/runs/')) {
         return new Response(
           JSON.stringify({
@@ -445,6 +455,65 @@ const emptyTimeline = (project: string) => ({
   note: 'no timeline entries yet',
 })
 
+const soloInput = {
+  project: 'alpha',
+  queue: 'alpha-7',
+  runtime: 'off',
+  base: 'main',
+  model: 'opus',
+}
+const soloPlan = {
+  project: 'alpha',
+  input: soloInput,
+  exe: '/usr/local/bin/claude',
+  argv: [
+    '--dangerously-skip-permissions',
+    '--autocompact',
+    '400k',
+    '--settings',
+    '{"worktree":{"bgIsolation":"none"}}',
+    '--model',
+    'opus',
+    '--name',
+    'solo-alpha',
+    '--bg',
+    '/solo alpha-7 --no-runtime --base main',
+  ],
+  prompt: '/solo alpha-7 --no-runtime --base main',
+  cwd: '/repo/alpha',
+  config_dir: '/home/u/.claude',
+  name: 'solo-alpha',
+  warnings: ['2 uncommitted changes in the checkout'],
+  ask_rules: 0,
+}
+const soloLaunch = {
+  id: 'ab12cd34',
+  session_id: 'sess-1',
+  project: 'alpha',
+  input: soloInput,
+  argv: soloPlan.argv,
+  cwd: '/repo/alpha',
+  config_dir: '/home/u/.claude',
+  name: 'solo-alpha',
+  started: '2026-09-15T10:00:00+02:00',
+  log: '/pm/.cockpit/solo/ab12cd34.log',
+  state: 'working',
+  status: 'busy',
+  pid: 4321,
+  attach: 'claude attach ab12cd34',
+  logs: 'claude logs ab12cd34',
+}
+const soloShift = {
+  project: 'alpha',
+  id: 'sess-1',
+  kind: 'solo',
+  date: '2026-09-15',
+  open: true,
+  status_line: 'open',
+  tasks: [{ id: 'alpha-7', title: 'Seventh', status: 'doing' }],
+  file: '/pm/alpha/.shift/2026-09-15-sess-1.md',
+}
+
 const api = {
   '/api/focus': focusPlan,
   '/api/timeline/acme-zap': acme-zapTimeline,
@@ -466,7 +535,8 @@ const api = {
   '/api/changes': changes,
   '/api/groups': groupsApi,
   '/api/report': reportOff,
-  '/api/solo': { shifts: [] },
+  '/api/solo': { shifts: [], launches: [] },
+  '/api/solo/plan?project=alpha&queue=alpha-7&runtime=off&base=main&model=opus': soloPlan,
   '/api/runs/alpha/alpha-9/plan?action=resume_run': {
     action: 'resume_run',
     project: 'alpha',
@@ -1251,6 +1321,126 @@ describe('run control goes through the dialog with the argv preview', () => {
     await vi.waitFor(() => expect(posts).toHaveLength(1))
     expect(posts[0].path).toBe('/api/runs/alpha/alpha-9/kill')
     expect(posts[0].header).toBe('cockpit')
+  })
+})
+
+describe('solo launch goes through the dialog with the claude --bg preview', () => {
+  it('the form asks, the dialog shows the server plan, Esc sends nothing, confirm posts the input', async () => {
+    vi.stubGlobal('fetch', fakeFetch(api))
+    const user = userEvent.setup()
+    renderAt('/runs')
+    await screen.findByText('no solo shifts')
+    expect(screen.queryByRole('form', { name: 'Launch solo' })).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'launch solo' }))
+    const form = screen.getByRole('form', { name: 'Launch solo' })
+    // Active projects only, the first preselected; the launch button waits for a queue.
+    const project = within(form).getByRole('combobox', { name: 'project' })
+    expect(
+      within(project)
+        .getAllByRole('option')
+        .map((o) => o.textContent),
+    ).toEqual(['alpha', 'acme-api', 'acme-zap'])
+    expect(project).toHaveValue('alpha')
+    const launch = within(form).getByRole('button', { name: /launch solo…/ })
+    expect(launch).toBeDisabled()
+    await user.type(within(form).getByRole('textbox', { name: 'queue' }), 'alpha-7')
+    await user.selectOptions(within(form).getByRole('combobox', { name: 'runtime' }), 'off')
+    await user.type(within(form).getByRole('textbox', { name: 'base branch' }), 'main')
+    expect(launch).toBeEnabled()
+    await user.click(launch)
+
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    expect(dialog).toHaveAttribute('open')
+    expect(within(dialog).getByText(/claude --bg, bypass permissions/)).toBeInTheDocument()
+    const preview = await within(dialog).findByLabelText('command preview')
+    await vi.waitFor(() =>
+      expect(preview).toHaveTextContent(
+        'cd /repo/alpha && claude --dangerously-skip-permissions --autocompact 400k --settings \'{"worktree":{"bgIsolation":"none"}}\' --model opus --name solo-alpha --bg \'/solo alpha-7 --no-runtime --base main\'',
+      ),
+    )
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(/2 uncommitted changes/)
+    expect(posts).toHaveLength(0)
+    await user.keyboard('{Escape}')
+    await vi.waitFor(() => expect(dialog).not.toHaveAttribute('open'))
+    expect(posts).toHaveLength(0)
+
+    await user.click(launch)
+    await within(dialog).findByLabelText('command preview')
+    await vi.waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'launch solo' })).toBeEnabled(),
+    )
+    await user.click(within(dialog).getByRole('button', { name: 'launch solo' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toEqual({ path: '/api/solo', header: 'cockpit', body: soloInput })
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'started solo ab12cd34 · claude attach ab12cd34',
+    )
+  })
+
+  it('a launch shows its state and attach command on the shift row, and stop goes through the dialog', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fakeFetch({ ...api, '/api/solo': { shifts: [soloShift], launches: [soloLaunch] } }),
+    )
+    const user = userEvent.setup()
+    renderAt('/runs')
+    const table = await screen.findByRole('table', { name: 'Solo shifts' })
+    const row = within(table).getAllByRole('row')[1]
+    const cells = within(row)
+      .getAllByRole('cell')
+      .map((c) => c.textContent)
+    expect(cells[0]).toBe('▶')
+    expect(cells[3]).toBe('alpha-7')
+    expect(cells[6]).toContain('working')
+    expect(cells[6]).toContain('claude attach ab12cd34')
+    expect(within(row).getByRole('link', { name: 'state' })).toHaveAttribute(
+      'href',
+      '/solo/alpha/sess-1',
+    )
+    expect(
+      within(row).getByRole('button', { name: 'copy claude attach ab12cd34' }),
+    ).toBeInTheDocument()
+    await user.click(within(row).getByRole('button', { name: 'stop' }))
+    const dialog = screen.getByRole('dialog', { name: 'Confirm' })
+    expect(within(dialog).getByText(/claude stop ab12cd34/)).toBeInTheDocument()
+    expect(posts).toHaveLength(0)
+    await user.click(within(dialog).getByRole('button', { name: 'stop solo' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0]).toEqual({
+      path: '/api/solo/ab12cd34/stop',
+      header: 'cockpit',
+      body: undefined,
+    })
+    expect(await screen.findByRole('status')).toHaveTextContent('stopped ab12cd34')
+  })
+
+  it('a launch without a shift yet is a row of its own, and the group tab preselects the project', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fakeFetch({
+        ...api,
+        '/api/solo': {
+          shifts: [],
+          launches: [{ ...soloLaunch, project: 'acme-api', session_id: undefined, state: 'starting' }],
+        },
+      }),
+    )
+    const user = userEvent.setup()
+    renderAt('/g/acme?tab=runs')
+    const table = await screen.findByRole('table', { name: 'Solo shifts' })
+    const row = within(table).getAllByRole('row')[1]
+    expect(within(row).getAllByRole('cell')[3]).toHaveTextContent('alpha-7')
+    expect(within(row).queryByRole('link', { name: /state|report/ })).toBeNull()
+    expect(within(row).getAllByRole('cell')[6]).toHaveTextContent('starting')
+    await user.click(screen.getByRole('button', { name: 'launch solo' }))
+    const form = screen.getByRole('form', { name: 'Launch solo' })
+    const project = within(form).getByRole('combobox', { name: 'project' })
+    expect(
+      within(project)
+        .getAllByRole('option')
+        .map((o) => o.textContent),
+    ).toEqual(['acme-api', 'acme-zap'])
+    expect(project).toHaveValue('acme-api')
   })
 })
 

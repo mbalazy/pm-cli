@@ -44,16 +44,32 @@ export function ConfirmDialog({
     if (open && !d.open) {
       d.showModal()
       // Focus the field, else the confirm button - so Enter confirms and Esc
-      // reaches the dialog (a real showModal moves focus too; jsdom's shim does not).
-      ;(fieldRef.current ?? d.querySelector<HTMLElement>('button[type=submit]'))?.focus()
+      // reaches the dialog (a real showModal moves focus too; jsdom's shim does
+      // not). A disabled confirm button (the plan still loading) cannot take
+      // focus, so the dialog itself does: Esc still lands here, never on the
+      // control behind the dialog that opened it.
+      ;(
+        fieldRef.current ??
+        d.querySelector<HTMLElement>('button[type=submit]:not(:disabled)') ??
+        d
+      ).focus()
     }
     if (!open && d.open) d.close()
   }, [open])
+  // Once the plan arrives, move from the dialog itself to the confirm button,
+  // so Enter confirms as promised in the footer.
+  const loading = text?.loading === true
+  useEffect(() => {
+    const d = ref.current
+    if (!d || !open || loading || document.activeElement !== d) return
+    d.querySelector<HTMLElement>('button[type=submit]:not(:disabled)')?.focus()
+  }, [open, loading])
 
   return (
     <dialog
       ref={ref}
       aria-label="Confirm"
+      tabIndex={-1}
       onClose={onCancel}
       onKeyDown={(e) => {
         // A real <dialog> cancels on Esc by itself; jsdom's does not.

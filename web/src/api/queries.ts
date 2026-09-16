@@ -23,6 +23,8 @@ import type {
   RunPlan,
   RunsResult,
   SeenResult,
+  SoloInput,
+  SoloPlan,
   SoloReportResult,
   SoloResult,
   TaskDetail,
@@ -53,6 +55,22 @@ export const keys = {
   soloReport: (project: string, shift: string) => ['solo-report', project, shift] as const,
   runPlan: (project: string, id: string, action: string, flags: RunFlags) =>
     ['run-plan', project, id, action, flags.yolo === true, flags.additional === true] as const,
+  soloPlan: (input: SoloInput) => ['solo-plan', soloPlanQuery(input)] as const,
+}
+
+/** The query string of GET /api/solo/plan for a form - also the plan's cache key. */
+export function soloPlanQuery(input: SoloInput): string {
+  return query({
+    project: input.project,
+    queue: input.queue,
+    runtime: input.runtime,
+    base: input.base,
+    model: input.model,
+    push: input.push ? 1 : undefined,
+    pr: input.pr ? 1 : undefined,
+    max_tasks: input.max_tasks || undefined,
+    max_hours: input.max_hours || undefined,
+  })
 }
 
 export function useProjects() {
@@ -246,11 +264,39 @@ export function useReview(id: string) {
   })
 }
 
-/** Every /solo shift across the active projects, open ones first, then newest. */
+/**
+ * Every /solo shift across the active projects, open ones first, then
+ * newest, plus the sessions launched from the cockpit; polled every 5 s
+ * while one of those is still starting or working (.shift/ files are not
+ * in the SSE fingerprint, and the supervisor's state is not a file at all).
+ */
 export function useSolo() {
   return useQuery({
     queryKey: keys.solo(),
     queryFn: () => apiGet<SoloResult>('/api/solo'),
+    refetchInterval: (q) =>
+      q.state.data?.launches?.some((l) => isLiveSoloState(l.state)) ? 5000 : false,
+  })
+}
+
+/** A launch whose session is still doing something, or waiting on the user. */
+export function isLiveSoloState(state: string): boolean {
+  return state === 'starting' || state === 'working' || state === 'blocked'
+}
+
+/**
+ * The exact `claude --bg` launch a form would run (argv, cwd, warnings) -
+ * the dialog's preview. Disabled without a project and a queue; never
+ * cached long, since the checkout it reads moves.
+ */
+export function useSoloPlan(input: SoloInput | undefined) {
+  const enabled = input !== undefined && input.project !== '' && input.queue.trim() !== ''
+  return useQuery({
+    queryKey: keys.soloPlan(input ?? { project: '', queue: '' }),
+    queryFn: () => apiGet<SoloPlan>(`/api/solo/plan${soloPlanQuery(input!)}`),
+    enabled,
+    staleTime: 0,
+    retry: false,
   })
 }
 

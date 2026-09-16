@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useRowMutation } from '../api/mutations'
-import { useRunPlan } from '../api/queries'
-import type { RunFlags, RunStarted } from '../api/types'
+import { useRunPlan, useSoloPlan } from '../api/queries'
+import type { RunFlags, RunStarted, SoloLaunch } from '../api/types'
 import {
   describeAction,
   initialValue,
@@ -53,6 +53,9 @@ export function useConfirmedAction(): ConfirmedAction {
     runKind,
     flags,
   )
+  // A solo launch likewise: the server's plan is the command that will run.
+  const soloKind = pending?.kind === 'solo_start'
+  const soloPlan = useSoloPlan(soloKind ? pending.subject.solo : undefined)
 
   useEffect(() => () => clearTimeout(timer.current), [])
   const notify = (message: string, error: boolean) => {
@@ -73,10 +76,19 @@ export function useConfirmedAction(): ConfirmedAction {
   const confirm = () => {
     if (!pending) return
     if (runKind && plan.data === undefined) return // the preview is the contract; wait for it
+    if (soloKind && soloPlan.data === undefined) return
+    const kind = pending.kind
     mutation.mutate(requestFor(pending, value, flags), {
       onSuccess: (res) => {
         setPending(null)
-        notify(runKind ? runToast(runKind, res as Record<string, unknown>) : 'saved', false)
+        notify(
+          runKind
+            ? runToast(runKind, res as Record<string, unknown>)
+            : kind === 'solo_start' || kind === 'solo_stop'
+              ? soloToast(kind, res as SoloLaunch)
+              : 'saved',
+          false,
+        )
       },
       onError: (e) => notify(e.message, true),
     })
@@ -84,7 +96,13 @@ export function useConfirmedAction(): ConfirmedAction {
 
   let text: ConfirmText | null = null
   if (pending) {
-    text = describeAction(pending, value, focused, runKind ? plan.data : undefined)
+    text = describeAction(
+      pending,
+      value,
+      focused,
+      runKind ? plan.data : undefined,
+      soloKind ? soloPlan.data : undefined,
+    )
     // A plan that failed to load is no plan: the preview IS the contract, so
     // the confirm button stays disabled (loading) and the error says why -
     // never an enabled button whose click does nothing.
@@ -94,6 +112,13 @@ export function useConfirmedAction(): ConfirmedAction {
         loading: true,
         preview: '(no command - the plan could not be loaded)',
         warnings: [`plan: ${plan.error.message}`],
+      }
+    if (soloKind && soloPlan.isError)
+      text = {
+        ...text,
+        loading: true,
+        preview: '(no command - the plan could not be loaded)',
+        warnings: [`plan: ${soloPlan.error.message}`],
       }
   }
   return {
@@ -110,6 +135,13 @@ export function useConfirmedAction(): ConfirmedAction {
     flags,
     setFlags,
   }
+}
+
+/** After a solo launch: the id and how to jump in; after a stop: how to reopen. */
+function soloToast(kind: 'solo_start' | 'solo_stop', l: SoloLaunch): string {
+  return kind === 'solo_start'
+    ? `started solo ${l.id} · ${l.attach}`
+    : `stopped ${l.id} · ${l.attach} reopens it`
 }
 
 /** What the toast says after a run action: the pid and the log, the claim, the kill. */

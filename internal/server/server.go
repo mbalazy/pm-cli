@@ -28,6 +28,7 @@ import (
 	"github.com/mbalazy/pm/internal/review"
 	"github.com/mbalazy/pm/internal/runctl"
 	"github.com/mbalazy/pm/internal/service"
+	"github.com/mbalazy/pm/internal/solo"
 	"github.com/mbalazy/pm/internal/storage"
 )
 
@@ -75,6 +76,10 @@ type Options struct {
 	// Review runs PR code reviews; nil = review.New over the store with
 	// `claude` on PATH. Tests hand in one whose Exe is a fake script.
 	Review *review.Controller
+	// Solo starts /solo sessions as Claude Code background sessions
+	// (pm-cli-141); nil = solo.New over the store with `claude` on PATH.
+	// Tests hand in one whose Exe is a fake script.
+	Solo *solo.Controller
 }
 
 const (
@@ -138,7 +143,10 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	if opts.Review == nil {
 		opts.Review = review.New(store)
 	}
-	h := &handler{store: store, opts: opts, feed: opts.Feed, clock: opts.Clock, bus: newChangeBus(), runs: opts.RunControl, reviews: opts.Review,
+	if opts.Solo == nil {
+		opts.Solo = solo.New(store)
+	}
+	h := &handler{store: store, opts: opts, feed: opts.Feed, clock: opts.Clock, bus: newChangeBus(), runs: opts.RunControl, reviews: opts.Review, solo: opts.Solo,
 		reports: &reportControl{writing: map[string]bool{}}, done: make(chan struct{})}
 
 	mux := http.NewServeMux()
@@ -158,6 +166,8 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux.HandleFunc("GET /api/reviews", h.listReviews)
 	mux.HandleFunc("GET /api/reviews/{id}", h.getReview)
 	mux.HandleFunc("GET /api/solo", h.soloShifts)
+	mux.HandleFunc("GET /api/solo/plan", h.soloPlan)
+	mux.HandleFunc("GET /api/solo/{id}", h.soloLaunch)
 	mux.HandleFunc("GET /api/solo/{project}/{shift}/report", h.soloReport)
 	// Mutations. Every POST under /api/ needs the client header (see
 	// requireClient); GETs stay open.
@@ -173,6 +183,8 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux.HandleFunc("POST /api/reviews", requireClient(h.startReview))
 	mux.HandleFunc("POST /api/reviews/{id}/cancel", requireClient(h.cancelReview))
 	mux.HandleFunc("POST /api/reviews/{id}/approve", requireClient(h.approveReview))
+	mux.HandleFunc("POST /api/solo", requireClient(h.soloStart))
+	mux.HandleFunc("POST /api/solo/{id}/stop", requireClient(h.soloStop))
 	mux.HandleFunc("POST /api/attention/dismiss", requireClient(h.dismissRows))
 	mux.HandleFunc("POST /api/attention/restore", requireClient(h.restoreRows))
 	mux.HandleFunc("GET /api/events", h.events)
@@ -199,6 +211,7 @@ type handler struct {
 	runs  *runctl.Controller
 	// reviews runs the PR code reviews.
 	reviews *review.Controller
+	solo    *solo.Controller
 	// reports tracks the report writes in flight (one per period).
 	reports *reportControl
 	// done is closed by StopStreams: every SSE handler selects on it and

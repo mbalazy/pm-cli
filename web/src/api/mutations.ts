@@ -14,6 +14,8 @@ import type {
   RunActionResult,
   RunFlags,
   SettingsPatch,
+  SoloInput,
+  SoloLaunch,
   TaskDetail,
   ToggleFocusResult,
   UpdateProjectBody,
@@ -40,6 +42,8 @@ export type MutationRequest =
   | { kind: 'review_start'; input: string }
   | { kind: 'review_cancel'; id: string }
   | { kind: 'review_approve'; id: string }
+  | { kind: 'solo_start'; input: SoloInput }
+  | { kind: 'solo_stop'; id: string }
 
 export type MutationResult =
   | TaskDetail
@@ -52,6 +56,7 @@ export type MutationResult =
   | DismissResult
   | RestoreResult
   | Review
+  | SoloLaunch
   | { seen: string }
 
 export function runMutation(req: MutationRequest): Promise<MutationResult> {
@@ -83,6 +88,10 @@ export function runMutation(req: MutationRequest): Promise<MutationResult> {
       return apiPost<Review>(`/api/reviews/${encodeURIComponent(req.id)}/cancel`)
     case 'review_approve':
       return apiPost<Review>(`/api/reviews/${encodeURIComponent(req.id)}/approve`)
+    case 'solo_start':
+      return apiPost<SoloLaunch>('/api/solo', req.input)
+    case 'solo_stop':
+      return apiPost<SoloLaunch>(`/api/solo/${encodeURIComponent(req.id)}/stop`)
     case 'run':
       return apiPost<RunActionResult>(
         `/api/runs/${encodeURIComponent(req.project)}/${encodeURIComponent(req.taskId)}/${req.action}`,
@@ -121,6 +130,7 @@ export function useRowMutation() {
         inv(keys.reviews())
         inv(['review'])
       }
+      if (req.kind === 'solo_start' || req.kind === 'solo_stop') inv(keys.solo())
       if (req.kind === 'run') {
         // A spawn seeds a run-state, a kill stamps one, a claim writes a
         // claim file: the runs table and the queue read all three.
