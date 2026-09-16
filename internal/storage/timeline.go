@@ -150,6 +150,9 @@ func AppendTimelineEntry(projectDir string, e *TimelineEntry) error {
 	if !when.Before(time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())) {
 		return fmt.Errorf("timeline entry dated %s is in the future - an entry records something that already happened", when.Format("2006-01-02"))
 	}
+	if err := ValidateStateMarkers(e.Kind, e.Text, now); err != nil {
+		return err
+	}
 	e.Refs = cleanRefs(e.Refs)
 	if e.ID == "" {
 		e.ID = timelineEntryID(e.TS, e.Kind, e.Text)
@@ -282,6 +285,10 @@ type TimelineRead struct {
 	DaysSince int `json:"days_since"`
 	// Total is every entry in the timeline, states included.
 	Total int `json:"total"`
+	// Verification is the state's provenance picture (verified / due for a
+	// re-check / assumed / unmarked lines, the re-check lines listed); nil
+	// without a state.
+	Verification *TimelineVerification `json:"verification,omitempty"`
 	// Note says what the read is when it is not the plain case (no state yet,
 	// empty timeline, stale).
 	Note string `json:"note,omitempty"`
@@ -326,6 +333,8 @@ func TimelineDefaultRead(entries []TimelineEntry, now time.Time) TimelineRead {
 
 	state := entries[idx]
 	r.State = &state
+	v := VerifyState(state.Text, now)
+	r.Verification = &v
 	r.Since = append(r.Since, entries[idx+1:]...)
 	r.EntriesSince = len(r.Since)
 	if when, ok := state.When(); ok && now.After(when) {
