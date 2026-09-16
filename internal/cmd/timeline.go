@@ -28,6 +28,9 @@ func newTimelineCmd(store storage.TaskStore) *cobra.Command {
 			"    state     a dated snapshot of where the project stands; fits on a screen (10-20 lines:\n" +
 			"              where we stand, what blocks, what is next, open questions, links)\n\n" +
 			"What happened INSIDE a task belongs in that task's Log, not here.\n\n" +
+			"A state line says where it comes from: end it with [verified YYYY-MM-DD by <command or doc>] or [assumed]. " +
+			"The read counts the lines (verified / to recheck / assumed / unmarked - an unmarked line is never read as " +
+			"verified) and lists the verified lines " + fmt.Sprint(storage.TimelineRecheckDays) + "+ days old as due for a re-check.\n\n" +
 			"A state is never overwritten: a new state is a new entry and older ones stay. With no subcommand " +
 			"this prints the default read - the latest state in full plus every entry after it, oldest first - " +
 			"and a stale: line once " + fmt.Sprint(storage.TimelineStaleEntries) + " entries or " +
@@ -76,6 +79,9 @@ func newTimelineAddCmd(store storage.TaskStore) *cobra.Command {
 			"stdin, the way to pass a multi-line state). A state fits on a screen: 10-20 lines saying where the " +
 			"project stands, what blocks, what is next, open questions and links - longer content stays in a " +
 			"document the state refers to.\n\n" +
+			"End each state line with its provenance: [verified YYYY-MM-DD by <command or doc>] for a fact you checked " +
+			"in this session, [assumed] for one you did not. A [verified] marker without a day, or with a day in the " +
+			"future, is refused. Lines with no marker are counted as unverified on every read.\n\n" +
 			"Entries are never edited. A changed picture is a new state, not a rewrite of the old one.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -104,8 +110,16 @@ func newTimelineAddCmd(store storage.TaskStore) *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "%s: %s added (%s, id %s)\n", slug, e.Kind, timelineDate(e), e.ID)
-			if r, err := storage.ReadTimelineDefault(dir, time.Now()); err == nil && r.Stale {
-				fmt.Fprintln(out, r.Note)
+			if r, err := storage.ReadTimelineDefault(dir, time.Now()); err == nil {
+				if e.Kind == storage.TimelineState && r.Verification != nil {
+					fmt.Fprintln(out, verificationSummary(*r.Verification))
+					if r.Verification.Note != "" {
+						fmt.Fprintln(out, r.Verification.Note)
+					}
+				}
+				if r.Stale {
+					fmt.Fprintln(out, r.Note)
+				}
 			}
 			return nil
 		},
@@ -223,9 +237,12 @@ func renderTimelineRead(slug string, r storage.TimelineRead) string {
 	}
 
 	fmt.Fprintf(&b, "## state %s  (id %s)\n", timelineDate(*r.State), r.State.ID)
-	fmt.Fprintf(&b, "%s\n", r.State.Text)
+	renderStateText(&b, r.State.Text, r.Verification)
 	if len(r.State.Refs) > 0 {
 		fmt.Fprintf(&b, "refs: %s\n", strings.Join(r.State.Refs, ", "))
+	}
+	if r.Verification != nil && r.Verification.Note != "" {
+		fmt.Fprintln(&b, r.Verification.Note)
 	}
 	fmt.Fprintf(&b, "\n## since the state (%d)\n", r.EntriesSince)
 	if len(r.Since) == 0 {
@@ -238,6 +255,51 @@ func renderTimelineRead(slug string, r storage.TimelineRead) string {
 		fmt.Fprintf(&b, "\n%s\n", r.Note)
 	}
 	return b.String()
+}
+
+// verificationSummary is the one-line count under a state header:
+// "verification: 3 verified, 2 to recheck (7+ days), 1 assumed, 4 unmarked".
+func verificationSummary(v storage.TimelineVerification) string {
+	return fmt.Sprintf("verification: %d verified, %d to recheck (%d+ days), %d assumed, %d unmarked",
+		v.Verified, v.Recheck, storage.TimelineRecheckDays, v.Assumed, v.Unmarked)
+}
+
+// renderStateText prints a state's text under its verification summary. A
+// state with markers gets a gutter - " ! " on a line due for a re-check (its
+// age appended), " ~ " on an assumed line, "   " otherwise - so the lines to
+// act on stand out in the 40 lines the post-compaction hook prints; a state
+// with no markers prints as it always did under the summary. The
+// verification note follows the refs, printed by the caller.
+func renderStateText(b *strings.Builder, text string, v *storage.TimelineVerification) {
+	if v == nil {
+		fmt.Fprintf(b, "%s\n", text)
+		return
+	}
+	fmt.Fprintln(b, verificationSummary(*v))
+	if !v.Marked() {
+		fmt.Fprintf(b, "%s\n", text)
+		return
+	}
+	due := map[int]storage.StateLine{}
+	for _, sl := range v.RecheckLines {
+		due[sl.N] = sl
+	}
+	assumed := map[int]bool{}
+	for _, sl := range storage.ParseStateLines(text) {
+		if sl.Mark == storage.VerifyAssumed {
+			assumed[sl.N] = true
+		}
+	}
+	for i, line := range strings.Split(text, "\n") {
+		switch {
+		case due[i+1].Recheck:
+			fmt.Fprintf(b, " ! %s   <- %d days\n", line, due[i+1].Days)
+		case assumed[i+1]:
+			fmt.Fprintf(b, " ~ %s\n", line)
+		default:
+			fmt.Fprintf(b, "   %s\n", line)
+		}
+	}
 }
 
 func renderTimelineList(slug string, entries []storage.TimelineEntry, total int) string {
