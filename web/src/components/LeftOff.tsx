@@ -52,6 +52,13 @@ export function LeftOff({ rows, onEdit }: Props) {
                     <div className="markdown">
                       <Markdown remarkPlugins={[remarkGfm]}>{view.state.text}</Markdown>
                     </div>
+                    {view.verification && (
+                      <p
+                        className={`text-xs ${view.verificationWarn ? 'text-warn' : 'text-ink-3'}`}
+                      >
+                        verification · {view.verification}
+                      </p>
+                    )}
                   </div>
                 )}
                 <p className="text-xs text-ink-3 italic">{view.heading}</p>

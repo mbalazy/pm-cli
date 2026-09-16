@@ -91,6 +91,35 @@ export interface TimelineEntry {
   session?: string
 }
 
+/** storage.StateLine - one non-blank line of a state with its provenance marker parsed. */
+export interface StateLine {
+  /** 1-based line number in the state's text. */
+  line: number
+  /** The line without its marker. */
+  text: string
+  /** verified | assumed; absent on an unmarked line. */
+  mark?: string
+  /** YYYY-MM-DD of the verification. */
+  date?: string
+  source?: string
+  /** Whole days since the verification day at read time. */
+  days?: number
+  recheck?: boolean
+}
+
+/** storage.TimelineVerification - the provenance picture of a state at read time. */
+export interface TimelineVerification {
+  /** Lines verified within the re-check window. */
+  verified: number
+  /** Verified lines old enough to check again. */
+  recheck: number
+  assumed: number
+  /** Lines with no marker - never read as verified. */
+  unmarked: number
+  recheck_lines: StateLine[]
+  note?: string
+}
+
 /** service.TimelineReadResult - /api/timeline/{project}: the latest state and every entry after it. */
 export interface TimelineRead {
   project: string
@@ -105,6 +134,8 @@ export interface TimelineRead {
   /** Every entry of the timeline, states included; 0 = no timeline. */
   total: number
   note?: string
+  /** The state's provenance picture; absent without a state. */
+  verification?: TimelineVerification
 }
 
 /** service.ProjectMeta */
