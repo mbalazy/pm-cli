@@ -233,3 +233,65 @@ func TestTimelineListCLI(t *testing.T) {
 		}
 	}
 }
+
+func TestTimelineVerificationCLI(t *testing.T) {
+	t.Run("marked state: summary, gutter, ages", func(t *testing.T) {
+		store, slug := timelineStore(t)
+		text := "deploy green [verified " + daysAgo(0) + " by gh api deployments]\n" +
+			"DSN unset [verified " + daysAgo(9) + " by sentry ui]\n" +
+			"client wants v2 [assumed]\n" +
+			"plain line"
+		out, err := runTimelineCmd(t, store, text, "add", "-p", slug, "--kind", "state", "--text", "-")
+		if err != nil {
+			t.Fatalf("add: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "verification: 1 verified, 1 to recheck (7+ days), 1 assumed, 1 unmarked") ||
+			!strings.Contains(out, "1 line verified 7+ days ago - re-check it") {
+			t.Fatalf("add output:\n%s", out)
+		}
+
+		out = mustTimeline(t, store, "-p", slug)
+		for _, want := range []string{
+			"verification: 1 verified, 1 to recheck (7+ days), 1 assumed, 1 unmarked",
+			"   deploy green [verified",
+			" ! DSN unset [verified",
+			"   <- 9 days",
+			" ~ client wants v2 [assumed]",
+			"   plain line",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("missing %q in:\n%s", want, out)
+			}
+		}
+
+		out = mustTimeline(t, store, "-p", slug, "--json")
+		var r storage.TimelineRead
+		if err := json.Unmarshal([]byte(out), &r); err != nil {
+			t.Fatalf("json: %v\n%s", err, out)
+		}
+		if r.Verification == nil || r.Verification.Recheck != 1 || len(r.Verification.RecheckLines) != 1 ||
+			r.Verification.RecheckLines[0].N != 2 || r.Verification.RecheckLines[0].Source != "sentry ui" {
+			t.Fatalf("verification = %+v", r.Verification)
+		}
+	})
+
+	t.Run("unmarked state renders as before, plus the unverified note", func(t *testing.T) {
+		store, slug := timelineStore(t)
+		mustTimeline(t, store, "add", "-p", slug, "--kind", "state", "--text", "line one\nline two")
+		out := mustTimeline(t, store, "-p", slug)
+		if !strings.Contains(out, "verification: 0 verified, 0 to recheck (7+ days), 0 assumed, 2 unmarked\nline one\nline two\nno verification markers - all 2 lines read as unverified") {
+			t.Fatalf("output:\n%s", out)
+		}
+	})
+
+	t.Run("a bad marker is refused without writing", func(t *testing.T) {
+		store, slug := timelineStore(t)
+		out, err := runTimelineCmd(t, store, "", "add", "-p", slug, "--kind", "state", "--text", "x [verified by me]")
+		if err == nil || !strings.Contains(err.Error(), "state line 1") {
+			t.Fatalf("err = %v\n%s", err, out)
+		}
+		if _, err := os.Stat(storage.TimelineDir(store.ProjectDir(slug))); !os.IsNotExist(err) {
+			t.Fatalf("a rejected add created the timeline dir: %v", err)
+		}
+	})
+}

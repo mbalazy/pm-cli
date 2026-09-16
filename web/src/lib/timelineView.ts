@@ -31,6 +31,10 @@ export type LeftOffView =
       heading: string
       /** '' unless the state is stale. */
       stale: string
+      /** The state's provenance in one line ('' without a state). */
+      verification: string
+      /** Set when the verification line asks for something (a re-check, or markers). */
+      verificationWarn: boolean
     }
   | { kind: 'notes'; notes: string }
   | { kind: 'loading' }
@@ -63,6 +67,22 @@ export function staleLine(read: TimelineRead): string {
   return `this state is ${plural(read.days_since, 'day', 'days')} old with ${plural(read.entries_since, 'entry', 'entries')} after it - time to write a new one`
 }
 
+/**
+ * The state's provenance in one line: how many lines were verified, are due
+ * for a re-check, are assumed, carry no marker. '' without a verification.
+ */
+export function verificationLine(read: TimelineRead): string {
+  const v = read.verification
+  if (!v) return ''
+  const parts = [
+    `${v.verified} verified`,
+    `${v.recheck} to recheck`,
+    `${v.assumed} assumed`,
+    `${v.unmarked} unmarked`,
+  ]
+  return v.note ? `${parts.join(' · ')} · ${v.note}` : parts.join(' · ')
+}
+
 export function entriesHeading(read: TimelineRead): string {
   if (read.state === null) {
     return `no state yet · the newest ${read.since.length} of ${plural(read.total, 'entry', 'entries')}`
@@ -91,5 +111,7 @@ export function leftOffView(
     entries: read.since.map(lineOf),
     heading: entriesHeading(read),
     stale: staleLine(read),
+    verification: verificationLine(read),
+    verificationWarn: Boolean(read.verification?.note),
   }
 }

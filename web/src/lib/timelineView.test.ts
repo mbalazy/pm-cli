@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Project, TimelineEntry, TimelineRead } from '../api/types'
-import { dateOf, entriesHeading, leftOffView, lineOf, staleLine } from './timelineView'
+import {
+  dateOf,
+  entriesHeading,
+  leftOffView,
+  lineOf,
+  staleLine,
+  verificationLine,
+} from './timelineView'
 
 const project = (notes?: string) =>
   ({
@@ -74,7 +81,41 @@ describe('leftOffView', () => {
       ],
       heading: '2 entries since this state',
       stale: '',
+      verification: '',
+      verificationWarn: false,
     })
+  })
+
+  it('carries the verification line and warns when it asks for something', () => {
+    const v = leftOffView(
+      project(),
+      read({
+        state: entry('s', 15, 'state', 'a [verified 2026-09-01 by x]\nb'),
+        total: 1,
+        verification: {
+          verified: 0,
+          recheck: 1,
+          assumed: 0,
+          unmarked: 1,
+          recheck_lines: [
+            {
+              line: 1,
+              text: 'a',
+              mark: 'verified',
+              date: '2026-09-01',
+              source: 'x',
+              days: 15,
+              recheck: true,
+            },
+          ],
+          note: '1 line verified 7+ days ago - re-check it before relying on it',
+        },
+      }),
+    )
+    expect(v.kind === 'timeline' && v.verification).toBe(
+      '0 verified · 1 to recheck · 0 assumed · 1 unmarked · 1 line verified 7+ days ago - re-check it before relying on it',
+    )
+    expect(v.kind === 'timeline' && v.verificationWarn).toBe(true)
   })
 
   it('an events-only timeline has no state and says which entries it shows', () => {
@@ -99,6 +140,19 @@ describe('staleLine', () => {
     expect(staleLine(read({ stale: true, entries_since: 1, days_since: 1 }))).toBe(
       'this state is 1 day old with 1 entry after it - time to write a new one',
     )
+  })
+})
+
+describe('verificationLine', () => {
+  it('is empty without a verification and plain when nothing is due', () => {
+    expect(verificationLine(read({}))).toBe('')
+    expect(
+      verificationLine(
+        read({
+          verification: { verified: 3, recheck: 0, assumed: 1, unmarked: 0, recheck_lines: [] },
+        }),
+      ),
+    ).toBe('3 verified · 0 to recheck · 1 assumed · 0 unmarked')
   })
 })
 

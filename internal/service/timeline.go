@@ -18,7 +18,7 @@ import (
 type TimelineAddInput struct {
 	Project string   `json:"project" jsonschema:"Project slug or prefix"`
 	Kind    string   `json:"kind" jsonschema:"event (something happened to the project - one to three sentences), decision (one sentence plus refs to the full record in a task or doc), or state (a dated snapshot of where the project stands that fits on a screen: 10-20 lines - where we stand, what blocks, what is next, open questions, links)"`
-	Text    string   `json:"text" jsonschema:"The entry. Long material stays in the task or document; the entry points at it through refs."`
+	Text    string   `json:"text" jsonschema:"The entry. Long material stays in the task or document; the entry points at it through refs. In a state, end every line with its provenance: [verified YYYY-MM-DD by <command or doc>] for a fact checked in this session, [assumed] for one that was not - a line with no marker is read as unverified, a [verified] marker without a day (or with a future day) is refused."`
 	Refs    []string `json:"refs,omitempty" jsonschema:"References - task ids, doc paths, URLs"`
 	Session string   `json:"session,omitempty" jsonschema:"Claude session id (pm session-id), so the entry can be traced back to a transcript"`
 }
@@ -84,6 +84,11 @@ func TimelineAdd(store storage.TaskStore, in TimelineAddInput) (*TimelineAddResu
 	if strings.TrimSpace(in.Text) == "" {
 		return nil, validation(fmt.Errorf("text is required - what happened to the project, or where it stands"))
 	}
+	// A malformed [verified] marker is the caller's mistake (a 400 on the
+	// web, not a 500); the store checks it again before writing.
+	if err := storage.ValidateStateMarkers(kind, in.Text, time.Now()); err != nil {
+		return nil, validation(err)
+	}
 	entry := storage.TimelineEntry{Kind: kind, Text: in.Text, Refs: in.Refs, Session: in.Session}
 	dir := store.ProjectDir(slug)
 	if err := storage.AppendTimelineEntry(dir, &entry); err != nil {
@@ -100,7 +105,11 @@ func TimelineAdd(store storage.TaskStore, in TimelineAddInput) (*TimelineAddResu
 func timelineAddNote(e storage.TimelineEntry, r storage.TimelineRead) string {
 	switch {
 	case e.Kind == storage.TimelineState:
-		return "state recorded - the default read starts from it now"
+		note := "state recorded - the default read starts from it now"
+		if r.Verification != nil && r.Verification.Note != "" {
+			note += "; " + r.Verification.Note
+		}
+		return note
 	case r.State == nil:
 		return "no state yet - write a state entry saying where the project stands"
 	case r.Stale:
@@ -184,12 +193,15 @@ type TimelineContext struct {
 	Since []storage.TimelineEntry `json:"since"`
 	// SinceOmitted counts the oldest entries after the state left out by
 	// ContextTimelineLimit.
-	SinceOmitted int    `json:"since_omitted,omitempty"`
-	Stale        bool   `json:"stale"`
-	EntriesSince int    `json:"entries_since"`
-	DaysSince    int    `json:"days_since"`
-	Total        int    `json:"total"`
-	Note         string `json:"note"`
+	SinceOmitted int `json:"since_omitted,omitempty"`
+	// Verification is the state's provenance picture: counts of verified /
+	// to-recheck / assumed / unmarked lines and the lines due for a re-check.
+	Verification *storage.TimelineVerification `json:"verification,omitempty"`
+	Stale        bool                          `json:"stale"`
+	EntriesSince int                           `json:"entries_since"`
+	DaysSince    int                           `json:"days_since"`
+	Total        int                           `json:"total"`
+	Note         string                        `json:"note"`
 }
 
 // contextTimeline builds the pm_context block; nil when the project has no
@@ -202,6 +214,7 @@ func contextTimeline(dir string, now time.Time) *TimelineContext {
 	c := &TimelineContext{
 		State:        r.State,
 		Since:        r.Since,
+		Verification: r.Verification,
 		Stale:        r.Stale,
 		EntriesSince: r.EntriesSince,
 		DaysSince:    r.DaysSince,
@@ -211,9 +224,12 @@ func contextTimeline(dir string, now time.Time) *TimelineContext {
 		c.SinceOmitted = len(c.Since) - ContextTimelineLimit
 		c.Since = c.Since[c.SinceOmitted:]
 	}
-	notes := []string{"what happened TO this project: the latest state in full plus the entries after it, oldest first - read them together, a state alone goes out of date with the first entry after it. pm_timeline_list with since/kind reaches older entries; record a project-level event, decision or new state with pm_timeline_add"}
+	notes := []string{"what happened TO this project: the latest state in full plus the entries after it, oldest first - read them together, a state alone goes out of date with the first entry after it. A state line ending in [verified <day> by <source>] was checked on that day; [assumed] was not; a line with neither is unverified - `verification` counts them and lists the verified lines due for a re-check. pm_timeline_list with since/kind reaches older entries; record a project-level event, decision or new state with pm_timeline_add"}
 	if c.SinceOmitted > 0 {
 		notes = append(notes, fmt.Sprintf("the %d oldest entries after the state are omitted here", c.SinceOmitted))
+	}
+	if r.Verification != nil && r.Verification.Note != "" {
+		notes = append(notes, r.Verification.Note)
 	}
 	if r.Note != "" {
 		notes = append(notes, r.Note)
@@ -237,6 +253,9 @@ func timelineStatePointer(dir string, now time.Time) string {
 	s := stateDate(*r.State) + ": " + first
 	if r.Stale {
 		s += " (stale)"
+	}
+	if r.Verification != nil && r.Verification.Recheck > 0 {
+		s += fmt.Sprintf(" (%d to recheck)", r.Verification.Recheck)
 	}
 	return s
 }

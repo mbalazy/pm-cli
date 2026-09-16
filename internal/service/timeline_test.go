@@ -138,3 +138,42 @@ func TestContextTimeline(t *testing.T) {
 		}
 	})
 }
+
+func TestTimelineVerificationService(t *testing.T) {
+	now := time.Now()
+	old := now.AddDate(0, 0, -10).Format("2006-01-02")
+	today := now.Format("2006-01-02")
+
+	t.Run("a bad marker is a ValidationError", func(t *testing.T) {
+		store := newTestStore(t)
+		var verr *ValidationError
+		if _, err := TimelineAdd(store, TimelineAddInput{Project: "test", Kind: "state", Text: "x [verified by me]"}); !errors.As(err, &verr) {
+			t.Fatalf("want a ValidationError, got %v", err)
+		}
+	})
+
+	t.Run("add note carries the verification note", func(t *testing.T) {
+		store := newTestStore(t)
+		res, err := TimelineAdd(store, TimelineAddInput{Project: "test", Kind: "state", Text: "a\nb"})
+		if err != nil || !strings.Contains(res.Note, "state recorded") || !strings.Contains(res.Note, "no verification markers") {
+			t.Fatalf("res = %+v, err %v", res, err)
+		}
+		res, err = TimelineAdd(store, TimelineAddInput{Project: "test", Kind: "state", Text: "a [verified " + today + " by x]"})
+		if err != nil || res.Note != "state recorded - the default read starts from it now" {
+			t.Fatalf("res = %+v, err %v", res, err)
+		}
+	})
+
+	t.Run("context block and pointer", func(t *testing.T) {
+		store := newTestStore(t)
+		seedServiceTimeline(t, store, storage.TimelineState, "first [verified "+old+" by x]\nsecond [verified "+today+" by y]\nthird", 1, 0)
+		c := contextTimeline(store.ProjectDir("test"), now)
+		if c.Verification == nil || c.Verification.Recheck != 1 || c.Verification.Verified != 1 || c.Verification.Unmarked != 1 ||
+			!strings.Contains(c.Note, "1 line verified 7+ days ago") {
+			t.Fatalf("block: %+v note %q", c.Verification, c.Note)
+		}
+		if p := timelineStatePointer(store.ProjectDir("test"), now); !strings.HasSuffix(p, "first [verified "+old+" by x] (1 to recheck)") {
+			t.Fatalf("pointer = %q", p)
+		}
+	})
+}
