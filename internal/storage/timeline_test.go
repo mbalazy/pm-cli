@@ -117,6 +117,62 @@ func TestAppendTimelineEntryAcceptsToday(t *testing.T) {
 	}
 }
 
+func TestTimelineBackdate(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/Warsaw")
+	if err != nil {
+		t.Skip("no tz database")
+	}
+	now := time.Date(2026, 9, 16, 10, 41, 7, 0, loc)
+	cases := []struct {
+		name, date, want string
+	}{
+		{"today takes the current time", "2026-09-16", "2026-09-16T10:41:07+02:00"},
+		{"yesterday is midnight", "2026-09-15", "2026-09-15T00:00:00+02:00"},
+		{"an older day is midnight in its own offset", "2026-01-05", "2026-01-05T00:00:00+01:00"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := TimelineBackdate(c.date, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != c.want {
+				t.Fatalf("TimelineBackdate(%q) = %q, want %q", c.date, got, c.want)
+			}
+		})
+	}
+	t.Run("malformed", func(t *testing.T) {
+		for _, date := range []string{"15.09.2026", "2026-9-16", "today", ""} {
+			if _, err := TimelineBackdate(date, now); err == nil || !strings.Contains(err.Error(), "YYYY-MM-DD") {
+				t.Fatalf("TimelineBackdate(%q) err = %v", date, err)
+			}
+		}
+	})
+	// The rule is what keeps a state added today with --date from hiding
+	// behind an older state written earlier the same day without the flag.
+	t.Run("state dated today reads as the latest", func(t *testing.T) {
+		dir := t.TempDir()
+		earlier := now.Add(-90 * time.Minute)
+		if err := AppendTimelineEntry(dir, &TimelineEntry{Kind: TimelineState, Text: "S morning", TS: earlier.Format(time.RFC3339)}); err != nil {
+			t.Fatal(err)
+		}
+		ts, err := TimelineBackdate(now.Format(stampDateLayout), now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := AppendTimelineEntry(dir, &TimelineEntry{Kind: TimelineState, Text: "S later", TS: ts}); err != nil {
+			t.Fatal(err)
+		}
+		r, err := ReadTimelineDefault(dir, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.State == nil || r.State.Text != "S later" {
+			t.Fatalf("default read state = %+v, want the state added later today", r.State)
+		}
+	})
+}
+
 func TestTimelineEntryIDStable(t *testing.T) {
 	a := timelineEntryID("2026-09-15T10:00:00+02:00", TimelineEvent, "x")
 	if a != timelineEntryID("2026-09-15T10:00:00+02:00", TimelineEvent, "x") {

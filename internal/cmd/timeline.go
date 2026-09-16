@@ -97,11 +97,11 @@ func newTimelineAddCmd(store storage.TaskStore) *cobra.Command {
 				e.Text = string(data)
 			}
 			if date != "" {
-				t, err := time.ParseInLocation("2006-01-02", date, time.Local)
+				ts, err := storage.TimelineBackdate(date, time.Now())
 				if err != nil {
-					return fmt.Errorf("--date %q: want YYYY-MM-DD", date)
+					return err
 				}
-				e.TS = t.Format(time.RFC3339)
+				e.TS = ts
 			}
 			e.Session = timelineSession(e.Session)
 			dir := store.ProjectDir(slug)
@@ -130,7 +130,8 @@ func newTimelineAddCmd(store storage.TaskStore) *cobra.Command {
 	// with a comma in its query is still one reference.
 	cmd.Flags().StringArrayVar(&e.Refs, "ref", nil, "a reference - task id, path or URL, stored verbatim (repeatable)")
 	cmd.Flags().StringVar(&e.Session, "session", "", "Claude session id (default: detected when run inside Claude Code)")
-	cmd.Flags().StringVar(&date, "date", "", "back-date the entry (YYYY-MM-DD) when seeding history")
+	cmd.Flags().StringVar(&date, "date", "", "back-date the entry (YYYY-MM-DD) when seeding history - midnight of that day; "+
+		"today's date takes the current time, the same as no flag, so an entry written now never sorts before this morning's")
 	return cmd
 }
 

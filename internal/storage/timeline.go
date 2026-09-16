@@ -112,6 +112,25 @@ func ValidateTimelineKind(kind string) error {
 	return fmt.Errorf("invalid timeline kind %q (want one of: %s)", kind, strings.Join(TimelineKinds, ", "))
 }
 
+// TimelineBackdate turns a `--date YYYY-MM-DD` value into the ts a back-dated
+// entry carries: midnight of that day in the local zone. The one exception is
+// TODAY (in now's zone), which answers now itself. An entry dated today is not
+// history - it is being written now - and midnight would sort it BEFORE every
+// entry written earlier the same day without the flag: as a state it would
+// hide behind an older state in the default read (vega, 2026-09-16: a state
+// added with `--date <today>` at 10:00 read as older than the bootstrap's
+// state of 09:02). A malformed date is an error naming the wanted layout.
+func TimelineBackdate(date string, now time.Time) (string, error) {
+	t, err := time.ParseInLocation(stampDateLayout, date, now.Location())
+	if err != nil {
+		return "", fmt.Errorf("--date %q: want YYYY-MM-DD", date)
+	}
+	if t.Format(stampDateLayout) == now.Format(stampDateLayout) {
+		return now.Format(time.RFC3339), nil
+	}
+	return t.Format(time.RFC3339), nil
+}
+
 // TimelineDir is where a project's timeline files live.
 func TimelineDir(projectDir string) string {
 	return filepath.Join(projectDir, ".timeline")

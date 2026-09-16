@@ -192,6 +192,49 @@ func TestTimelineAddCLI(t *testing.T) {
 	})
 }
 
+// A state added later today with --date <today> must be the default read: the
+// flag takes the current time for today, midnight only for an earlier day.
+func TestTimelineAddDateTodayCLI(t *testing.T) {
+	store, slug := timelineStore(t)
+	mustTimeline(t, store, "add", "-p", slug, "--kind", "state", "--text", "S morning")
+	mustTimeline(t, store, "add", "-p", slug, "--kind", "state", "--text", "S later", "--date", daysAgo(0))
+	mustTimeline(t, store, "add", "-p", slug, "--kind", "event", "--text", "E old", "--date", daysAgo(1))
+
+	out := mustTimeline(t, store, slug, "--json")
+	var read struct {
+		State *storage.TimelineEntry `json:"state"`
+	}
+	if err := json.Unmarshal([]byte(out), &read); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if read.State == nil || read.State.Text != "S later" {
+		t.Fatalf("default read state = %+v, want the state added later today", read.State)
+	}
+
+	entries, err := storage.ReadTimeline(store.ProjectDir(slug))
+	if err != nil {
+		t.Fatal(err)
+	}
+	byText := map[string]storage.TimelineEntry{}
+	for _, e := range entries {
+		byText[e.Text] = e
+	}
+	later, _ := byText["S later"].When()
+	morning, _ := byText["S morning"].When()
+	// Second resolution: both adds may share a second, and a tie keeps file
+	// order (sortTimeline is stable) - what must never happen is "later" BEFORE.
+	if later.Before(morning) {
+		t.Fatalf("--date <today> ts %s sorts before the flagless %s", byText["S later"].TS, byText["S morning"].TS)
+	}
+	if later.Hour() == 0 && later.Minute() == 0 && later.Second() == 0 && time.Since(later) > time.Minute {
+		t.Fatalf("--date <today> stamped midnight: %s", byText["S later"].TS)
+	}
+	old, _ := byText["E old"].When()
+	if old.Hour() != 0 || old.Minute() != 0 || old.Second() != 0 || old.Format("2006-01-02") != daysAgo(1) {
+		t.Fatalf("--date <yesterday> ts %s is not midnight of that day", byText["E old"].TS)
+	}
+}
+
 func TestTimelineListCLI(t *testing.T) {
 	store, slug := timelineStore(t)
 	mustTimeline(t, store, "add", "-p", slug, "--kind", "state", "--text", "S old", "--date", daysAgo(10))
