@@ -551,7 +551,7 @@ func TestGitHubContext(t *testing.T) {
 func TestOpenPRsOnlyTheUsers(t *testing.T) {
 	listFor := func(login string) string {
 		return fmt.Sprintf(`[
-		{"number":1,"title":"Theirs","updatedAt":%[1]q,"createdAt":%[2]q,"headRefName":"feat/random","author":{"login":"Muhameti-centralsoft"},"reviewRequests":[{"login":"somebody"},{"name":"team"}]},
+		{"number":1,"title":"Theirs","updatedAt":%[1]q,"createdAt":%[2]q,"headRefName":"feat/random","author":{"login":"casey"},"reviewRequests":[{"login":"somebody"},{"name":"team"}]},
 		{"number":2,"title":"Mine","updatedAt":%[1]q,"createdAt":%[2]q,"headRefName":"feat/mine","author":{"login":%[3]q}},
 		{"number":3,"title":"Review me","updatedAt":%[1]q,"createdAt":%[2]q,"headRefName":"feat/review","author":{"login":"vernon"},"reviewRequests":[{"login":%[4]q}]},
 		{"number":4,"title":"On my task","updatedAt":%[1]q,"createdAt":%[2]q,"headRefName":"feat/task-branch","author":{"login":"vernon"}}]`,
