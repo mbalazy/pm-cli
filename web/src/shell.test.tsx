@@ -21,7 +21,7 @@ const projects = {
     },
     {
       slug: 'acme-api',
-      name: 'ACMEApi',
+      name: 'Publisher API',
       group: 'acme',
       group_name: 'ACME',
       stack: 'Node, Postgres',
