@@ -86,7 +86,7 @@ When fixing layout/rendering bugs, don't guess at line counts - instrument (colo
 - **Task reorder**: `Ctrl+j/k` swaps task order within a column via `Order int` field in TaskMeta. If all tasks have `Order==0`, sequential orders are assigned first. `filteredTasks()` sorts by Order asc, then Updated desc.
 - **Sessions**: `Sessions []string` in TaskMeta stores Claude session IDs (appended by TUI on launch, or via MCP `sessions` param). Used for `--resume` and `session_count` in MCP output. MCP `pm_get_task` returns full `sessions` list; `pm_update_task` and `pm_add_task` accept `sessions` param (append-only).
 - **Session detection**: `pm session-id` prints current CC session UUID. Strategy: (1) walk process tree for `claude --resume <id>` arg, (2) fallback to newest .jsonl in `~/.claude/projects/<encoded-cwd>/`. Requires `CLAUDECODE=1` env var.
-- **Worktree naming**: `worktreeName(t)` uses `t.Meta.Branch` if set, otherwise `Slugify(t.Meta.Title)`. Produces semantic branch names (e.g. `feat/enable-analytics` not `atlas-9`).
+- **Worktree naming**: `worktreeName(t)` uses `t.Meta.Branch` if set, otherwise `Slugify(t.Meta.Title)`. Produces semantic branch names (e.g. `feat/enable-analytics` not `comet-9`).
 
 ## Workflow
 
