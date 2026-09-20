@@ -3,8 +3,11 @@ LDFLAGS = -ldflags "-X github.com/mbalazy/pm-cli/internal/version.Version=$(VERS
 
 .PHONY: install install-full vet staticcheck fmt-check test test-race check build-pm-linux deploy-vps web-install web-check web
 
-# staticcheck lives in GOBIN (go install honnef.co/go/tools/cmd/staticcheck@latest),
+# staticcheck lives in GOBIN (go install honnef.co/go/tools/cmd/staticcheck@v0.6.1),
 # which may not be on PATH in every invocation context (hooks, CI) - resolve it.
+# The version is the one .github/workflows/ci.yml installs: an unpinned @latest
+# locally means a check that passes here can still fail in CI, and the other way
+# round. Bump both together.
 GOBIN_DIR := $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)
 STATICCHECK := $(or $(shell command -v staticcheck 2>/dev/null),$(GOBIN_DIR)/staticcheck)
 
@@ -71,7 +74,7 @@ vet:
 	go vet ./...
 
 staticcheck:
-	@test -x "$(STATICCHECK)" || { echo "staticcheck not found - run: go install honnef.co/go/tools/cmd/staticcheck@latest"; exit 1; }
+	@test -x "$(STATICCHECK)" || { echo "staticcheck not found - run: go install honnef.co/go/tools/cmd/staticcheck@v0.6.1"; exit 1; }
 	"$(STATICCHECK)" ./...
 
 test:

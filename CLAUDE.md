@@ -15,7 +15,7 @@ make test-race             # go test -race ./... (also run by CI, not part of ch
 make install VERSION=X.Y.Z  # override version
 ```
 
-Git hooks live in `githooks/` (versioned; `git config core.hooksPath githooks` - already set locally). `pre-commit` just runs `make check`, so the hook, `make check`, and CI share one target set and can't drift apart. `staticcheck` is resolved via PATH → `go env GOBIN` → `GOPATH/bin` and fails with an install hint when missing (`go install honnef.co/go/tools/cmd/staticcheck@latest`). Fix failures - never bypass with `-n`.
+Git hooks live in `githooks/` (versioned; `git config core.hooksPath githooks` - already set locally). `pre-commit` just runs `make check`, so the hook, `make check`, and CI share one target set and can't drift apart. `staticcheck` is resolved via PATH → `go env GOBIN` → `GOPATH/bin` and fails with an install hint when missing (`go install honnef.co/go/tools/cmd/staticcheck@v0.6.1`, the version `.github/workflows/ci.yml` installs - bump both together). Fix failures - never bypass with `-n`.
 
 CI (`.github/workflows/ci.yml`) runs on push to `main` and on every PR: `make fmt-check`, `make vet`, `make staticcheck`, `make test-race` - the same Makefile targets used locally, plus the race detector (deliberately not part of `make check`, which stays fast for the local commit-time gate).
 
