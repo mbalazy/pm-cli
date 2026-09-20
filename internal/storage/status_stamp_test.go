@@ -153,7 +153,7 @@ func TestMoveTaskStampsStatusChanged(t *testing.T) {
 func TestWaitingForRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "w-1-blocked.md")
-	blocker := "review Alex PR #940"
+	blocker := "review by the lead, PR #940"
 	if err := WriteTask(&Task{
 		Meta:     TaskMeta{ID: "w-1", Title: "Blocked", Status: StatusWaiting, Created: Today(), Updated: Now(), WaitingFor: blocker},
 		FilePath: path,

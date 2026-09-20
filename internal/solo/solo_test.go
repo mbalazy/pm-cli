@@ -419,7 +419,7 @@ func TestPinConfigDir(t *testing.T) {
 	if PinConfigDir(def) || PinConfigDir(def+"/") || PinConfigDir("") {
 		t.Fatal("the default dir must not be pinned")
 	}
-	if !PinConfigDir(filepath.Join(home, ".claude-alt")) {
+	if !PinConfigDir(filepath.Join(home, ".claude-work")) {
 		t.Fatal("a non-default dir must be pinned")
 	}
 	t.Setenv("CLAUDE_CONFIG_DIR", "/tmp/leaked-from-pm-serve")

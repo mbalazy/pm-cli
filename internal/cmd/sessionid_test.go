@@ -7,13 +7,13 @@ func TestEncodeProjectPath(t *testing.T) {
 		path string
 		want string
 	}{
-		{"/Users/alice/.claude/pm-cli", "-Users-mart--claude-pm-cli"},
-		{"/Users/alice/.config/nvim", "-Users-mart--config-nvim"},
-		{"/Users/alice/repos/atlas", "-Users-mart-repos-atlas"},
-		{"/Users/alice/repos/atlas/atlas-app", "-Users-mart-repos-atlas-atlas-app"},
+		{"/Users/alice/.claude/pm-cli", "-Users-alice--claude-pm-cli"},
+		{"/Users/alice/.config/nvim", "-Users-alice--config-nvim"},
+		{"/Users/alice/repos/atlas", "-Users-alice-repos-atlas"},
+		{"/Users/alice/repos/atlas/atlas-app", "-Users-alice-repos-atlas-atlas-app"},
 		// Dot in a path segment must map to "-" too (CC's real encoding).
-		{"/Users/alice/repos/orbit/app.orbit", "-Users-mart-repos-orbit-app-orbit"},
-		{"/Users/alice/.claude/pm-cli/sub.dir", "-Users-mart--claude-pm-cli-sub-dir"},
+		{"/Users/alice/repos/orbit/app.orbit", "-Users-alice-repos-orbit-app-orbit"},
+		{"/Users/alice/.claude/pm-cli/sub.dir", "-Users-alice--claude-pm-cli-sub-dir"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {

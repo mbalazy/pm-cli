@@ -383,7 +383,7 @@ func TestWorkerEnvPinsConfigDir(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "/inherited/dir")
 
 	// Non-default config dir -> pinned exactly once, replacing the inherited one.
-	custom := "/Users/test/.claude-alt"
+	custom := "/Users/test/.claude-work"
 	var got []string
 	for _, kv := range workerEnv(custom) {
 		if strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") {

@@ -225,7 +225,7 @@ func TestResolveHandoffRigSkill(t *testing.T) {
 	})
 
 	t.Run("falls back to the project's pinned Claude config dir", func(t *testing.T) {
-		configDir := t.TempDir() // e.g. ~/.claude-alt on a pinned project
+		configDir := t.TempDir() // e.g. ~/.claude-work on a pinned project
 		md := filepath.Join(configDir, "skills", "starting-local-rig", "SKILL.md")
 		writeHandoffFile(t, md, "# starting-local-rig")
 
@@ -274,7 +274,7 @@ func TestResolveHandoffSkillWithoutScriptsDir(t *testing.T) {
 
 func TestResolveHandoffRuntimeSkillGlobalFallback(t *testing.T) {
 	t.Run("falls back to the pinned Claude config dir and FLAGS it", func(t *testing.T) {
-		configDir := t.TempDir() // e.g. ~/.claude-alt on a pinned project
+		configDir := t.TempDir() // e.g. ~/.claude-work on a pinned project
 		md := filepath.Join(configDir, "skills", "web-verify", "SKILL.md")
 		writeHandoffFile(t, md, "# web-verify")
 		writeHandoffFile(t, filepath.Join(configDir, "skills", "web-verify", "scripts", "web-ui.mjs"), "")

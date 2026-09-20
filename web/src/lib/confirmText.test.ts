@@ -314,8 +314,8 @@ describe('solo actions', () => {
     expect(describeAction(p, '').loading).toBe(true)
     expect(requestFor(p, '')).toEqual({ kind: 'solo_start', input })
     // A non-default config dir is spelled out, so the line is pasteable as is.
-    expect(previewOfSolo({ ...plan, config_dir: '/home/u/.claude-alt' })).toMatch(
-      /^cd \/repos\/pm-cli && CLAUDE_CONFIG_DIR=\/home\/u\/.claude-alt claude /,
+    expect(previewOfSolo({ ...plan, config_dir: '/home/u/.claude-work' })).toMatch(
+      /^cd \/repos\/pm-cli && CLAUDE_CONFIG_DIR=\/home\/u\/.claude-work claude /,
     )
     expect(previewOfSolo(undefined)).toBe('')
   })

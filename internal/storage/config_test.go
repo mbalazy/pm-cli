@@ -123,7 +123,7 @@ func TestLoadConfigRejectsBadEntries(t *testing.T) {
 		},
 		{
 			name: "uppercase name breaks ValidateSlug",
-			body: "remotes:\n  - name: runner\n    ssh: runner\n    pm: /bin/pm\n    root: /root\n",
+			body: "remotes:\n  - name: Runner\n    ssh: runner\n    pm: /bin/pm\n    root: /root\n",
 			want: []string{"invalid slug"},
 		},
 		{

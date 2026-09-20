@@ -15,8 +15,8 @@ func TestResolveWorkerClaudeConfigDir(t *testing.T) {
 	home, _ := os.UserHomeDir()
 
 	t.Run("unset -> the project's claude_config_dir", func(t *testing.T) {
-		p := &Project{ClaudeConfigDir: "/opt/claude-alt"}
-		if got := p.ResolveWorkerClaudeConfigDir(); got != "/opt/claude-alt" {
+		p := &Project{ClaudeConfigDir: "/opt/claude-work"}
+		if got := p.ResolveWorkerClaudeConfigDir(); got != "/opt/claude-work" {
 			t.Errorf("got %q, want the project dir", got)
 		}
 	})
@@ -27,11 +27,11 @@ func TestResolveWorkerClaudeConfigDir(t *testing.T) {
 		}
 	})
 	t.Run("set -> the worker dir, tilde expanded, project dir untouched", func(t *testing.T) {
-		p := &Project{ClaudeConfigDir: "/opt/claude-alt", Executor: &Executor{WorkerClaudeConfigDir: "~/.claude-worker"}}
+		p := &Project{ClaudeConfigDir: "/opt/claude-work", Executor: &Executor{WorkerClaudeConfigDir: "~/.claude-worker"}}
 		if got, want := p.ResolveWorkerClaudeConfigDir(), filepath.Join(home, ".claude-worker"); got != want {
 			t.Errorf("worker dir = %q, want %q", got, want)
 		}
-		if got := p.ResolveClaudeConfigDir(); got != "/opt/claude-alt" {
+		if got := p.ResolveClaudeConfigDir(); got != "/opt/claude-work" {
 			t.Errorf("the project's own dir must not move: %q", got)
 		}
 	})
@@ -63,15 +63,15 @@ func TestResolveClaudeConfigDir(t *testing.T) {
 	})
 
 	t.Run("explicit absolute path", func(t *testing.T) {
-		p := &Project{ClaudeConfigDir: "/opt/claude-alt"}
-		if got := p.ResolveClaudeConfigDir(); got != "/opt/claude-alt" {
-			t.Errorf("got %q, want /opt/claude-alt", got)
+		p := &Project{ClaudeConfigDir: "/opt/claude-work"}
+		if got := p.ResolveClaudeConfigDir(); got != "/opt/claude-work" {
+			t.Errorf("got %q, want /opt/claude-work", got)
 		}
 	})
 
 	t.Run("tilde expansion", func(t *testing.T) {
-		p := &Project{ClaudeConfigDir: "~/.claude-alt"}
-		want := filepath.Join(home, ".claude-alt")
+		p := &Project{ClaudeConfigDir: "~/.claude-work"}
+		want := filepath.Join(home, ".claude-work")
 		if got := p.ResolveClaudeConfigDir(); got != want {
 			t.Errorf("got %q, want %q", got, want)
 		}

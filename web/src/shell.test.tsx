@@ -722,10 +722,10 @@ describe('mutations go through the dialog', () => {
     await user.click(within(second).getByRole('button', { name: 'waiting…' }))
     const dialog = screen.getByRole('dialog', { name: 'Confirm' })
     expect(within(dialog).getByRole('alert')).toHaveTextContent(/no reason/)
-    await user.type(within(dialog).getByRole('textbox'), 'review by Marta{Enter}')
+    await user.type(within(dialog).getByRole('textbox'), 'review by the lead{Enter}')
     await vi.waitFor(() => expect(posts).toHaveLength(1))
     expect(posts[0].path).toBe('/api/tasks/alpha/alpha-2')
-    expect(posts[0].body).toEqual({ status: 'waiting', waiting_for: 'review by Marta' })
+    expect(posts[0].body).toEqual({ status: 'waiting', waiting_for: 'review by the lead' })
   })
 
   it('Esc inside a detail dialog closes the dialog only - the task stays open', async () => {
@@ -1609,10 +1609,10 @@ describe('review screen', () => {
     renderAt('/review')
     await user.type(
       await screen.findByRole('textbox', { name: 'PR to review' }),
-      'pr 555 w repo orbit mobile{Enter}',
+      'pr 555 in the mobile repo{Enter}',
     )
     await vi.waitFor(() => expect(posts).toHaveLength(1))
-    expect(posts[0].body).toEqual({ input: 'pr 555 w repo orbit mobile' })
+    expect(posts[0].body).toEqual({ input: 'pr 555 in the mobile repo' })
   })
 
   it('a review page renders the report', async () => {

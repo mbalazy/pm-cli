@@ -47,14 +47,14 @@ func TestE2EWaitingForAndStatusChanged(t *testing.T) {
 	// add: waiting_for is accepted, status_changed is stamped at creation.
 	text, isErr := call(t, sess, "pm_add_task", map[string]any{
 		"project": "test", "title": "Blocked on review",
-		"status": "waiting", "waiting_for": "review Alex PR #940",
+		"status": "waiting", "waiting_for": "review by the lead, PR #940",
 	})
 	if isErr {
 		t.Fatalf("add_task error: %s", text)
 	}
 	var added blockerDetail
 	mustUnmarshal(t, text, &added)
-	if added.WaitingFor != "review Alex PR #940" {
+	if added.WaitingFor != "review by the lead, PR #940" {
 		t.Errorf("waiting_for = %q, want the blocker text", added.WaitingFor)
 	}
 	if storage.StampDate(added.StatusChanged) != storage.Today() {
