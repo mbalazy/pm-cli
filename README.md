@@ -106,7 +106,7 @@ id: my-app-12
 title: Fix login flow
 status: doing
 status_changed: '2026-09-02T11:20:04+02:00'
-waiting_for: 'review Alex PR #940'
+waiting_for: 'review by the lead, PR #940'
 brief: 'Worker merged on feat/fix-login. JWT refresh was the culprit ...'
 ac: |
   - refresh token rotates on use
