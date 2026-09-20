@@ -161,7 +161,7 @@ make install-full # the front end plus the binary
 
 Git hooks live in `githooks/` (`git config core.hooksPath githooks`) and pre-commit runs `make check`, the same target as CI. `make check` and `make install` are node-free on purpose, which is why the cockpit's front end has its own target. The tests need `git` and `python3` on `PATH`, and the agent paths run against a fake `claude` binary - a PATH-prepended script emitting a canned result envelope - so the real subprocess, parsing, journal and run-state plumbing is covered at zero token cost.
 
-Developed with Claude Code; `CLAUDE.md` is the agent's working memory and doubles as the contributor guide. Docs: [agent guide](docs/agent-guide.md), [task authoring](docs/task-authoring.md), [executor](docs/executor.md), [design log](docs/design-log.md).
+Developed with Claude Code; `CLAUDE.md` is the agent's working memory and doubles as the contributor guide. The rest of the writing is indexed in [docs/](docs/README.md).
 
 ## License
 
