@@ -67,28 +67,28 @@ func TestReadShifts(t *testing.T) {
 // heading line with bullet labels and nested bullets, bold label-and-word,
 // "Stan uzupełnienie", and the three ways an untouched task is written.
 const sampleReport = "# Raport zmiany solo - 2026-09-14\n\n## 1. Co z taskami\n\n" +
-	"### APP-1 - lista nie pokazuje klienta\n\n**Bug:** klient znika z listy.\n\n**Stan:** **naprawione** (częściowo w jednym punkcie). Lista pokazuje klienta.\n\n**Sprawdzone:** na symulatorze.\n\n**Przed PR-em:** nic.\n\n" +
-	"**APP-2, krok 2: ekran pozycji**\n- Bug: nie było ekranu.\n- Stan: **zrobione**. Ekran pokazuje dług.\n\n  Pod nim jest lista.\n- Sprawdzone: w przeglądarce.\n- Przed PR-em: scalić po kroku 1. Decyzje do potwierdzenia:\n  - Skala z konfiguracji.\n  - 404 to brak pozycji.\n\n" +
-	"### APP-3 - eksport\n\n- **Bug:** brak eksportu.\n- **Stan: nie zrobione.** Eksport nadal pada.\n- **Stan uzupełnienie:** przyczyna w API.\n\n" +
-	"**APP-4, krok 4: kontrakt**: nie ruszone, bo czeka na zamrożenie.\n\n" +
-	"### Zadania nie ruszone\n\n- **APP-5** - nie ruszone, bo czeka na makietę.\n\n" +
-	"### APP-6 - atrapa\n\nNie ruszone, bo czeka na APP-3.\n\n" +
+	"### ACME-1 - lista nie pokazuje klienta\n\n**Bug:** klient znika z listy.\n\n**Stan:** **naprawione** (częściowo w jednym punkcie). Lista pokazuje klienta.\n\n**Sprawdzone:** na symulatorze.\n\n**Przed PR-em:** nic.\n\n" +
+	"**ACME-2, krok 2: ekran pozycji**\n- Bug: nie było ekranu.\n- Stan: **zrobione**. Ekran pokazuje dług.\n\n  Pod nim jest lista.\n- Sprawdzone: w przeglądarce.\n- Przed PR-em: scalić po kroku 1. Decyzje do potwierdzenia:\n  - Skala z konfiguracji.\n  - 404 to brak pozycji.\n\n" +
+	"### ACME-3 - eksport\n\n- **Bug:** brak eksportu.\n- **Stan: nie zrobione.** Eksport nadal pada.\n- **Stan uzupełnienie:** przyczyna w API.\n\n" +
+	"**ACME-4, krok 4: kontrakt**: nie ruszone, bo czeka na zamrożenie.\n\n" +
+	"### Zadania nie ruszone\n\n- **ACME-5** - nie ruszone, bo czeka na makietę.\n\n" +
+	"### ACME-6 - atrapa\n\nNie ruszone, bo czeka na ACME-3.\n\n" +
 	"## 2. Decyzje podjete za Ciebie\n\n- Wybrałem A zamiast B.\n  Bo B psuje C.\n- Odrzuciłem D.\n\n" +
 	"## 3. Pomysły na nowe tickety\n\n1. Ticket jeden.\n2. Ticket dwa.\n\n" +
 	"## 4. Sprzatanie i stan runtime\n\n- serwer zatrzymany\n\n" +
 	"## 5. Szczegóły techniczne\n\n`a1b2c3d` commit\n\n" +
-	"## TL;DR\n\nZrobione dwa z trzech,\nnic nie wypchnięte. Twój ruch: wypchnij `APP-2` i otwórz PR.\n"
+	"## TL;DR\n\nZrobione dwa z trzech,\nnic nie wypchnięte. Twój ruch: wypchnij `ACME-2` i otwórz PR.\n"
 
 func TestParseShiftReport(t *testing.T) {
 	rep := ParseShiftReport(sampleReport)
 	type want struct{ heading, outcome string }
 	wants := []want{
-		{"APP-1 - lista nie pokazuje klienta", OutcomePartial},
-		{"APP-2, krok 2: ekran pozycji", OutcomeDone},
-		{"APP-3 - eksport", OutcomeNotDone},
-		{"APP-4, krok 4: kontrakt", OutcomeUntouched},
-		{"APP-5", OutcomeUntouched},
-		{"APP-6 - atrapa", OutcomeUntouched},
+		{"ACME-1 - lista nie pokazuje klienta", OutcomePartial},
+		{"ACME-2, krok 2: ekran pozycji", OutcomeDone},
+		{"ACME-3 - eksport", OutcomeNotDone},
+		{"ACME-4, krok 4: kontrakt", OutcomeUntouched},
+		{"ACME-5", OutcomeUntouched},
+		{"ACME-6 - atrapa", OutcomeUntouched},
 	}
 	if len(rep.Tasks) != len(wants) {
 		t.Fatalf("tasks = %+v", rep.Tasks)
@@ -100,15 +100,15 @@ func TestParseShiftReport(t *testing.T) {
 	}
 	a1, a2, a3 := rep.Tasks[0], rep.Tasks[1], rep.Tasks[2]
 	if a1.Problem != "klient znika z listy." || a1.Checked != "na symulatorze." || a1.BeforePR != "nic." {
-		t.Errorf("APP-1 fields = %+v", a1)
+		t.Errorf("ACME-1 fields = %+v", a1)
 	}
 	if a2.State != "zrobione. Ekran pokazuje dług.\n\nPod nim jest lista." || a2.BeforePR != "scalić po kroku 1. Decyzje do potwierdzenia:\n- Skala z konfiguracji.\n- 404 to brak pozycji." {
-		t.Errorf("APP-2 continuation = %q / %q", a2.State, a2.BeforePR)
+		t.Errorf("ACME-2 continuation = %q / %q", a2.State, a2.BeforePR)
 	}
 	if a3.State != "nie zrobione. Eksport nadal pada.\n\nprzyczyna w API." {
-		t.Errorf("APP-3 Stan uzupełnienie = %q", a3.State)
+		t.Errorf("ACME-3 Stan uzupełnienie = %q", a3.State)
 	}
-	if rep.Tasks[3].State != "nie ruszone, bo czeka na zamrożenie." || rep.Tasks[5].State != "Nie ruszone, bo czeka na APP-3." {
+	if rep.Tasks[3].State != "nie ruszone, bo czeka na zamrożenie." || rep.Tasks[5].State != "Nie ruszone, bo czeka na ACME-3." {
 		t.Errorf("untouched = %q / %q", rep.Tasks[3].State, rep.Tasks[5].State)
 	}
 	if len(rep.Decisions) != 2 || rep.Decisions[0] != "Wybrałem A zamiast B.\nBo B psuje C." || rep.Decisions[1] != "Odrzuciłem D." {
@@ -120,7 +120,7 @@ func TestParseShiftReport(t *testing.T) {
 	if rep.Cleanup != "- serwer zatrzymany" || rep.Technical != "`a1b2c3d` commit" {
 		t.Errorf("cleanup %q technical %q", rep.Cleanup, rep.Technical)
 	}
-	if rep.Summary != "Zrobione dwa z trzech, nic nie wypchnięte." || rep.Next != "Twój ruch: wypchnij `APP-2` i otwórz PR." {
+	if rep.Summary != "Zrobione dwa z trzech, nic nie wypchnięte." || rep.Next != "Twój ruch: wypchnij `ACME-2` i otwórz PR." {
 		t.Errorf("tl;dr = %q | %q", rep.Summary, rep.Next)
 	}
 	if got := ParseShiftReport("## 2. Decyzje podjęte za Ciebie\n\nBrak.\n"); len(got.Decisions) != 0 || len(got.Tasks) != 0 {
@@ -149,7 +149,7 @@ func TestShiftProgressAndSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := ReadShifts(dir, "p")[0].Summary
-	if s == nil || s.Counts() != "1 done · 1 partial · 1 not done · 3 untouched" || s.Title != "APP-1 - lista nie pokazuje klienta (+2 more)" || s.Next != "Twój ruch: wypchnij APP-2 i otwórz PR." {
+	if s == nil || s.Counts() != "1 done · 1 partial · 1 not done · 3 untouched" || s.Title != "ACME-1 - lista nie pokazuje klienta (+2 more)" || s.Next != "Twój ruch: wypchnij ACME-2 i otwórz PR." {
 		t.Errorf("summary off the report = %+v", s)
 	}
 	if long := plainLine(strings.Repeat("słowo ", 60), 40); utf8.RuneCountInString(long) > 41 || !strings.HasSuffix(long, "…") {
@@ -164,8 +164,8 @@ func TestAttentionSoloRowSaysWhatCameOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := build(t, store, "", AttentionOptions{}).Section(SectionSoloReports).Rows[0]
-	if row.Title != "APP-1 - lista nie pokazuje klienta (+2 more)" || row.Severity != SeverityWarn ||
-		row.Reason != "1 done · 1 partial · 1 not done · 3 untouched · Twój ruch: wypchnij APP-2 i otwórz PR." {
+	if row.Title != "ACME-1 - lista nie pokazuje klienta (+2 more)" || row.Severity != SeverityWarn ||
+		row.Reason != "1 done · 1 partial · 1 not done · 3 untouched · Twój ruch: wypchnij ACME-2 i otwórz PR." {
 		t.Errorf("row = %q | %q | %s", row.Title, row.Reason, row.Severity)
 	}
 }

@@ -109,8 +109,8 @@ func TestPromptAndArgv(t *testing.T) {
 			`--dangerously-skip-permissions --autocompact 400k --settings {"worktree":{"bgIsolation":"none"}} --model opus --name solo-app --bg /solo app-7 app-8 --no-runtime --push --pr --max-tasks 2 --max-hours 3 --base main`},
 		{"ask rules add the setting sources", Input{Queue: "ACME-1234", Runtime: RuntimeSim}, 2,
 			`--dangerously-skip-permissions --autocompact 400k --settings {"worktree":{"bgIsolation":"none"}} --setting-sources user,local --name solo-app --bg /solo ACME-1234 --sim`},
-		{"web runtime", Input{Queue: "https://linear.app/x/issue/APP-1"}, 0,
-			`--dangerously-skip-permissions --autocompact 400k --settings {"worktree":{"bgIsolation":"none"}} --name solo-app --bg /solo https://linear.app/x/issue/APP-1`},
+		{"web runtime", Input{Queue: "https://linear.app/x/issue/ACME-1"}, 0,
+			`--dangerously-skip-permissions --autocompact 400k --settings {"worktree":{"bgIsolation":"none"}} --name solo-app --bg /solo https://linear.app/x/issue/ACME-1`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := strings.Join(buildArgv(tc.in, tc.ask, "solo-app"), " ")

@@ -353,7 +353,7 @@ func TestGitAndGitHubSourcesParseGH(t *testing.T) {
 		at(30*time.Minute), at(30*time.Minute), at(72*time.Hour), at(96*time.Hour), at(10*time.Minute), at(5*time.Minute))
 	prView9 := fmt.Sprintf(`{"number":9,"title":"Merged one","url":"https://gh/x/pull/9","comments":[
 	{"id":"n1","body":"### PR preview published","createdAt":%[1]q,"author":{"login":"github-actions"}},
-	{"id":"n2","body":"<!-- linear-linkback -->\nAPP-1","createdAt":%[1]q,"author":{"login":"linear-code"}},
+	{"id":"n2","body":"<!-- linear-linkback -->\nACME-1","createdAt":%[1]q,"author":{"login":"linear-code"}},
 	{"id":"n3","body":"/preview","createdAt":%[1]q,"author":{"login":"me-login"}},
 	{"id":"n4","body":"thanks, verified after the merge","createdAt":%[1]q,"author":{"login":"rev"}}],"reviews":[]}`, at(8*time.Minute))
 	prView := fmt.Sprintf(`{"number":7,"title":"Add b","url":"https://gh/x/pull/7","reviewDecision":"CHANGES_REQUESTED",
@@ -461,7 +461,7 @@ func TestNoiseComment(t *testing.T) {
 		want        bool
 	}{
 		{"github-actions", "# Performance Comparison Report", true},
-		{"linear-code", "<!-- linear-linkback -->\nAPP-1", true},
+		{"linear-code", "<!-- linear-linkback -->\nACME-1", true},
 		{"someone", "<!-- linear-linkback --> moved", true},
 		{"me-login", "/preview", true},
 		{"me-login", "  /deploy staging  ", true},
