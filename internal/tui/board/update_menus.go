@@ -369,15 +369,3 @@ func (m Model) updateColVisMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
-
-func (m *Model) copyToClipboard(value string) {
-	c := exec.Command("pbcopy")
-	c.Stdin = strings.NewReader(value)
-	if err := c.Run(); err != nil {
-		m.showErrorToast("copy failed", err)
-		return
-	}
-	display := truncateWidth(value, 40)
-	m.toastMsg = "Copied: " + display
-	m.toastExpiry = time.Now().Add(2 * time.Second)
-}
