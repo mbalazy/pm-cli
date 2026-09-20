@@ -26,8 +26,8 @@ func runConfigCmd(t *testing.T, store storage.TaskStore, args ...string) (string
 }
 
 const configWithRemote = `remotes:
-  - name: runner
-    ssh: runner
+  - name: nimbus
+    ssh: nimbus
     pm: /home/runner/go/bin/pm
     root: /home/runner/.claude/pm
 `
@@ -66,7 +66,7 @@ func TestConfigShowRendersRemotes(t *testing.T) {
 	for _, want := range []string{
 		store.ConfigPath(),
 		"Remote runners (1)",
-		"runner",
+		"nimbus",
 		"/home/runner/go/bin/pm",
 		"/home/runner/.claude/pm",
 	} {

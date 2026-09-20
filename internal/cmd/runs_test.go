@@ -149,7 +149,7 @@ func TestRunsLocalContactsNoRemote(t *testing.T) {
 func TestRunsLocalAndRemoteFlagsConflict(t *testing.T) {
 	store := runsFixture(t)
 	writeStoreConfig(t, store, configWithRemote)
-	if _, err := runRunsCmd(t, store, "--local", "--remote", "runner"); err == nil {
+	if _, err := runRunsCmd(t, store, "--local", "--remote", "nimbus"); err == nil {
 		t.Error("--local with --remote must be refused, not silently resolved one way")
 	}
 }
@@ -158,7 +158,7 @@ func TestRunsLocalAndRemoteFlagsConflict(t *testing.T) {
 func TestRunsUnreachableRemoteIsANote(t *testing.T) {
 	store := runsFixture(t)
 	writeStoreConfig(t, store, configWithRemote)
-	fakeSSH(t, "echo 'ssh: connect to host runner port 22: Operation timed out' >&2\nexit 255\n")
+	fakeSSH(t, "echo 'ssh: connect to host nimbus port 22: Operation timed out' >&2\nexit 255\n")
 
 	out, err := runRunsCmd(t, store, "--json")
 	if err != nil {
@@ -181,8 +181,8 @@ func TestRunsUnreachableRemoteIsANote(t *testing.T) {
 	if note == nil {
 		t.Fatalf("no note row for the unreachable remote:\n%s", out)
 	}
-	if note.Remote != "runner" {
-		t.Errorf("note row remote = %q, want runner", note.Remote)
+	if note.Remote != "nimbus" {
+		t.Errorf("note row remote = %q, want nimbus", note.Remote)
 	}
 	// A placeholder row must not invent a project slug - a consumer filtering
 	// rows by project would match the note against a real one.
@@ -230,7 +230,7 @@ func TestRunsRemotePmTooOldIsANote(t *testing.T) {
 func TestRunsRemoteGarbageIsANote(t *testing.T) {
 	store := runsFixture(t)
 	writeStoreConfig(t, store, configWithRemote)
-	fakeSSH(t, "echo 'Welcome to runner!'\nexit 0\n")
+	fakeSSH(t, "echo 'Welcome to nimbus!'\nexit 0\n")
 
 	out, err := runRunsCmd(t, store)
 	if err != nil {
@@ -239,7 +239,7 @@ func TestRunsRemoteGarbageIsANote(t *testing.T) {
 	if !strings.Contains(out, "unparsable") {
 		t.Errorf("table does not report the unparsable answer:\n%s", out)
 	}
-	if !strings.Contains(out, "Welcome to runner!") {
+	if !strings.Contains(out, "Welcome to nimbus!") {
 		t.Errorf("the note drops what the remote actually said:\n%s", out)
 	}
 	if !strings.Contains(out, "app-1") {
@@ -262,7 +262,7 @@ func TestRunsRemoteRowsAreQualified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pm runs: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "runner/orbit") {
+	if !strings.Contains(out, "nimbus/orbit") {
 		t.Errorf("remote row is not qualified with the remote name:\n%s", out)
 	}
 	if !strings.Contains(out, "running 3/8") {
@@ -274,7 +274,7 @@ func TestRunsRemoteRowsAreQualified(t *testing.T) {
 	// Newest activity first: the remote row's 2026-08-07 beats the local
 	// 2026-08-01, so the local tracker id must appear BELOW it even though both
 	// rows carry the id app-1.
-	if strings.Index(out, "runner/orbit") > strings.Index(out, "\napp") {
+	if strings.Index(out, "nimbus/orbit") > strings.Index(out, "\napp") {
 		t.Errorf("rows are not ordered newest first:\n%s", out)
 	}
 }
@@ -290,7 +290,7 @@ func TestRunsRemoteInvocation(t *testing.T) {
 		t.Fatalf("pm runs: %v\n%s", err, out)
 	}
 	ran := sshRan(t, marker)
-	for _, want := range []string{"ConnectTimeout=5", "BatchMode=yes", "runner", "/home/runner/go/bin/pm", "runs", "--json", "--local"} {
+	for _, want := range []string{"ConnectTimeout=5", "BatchMode=yes", "nimbus", "/home/runner/go/bin/pm", "runs", "--json", "--local"} {
 		if !strings.Contains(ran, want) {
 			t.Errorf("ssh argv %q missing %q", ran, want)
 		}
@@ -306,7 +306,7 @@ func TestRunsUnknownRemoteErrors(t *testing.T) {
 	if err == nil {
 		t.Fatalf("want an error for an unknown remote, got:\n%s", out)
 	}
-	if !strings.Contains(err.Error(), "runner") {
+	if !strings.Contains(err.Error(), "nimbus") {
 		t.Errorf("error %q does not name the remotes that ARE declared", err)
 	}
 }
