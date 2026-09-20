@@ -8,18 +8,18 @@ LDFLAGS = -ldflags "-X github.com/mbalazy/pm/internal/version.Version=$(VERSION)
 GOBIN_DIR := $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)
 STATICCHECK := $(or $(shell command -v staticcheck 2>/dev/null),$(GOBIN_DIR)/staticcheck)
 
+install:
+	go install -buildvcs=false $(LDFLAGS) ./cmd/pm/
+
+build-pm-linux:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false $(LDFLAGS) -o bin/pm-linux ./cmd/pm/
+
 # --- personal runner (a remote box that runs executor batches) ---
 # Nothing syncs the runner's pm binary: after a release the laptop and the
 # runner diverge silently, and you find out from a run behaving like an older
 # version rather than from an error. Override both for your own host.
 VPS_HOST ?= runner
 VPS_BIN  ?= /home/runner/go/bin/pm
-
-install:
-	go install -buildvcs=false $(LDFLAGS) ./cmd/pm/
-
-build-pm-linux:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false $(LDFLAGS) -o bin/pm-linux ./cmd/pm/
 
 # Cross-compile and install onto the runner. Two guards, both skipped by FORCE=1:
 #
