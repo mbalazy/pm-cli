@@ -4,8 +4,6 @@ Moved out of `CLAUDE.md` on 2026-09-02 (retro pm-cli-119-4): this section was 29
 
 ## Running it
 
-This is the user-facing manual, moved here from the README.
-
 The executor runs pm tasks autonomously through **isolated headless `claude -p` workers**, so a multi-subtask epic executes without blowing one session's context.
 
 First run:
