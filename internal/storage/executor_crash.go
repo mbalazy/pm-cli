@@ -54,7 +54,7 @@ import (
 // been overwritten: the file is keyed by task id, so a later run of the same
 // tracker replaces it, and the dead run's forensics are gone with it. Measured
 // on the three crashes of 2026-08-08: `pm-cli-102` still had its own run-state
-// and reconciles in full, while `orbit-108` and `pm-cli-100` were re-run
+// and reconciles in full, while another project's run and `pm-cli-100` were re-run
 // later the same day and now carry the SUCCESSFUL run's state, whose run id does
 // not match the orphaned start - so they are skipped rather than described
 // wrongly, and keep being counted by the orphaned-start heuristic. Going forward

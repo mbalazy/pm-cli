@@ -76,7 +76,7 @@ type TaskMeta struct {
 	Brief         string            `yaml:"brief,omitempty"`
 	AC            string            `yaml:"ac,omitempty"`
 	// WaitingFor is free text naming who or what the task is blocked on
-	// ("review Alex PR #940", "odpowiedź klienta"). Deliberately
+	// ("review by the lead, PR #940", "client answer"). Deliberately
 	// unvalidated and never required - not even on the waiting status, where a
 	// forced field would just collect junk. Empty = not recorded.
 	WaitingFor string   `yaml:"waiting_for,omitempty"`
@@ -190,7 +190,7 @@ func ValidateMode(m string) error {
 // slugPattern is deliberately NOT "slug == Slugify(slug)": Slugify drops
 // literal hyphens (it only turns ' '/'_'/'/' into '-', see the "slashes" case
 // in TestSlugify: "feat/add-auth" -> "feat-addauth"), so that check would
-// reject real hyphenated slugs like "app-orbit". Requiring the first
+// reject real hyphenated slugs like "app-mobile". Requiring the first
 // char to be alphanumeric (never '.' or '/') is what blocks every path
 // separator and ".."/"../foo" style traversal in one rule.
 var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)

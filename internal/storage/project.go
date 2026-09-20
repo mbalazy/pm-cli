@@ -30,9 +30,9 @@ type Project struct {
 	// is UI state of one screen, deliberately never read as a fact about the
 	// project.
 	Archived bool `yaml:"archived,omitempty"`
-	// Group joins several repos into ONE project on the cockpit (ACME = acme-api +
-	// acme-zap + acme-crm + acme-best; orbit = orbit +
-	// orbit-platform + orbit-web). The value is a group slug,
+	// Group joins several repos into ONE project on the cockpit (acme = acme-api
+	// + acme-zap + acme-crm; orbit = orbit + orbit-platform + orbit-web). The
+	// value is a group slug,
 	// validated like a project slug. Empty = the project is a group of its own
 	// whose slug is the project slug (see GroupSlug). A display name for a group
 	// lives in the global config's `cockpit.groups` block, never here - the
@@ -61,7 +61,7 @@ type Project struct {
 	// ClaudeConfigDir overrides the Claude Code config dir for this project
 	// (the dir CLAUDE_CONFIG_DIR points at - holds projects/, credentials, MCP).
 	// Empty = the default ~/.claude. Set it when a project runs claude under a
-	// separate account/config (e.g. a company Team account in ~/.claude-alt).
+	// separate account/config (e.g. a company Team account in its own dir).
 	// "~" is expanded. See ResolveClaudeConfigDir.
 	ClaudeConfigDir string `yaml:"claude_config_dir,omitempty"`
 }

@@ -19,7 +19,7 @@ import (
 )
 
 // What the user pastes is not always a PR URL: it can be a sentence ("pr 555
-// w repo orbit mobile") or a Slack link to a message asking for a review. The
+// in the mobile repo") or a Slack link to a message asking for a review. The
 // resolution runs in steps, cheapest first:
 //
 //  1. a GitHub PR URL anywhere in the text wins;
@@ -177,7 +177,7 @@ func resolvePrompt(request string, cands []candidate) string {
 	for _, c := range cands {
 		fmt.Fprintf(&b, "- %s - %s - %s - %s - %s\n", c.Repo, c.Proj.Name, c.Proj.GroupSlug(c.Slug), c.Proj.Stack, strings.Join(c.Proj.Tags, ", "))
 	}
-	b.WriteString("\nRequest (may be Polish, may abbreviate names: \"orb\" = orbit, \"mobile\"/\"app\" = the React Native app, \"web\" = the web app):\n")
+	b.WriteString("\nRequest (may be in any language, and may name a repo by its project name, its group or its stack rather than by owner/repo):\n")
 	b.WriteString(request)
 	b.WriteString("\n\nAnswer with ONE line of JSON and nothing else: {\"repo\":\"owner/repo\",\"number\":123} with a repo from the list above, " +
 		"or {\"error\":\"<one sentence why>\"} when the request names no PR number or no listed repository fits.\n")

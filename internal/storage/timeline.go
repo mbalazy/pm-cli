@@ -117,7 +117,7 @@ func ValidateTimelineKind(kind string) error {
 // TODAY (in now's zone), which answers now itself. An entry dated today is not
 // history - it is being written now - and midnight would sort it BEFORE every
 // entry written earlier the same day without the flag: as a state it would
-// hide behind an older state in the default read (vega, 2026-09-16: a state
+// hide behind an older state in the default read (observed 2026-09-16: a state
 // added with `--date <today>` at 10:00 read as older than the bootstrap's
 // state of 09:02). A malformed date is an error naming the wanted layout.
 func TimelineBackdate(date string, now time.Time) (string, error) {

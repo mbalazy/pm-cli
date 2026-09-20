@@ -53,7 +53,7 @@ type ReviewSpawn struct {
 	// the worker itself. The PreToolUse payload carries agent_id/agent_type only
 	// for nested calls, which is what makes the distinction observable at all.
 	// It is tracked separately because a cap on the worker does not see these:
-	// in orbit-106-3 one reviewer spawned its own Explore subagent that
+	// in one 2026-08 sub one reviewer spawned its own Explore subagent that
 	// burned 6.1M tokens over 65 tool calls.
 	Nested    bool   `json:"nested,omitempty"`
 	AgentType string `json:"agent_type,omitempty"` // spawning agent's type, nested spawns only
@@ -199,7 +199,7 @@ type ReviewTelemetry struct {
 	// findings were fixed, but the LAST fix landed after the cap and nothing
 	// reviewed it". The second is structural to any capped loop - the round that
 	// would check the final fix is the round past the cap - and it was readable
-	// only inside a sentence (orbit-114-1, $23.75: "the final mechanism ...
+	// only inside a sentence (one 2026-08 sub, $23.75: "the final mechanism ...
 	// landed after the review round cap and has had NO adversarial review").
 	// UnreviewedCommits > 0 is now that same fact, in a number.
 	//
@@ -220,7 +220,7 @@ type ReviewTelemetry struct {
 // ReviewRoundGap separates one review round from the next. Measured 2026-08-07
 // against a live claude 2.1.224: subagents spawned in parallel within ONE
 // assistant turn arrive 0.6-0.9s apart, while a new round costs a full reviewer
-// run - the reviewers in epic orbit-106 made 13-75 tool calls each, i.e.
+// run - the reviewers in a 2026-08 epic made 13-75 tool calls each, i.e.
 // minutes. Nothing in the hook payload groups a turn's tool calls together
 // (session_id and prompt_id are shared by the whole user turn AND by the
 // subagents' own calls), so the gap is the available signal.

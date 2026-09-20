@@ -164,7 +164,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	}
 
 	// Resolve the Claude config dir for this project (default ~/.claude unless the
-	// project sets claude_config_dir, e.g. a company account in ~/.claude-alt).
+	// project sets claude_config_dir, e.g. a company account in its own dir).
 	configDir := m.claudeConfigDir(t.Project)
 
 	// Check if the session lives in a worktree. Claude Code stores conversations

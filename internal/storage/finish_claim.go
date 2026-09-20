@@ -312,7 +312,7 @@ func AcquireFinishClaim(projectDir, trackerID, session string) (*FinishClaim, er
 			// and refusing it used to force exactly the failure the claim
 			// exists to prevent: the claim lapsed mid-acceptance, invisible to
 			// every surface and free for the auto-chain to race
-			// (orbit-117, pm-cli-113).
+			// (a 2026-08 epic, pm-cli-113).
 			//
 			// Identity is host + session, nothing weaker: the pid died with
 			// the claiming CLI, and Started is precisely what a later CLI

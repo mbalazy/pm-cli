@@ -151,7 +151,7 @@ type Executor struct {
 	// interpret the command or its output.
 	Baseline string `yaml:"baseline,omitempty"`
 	// ContextRepos maps a short name to a local repo path the worker may READ
-	// for cross-repo context (e.g. backend: ../platform.orbit to check an
+	// for cross-repo context (e.g. backend: ../platform-api to check an
 	// endpoint's real shape). Listed in the worker prompt as read-only reference
 	// repos; pm itself never touches them.
 	ContextRepos map[string]string `yaml:"context_repos,omitempty"`
@@ -182,14 +182,14 @@ type Executor struct {
 	// sub takes on this machine, in this repo, with this test suite) while the
 	// only place to say it was a flag - so a slower machine needed the flag
 	// remembered on every single invocation, and the runs that hit the wall show
-	// what forgetting costs: pm-cli-57, pm-cli-72-1 and orbit-1-2 all died
+	// what forgetting costs: pm-cli-57, pm-cli-72-1 and a third sub all died
 	// at ~3600 s with their branch ALREADY pushed, i.e. real work truncated, not a
 	// hung worker. In the same window five green subs finished between 2839 s and
 	// 3530 s - the wall sits inside the distribution, not outside it.
 	Timeout Duration `yaml:"timeout,omitempty"`
 	// ReviewModel is the model reviewer subagents run on, independent of the
 	// run's own --model. Reviewers were the single largest line item measured in
-	// epic orbit-106 (58% of the epic's tokens) and they inherited opus
+	// a 2026-08 epic (58% of the epic's tokens) and they inherited opus
 	// purely because nobody named a model for them. Empty = DefaultReviewModel;
 	// the literal "inherit" turns the pinning off and restores pre-0.38
 	// behaviour, which is also the rollback for this one change alone.
@@ -219,8 +219,8 @@ func ValidateEffort(level string) error {
 // say otherwise.
 //
 // This was "sonnet" for exactly as long as it took to measure it. Gate G2
-// (pm-cli-96-6, 2026-08-07) replayed two review-forced findings out of epic
-// orbit-106 through the new harness, each as a single reviewer holding
+// (pm-cli-96-6, 2026-08-07) replayed two review-forced findings out of a
+// 2026-08 epic through the new harness, each as a single reviewer holding
 // the diff packet with no Bash - once on sonnet, once on opus, everything else
 // identical:
 //

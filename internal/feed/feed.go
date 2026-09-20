@@ -94,7 +94,7 @@ type Configurable interface {
 }
 
 // PRSnapshotter is implemented by a source that knows the CURRENT state of
-// the PRs it listed (the git source). Events are history - "Marta tests the
+// the PRs it listed (the git source). Events are history - "a reviewer tests the
 // preview" stays true of 11:20 after the PR merged at 14:00 - so a reader
 // that describes the present (the report) needs the state beside them.
 type PRSnapshotter interface {

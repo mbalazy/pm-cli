@@ -53,7 +53,7 @@ const (
 type RunRow struct {
 	// Remote is the name of the machine this row came from, empty for a local
 	// row. Kept separate from Project (rather than pre-joined into
-	// "runner/orbit") so the board can style the two halves and a script
+	// "runner/app-mobile") so the board can style the two halves and a script
 	// can filter on either: the display joins them, the data does not.
 	Remote  string `json:"remote,omitempty"`
 	Project string `json:"project"`

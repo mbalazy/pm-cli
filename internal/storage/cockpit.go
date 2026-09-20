@@ -101,13 +101,13 @@ type SlackServer struct {
 	// Workspace) refers to, and what an event carries. A slug.
 	Workspace string `yaml:"workspace"`
 	// ClaudeServer is the name of an mcpServers entry in ClaudeConfig to
-	// take command/args/env from (e.g. slack-orbit).
+	// take command/args/env from (e.g. slack-work).
 	ClaudeServer string `yaml:"claude_server,omitempty"`
 	// Command/Args/Env spell the server out instead.
 	Command string            `yaml:"command,omitempty"`
 	Args    []string          `yaml:"args,omitempty"`
 	Env     map[string]string `yaml:"env,omitempty"`
-	// Me is the user's own handle ("@me-login") or id ("U0..") in this
+	// Me is the user's own handle ("@your-handle") or id ("U0..") in this
 	// workspace; mentions and DMs are found through it. Empty = the source
 	// carries only the mapped channels and says so.
 	Me string `yaml:"me,omitempty"`

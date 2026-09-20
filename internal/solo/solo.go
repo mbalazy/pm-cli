@@ -9,8 +9,8 @@
 // from `claude agents --json --all`, the supported interface (the files under
 // <config-dir>/jobs/ are not a contract).
 //
-// The argv restates the user's `cc-solo` fish function once (bypass permissions,
-// a 400k autocompact window, `--setting-sources user,local` when the repo's
+// The argv restates the author's own launcher once (bypass permissions, a
+// 400k autocompact window, `--setting-sources user,local` when the repo's
 // shared settings carry `ask` rules) and adds what a background session needs
 // to behave like an interactive one in the main checkout:
 // `--settings '{"worktree":{"bgIsolation":"none"}}'` - without it a bg
@@ -142,7 +142,7 @@ type Plan struct {
 	Name     string   `json:"name"`
 	Warnings []string `json:"warnings,omitempty"`
 	// AskRules > 0 means the repo's shared settings carry `ask` rules and
-	// --setting-sources user,local was added (the cc-solo rule).
+	// --setting-sources user,local was added (see buildArgv).
 	AskRules int `json:"ask_rules"`
 }
 
@@ -310,7 +310,7 @@ func (in Input) Prompt() string {
 	return strings.Join(parts, " ")
 }
 
-// buildArgv is the cc-solo rule plus the background flags, as one pure function:
+// buildArgv is the launcher rule plus the background flags, as one pure function:
 //
 //	--dangerously-skip-permissions --autocompact 400k --settings <bgIsolation>
 //	[--setting-sources user,local]   (askRules > 0)
@@ -327,8 +327,8 @@ func buildArgv(in Input, askRules int, name string) []string {
 	return args
 }
 
-// askRules counts `permissions.ask` in the repo's shared settings (the cc-solo
-// rule: they prompt in every mode, bypass included).
+// askRules counts `permissions.ask` in the repo's shared settings (they
+// prompt in every mode, bypass included).
 func askRules(cwd string) int {
 	data, err := os.ReadFile(filepath.Join(cwd, ".claude", "settings.json"))
 	if err != nil {

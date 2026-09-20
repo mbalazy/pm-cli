@@ -27,7 +27,7 @@ type AddTaskInput struct {
 	ID         string            `json:"id,omitempty" jsonschema:"Task ID (auto-generated if omitted; when parent is set, auto-numbers as <parent>-<n>)"`
 	Brief      string            `json:"brief,omitempty" jsonschema:"Short session context summary (overwrites previous)"`
 	AC         string            `json:"ac,omitempty" jsonschema:"Acceptance criteria (overwrites previous)"`
-	WaitingFor string            `json:"waiting_for,omitempty" jsonschema:"Who or what this task is blocked on - free text (e.g. 'review Alex PR #940', 'client answer'). Set it whenever you put a task on the waiting status, so the blocker is readable without opening the body."`
+	WaitingFor string            `json:"waiting_for,omitempty" jsonschema:"Who or what this task is blocked on - free text (e.g. 'review by the lead, PR #940', 'client answer'). Set it whenever you put a task on the waiting status, so the blocker is readable without opening the body."`
 	Sessions   []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to attach"`
 }
 
@@ -53,7 +53,7 @@ type UpdateTaskInput struct {
 	Spec       string            `json:"spec,omitempty" jsonschema:"Replace the current-truth Spec block (between <!-- spec:start --> / <!-- spec:end --> markers): what we're building, current decisions, still-open questions. Editable in place; created at the top of the body if absent. When a decision changes, rewrite the Spec to read as current truth AND append a one-line pointer to the Log via body_append (e.g. 'Q3 resolved -> see Spec'). Nothing is lost; the Spec never rots."`
 	Brief      *string           `json:"brief,omitempty" jsonschema:"Set the short session context summary (overwrites previous). Omit to keep current; pass an empty string to clear."`
 	AC         *string           `json:"ac,omitempty" jsonschema:"Set the acceptance criteria (overwrites previous). Omit to keep current; pass an empty string to clear."`
-	WaitingFor *string           `json:"waiting_for,omitempty" jsonschema:"Set who or what this task is blocked on - free text (e.g. 'review Alex PR #940', 'client answer'). Set it whenever you move a task to the waiting status, and clear it when the block lifts. Omit to keep current; pass an empty string to clear."`
+	WaitingFor *string           `json:"waiting_for,omitempty" jsonschema:"Set who or what this task is blocked on - free text (e.g. 'review by the lead, PR #940', 'client answer'). Set it whenever you move a task to the waiting status, and clear it when the block lifts. Omit to keep current; pass an empty string to clear."`
 	Sessions   []string          `json:"sessions,omitempty" jsonschema:"Claude session IDs to append (never removes existing)"`
 }
 
