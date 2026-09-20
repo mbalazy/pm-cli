@@ -8,9 +8,10 @@ LDFLAGS = -ldflags "-X github.com/mbalazy/pm/internal/version.Version=$(VERSION)
 GOBIN_DIR := $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)
 STATICCHECK := $(or $(shell command -v staticcheck 2>/dev/null),$(GOBIN_DIR)/staticcheck)
 
-# The runner's pm is a plain file and NOTHING syncs it: after a release the mac
-# and the runner diverge silently, and you find out from a run behaving like an
-# older version rather than from an error. Overridable for a second runner.
+# --- personal runner (a remote box that runs executor batches) ---
+# Nothing syncs the runner's pm binary: after a release the laptop and the
+# runner diverge silently, and you find out from a run behaving like an older
+# version rather than from an error. Override both for your own host.
 VPS_HOST ?= runner
 VPS_BIN  ?= /home/runner/go/bin/pm
 
@@ -32,9 +33,9 @@ build-pm-linux:
 #
 # The pgrep pattern is bracketed ([p]m) so it cannot match the ssh command line
 # carrying it - without that the check finds itself and every deploy "fails".
-# Matching on the full command line rather than `pgrep -x pm` is deliberate: the
-# pm-vps MCP bridge runs as a long-lived `pm mcp` and would otherwise read as a
-# live run whenever an acceptance session is open.
+# Matching on the full command line rather than `pgrep -x pm` is deliberate: a
+# long-lived `pm mcp` server on the runner would otherwise read as a live run
+# whenever an editor session is connected to it.
 #
 # It keeps NO backup of the replaced binary, deliberately. A backup is for
 # something you cannot recreate, and this binary is `git checkout <sha> && make
