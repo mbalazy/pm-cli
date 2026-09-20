@@ -24,7 +24,7 @@ const projects = {
       name: 'ACMEApi',
       group: 'acme',
       group_name: 'ACME',
-      stack: 'Livingdocs',
+      stack: 'Node, Postgres',
       notes: 'ACME-60 in two repos',
       task_counts: { doing: 1, waiting: 1 },
       statuses: ['todo', 'doing', 'waiting', 'done'],
@@ -974,7 +974,7 @@ describe('group page', () => {
       'href',
       '/g/acme?tab=board&repo=acme-api',
     )
-    expect(within(repos).getByText(/· Livingdocs/)).toBeInTheDocument()
+    expect(within(repos).getByText(/· Node, Postgres/)).toBeInTheDocument()
     const tabs = screen.getByRole('tablist')
     expect(
       within(tabs)
