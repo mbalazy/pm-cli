@@ -71,7 +71,7 @@ func TestSlackSourceOverAFakeMCPServer(t *testing.T) {
 	})
 	acmeScript := scriptFile(t, map[string]string{
 		"conversations_history|#acme-api-dev": "UserID,UserName,Channel,ThreadTs,Text,Time\n" +
-			"U7,sarah,C0LDMS,1755000000.000100,branding deadline?,1755001000.000200\n",
+			"U7,sarah,C0API,1755000000.000100,branding deadline?,1755001000.000200\n",
 	})
 	cfg := cfgWith(map[string]bool{"slack": true})
 	cfg.Slack.Servers = []storage.SlackServer{

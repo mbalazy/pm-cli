@@ -1007,7 +1007,7 @@ func TestNextVisibleProject(t *testing.T) {
 func TestFilteredPickerItems(t *testing.T) {
 	items := []pickerItem{
 		{slug: "atlas", name: "Atlas", stack: "Elixir", taskCount: 10},
-		{slug: "acme-api", name: "ACME-API", stack: "Livingdocs", taskCount: 5},
+		{slug: "acme-api", name: "AcmeApi", stack: "Livingdocs", taskCount: 5},
 		{slug: "pm-cli", name: "pm-cli", stack: "Go, Bubble Tea", taskCount: 8},
 	}
 
@@ -1044,7 +1044,7 @@ func TestFilteredPickerItems(t *testing.T) {
 	})
 
 	t.Run("case insensitive", func(t *testing.T) {
-		m := Model{pickerState: pickerState{pickerItems: items, pickerFilter: "ACME-API"}}
+		m := Model{pickerState: pickerState{pickerItems: items, pickerFilter: "AcmeApi"}}
 		got := m.filteredPickerItems()
 		if len(got) != 1 || got[0].slug != "acme-api" {
 			t.Errorf("got %v, want [acme-api]", got)

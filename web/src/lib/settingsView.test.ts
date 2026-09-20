@@ -15,7 +15,7 @@ import {
 
 const config: CockpitConfig = {
   groups: [
-    { slug: 'atlas', name: 'orbit', order: 1 },
+    { slug: 'atlas', name: 'Orbit', order: 1 },
     { slug: 'acme', name: 'acme', order: 0 },
   ],
   doing_idle_days: 7,
@@ -36,7 +36,7 @@ describe('form and patch', () => {
     const f = formFromConfig(config)
     expect(f.refresh_minutes).toBe(30)
     expect(f.groups).toEqual({
-      orbit: { name: 'orbit', order: 1 },
+      orbit: { name: 'Orbit', order: 1 },
       acme: { name: '', order: 0 },
     })
     expect(patchFromForm(f, formFromConfig(config))).toBeNull()
@@ -53,7 +53,7 @@ describe('form and patch', () => {
       sidebar: { ...base.sidebar, variant: 'rail' },
       git_all_branches: true,
       report_model: 'sonnet ',
-      groups: { ...base.groups, acme: { name: 'ACME', order: 2 }, vega: { name: '', order: 3 } },
+      groups: { ...base.groups, acme: { name: 'Acme', order: 2 }, vega: { name: '', order: 3 } },
     }
     expect(patchFromForm(base, edited)).toEqual({
       cutoff_hour: 20,
@@ -63,7 +63,7 @@ describe('form and patch', () => {
       git: { all_branches: true },
       report: { model: 'sonnet' },
       groups: [
-        { slug: 'acme', name: 'ACME', order: 2 },
+        { slug: 'acme', name: 'Acme', order: 2 },
         { slug: 'vega', order: 3 },
       ],
     })
@@ -78,9 +78,9 @@ describe('rows', () => {
   it('group rows: every derived group plus configured-but-asleep ones, in manual order', () => {
     const rows = groupRows(groups, formFromConfig(config), config.groups)
     expect(rows.map((r) => [r.slug, r.name, r.order, r.members, r.configured])).toEqual([
-      ['atlas', 'orbit', 1, [], true],
-      ['alpha', 'alpha', 0, ['alpha'], false],
+      ['atlas', 'Orbit', 1, [], true],
       ['acme', 'acme', 0, ['acme-api', 'acme-zap'], true],
+      ['alpha', 'alpha', 0, ['alpha'], false],
     ])
   })
   it('manual order: placed by order then slug, unplaced after by slug', () => {
@@ -112,9 +112,9 @@ describe('rows', () => {
     const projects: Project[] = [
       {
         slug: 'acme-api',
-        name: 'ACME-API',
+        name: 'AcmeApi',
         group: 'acme',
-        group_name: 'ACME',
+        group_name: 'Acme',
         task_counts: {},
         statuses: [],
         landing_statuses: [],
@@ -141,7 +141,7 @@ describe('rows', () => {
       },
     ]
     expect(slackRows(projects)).toEqual([
-      { slug: 'acme-api', name: 'ACME-API', workspace: 'acme', channels: '#acme-api-dev, general' },
+      { slug: 'acme-api', name: 'AcmeApi', workspace: 'acme', channels: '#acme-api-dev, general' },
       { slug: 'alpha', name: 'Alpha', workspace: '', channels: '' },
     ])
     expect(parseChannels(' #a, b #c,, ')).toEqual(['#a', 'b', '#c'])

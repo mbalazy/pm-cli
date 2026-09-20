@@ -18,16 +18,16 @@ describe('parseGroupFilter / groupSearch', () => {
 describe('groupHotkeys', () => {
   it('assigns the first free letter of each slug, in order', () => {
     const m = groupHotkeys([
-      { slug: 'orbit' },
-      { slug: 'acme-api' },
+      { slug: 'lumen' },
+      { slug: 'ldap' },
       { slug: 'lint' },
-      { slug: 'acme' },
+      { slug: 'nova' },
       { slug: 'ln' },
     ])
-    expect(m.get('l')).toBe('orbit')
-    expect(m.get('d')).toBe('acme-api')
+    expect(m.get('l')).toBe('lumen')
+    expect(m.get('d')).toBe('ldap')
     expect(m.get('i')).toBe('lint')
-    expect(m.get('n')).toBe('acme')
+    expect(m.get('n')).toBe('nova')
     // 'ln': l and n are taken and nothing is left - no hotkey, no crash.
     expect([...m.values()]).not.toContain('ln')
   })

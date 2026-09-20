@@ -21,19 +21,19 @@ func writeProjectDir(t *testing.T, s *Store, slug string, p *Project) {
 
 func TestProjectGroups(t *testing.T) {
 	store := &Store{Root: t.TempDir()}
-	writeProjectDir(t, store, "acme-api", &Project{Name: "ACME-API", Group: "acme"})
-	writeProjectDir(t, store, "acme-zap", &Project{Name: "acme-zap", Group: "acme"})
+	writeProjectDir(t, store, "acme-api", &Project{Name: "AcmeApi", Group: "acme"})
+	writeProjectDir(t, store, "acme-zap", &Project{Name: "AcmeZap", Group: "acme"})
 	writeProjectDir(t, store, "acme-best", &Project{Name: "Best", Group: "acme", Archived: true})
 	writeProjectDir(t, store, "pm-cli", &Project{Name: "pm"})
 	writeProjectDir(t, store, "old", &Project{Name: "Old", Archived: true})
-	writeConfig(t, store, "cockpit:\n  groups:\n    acme: {name: ACME}\n    ghost: {name: Nobody}\n")
+	writeConfig(t, store, "cockpit:\n  groups:\n    acme: {name: Acme}\n    ghost: {name: Nobody}\n")
 
 	groups, err := store.ProjectGroups()
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []ProjectGroup{
-		{Slug: "acme", Name: "ACME", Projects: []string{"acme-api", "acme-zap"}},
+		{Slug: "acme", Name: "Acme", Projects: []string{"acme-api", "acme-zap"}},
 		{Slug: "pm-cli", Name: "pm-cli", Projects: []string{"pm-cli"}},
 	}
 	if !reflect.DeepEqual(groups, want) {
@@ -81,7 +81,7 @@ func TestValidateGroup(t *testing.T) {
 			t.Errorf("%q rejected: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"ACME", "little engine", "../x", "-x", "a/b"} {
+	for _, bad := range []string{"Acme", "little engine", "../x", "-x", "a/b"} {
 		if err := ValidateGroup(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
@@ -126,8 +126,8 @@ func TestStoreValidatesGroup(t *testing.T) {
 func TestWriteProjectRoundTripsGroup(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "project.yaml")
-	handTuned := `name: ACME-API
-# the ACME content pipeline
+	handTuned := `name: AcmeApi
+# the Acme content pipeline
 path: /repos/acme-api
 group: acme # shares the cockpit page with acme-zap
 custom: keep
@@ -156,7 +156,7 @@ custom: keep
 	}
 	raw, _ = os.ReadFile(path)
 	text := string(raw)
-	for _, want := range []string{"# the ACME content pipeline", "group: acme # shares the cockpit page with acme-zap", "custom: keep", "notes: touched"} {
+	for _, want := range []string{"# the Acme content pipeline", "group: acme # shares the cockpit page with acme-zap", "custom: keep", "notes: touched"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("after an unrelated edit the file lacks %q:\n%s", want, text)
 		}

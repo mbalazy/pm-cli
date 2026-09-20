@@ -173,7 +173,7 @@ describe('project settings actions', () => {
     })
     const move = {
       kind: 'move_repo' as const,
-      subject: { project: 'acme-api', title: 'ACME-API', group: 'acme' },
+      subject: { project: 'acme-api', title: 'AcmeApi', group: 'acme' },
     }
     expect(describeAction(move, '').confirmLabel).toBe('move to acme')
     expect(requestFor(move, '')).toEqual({
@@ -183,7 +183,7 @@ describe('project settings actions', () => {
     })
     const leave = {
       kind: 'move_repo' as const,
-      subject: { project: 'acme-api', title: 'ACME-API', group: '' },
+      subject: { project: 'acme-api', title: 'AcmeApi', group: '' },
     }
     expect(describeAction(leave, '').confirmLabel).toBe('leave group')
     expect(requestFor(leave, '')).toEqual({ kind: 'project', project: 'acme-api', body: { group: '' } })

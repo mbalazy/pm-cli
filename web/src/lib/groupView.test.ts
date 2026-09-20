@@ -15,9 +15,9 @@ import {
 const p = (slug: string, group?: string, group_name?: string, archived?: boolean) =>
   ({ slug, name: slug.toUpperCase(), group, group_name, archived }) as Project
 const projects = [
-  p('acme-api', 'acme', 'ACME'),
-  p('acme-zap', 'acme', 'ACME'),
-  p('old', 'acme', 'ACME', true),
+  p('acme-api', 'acme', 'Acme'),
+  p('acme-zap', 'acme', 'Acme'),
+  p('old', 'acme', 'Acme', true),
   p('solo'),
 ]
 
@@ -45,7 +45,7 @@ describe('groups', () => {
   })
   it('names the group and picks the board repo', () => {
     const acme = groupMembers(projects, 'acme')
-    expect(groupName(acme, 'acme')).toBe('ACME')
+    expect(groupName(acme, 'acme')).toBe('Acme')
     expect(groupName([], 'ghost')).toBe('ghost')
     expect(groupName(groupMembers(projects, 'solo'), 'solo')).toBe('SOLO')
     expect(activeRepo(acme, 'acme-zap')).toBe('acme-zap')

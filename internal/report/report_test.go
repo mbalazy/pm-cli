@@ -23,24 +23,24 @@ func fakeClaude(t *testing.T, script string) string {
 	return exe
 }
 
-const okEnvelope = `{"type":"result","subtype":"success","is_error":false,"result":"**ACME**: acme-api-1 moved.\n\nDecide on the batch.\n\n- SUGGEST acme-api-1 back_to_todo: the reviewer answered\n- SUGGEST zzz-9 dance: nonsense\n","session_id":"sess-1","num_turns":1,"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":4000,"output_tokens":90}}`
+const okEnvelope = `{"type":"result","subtype":"success","is_error":false,"result":"**Acme**: acme-api-1 moved.\n\nDecide on the batch.\n\n- SUGGEST acme-api-1 back_to_todo: the reviewer answered\n- SUGGEST zzz-9 dance: nonsense\n","session_id":"sess-1","num_turns":1,"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":4000,"output_tokens":90}}`
 
 func input() Input {
 	cutoff := time.Date(2026, 9, 4, 18, 0, 0, 0, time.Local)
 	return Input{
 		Cutoff: cutoff, Now: cutoff.Add(15 * time.Hour), Language: "en",
-		Events: []feed.Event{{ID: "e1", TS: cutoff.Add(time.Hour).Format(time.RFC3339), Source: "pm", Project: "acme-api", Group: "acme", TaskID: "acme-api-1", Title: "Acme-api thing", Detail: "moved to waiting", Severity: "warn"}},
+		Events: []feed.Event{{ID: "e1", TS: cutoff.Add(time.Hour).Format(time.RFC3339), Source: "pm", Project: "acme-api", Group: "acme", TaskID: "acme-api-1", Title: "AcmeApi thing", Detail: "moved to waiting", Severity: "warn"}},
 		Attention: &storage.Attention{Sections: []storage.AttentionSection{
 			{Name: "needs_me", Total: 1, Rows: []storage.AttentionRow{{Project: "atlas", TaskID: "atlas-9", Title: "Epic", Reason: "run failed", Status: "doing"}}},
 			{Name: "changes", Total: 5, Rows: []storage.AttentionRow{{Title: "ignored here"}}},
 		}},
-		Groups: []storage.ProjectGroup{{Slug: "acme", Name: "ACME", Projects: []string{"acme-api", "acme-zap"}}},
+		Groups: []storage.ProjectGroup{{Slug: "acme", Name: "Acme", Projects: []string{"acme-api", "acme-zap"}}},
 	}
 }
 
 func TestBuildPromptAndParse(t *testing.T) {
 	p := BuildPrompt(input())
-	for _, want := range []string{"- ACME (acme): repos acme-api, acme-zap", "pm acme-api acme-api-1: Acme-api thing - moved to waiting [warn]", "### needs_me (1)", "- orbit atlas-9: Epic - run failed (status doing)", `language with code "en"`, "SUGGEST <task_id> <action>"} {
+	for _, want := range []string{"- Acme (acme): repos acme-api, acme-zap", "pm acme-api acme-api-1: AcmeApi thing - moved to waiting [warn]", "### needs_me (1)", "- orbit atlas-9: Epic - run failed (status doing)", `language with code "en"`, "SUGGEST <task_id> <action>"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, p)
 		}
@@ -55,9 +55,9 @@ func TestBuildPromptAndParse(t *testing.T) {
 	// above them.
 	in := input()
 	in.PRs = []feed.PRState{{Project: "acme-api", Number: 5, Title: "Fix", State: "merged", ReviewDecision: "APPROVED", TaskID: "acme-api-1"}, {Project: "acme-api", Number: 6, Title: "WIP", State: "open", Draft: true}}
-	in.Tasks = []TaskState{{Project: "acme-api", ID: "acme-api-1", Title: "Acme-api thing", Status: "waiting", WaitingFor: "review Anna"}}
+	in.Tasks = []TaskState{{Project: "acme-api", ID: "acme-api-1", Title: "AcmeApi thing", Status: "waiting", WaitingFor: "review Anna"}}
 	withState := BuildPrompt(in)
-	for _, want := range []string{`- PR acme-api #5 "Fix": merged, review approved, task acme-api-1`, `- PR acme-api #6 "WIP": open (draft)`, `- task acme-api acme-api-1 "Acme-api thing": status waiting, waiting for review Anna`, "never write about a merged or closed PR"} {
+	for _, want := range []string{`- PR acme-api #5 "Fix": merged, review approved, task acme-api-1`, `- PR acme-api #6 "WIP": open (draft)`, `- task acme-api acme-api-1 "AcmeApi thing": status waiting, waiting for review Anna`, "never write about a merged or closed PR"} {
 		if !strings.Contains(withState, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, withState)
 		}
@@ -95,7 +95,7 @@ func TestWriteSuccessAndFailure(t *testing.T) {
 		if r.Period != "2026-09-04T18" || r.Model != "haiku" || r.Tokens == nil || r.Tokens.CacheRead != 4000 || r.Events != 1 || r.Rows != 2 {
 			t.Fatalf("report = %+v", r)
 		}
-		if !strings.HasPrefix(r.Text, "**ACME**") || strings.Contains(r.Text, "SUGGEST") || len(r.Suggestions) != 2 {
+		if !strings.HasPrefix(r.Text, "**Acme**") || strings.Contains(r.Text, "SUGGEST") || len(r.Suggestions) != 2 {
 			t.Fatalf("text/suggestions = %q %+v", r.Text, r.Suggestions)
 		}
 		if r.Suggestions[0].Project != "acme-api" || r.Suggestions[0].Action != "back_to_todo" {

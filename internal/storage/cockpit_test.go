@@ -70,7 +70,7 @@ func TestCockpitDecodesOverDefaults(t *testing.T) {
 	store := &Store{Root: t.TempDir()}
 	writeConfig(t, store, `cockpit:
   groups:
-    acme: {name: "ACME"}
+    acme: {name: "Acme"}
     orbit: {}
   cutoff_hour: 0
   waiting_highlight_days: 9
@@ -108,7 +108,7 @@ func TestCockpitDecodesOverDefaults(t *testing.T) {
 	if c.Sidebar.ShowRepos || c.Sidebar.Width != 300 || c.Sidebar.Variant != "columns" {
 		t.Errorf("sidebar = %+v", c.Sidebar)
 	}
-	if c.GroupName("acme") != "ACME" || c.GroupName("atlas") != "atlas" || c.GroupName("other") != "other" {
+	if c.GroupName("acme") != "Acme" || c.GroupName("atlas") != "atlas" || c.GroupName("other") != "other" {
 		t.Errorf("group names: acme=%q orbit=%q", c.GroupName("acme"), c.GroupName("atlas"))
 	}
 }
@@ -128,7 +128,7 @@ func TestCockpitRejectsBadValues(t *testing.T) {
 		{"bare number duration", "cockpit:\n  refresh:\n    every: 30\n", []string{"duration"}},
 		{"bad sidebar variant", "cockpit:\n  sidebar:\n    variant: wide\n", []string{"cockpit.sidebar.variant", "columns, plain, rail"}},
 		{"bad sidebar sort", "cockpit:\n  sidebar:\n    sort: name\n", []string{"cockpit.sidebar.sort"}},
-		{"group slug not a slug", "cockpit:\n  groups:\n    ACME: {name: x}\n", []string{"cockpit.groups", "ACME"}},
+		{"group slug not a slug", "cockpit:\n  groups:\n    Acme: {name: x}\n", []string{"cockpit.groups", "Acme"}},
 		{"unparsable block", "cockpit:\n  sections:\n   - focus\n", []string{"parse"}},
 	}
 	for _, tc := range tests {
@@ -193,7 +193,7 @@ cockpit:
   cutoff_hour: 20
 `)
 	cfg, err := store.MutateConfig(func(c *PMConfig) error {
-		c.Cockpit.Groups = map[string]GroupConfig{"acme": {Name: "ACME"}}
+		c.Cockpit.Groups = map[string]GroupConfig{"acme": {Name: "Acme"}}
 		c.Cockpit.Sections["recent"] = true
 		return nil
 	})
@@ -212,7 +212,7 @@ cockpit:
 		"my_future_key: keep-me",
 		"# night owl",
 		"cutoff_hour: 20",
-		"name: ACME",
+		"name: Acme",
 		"every: 30m0s",
 	} {
 		if !strings.Contains(text, want) {
@@ -224,7 +224,7 @@ cockpit:
 	if err != nil {
 		t.Fatalf("re-read: %v", err)
 	}
-	if again.Cockpit.CutoffHour != 20 || again.Cockpit.GroupName("acme") != "ACME" || !again.Cockpit.SectionEnabled("recent") || again.Cockpit.SectionEnabled("new_since_cutoff") {
+	if again.Cockpit.CutoffHour != 20 || again.Cockpit.GroupName("acme") != "Acme" || !again.Cockpit.SectionEnabled("recent") || again.Cockpit.SectionEnabled("new_since_cutoff") {
 		t.Errorf("re-read = %+v", again.Cockpit)
 	}
 	if len(again.Remotes) != 1 || again.Remotes[0].SSH != "runner" {

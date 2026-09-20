@@ -137,7 +137,7 @@ func TestConfigShowRendersCockpit(t *testing.T) {
 		}
 	}
 
-	writeStoreConfig(t, store, "cockpit:\n  groups:\n    acme: {name: ACME}\n    orbit: {}\n  cutoff_hour: 20\n  sections:\n    recent: true\n  sidebar:\n    width: 240\n")
+	writeStoreConfig(t, store, "cockpit:\n  groups:\n    acme: {name: Acme}\n    orbit: {}\n  cutoff_hour: 20\n  sections:\n    recent: true\n  sidebar:\n    width: 240\n")
 	out, err = runConfigCmd(t, store, "show")
 	if err != nil {
 		t.Fatalf("config show: %v", err)
@@ -146,7 +146,7 @@ func TestConfigShowRendersCockpit(t *testing.T) {
 		"groups (2, manual sidebar order)",
 		"-  orbit: orbit",
 		"orbit: orbit",
-		"acme: ACME",
+		"acme: Acme",
 		"cutoff hour: 20:00",
 		"stuck_projects -new_since_cutoff recent",
 		"width 240px",

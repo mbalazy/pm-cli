@@ -35,7 +35,7 @@ func TestConfig(t *testing.T) {
 	})
 	t.Run("file values win and groups resolve their names", func(t *testing.T) {
 		store := newTestStore(t)
-		yaml := "cockpit:\n  sidebar: {variant: rail, show_repos: false}\n  refresh: {every: 10m}\n  groups:\n    acme: {name: ACME}\n    orbit: {}\n"
+		yaml := "cockpit:\n  sidebar: {variant: rail, show_repos: false}\n  refresh: {every: 10m}\n  groups:\n    acme: {name: Acme}\n    orbit: {}\n"
 		if err := os.WriteFile(store.ConfigPath(), []byte(yaml), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -50,7 +50,7 @@ func TestConfig(t *testing.T) {
 		if c.Refresh.EverySeconds != 600 {
 			t.Fatalf("refresh = %+v", c.Refresh)
 		}
-		if len(c.Groups) != 2 || c.Groups[0].Slug != "atlas" || c.Groups[0].Name != "atlas" || c.Groups[1].Name != "ACME" {
+		if len(c.Groups) != 2 || c.Groups[0].Slug != "acme" || c.Groups[0].Name != "Acme" || c.Groups[1].Slug != "atlas" || c.Groups[1].Name != "atlas" {
 			t.Fatalf("groups = %+v", c.Groups)
 		}
 	})
@@ -68,7 +68,7 @@ func TestConfig(t *testing.T) {
 func TestUpdateSettings(t *testing.T) {
 	t.Run("a patch changes only what it names and keeps the file's comments", func(t *testing.T) {
 		store := newTestStore(t)
-		yaml := "# hand-written\ncockpit:\n  # night owl\n  cutoff_hour: 20\n  groups:\n    acme: {name: ACME}\nmy_key: keep\n"
+		yaml := "# hand-written\ncockpit:\n  # night owl\n  cutoff_hour: 20\n  groups:\n    acme: {name: Acme}\nmy_key: keep\n"
 		if err := os.WriteFile(store.ConfigPath(), []byte(yaml), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -80,7 +80,7 @@ func TestUpdateSettings(t *testing.T) {
 			Sources:       map[string]bool{"git": false},
 			Sidebar:       &SidebarPatch{Variant: &variant, ShowRepos: &off},
 			Groups: []ConfigGroupPatch{
-				{Slug: "atlas", Name: &[]string{"orbit"}[0], Order: &[]int{1}[0]},
+				{Slug: "atlas", Name: &[]string{"Orbit"}[0], Order: &[]int{1}[0]},
 				{Slug: "acme", Order: &[]int{2}[0]},
 			},
 			Git: &GitPatch{AllBranches: &[]bool{true}[0]},
@@ -104,15 +104,15 @@ func TestUpdateSettings(t *testing.T) {
 		if c.Sidebar.Variant != "rail" || c.Sidebar.ShowRepos || c.Sidebar.Sort != "worst" {
 			t.Fatalf("sidebar = %+v", c.Sidebar)
 		}
-		if len(c.Groups) != 2 || c.Groups[0].Slug != "atlas" || c.Groups[0].Name != "orbit" || c.Groups[0].Order != 1 ||
-			c.Groups[1].Slug != "acme" || c.Groups[1].Name != "ACME" || c.Groups[1].Order != 2 {
+		if len(c.Groups) != 2 || c.Groups[0].Slug != "atlas" || c.Groups[0].Name != "Orbit" || c.Groups[0].Order != 1 ||
+			c.Groups[1].Slug != "acme" || c.Groups[1].Name != "Acme" || c.Groups[1].Order != 2 {
 			t.Fatalf("groups = %+v", c.Groups)
 		}
 		if !c.Git.AllBranches {
 			t.Fatalf("git = %+v", c.Git)
 		}
 		raw, _ := os.ReadFile(store.ConfigPath())
-		for _, want := range []string{"# hand-written", "# night owl", "cutoff_hour: 20", "name: ACME", "order: 2", "all_branches: true", "my_key: keep"} {
+		for _, want := range []string{"# hand-written", "# night owl", "cutoff_hour: 20", "name: Acme", "order: 2", "all_branches: true", "my_key: keep"} {
 			if !strings.Contains(string(raw), want) {
 				t.Errorf("file lacks %q:\n%s", want, raw)
 			}
@@ -150,7 +150,7 @@ func TestUpdateSettings(t *testing.T) {
 			{"variant", UpdateSettingsInput{Sidebar: &SidebarPatch{Variant: &[]string{"huge"}[0]}}, "sidebar.variant"},
 			{"sort", UpdateSettingsInput{Sidebar: &SidebarPatch{Sort: &[]string{"random"}[0]}}, "sidebar.sort"},
 			{"width", UpdateSettingsInput{Sidebar: &SidebarPatch{Width: &[]int{-1}[0]}}, "sidebar.width"},
-			{"group slug", UpdateSettingsInput{Groups: []ConfigGroupPatch{{Slug: "ACME"}}}, "groups"},
+			{"group slug", UpdateSettingsInput{Groups: []ConfigGroupPatch{{Slug: "Acme"}}}, "groups"},
 			{"group order", UpdateSettingsInput{Groups: []ConfigGroupPatch{{Slug: "acme", Order: &[]int{-2}[0]}}}, "order"},
 		}
 		for _, tc := range bad {

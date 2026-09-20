@@ -273,7 +273,7 @@ func TestProjects(t *testing.T) {
 		if _, err := store.MutateProject("beta", func(p *storage.Project) error { p.Group = "acme"; return nil }); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  groups:\n    acme: {name: ACME}\n"), 0o644); err != nil {
+		if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  groups:\n    acme: {name: Acme}\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		res, err := ListProjects(store)
@@ -284,7 +284,7 @@ func TestProjects(t *testing.T) {
 		for _, p := range res.Projects {
 			byslug[p.Slug] = p
 		}
-		if b := byslug["beta"]; b.Group != "acme" || b.GroupName != "ACME" {
+		if b := byslug["beta"]; b.Group != "acme" || b.GroupName != "Acme" {
 			t.Errorf("beta = %+v", b)
 		}
 		if x := byslug["test"]; x.Group != "test" || x.GroupName != "test" {
@@ -350,7 +350,7 @@ func TestProjects(t *testing.T) {
 			t.Fatalf("rejected group was written: %q", proj.Group)
 		}
 		// nil keeps, "" clears.
-		if res, err := UpdateProject(store, UpdateProjectInput{Project: "acme-api", Name: "ACME-API"}); err != nil || res.Group != "acme" {
+		if res, err := UpdateProject(store, UpdateProjectInput{Project: "acme-api", Name: "AcmeApi"}); err != nil || res.Group != "acme" {
 			t.Fatalf("omit must keep: %+v, %v", res, err)
 		}
 		empty := ""

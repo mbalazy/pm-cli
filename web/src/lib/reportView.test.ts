@@ -16,7 +16,7 @@ const done: ReportState = {
     model: 'haiku',
     tokens: { input: 100, cache_creation: 0, cache_read: 4000, output: 300 },
     duration_s: 12,
-    text: '**ACME**: moved.\n\nDecide.',
+    text: '**Acme**: moved.\n\nDecide.',
     suggestions: [
       { id: 'a', project: 'acme-api', task_id: 'acme-api-1', action: 'back_to_todo', text: 'lifted' },
       { id: 'b', task_id: 'x-9', text: 'unknown' },
@@ -30,7 +30,7 @@ const done: ReportState = {
 describe('reportView', () => {
   it('done: paragraphs, open suggestions minus the dismissed, the cost line', () => {
     const v = reportView(done)
-    expect(v.paragraphs).toEqual(['**ACME**: moved.', 'Decide.'])
+    expect(v.paragraphs).toEqual(['**Acme**: moved.', 'Decide.'])
     expect(v.open.map((s) => s.id)).toEqual(['a'])
     expect(v.dismissedCount).toBe(1)
     expect(v.cost).toBe('haiku · 4.4k tokens · 12 s')

@@ -145,7 +145,7 @@ func TestProjectsGroups(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  groups:\n    acme: {name: ACME}\n"), 0o644); err != nil {
+	if err := os.WriteFile(store.ConfigPath(), []byte("cockpit:\n  groups:\n    acme: {name: Acme}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	srv := newServer(t, store, Options{})
@@ -159,7 +159,7 @@ func TestProjectsGroups(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("rows = %v", rows)
 	}
-	if r := rows["acme-api"]; r["group"] != "acme" || r["group_name"] != "ACME" {
+	if r := rows["acme-api"]; r["group"] != "acme" || r["group_name"] != "Acme" {
 		t.Fatalf("acme-api = %v", r)
 	}
 	if r := rows["acme-zap"]; r["archived"] != true || r["group"] != "acme" {
@@ -172,7 +172,7 @@ func TestProjectsGroups(t *testing.T) {
 		t.Fatalf("groups = %v", groups)
 	}
 	acme := groups[0].(map[string]any)
-	if acme["slug"] != "acme" || acme["name"] != "ACME" {
+	if acme["slug"] != "acme" || acme["name"] != "Acme" {
 		t.Fatalf("acme = %v", acme)
 	}
 	if members := acme["projects"].([]any); len(members) != 1 || members[0] != "acme-api" {
@@ -928,13 +928,13 @@ func TestSettings(t *testing.T) {
 	})
 
 	t.Run("a patch is written with the comments kept, answered resolved, visible on the next GET, announced on SSE", func(t *testing.T) {
-		m := postJSON(t, srv.URL+"/api/settings", `{"sidebar":{"variant":"plain"},"sections":{"recent":true},"groups":[{"slug":"acme","name":"ACME","order":1}],"git":{"all_branches":true}}`, 200)
+		m := postJSON(t, srv.URL+"/api/settings", `{"sidebar":{"variant":"plain"},"sections":{"recent":true},"groups":[{"slug":"acme","name":"Acme","order":1}],"git":{"all_branches":true}}`, 200)
 		c := m["cockpit"].(map[string]any)
 		if c["cutoff_hour"] != float64(20) || c["sidebar"].(map[string]any)["variant"] != "plain" {
 			t.Fatalf("result = %v", c)
 		}
 		groups := c["groups"].([]any)
-		if len(groups) != 1 || groups[0].(map[string]any)["name"] != "ACME" || groups[0].(map[string]any)["order"] != float64(1) {
+		if len(groups) != 1 || groups[0].(map[string]any)["name"] != "Acme" || groups[0].(map[string]any)["order"] != float64(1) {
 			t.Fatalf("groups = %v", groups)
 		}
 		if c["git"].(map[string]any)["all_branches"] != true {
@@ -942,7 +942,7 @@ func TestSettings(t *testing.T) {
 		}
 		waitFor(t, events, "settings {}")
 		raw, _ := os.ReadFile(store.ConfigPath())
-		for _, want := range []string{"# mine", "# owl", "cutoff_hour: 20", "variant: plain", "recent: true", "name: ACME"} {
+		for _, want := range []string{"# mine", "# owl", "cutoff_hour: 20", "variant: plain", "recent: true", "name: Acme"} {
 			if !strings.Contains(string(raw), want) {
 				t.Errorf("config.yaml lacks %q:\n%s", want, raw)
 			}

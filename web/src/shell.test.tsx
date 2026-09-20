@@ -21,7 +21,7 @@ const projects = {
     },
     {
       slug: 'acme-api',
-      name: 'ACME-API',
+      name: 'ACMEApi',
       group: 'acme',
       group_name: 'ACME',
       stack: 'Livingdocs',
@@ -32,7 +32,7 @@ const projects = {
     },
     {
       slug: 'acme-zap',
-      name: 'acme-zap',
+      name: 'ACMEZap',
       group: 'acme',
       group_name: 'ACME',
       task_counts: { doing: 1 },
@@ -54,15 +54,15 @@ const tasks = {
   total: 2,
   shown: 2,
 }
-const acme-apiTasks = {
+const acmeApiTasks = {
   tasks: [
-    { ...summary('acme-api-1', 'Acme-api thing'), project: 'acme-api', status: 'waiting' },
+    { ...summary('acme-api-1', 'ACMEApi thing'), project: 'acme-api', status: 'waiting' },
     { ...summary('acme-api-2', 'Old doing'), project: 'acme-api', status: 'doing', updated: '2025-12-01' },
   ],
   total: 2,
   shown: 2,
 }
-const acme-zapTasks = {
+const acmeZapTasks = {
   tasks: [
     {
       ...summary('acme-zap-1', 'Zap task'),
@@ -263,7 +263,7 @@ const attention = {
     {
       name: 'waiting',
       rows: [
-        row('waiting', 'acme-api', 'acme-api-1', 'Acme-api thing', {
+        row('waiting', 'acme-api', 'acme-api-1', 'ACMEApi thing', {
           flags: ['no_reason'],
           actions: ['open', 'focus_toggle', 'set_waiting_for', 'back_to_todo'],
         }),
@@ -301,7 +301,7 @@ const attentionRuns = {
       : s,
   ),
 }
-const attentionNzz = {
+const attentionACME = {
   ...attention,
   sections: attention.sections.map((s) => ({
     ...s,
@@ -351,7 +351,7 @@ const changes = {
       project: 'acme-api',
       group: 'acme',
       task_id: 'acme-api-1',
-      title: 'Acme-api thing',
+      title: 'ACMEApi thing',
       detail: 'moved',
       severity: 'ok',
       seen: false,
@@ -424,7 +424,7 @@ const timelineEntry = (id: string, ts: string, kind: string, text: string, refs?
   text,
   ...(refs ? { refs } : {}),
 })
-const acme-zapTimeline = {
+const acmeZapTimeline = {
   project: 'acme-zap',
   state: timelineEntry(
     '2026-09-15-aa01',
@@ -516,7 +516,7 @@ const soloShift = {
 
 const api = {
   '/api/focus': focusPlan,
-  '/api/timeline/acme-zap': acme-zapTimeline,
+  '/api/timeline/acme-zap': acmeZapTimeline,
   '/api/timeline/acme-api': emptyTimeline('acme-api'),
   '/api/projects': projects,
   '/api/tasks': tasks,
@@ -524,9 +524,9 @@ const api = {
   '/api/runs': runs,
   '/api/runs?remote=1': remoteRuns,
   '/api/attention': attention,
-  '/api/attention?group=acme': attentionNzz,
-  '/api/tasks?project=acme-api&limit=200': acme-apiTasks,
-  '/api/tasks?project=acme-zap&limit=200': acme-zapTasks,
+  '/api/attention?group=acme': attentionACME,
+  '/api/tasks?project=acme-api&limit=200': acmeApiTasks,
+  '/api/tasks?project=acme-zap&limit=200': acmeZapTasks,
   '/api/context?project=acme-api': context('acme-api', [tracker('acme-api-9', 'Old epic', 2, { done: 2 })]),
   '/api/context?project=acme-zap': context('acme-zap', [
     tracker('acme-zap-1', 'Zap task', 2, { done: 1, doing: 1 }),
@@ -642,7 +642,7 @@ describe('today', () => {
     await user.click(within(chips).getByRole('link', { name: 'ACME' }))
     const waiting = await screen.findByRole('region', { name: 'Waiting on' })
     await vi.waitFor(() => expect(within(waiting).queryByText('Second')).toBeNull())
-    expect(within(waiting).getByText('Acme-api thing')).toBeInTheDocument()
+    expect(within(waiting).getByText('ACMEApi thing')).toBeInTheDocument()
     expect(
       within(screen.getByRole('region', { name: 'Needs me' })).getByText('Nothing needs you.'),
     ).toBeInTheDocument()
@@ -667,7 +667,7 @@ describe('today', () => {
     await user.keyboard('j')
     expect(screen.getByRole('listitem', { current: true })).toHaveTextContent('First')
     await user.keyboard('j')
-    expect(screen.getByRole('listitem', { current: true })).toHaveTextContent('Acme-api thing')
+    expect(screen.getByRole('listitem', { current: true })).toHaveTextContent('ACMEApi thing')
     await user.keyboard('k')
     expect(screen.getByRole('listitem', { current: true })).toHaveTextContent('First')
     await user.keyboard('{Enter}')
@@ -946,7 +946,7 @@ describe('runs', () => {
     await user.click(screen.getByRole('button', { name: 'newest' }))
     expect(trackers()).toEqual(['alpha-9', 'alpha-1', 'acme-api-9'])
     await user.click(screen.getByRole('button', { name: 'by project' }))
-    expect(trackers()).toEqual(['alpha-9', 'alpha-1', 'acme-api-9'])
+    expect(trackers()).toEqual(['acme-api-9', 'alpha-9', 'alpha-1'])
 
     await user.click(screen.getByRole('button', { name: 'fetch remote' }))
     expect(await within(table).findByText('vps/beta')).toBeInTheDocument()
@@ -979,13 +979,13 @@ describe('group page', () => {
     const left = screen.getByRole('region', { name: 'Where we left off' })
     // acme-zap keeps a timeline: the state with its date, the entries after it
     // in order with kind and date, the stale line.
-    const acme-zap = within(left).getByRole('listitem', { name: 'acme-zap' })
+    const acmeZap = within(left).getByRole('listitem', { name: 'acme-zap' })
     expect(
-      await within(acme-zap).findByText('Stan 15.09: the zap runs on the new webhook'),
+      await within(acmeZap).findByText('Stan 15.09: the zap runs on the new webhook'),
     ).toBeInTheDocument()
-    expect(acme-zap).toHaveTextContent('state · 2026-09-15')
+    expect(acmeZap).toHaveTextContent('state · 2026-09-15')
     const entries = within(
-      within(acme-zap).getByRole('list', { name: 'acme-zap timeline entries' }),
+      within(acmeZap).getByRole('list', { name: 'acme-zap timeline entries' }),
     ).getAllByRole('listitem')
     expect(entries).toHaveLength(2)
     expect(entries[0]).toHaveTextContent('2026-09-16decisionkeep the old webhook for a week')
@@ -994,21 +994,21 @@ describe('group page', () => {
       within(entries[1]).getByRole('link', { name: 'https://example.com/thread' }),
     ).toHaveAttribute('href', 'https://example.com/thread')
     // The notes box gives way to the timeline; the notes action stays.
-    expect(within(acme-zap).queryByText('no notes yet')).toBeNull()
-    expect(within(acme-zap).getByRole('button', { name: 'add notes' })).toBeInTheDocument()
+    expect(within(acmeZap).queryByText('no notes yet')).toBeNull()
+    expect(within(acmeZap).getByRole('button', { name: 'add notes' })).toBeInTheDocument()
     // acme-api has an empty timeline: its notes and the edit action, as before.
-    const acme-api = within(left).getByRole('listitem', { name: 'acme-api' })
-    expect(within(acme-api).getByText('ACME-60 in two repos')).toBeInTheDocument()
-    expect(within(acme-api).getByRole('button', { name: 'edit notes' })).toBeInTheDocument()
+    const acmeApi = within(left).getByRole('listitem', { name: 'acme-api' })
+    expect(within(acmeApi).getByText('ACME-60 in two repos')).toBeInTheDocument()
+    expect(within(acmeApi).getByRole('button', { name: 'edit notes' })).toBeInTheDocument()
     // The stale line is acme-zap's alone.
     expect(within(left).getAllByText(/time to write a new one/)).toHaveLength(1)
-    expect(acme-zap).toHaveTextContent(
+    expect(acmeZap).toHaveTextContent(
       'this state is 9 days old with 2 entries after it - time to write a new one',
     )
 
     // The queue, narrowed to acme by the API (?group=acme route).
     const waiting = screen.getByRole('region', { name: 'Waiting on' })
-    expect(within(waiting).getByText('Acme-api thing')).toBeInTheDocument()
+    expect(within(waiting).getByText('ACMEApi thing')).toBeInTheDocument()
     expect(within(waiting).queryByText('Second')).toBeNull()
     expect(
       within(screen.getByRole('region', { name: 'Needs me' })).getByText('Nothing needs you.'),
@@ -1045,7 +1045,7 @@ describe('group page', () => {
     expect(await screen.findByRole('region', { name: 'doing' })).toHaveTextContent('Zap task')
 
     await user.click(within(repo).getByRole('link', { name: 'acme-api' }))
-    expect(await screen.findByText('Acme-api thing')).toBeInTheDocument()
+    expect(await screen.findByText('ACMEApi thing')).toBeInTheDocument()
 
     await user.keyboard(']')
     await vi.waitFor(() =>
@@ -1075,7 +1075,7 @@ describe('group page', () => {
     renderAt('/g/acme?tab=changes')
     const list = await screen.findByRole('region', { name: 'Changes' })
     await vi.waitFor(() => expect(within(list).getAllByRole('listitem')).toHaveLength(1))
-    expect(list).toHaveTextContent('Acme-api thing')
+    expect(list).toHaveTextContent('ACMEApi thing')
     expect(list).toHaveTextContent('moved')
     expect(list).not.toHaveTextContent('alpha event')
   })
@@ -1105,7 +1105,7 @@ describe('changes screen', () => {
     // Toggle git off: only the pm event stays.
     await user.click(within(sources).getByRole('button', { name: /^git/ }))
     expect(within(feed).getAllByRole('listitem')).toHaveLength(1)
-    expect(within(feed).getByText('Acme-api thing')).toBeInTheDocument()
+    expect(within(feed).getByText('ACMEApi thing')).toBeInTheDocument()
     await user.click(within(sources).getByRole('button', { name: /^git/ }))
     expect(within(feed).getAllByRole('listitem')).toHaveLength(2)
     // The group chip narrows via the URL.

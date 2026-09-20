@@ -46,7 +46,7 @@ func attentionStore(t *testing.T) *Store {
 	mk("silent", "", false)
 	mk("idle", "", false)
 	mk("asleep", "acme", true)
-	writeConfig(t, store, "cockpit:\n  groups:\n    acme: {name: ACME}\n")
+	writeConfig(t, store, "cockpit:\n  groups:\n    acme: {name: Acme}\n")
 
 	tracker := func(slug, id, title string) {
 		attentionTask(t, store, slug, TaskMeta{ID: id, Title: title, Status: StatusDoing, Created: dateAgo(3), Updated: stampAgo(3 * time.Hour)})
@@ -361,7 +361,7 @@ func TestAttentionGroupsSumAcrossRepos(t *testing.T) {
 	if acme == nil || solo == nil {
 		t.Fatalf("groups = %+v", a.Groups)
 	}
-	if acme.Name != "ACME" || len(acme.Projects) != 2 || acme.Worst != SeverityCrit || acme.Failed != 1 || acme.Visual != 2 || acme.Waiting != 0 || acme.Quiet != 0 {
+	if acme.Name != "Acme" || len(acme.Projects) != 2 || acme.Worst != SeverityCrit || acme.Failed != 1 || acme.Visual != 2 || acme.Waiting != 0 || acme.Quiet != 0 {
 		t.Errorf("acme = %+v", *acme)
 	}
 	if solo.Worst != SeverityWarn || solo.Waiting != 3 || solo.Failed != 0 {
