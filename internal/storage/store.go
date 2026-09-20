@@ -448,7 +448,7 @@ func (s *Store) ProjectPrefix(slug string) string {
 	return slug
 }
 
-// NextTaskID returns the next sequential ID for a project (e.g. "orbit2-3").
+// NextTaskID returns the next sequential ID for a project (e.g. "orbit-3").
 func (s *Store) NextTaskID(slug string) string {
 	prefix := s.ProjectPrefix(slug)
 	tasks, err := s.GetTasks(slug)

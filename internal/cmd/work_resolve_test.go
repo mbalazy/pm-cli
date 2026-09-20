@@ -47,7 +47,7 @@ func TestResolveWorkTaskAmbiguousAcrossProjects(t *testing.T) {
 // ranking. Flattening the tiers would make `pm work pm-cli-18` fail as
 // "ambiguous" merely because another project has a task TITLED "smoke-test for
 // pm-cli-18" - a weaker match, not a rival. (Real shape: this machine's
-// pm-cli-18 vs a atlas task mentioning it in its title.)
+// pm-cli-18 vs an atlas task mentioning it in its title.)
 func TestResolveWorkTaskExactIDBeatsTitleMention(t *testing.T) {
 	store := twoProjectStore(t)
 	addTask(t, store, "alpha", storage.TaskMeta{ID: "alpha-18", Title: "Smoke-test epic for beta-18", Status: storage.StatusTodo}, "")

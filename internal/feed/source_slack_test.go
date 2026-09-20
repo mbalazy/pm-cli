@@ -48,7 +48,7 @@ func TestSlackSourceOverAFakeMCPServer(t *testing.T) {
 	exe := fakeMCP(t)
 	store := feedStore(t)
 	if _, err := store.MutateProject("alpha", func(p *storage.Project) error {
-		p.Slack = &storage.SlackConfig{Workspace: "atlas", Channels: []string{"#dev", "product"}}
+		p.Slack = &storage.SlackConfig{Workspace: "orbit", Channels: []string{"#dev", "product"}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestSlackSourceOverAFakeMCPServer(t *testing.T) {
 	if err := store.CreateProject("acme-api", &storage.Project{Name: "acme-api", Group: "acme", Slack: &storage.SlackConfig{Workspace: "acme", Channels: []string{"acme-api-dev"}}}); err != nil {
 		t.Fatal(err)
 	}
-	leScript := scriptFile(t, map[string]string{
+	orbitScript := scriptFile(t, map[string]string{
 		"conversations_history|#dev": "UserID,UserName,Channel,ThreadTs,Text,Time\n" +
 			"U1,dana,C0DEV,,\"Fixed the header\nsecond line\"," + slackTS(2*time.Hour) + "\n" +
 			"U2,me-login,C0DEV,,my own note," + slackTS(time.Hour) + "\n" +
@@ -75,7 +75,7 @@ func TestSlackSourceOverAFakeMCPServer(t *testing.T) {
 	})
 	cfg := cfgWith(map[string]bool{"slack": true})
 	cfg.Slack.Servers = []storage.SlackServer{
-		{Workspace: "atlas", Command: exe, Env: map[string]string{"FAKE_MCP_SCRIPT": leScript}, Me: "@me-login"},
+		{Workspace: "orbit", Command: exe, Env: map[string]string{"FAKE_MCP_SCRIPT": orbitScript}, Me: "@me-login"},
 		{Workspace: "acme", Command: exe, Env: map[string]string{"FAKE_MCP_SCRIPT": acmeScript}},
 	}
 	src := &SlackSource{}
@@ -145,7 +145,7 @@ func TestSlackSourceFailures(t *testing.T) {
 	exe := fakeMCP(t)
 	store := feedStore(t)
 	if _, err := store.MutateProject("alpha", func(p *storage.Project) error {
-		p.Slack = &storage.SlackConfig{Workspace: "atlas", Channels: []string{"dev"}}
+		p.Slack = &storage.SlackConfig{Workspace: "orbit", Channels: []string{"dev"}}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -166,7 +166,7 @@ func TestSlackSourceFailures(t *testing.T) {
 		cfg := cfgWith(map[string]bool{"slack": true})
 		cfg.Slack.Servers = []storage.SlackServer{
 			{Workspace: "hung", Command: exe, Env: map[string]string{"FAKE_MCP_MODE": "hang", "FAKE_MCP_SCRIPT": okScript}, Me: "@x"},
-			{Workspace: "atlas", Command: exe, Env: map[string]string{"FAKE_MCP_SCRIPT": okScript}, Me: "@me-login"},
+			{Workspace: "orbit", Command: exe, Env: map[string]string{"FAKE_MCP_SCRIPT": okScript}, Me: "@me-login"},
 			{Workspace: "dead", Command: exe, Env: map[string]string{"FAKE_MCP_MODE": "die"}},
 		}
 		// The hung workspace has a mapped channel too, so its history call hangs.
@@ -214,7 +214,7 @@ func TestResolveServerFromClaudeConfig(t *testing.T) {
 	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	spec, err := ResolveServer(storage.SlackServer{Workspace: "atlas", ClaudeServer: "slack-work"}, path)
+	spec, err := ResolveServer(storage.SlackServer{Workspace: "orbit", ClaudeServer: "slack-work"}, path)
 	if err != nil || spec.Command != "npx" || len(spec.Args) != 4 || len(spec.Env) != 1 || spec.Env[0] != "SLACK_MCP_XOXC_TOKEN=xoxc" {
 		t.Fatalf("spec = %+v %v", spec, err)
 	}

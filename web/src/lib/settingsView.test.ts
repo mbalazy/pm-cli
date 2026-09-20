@@ -121,10 +121,10 @@ describe('rows', () => {
         slack: { workspace: 'acme', channels: ['#acme-api-dev', 'general'] },
       },
       {
-        slug: 'orbit2',
-        name: 'Orbit2',
-        group: 'orbit2',
-        group_name: 'orbit2',
+        slug: 'orbit',
+        name: 'Orbit',
+        group: 'orbit',
+        group_name: 'orbit',
         task_counts: {},
         statuses: [],
         landing_statuses: [],
@@ -149,7 +149,7 @@ describe('rows', () => {
       workspace: 'acme',
       channels: ['#a', 'b'],
     })
-    expect(sleepRows(projects).asleep.map((p) => p.slug)).toEqual(['orbit2'])
+    expect(sleepRows(projects).asleep.map((p) => p.slug)).toEqual(['orbit'])
     expect(sleepRows(projects).awake.map((p) => p.slug)).toEqual(['acme-api', 'alpha'])
   })
 })

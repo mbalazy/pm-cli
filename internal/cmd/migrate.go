@@ -13,7 +13,7 @@ import (
 func newMigrateIDsCmd(store storage.TaskStore) *cobra.Command {
 	return &cobra.Command{
 		Use:   "migrate-ids",
-		Short: "Migrate task IDs to sequential project-prefixed format (e.g. orbit2-1, atlas-2)",
+		Short: "Migrate task IDs to sequential project-prefixed format (e.g. orbit-1, atlas-2)",
 		// One-shot legacy migration from before project-prefixed IDs existed.
 		// Hidden so nobody reaches for it on a modern store by accident.
 		Hidden: true,

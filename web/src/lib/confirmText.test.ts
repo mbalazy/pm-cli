@@ -158,17 +158,17 @@ describe('requestFor', () => {
 
 describe('project settings actions', () => {
   it('sleep warns and sends archived; wake and move_repo send their field', () => {
-    const sleep = { kind: 'sleep_project' as const, subject: { project: 'orbit2', title: 'Orbit2' } }
+    const sleep = { kind: 'sleep_project' as const, subject: { project: 'orbit', title: 'Orbit' } }
     expect(describeAction(sleep, '').warning).toMatch(/leaves every group/)
     expect(requestFor(sleep, '')).toEqual({
       kind: 'project',
-      project: 'orbit2',
+      project: 'orbit',
       body: { archived: true },
     })
-    const wake = { kind: 'wake_project' as const, subject: { project: 'orbit2', title: 'Orbit2' } }
+    const wake = { kind: 'wake_project' as const, subject: { project: 'orbit', title: 'Orbit' } }
     expect(requestFor(wake, '')).toEqual({
       kind: 'project',
-      project: 'orbit2',
+      project: 'orbit',
       body: { archived: false },
     })
     const move = {
