@@ -39,8 +39,9 @@ state snapshots - next to what happened *in* a task.
 
 ## 0.59.0 - 2026-09-06
 
-The web runtime rig proves the app actually mounts before a run may call
-itself verified, with Vite restarted per rig and its own journal.
+Recorded what a false green taught: a server that answers is not an app that
+mounted. The web runtime rig restarts Vite for every run and needs a browser
+to see the shell render before it reports itself up.
 
 ## 0.58.1 - 2026-09-06
 

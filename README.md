@@ -146,7 +146,7 @@ A few principles this codebase holds onto, learned from real runs:
 
 ## Status
 
-A personal tool, in daily use since February 2026, currently 0.64.0. One machine, one user: no sync, no account, no API key - the agent parts drive the `claude` CLI, so they run on a Claude subscription (the solo mode's `claude --bg` needs Claude Code 2.1.272 or newer). Developed on macOS; CI runs the suite on Linux, but the desktop bits are untested there. Not looking for contributions, though bug reports are welcome. Versions promise each other nothing, except that task files stay readable: markdown.
+A personal tool, in daily use since February 2026, currently [0.64.0](CHANGELOG.md). One machine, one user: no sync, no account, no API key - the agent parts drive the `claude` CLI, so they run on a Claude subscription (the solo mode's `claude --bg` needs Claude Code 2.1.272 or newer). Developed on macOS; CI runs the suite on Linux, but the desktop bits are untested there. Not looking for contributions, though bug reports are welcome. Versions promise each other nothing, except that task files stay readable: markdown.
 
 ## Development
 
