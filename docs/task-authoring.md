@@ -61,7 +61,7 @@ the job of the session that picks up the task.
   - `## Related Tasks` - explicit cross-refs with dependency descriptions (not just IDs)
   - `## People Map` - table: person, status, blockers, which other tasks they appear in
   - `## Client Communication` - what was asked, when, in which message
-- **Absorbing tasks:** when an old task becomes a subset of a new one - add a note "absorbed into orbit2-X" in the old task instead of deleting. Decision history stays.
+- **Absorbing tasks:** when an old task becomes a subset of a new one - add a note "absorbed into app-X" in the old task instead of deleting. Decision history stays.
 - **Stale Next Steps:** when checkboxes are completed - check them off or replace the list with a dated update. Don't leave old checkboxes next to new ones.
 
 ## Project links convention
