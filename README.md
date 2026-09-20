@@ -81,7 +81,7 @@ pm docs claude >> ~/.claude/CLAUDE.md
 pm projects add <slug> --path /path/to/repo
 ```
 
-The second line is not optional: the MCP server gives the agent the *tools*, the guide gives it the *workflow* - when to record what, the brief format, the Spec/Log write rules, and the rule that only a human closes a task. It ships inside the binary between `<!-- pm:agent-guide:start/end -->` markers, versioned as [docs/agent-guide.md](docs/agent-guide.md). `--path` matters: cwd auto-detection matches against it, so a project without one is never found from its own repo.
+The second line is not optional: the MCP server gives the agent the *tools*, the guide gives it the *workflow* - when to record what, the brief format, the Spec/Log write rules, and who closes a task - a merged pull request does, or you do. It ships inside the binary between `<!-- pm:agent-guide:start/end -->` markers, versioned as [docs/agent-guide.md](docs/agent-guide.md). `--path` matters: cwd auto-detection matches against it, so a project without one is never found from its own repo.
 
 ## Claude Code drives it
 
