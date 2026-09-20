@@ -1,7 +1,10 @@
-// Package cmd is the cobra tree behind the `pm` binary - every subcommand,
-// and nothing else's semantics: the mutating commands call internal/service
-// and internal/storage, the same functions the MCP server and the HTTP API
-// call, so a validation rule cannot hold on one surface and not another.
+// Package cmd is the cobra tree behind the `pm` binary - every subcommand.
+// It predates internal/service and mostly does not go through it: the CLI
+// reads and writes tasks with internal/storage directly, and `pm today` is
+// the one command that calls the service layer the MCP server and the HTTP
+// API share. A rule added there does NOT reach the CLI by itself - `pm add`
+// carries its own status default and its own lock - so the two are kept in
+// step by hand.
 //
 // What is this package's own is the executor (work*.go, run_epic*.go,
 // finish*.go, worker_guard.go): launching headless `claude -p` workers,

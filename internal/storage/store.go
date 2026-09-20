@@ -1,15 +1,21 @@
 // Package storage is pm's data layer, and the files are the only source of
 // truth: a project is a directory under ~/.claude/pm/ (PM_DATA_DIR overrides
 // the root), a task is a markdown file with YAML frontmatter sitting next to
-// that project's project.yaml, and the journal, timeline and executor run
-// state are append-only files in that project's own subdirectories.
+// that project's project.yaml, and the journals, the timeline and the
+// executor's run journal are append-only JSONL in that project's own
+// subdirectories. A run's LIVE state is the exception: one JSON file
+// rewritten whole (tmp + rename) on every 30-second heartbeat, so its
+// earlier contents are gone, not recoverable from the file.
 //
 // Two rules shape almost everything here. Files are NEVER migrated between
 // versions, so every reader tolerates an older shape and reports a missing
 // field as unknown instead of guessing one. And a write that could race -
-// a task edit, project.yaml, the acceptance claim - takes the project's
-// flock through LockProject and re-reads the file fresh inside it, because
-// a lost update here is somebody's brief.
+// a task edit, project.yaml - takes the project's flock through LockProject
+// and re-reads the file fresh inside it, because a lost update here is
+// somebody's brief. The acceptance claim does NOT use that flock: it is a
+// create-if-absent os.Link in finish_claim.go, because a claim has to
+// outlive the process that took it (another host must see it, and a stale
+// one must be stealable), and a flock dies with its holder.
 package storage
 
 import (
