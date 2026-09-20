@@ -10,8 +10,8 @@ import (
 )
 
 func TestFindSlackLink(t *testing.T) {
-	l, ok := findSlackLink("zobacz https://orbit.slack.com/archives/C07ABC123/p1694012345123456?thread_ts=1694000000.000100&cid=C07ABC123 prosze")
-	if !ok || l.Workspace != "orbit" || l.Channel != "C07ABC123" || l.TS != "1694012345.123456" || l.ThreadTS != "1694000000.000100" {
+	l, ok := findSlackLink("zobacz https://example.slack.com/archives/C07ABC123/p1694012345123456?thread_ts=1694000000.000100&cid=C07ABC123 prosze")
+	if !ok || l.Workspace != "example" || l.Channel != "C07ABC123" || l.TS != "1694012345.123456" || l.ThreadTS != "1694000000.000100" {
 		t.Fatalf("link = %+v %v", l, ok)
 	}
 	l, ok = findSlackLink("https://x.slack.com/archives/D01/p1694012345123456")
@@ -57,20 +57,20 @@ func TestResolve(t *testing.T) {
 			if l.Channel != "C1" {
 				t.Errorf("channel = %s", l.Channel)
 			}
-			return "ts,user,text\n1,anna,możesz zerknąć? https://github.com/org/app/pull/31", "slack-orbit", nil
+			return "ts,user,text\n1,anna,możesz zerknąć? https://github.com/org/app/pull/31", "slack-work", nil
 		}
 		res, err := c.Resolve(bg, "https://example.slack.com/archives/C1/p1694012345123456")
 		if err != nil || res.PR.Number != 31 || !strings.Contains(res.SlackText, "zerknąć") || prompt != "" {
 			t.Fatalf("res = %+v err = %v", res, err)
 		}
-		if res.Slack == nil || res.Slack.Server != "slack-orbit" || res.Slack.TS != "1694012345.123456" {
+		if res.Slack == nil || res.Slack.Server != "slack-work" || res.Slack.TS != "1694012345.123456" {
 			t.Fatalf("slack = %+v", res.Slack)
 		}
 	})
 
 	t.Run("a Slack message without a URL goes to the model with its text", func(t *testing.T) {
 		c.ReadSlack = func(context.Context, SlackLink) (string, string, error) {
-			return "anna: review PR 555 w mobile?", "slack-orbit", nil
+			return "anna: review PR 555 w mobile?", "slack-work", nil
 		}
 		res, err := c.Resolve(bg, "https://example.slack.com/archives/C1/p1694012345123456")
 		if err != nil || res.PR.Number != 555 || res.Slack == nil || !strings.Contains(prompt, "anna: review PR 555 w mobile?") {

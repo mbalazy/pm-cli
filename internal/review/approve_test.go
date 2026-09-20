@@ -50,7 +50,7 @@ func TestApprove(t *testing.T) {
 		return nil
 	}
 	c.ReadSlack = func(context.Context, SlackLink) (string, string, error) {
-		return "anna: https://github.com/org/app/pull/7", "slack-orbit", nil
+		return "anna: https://github.com/org/app/pull/7", "slack-work", nil
 	}
 
 	t.Run("a running review cannot approve", func(t *testing.T) {
@@ -72,7 +72,7 @@ func TestApprove(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r.Slack == nil || r.Slack.Server != "slack-orbit" {
+		if r.Slack == nil || r.Slack.Server != "slack-work" {
 			t.Fatalf("slack = %+v", r.Slack)
 		}
 		if done := waitState(t, c, r.ID, StateDone); !done.NoIssues || done.Slack == nil {
@@ -88,7 +88,7 @@ func TestApprove(t *testing.T) {
 		if _, err := c.Approve(bg, r.ID); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Join(approved, ",") != "org/app#7" || strings.Join(reacted, ",") != "slack-orbit C1 1694012345.123456 white_check_mark" {
+		if strings.Join(approved, ",") != "org/app#7" || strings.Join(reacted, ",") != "slack-work C1 1694012345.123456 white_check_mark" {
 			t.Fatalf("calls: approved %v reacted %v", approved, reacted)
 		}
 	})
@@ -143,7 +143,7 @@ func TestStartReactsEyes(t *testing.T) {
 		return reactErr
 	}
 	c.ReadSlack = func(context.Context, SlackLink) (string, string, error) {
-		return "anna: https://github.com/org/app/pull/7", "slack-orbit", nil
+		return "anna: https://github.com/org/app/pull/7", "slack-work", nil
 	}
 	const link = "https://example.slack.com/archives/C1/p1694012345123456"
 	nextCall := func() string {
@@ -173,7 +173,7 @@ func TestStartReactsEyes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := nextCall(); got != "slack-orbit C1 1694012345.123456 eyes" {
+	if got := nextCall(); got != "slack-work C1 1694012345.123456 eyes" {
 		t.Fatalf("reaction = %q", got)
 	}
 	if seen := waitSeen(r.ID); seen.SlackSeen == "" || seen.SlackSeenError != "" {

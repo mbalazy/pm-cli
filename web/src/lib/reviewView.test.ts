@@ -20,8 +20,8 @@ const review = (over: Partial<Review>): Review => ({
 describe('reviewView', () => {
   it('parsePRUrl accepts a PR URL with anything after the number, nothing else', () => {
     expect(
-      parsePRUrl('https://github.com/OrbitOrg/app.orbit/pull/1003/changes'),
-    ).toEqual({ repo: 'OrbitOrg/app.orbit', number: 1003 })
+      parsePRUrl('https://github.com/orbit-org/app.orbit/pull/1003/changes'),
+    ).toEqual({ repo: 'orbit-org/app.orbit', number: 1003 })
     expect(parsePRUrl(' https://github.com/o/r/pull/7 ')).toEqual({ repo: 'o/r', number: 7 })
     expect(parsePRUrl('https://github.com/o/r/issues/7')).toBeNull()
     expect(parsePRUrl('o/r#7')).toBeNull()
@@ -47,7 +47,7 @@ describe('reviewView', () => {
       channel: 'C1',
       ts: '1.2',
       thread_ts: '1.2',
-      server: 'slack-orbit',
+      server: 'slack-work',
     }
     const clean = approveView(review({ no_issues: true, slack }), now)
     expect(clean.offer).toBe(true)
@@ -79,7 +79,7 @@ describe('reviewView', () => {
       channel: 'C1',
       ts: '1.2',
       thread_ts: '1.2',
-      server: 'slack-orbit',
+      server: 'slack-work',
     }
     expect(slackSeenLine(review({ state: 'running', slack }))).toBe(
       '👀 going on the Slack message…',

@@ -110,7 +110,7 @@ func TestParseURL(t *testing.T) {
 		want string
 		ok   bool
 	}{
-		{"https://github.com/OrbitOrg/app.orbit/pull/1003/changes", "OrbitOrg/app.orbit#1003", true},
+		{"https://github.com/orbit-org/app.orbit/pull/1003/changes", "orbit-org/app.orbit#1003", true},
 		{"https://github.com/o/r/pull/7", "o/r#7", true},
 		{" https://github.com/o/r/pull/7/files?diff=split ", "o/r#7", true},
 		{"https://github.com/o/r/issues/7", "", false},

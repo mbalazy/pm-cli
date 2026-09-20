@@ -1591,15 +1591,15 @@ describe('review screen', () => {
     expect(within(table).getByText('8m')).toBeInTheDocument()
     const input = screen.getByRole('textbox', { name: 'PR to review' })
     expect(screen.getByRole('button', { name: /^review/ })).toBeDisabled()
-    await user.type(input, 'https://github.com/OrbitOrg/app.orbit/pull/1003/changes')
+    await user.type(input, 'https://github.com/orbit-org/app.orbit/pull/1003/changes')
     await user.click(
-      screen.getByRole('button', { name: 'review OrbitOrg/app.orbit#1003' }),
+      screen.getByRole('button', { name: 'review orbit-org/app.orbit#1003' }),
     )
     await vi.waitFor(() => expect(posts).toHaveLength(1))
     expect(posts[0]).toEqual({
       path: '/api/reviews',
       header: 'cockpit',
-      body: { input: 'https://github.com/OrbitOrg/app.orbit/pull/1003/changes' },
+      body: { input: 'https://github.com/orbit-org/app.orbit/pull/1003/changes' },
     })
   })
 
@@ -1646,7 +1646,7 @@ describe('review approve', () => {
     finished: '2026-01-02T09:08:00Z',
     state: 'done',
     no_issues: true,
-    slack: { workspace: 'atlas', channel: 'C1', ts: '1.2', thread_ts: '1.2', server: 'slack-orbit' },
+    slack: { workspace: 'atlas', channel: 'C1', ts: '1.2', thread_ts: '1.2', server: 'slack-work' },
     report: '### Code review - PR #7\n\nNo issues found.',
   }
 

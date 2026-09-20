@@ -209,12 +209,12 @@ func TestResolveServerFromClaudeConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "claude.json")
 	doc := `{"mcpServers":{"top":{"type":"stdio","command":"npx","args":["-y","x"],"env":{"A":"1"}}},
-	"projects":{"/repo":{"mcpServers":{"slack-orbit":{"command":"npx","args":["-y","slack-mcp-server@latest","--transport","stdio"],"env":{"SLACK_MCP_XOXC_TOKEN":"xoxc"}}}},
+	"projects":{"/repo":{"mcpServers":{"slack-work":{"command":"npx","args":["-y","slack-mcp-server@latest","--transport","stdio"],"env":{"SLACK_MCP_XOXC_TOKEN":"xoxc"}}}},
 	"/other":{"mcpServers":{"http-one":{"type":"http","url":"https://x"}}}}}`
 	if err := os.WriteFile(path, []byte(doc), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	spec, err := ResolveServer(storage.SlackServer{Workspace: "atlas", ClaudeServer: "slack-orbit"}, path)
+	spec, err := ResolveServer(storage.SlackServer{Workspace: "atlas", ClaudeServer: "slack-work"}, path)
 	if err != nil || spec.Command != "npx" || len(spec.Args) != 4 || len(spec.Env) != 1 || spec.Env[0] != "SLACK_MCP_XOXC_TOKEN=xoxc" {
 		t.Fatalf("spec = %+v %v", spec, err)
 	}
