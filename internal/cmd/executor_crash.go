@@ -98,7 +98,7 @@ func signalName(sig syscall.Signal) string {
 
 // reportReconciledCrashes reconciles this project's unclosed crashes and says
 // what it found. Printed rather than silent: the run about to start is often the
-// re-run OF the crash (orbit-108 was re-launched 42 minutes later), and
+// re-run OF the crash (one such run was re-launched 42 minutes later), and
 // that is the moment the reason is worth reading.
 func reportReconciledCrashes(w io.Writer, stateDir, label string) {
 	for _, e := range storage.ReconcileCrashedRuns(stateDir) {

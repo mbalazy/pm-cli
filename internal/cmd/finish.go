@@ -302,7 +302,7 @@ func planFinish(store storage.TaskStore, tracker *storage.Task, slug string, opt
 // sub.
 //
 // A nested spawn (a sub-acceptance agent spawning its own) stays blocked even
-// with no telemetry, and that is deliberate too: in epic orbit-106 one
+// with no telemetry, and that is deliberate too: in a 2026-08 epic one
 // reviewer's own Explore burned 6.1M tokens outside any budget. If an
 // acceptance agent turns out to need one, that is its own decision to take,
 // not a quiet exception here.
@@ -842,7 +842,7 @@ func finishProjectSlug(cmd *cobra.Command, store storage.TaskStore, tracker stri
 }
 
 // projectFromTaskID finds the project whose id prefix the task id carries.
-// Prefixes may nest (`orb` and `orbit-vps`), so the longest match wins; two
+// Prefixes may nest (`app` and `app-web`), so the longest match wins; two
 // projects sharing one prefix cannot be told apart and are refused, since
 // reading a claim from the wrong project's data dir would look like success.
 func projectFromTaskID(store storage.TaskStore, id string) (string, error) {

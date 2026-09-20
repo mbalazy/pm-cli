@@ -1294,7 +1294,7 @@ func buildClaudeArgsFor(r claudeRun) []string {
 // no PATH-visible pytest/ruff/mypy at all: they live in .venv and the only way
 // in is `uv run`. Without these entries the worker's ONLY reachable gate is a
 // `make` target, so it cannot narrow a failure to one test file - measured on
-// platform.orbit (2026-08-18), where every check is `uv run` behind a
+// a real Python project (2026-08-18), where every check is `uv run` behind a
 // Makefile. But a blanket `Bash(uv:*)` would also hand it `uv run git push
 // --force` and `uv run gh pr merge`: the disallow patterns below match on the
 // leading tokens, and the PreToolUse guard (worker_guard.go) reads the whole
@@ -1519,7 +1519,7 @@ func workerDeathError(configDir, dir, sessionID, stderrTail string, err error) e
 // workerEnv strips ANTHROPIC keys and, when the project uses a non-default
 // Claude config dir (configDir != ~/.claude), pins CLAUDE_CONFIG_DIR so the
 // worker authenticates with that project's account/config (e.g. a company Team
-// account in ~/.claude-alt) instead of the personal default.
+// account in its own config dir) instead of the personal default.
 //
 // It also marks the process with PM_HEADLESS=1 so project-side hooks (e.g. a
 // SessionStart hook that boots a simulator + Metro for interactive worktree

@@ -111,7 +111,7 @@ func sessionFromProjectDir() (string, bool) {
 
 	// Honor CLAUDE_CONFIG_DIR: this command runs INSIDE the claude process, so a
 	// project that runs claude under a non-default config dir (e.g. a company
-	// account in ~/.claude-alt via a shell wrapper) has it set in the env.
+	// account in its own config dir via a shell wrapper) has it set in the env.
 	projectKey := encodeProjectPath(cwd)
 	sessDir := filepath.Join(storage.DefaultClaudeConfigDir(), "projects", projectKey)
 
@@ -149,8 +149,8 @@ func sessionFromProjectDir() (string, bool) {
 // encodeProjectPath converts a filesystem path to CC's project directory name:
 // every "/" and "." becomes "-". Matches board.pathToCCProject.
 //
-//	/Users/alice/.claude/pm-cli          -> -Users-mart--claude-pm-cli
-//	/Users/alice/repos/x/app.orbit -> -Users-mart-repos-x-app-orbit
+//	/Users/alice/.claude/pm-cli      -> -Users-alice--claude-pm-cli
+//	/Users/alice/repos/x/app.mobile  -> -Users-alice-repos-x-app-mobile
 func encodeProjectPath(path string) string {
 	s := strings.ReplaceAll(path, "/", "-")
 	s = strings.ReplaceAll(s, ".", "-")

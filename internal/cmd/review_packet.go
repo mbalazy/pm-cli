@@ -11,7 +11,7 @@ import (
 // The review prompt has promised since 0.36.2 that each reviewer gets "ONLY the
 // branch diff plus the AC". It was never true. What the worker actually sends is
 // a 1.9-4.8kB instruction to go and look, and the reviewer then looks: the 16
-// reviewers in epic orbit-106 made 674 tool calls and pulled 2.27M
+// reviewers in a 2026-08 epic made 674 tool calls and pulled 2.27M
 // characters out of the repo (Read 1.35M, Bash 0.69M, Grep 0.20M) - ~42 calls
 // and ~142kB each. A prompt cannot make an agent with a full toolset stop
 // reading; only not having the tool can, and only having the material already

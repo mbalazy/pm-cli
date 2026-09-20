@@ -499,7 +499,7 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 			return fmt.Errorf("independent mode: base branch %q does not exist at %s", baseBranch, workDir)
 		}
 		// Every sub forks from base: a stale local base is what produced the
-		// false SPEC-CONFLICT of orbit-144 (pm-cli-119-7).
+		// false SPEC-CONFLICT of a 2026-08 run (pm-cli-119-7).
 		if err := freshenBase(errOut, workDir, baseBranch); err != nil {
 			return fmt.Errorf("independent mode: %w", err)
 		}

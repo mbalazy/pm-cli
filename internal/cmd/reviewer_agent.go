@@ -8,7 +8,7 @@ import (
 )
 
 // Reviewer subagents are the largest single line item the executor spends on:
-// in epic orbit-106 sixteen of them accounted for 55.3M tokens, 58% of
+// in a 2026-08 epic sixteen of them accounted for 55.3M tokens, 58% of
 // the whole epic, and every one of them ran on opus for no reason anybody chose
 // - a subagent with no model named inherits the session's, and the session was
 // the run's --model.
@@ -23,9 +23,10 @@ import (
 //     something else - the definition's model is real, not advisory.
 //  2. The review prompt names the type and tells the worker not to pass a model.
 //  3. The guard hook rewrites the call anyway, because a `model` named BY THE
-//     CALLER beats the definition's - and the caller does name one: in sub
-//     orbit-106-3 the worker wrote `model: "opus"` into all three of its
-//     Agent calls unprompted, while in 106-1 and 106-2 it named none. Layer 2
+//     CALLER beats the definition's - and the caller does name one: in the
+//     third sub of a 2026-08 epic the worker wrote `model: "opus"` into all
+//     three of its Agent calls unprompted, while in subs one and two it named
+//     none. Layer 2
 //     asks; layer 3 is what makes the answer not matter.
 
 const reviewerAgentType = storage.ReviewerAgentType
@@ -38,8 +39,8 @@ const reviewerAgentType = storage.ReviewerAgentType
 // turn on.
 //
 // Bash is absent because it was the single largest way reviewers spent tokens:
-// 340 calls and 0.69M characters across the 16 reviewers of epic
-// orbit-106. A reviewer given the diff up front has nothing left to shell
+// 340 calls and 0.69M characters across the 16 reviewers of a 2026-08
+// epic. A reviewer given the diff up front has nothing left to shell
 // out for. The deliberate loss is that it can no longer run the tests or read
 // `git log` - neither of which is its job. Verify is a separate phase of the
 // inner loop and it is the gate; a reviewer's job is to find what is wrong with

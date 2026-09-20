@@ -237,7 +237,7 @@ var agentToolNames = map[string]bool{"Agent": true, "Task": true}
 
 // diffMarkers are the shapes a real diff carries in a prompt. Used to record
 // whether the worker handed its reviewer the diff or sent it to go dig one up
-// itself - the 16 reviewers in epic orbit-106 pulled 2.27M characters
+// itself - the 16 reviewers in a 2026-08 epic pulled 2.27M characters
 // out of the repo because they were handed a 1.9-4.8kB prompt and no diff.
 var diffMarkers = []string{"diff --git", "\n@@ ", "```diff"}
 
@@ -266,7 +266,7 @@ var budgetedToolNames = map[string]bool{"Read": true, "Grep": true, "Glob": true
 // 25 -> 12 (retro pm-cli-119, 2026-09-02): with the whole diff in the packet
 // the budget had become the norm, not the tail - all 4 reviewers of run
 // pm-cli-118 hit it (26/24/26/26 calls), each at 41-48 API calls on a 60-107k
-// context = 2.6-3.8M tokens, a quarter of the sub's total; orbit logged
+// context = 2.6-3.8M tokens, a quarter of the sub's total; another project logged
 // 47 refusals across 33 subs. The greps they spent it on (`Updated`,
 // `AddTask\(`) were reads of what the packet already showed.
 var reviewerToolBudget = 12

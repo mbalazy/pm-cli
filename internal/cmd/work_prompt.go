@@ -237,7 +237,7 @@ func genericPhasePrompt(phase string) string {
 	case storage.PhaseReview:
 		// How MANY reviewers is no longer stated here, because stating it did not
 		// work: the same instruction, phrased as a rule for the model to apply,
-		// produced 3 reviewers for a one-markdown-file change (orbit-106-3)
+		// produced 3 reviewers for a one-markdown-file change (measured 2026-08)
 		// and 1 for a diff the rule put at 3 (the 0.36.2 A/B). pm now sizes it
 		// from the production diff itself and refuses the spawn past the cap, so
 		// this prompt says what the reviewers are FOR and lets the harness own
@@ -247,7 +247,7 @@ func genericPhasePrompt(phase string) string {
 		// The model is stated the same way and for the same reason. Asking the
 		// worker not to name one is the cheap half; the guard rewriting the call
 		// is the half that holds when it names one anyway, which it demonstrably
-		// does (orbit-106-3 wrote `model: "opus"` into all three of its
+		// does (one 2026-08 sub wrote `model: "opus"` into all three of its
 		// spawns unasked). Saying so out loud costs one clause and stops the
 		// worker treating pm's substitution as something gone wrong.
 		return "Spawn independent reviewer subagents of type `" + reviewerAgentType + "`, and do NOT pass a `model` field - pm decides what reviewers run on and will overwrite the field anyway. " +

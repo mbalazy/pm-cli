@@ -23,7 +23,7 @@ import (
 // plain final sentence in result. pm then reported a fully finished sub as
 // "worker returned no structured result" and moved it to failed: the work was
 // committed and pushed, only the receipt was lost. Observed 2026-08-05 on
-// orbit-vps-1-1, whose recorded status contradicted its own transcript (the worker
+// a remote-runner sub, whose status contradicted its own transcript (the worker
 // had emitted status "verified" with branch and commit twelve seconds earlier).
 //
 // The transcript is the same data the envelope would have carried, written by
@@ -113,8 +113,8 @@ func scanTranscripts(configDir, dir, sessionID string, scan func(io.Reader) bool
 }
 
 // transcriptCandidates lists the paths a worker transcript can live at: the
-// project's Claude config dir first (a project pinned to e.g. ~/.claude-alt
-// writes there), then the default. The worker's cwd is the encoded directory
+// project's Claude config dir first (a project pinned to a second account's
+// config dir writes there), then the default. The worker's cwd is the encoded directory
 // name, resolved both as given and with symlinks expanded - Claude Code encodes
 // the path it actually runs in, which on macOS differs for /tmp and friends.
 func transcriptCandidates(configDir, dir, sessionID string) []string {

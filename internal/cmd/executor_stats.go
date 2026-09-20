@@ -696,7 +696,7 @@ func renderReviewStats(b *strings.Builder, st journalStats) {
 	if st.NestedSpawns > 0 {
 		// Called out rather than folded into the total: these are spawned from
 		// inside another subagent, so a cap that only watches the worker never
-		// sees them (orbit-106-3: one reviewer's own Explore subagent
+		// sees them (measured once: one reviewer's own Explore subagent
 		// burned 6.1M tokens over 65 tool calls).
 		fmt.Fprintf(b, "  nested    %d spawn(s) issued from inside another subagent\n", st.NestedSpawns)
 	}

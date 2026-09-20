@@ -177,9 +177,9 @@ const baseFetchTimeout = 2 * time.Minute
 
 // freshenBase brings the local base branch up to origin before anything forks
 // from it. Retro pm-cli-119: independent-mode runs forked from a LOCAL
-// `development` nothing had pulled - 10 commits behind origin on run
-// orbit-144, where a sub then "proved" the spec's code did not exist (a
-// false SPEC-CONFLICT, re-run needed, ~$25); orbit-117-4 found its base
+// `development` nothing had pulled - 10 commits behind origin on a 2026-08
+// run, where a sub then "proved" the spec's code did not exist (a false
+// SPEC-CONFLICT, re-run needed, ~$25); another sub found its base
 // stale and rebased itself mid-task. Rules:
 //   - no remote, base unknown, fetch fails or times out: nil, said on w - an
 //     offline run is still a run, on the base it has;

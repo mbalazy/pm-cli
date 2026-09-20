@@ -18,7 +18,7 @@ import (
 // applies it, and that is the entire point.
 //
 // The evidence that the instruction alone does not work:
-//   - orbit-106-3 delivered ONE markdown file (by the rule: 1 reviewer)
+//   - one real sub delivered ONE markdown file (by the rule: 1 reviewer)
 //     and spawned 3 in round one, then 1 in each of two further rounds.
 //   - the 0.36.2 A/B on a throwaway repo spawned 1 reviewer in BOTH arms with a
 //     92-line/2-file diff that the rule put squarely at 3. Recorded in CLAUDE.md
@@ -105,7 +105,7 @@ func isProductionFile(name string) bool {
 // cost per sub, but never diff sizes, so there is no distribution to fit them
 // to - the Open Question this ticket carried cannot be answered from the data
 // that exists. What IS measured is the cost of getting it wrong: the 16
-// reviewers in epic orbit-106 accounted for 55.3M tokens, 58% of the
+// reviewers in a 2026-08 epic accounted for 55.3M tokens, 58% of the
 // whole epic, at roughly 3.5M tokens each. So each step up the ladder has to be
 // earned by the change actually being bigger, and the smallest band - which is
 // where the pathological case lived (one markdown file, three reviewers) - stays
@@ -127,8 +127,8 @@ const (
 // on prose the proxy simply does not hold: a long document is longer, not
 // riskier, and nothing in it can break at runtime.
 //
-// This is the case epic pm-cli-96 measured and did not fix. Sub
-// orbit-106-3 delivered ONE markdown file of 656 lines - by the bands
+// This is the case epic pm-cli-96 measured and did not fix. The third sub
+// of a 2026-08 epic delivered ONE markdown file of 656 lines - by the bands
 // that is 1 file but >400 lines, i.e. cap 3, exactly what the model chose
 // unaided - and cost $40.38 of the epic's $89.09. Its transcript says where
 // that went: the document was written and committed in 11 minutes, and 43 of
@@ -307,7 +307,7 @@ func roundIndex(spawns []storage.ReviewSpawn, now time.Time, gap time.Duration) 
 // cap. It names the alternative, because the loop this bounds is one a model
 // will otherwise keep feeding: an adversarial reviewer asked to refute a change
 // almost never returns an empty list, so "repeat until the review is clean" has
-// no natural end - measured on epic orbit-106, where all three subs hit
+// no natural end - measured on a 2026-08 epic, where all three subs hit
 // the cap of 3 and every third round was named some variant of "final
 // verification review".
 func roundDenyMessage(cap int, docOnly bool) string {
@@ -342,7 +342,7 @@ func capDenyMessage(cap, files, lines int, docOnly bool) string {
 }
 
 // nestedDenyMessage refuses a spawn made from inside a subagent. This is the
-// case a cap on the worker cannot see: in orbit-106-3 one reviewer
+// case a cap on the worker cannot see: in a 2026-08 sub one reviewer
 // spawned its own Explore subagent that made 65 tool calls and burned 6.1M
 // tokens, entirely outside any budget the worker was subject to.
 const nestedDenyMessage = "pm review cap: a subagent may not spawn further subagents. " +

@@ -16,7 +16,7 @@ import (
 //
 // The subcommands take the journal NAME as their argument and the project as a
 // --project flag rather than as a second positional: `pm journal show sim-rig
-// app-orbit` reads as two names in no obvious order, and the project is
+// app-mobile` reads as two names in no obvious order, and the project is
 // usually settled by cwd anyway.
 
 func newJournalCmd(store storage.TaskStore) *cobra.Command {

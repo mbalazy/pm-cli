@@ -475,7 +475,7 @@ func detectVerifyCmd(projectPath string) string {
 // blames pre-existing breakage on itself or walks past a real regression - the
 // exact failure 0.25.0 introduced baselines to stop.
 //
-// Measured on app.orbit, which has `validate` (type-check + lint +
+// Measured on a real JavaScript project, which has `validate` (type-check + lint +
 // format:check) and none of the other three: detection used to fall through to
 // `yarn test && yarn lint`, a command the project's own playbook says is wrong
 // (jest is deliberately NOT part of its verification and explodes in a fresh
