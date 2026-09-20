@@ -76,7 +76,7 @@ go install github.com/mbalazy/pm-cli/cmd/pm@latest
 The binary lands in `$(go env GOBIN)`, or `$(go env GOPATH)/bin` when that is empty; put it on your `PATH`. To work on pm, clone and use `make install`, which stamps the Makefile's `VERSION` through ldflags. Then register the MCP server, give the agent its usage contract and create a project:
 
 ```sh
-claude mcp add --transport stdio --scope user pm -- $(command -v pm) mcp
+claude mcp add --transport stdio --scope user pm -- pm mcp
 pm docs claude >> ~/.claude/CLAUDE.md
 pm projects add <slug> --path /path/to/repo
 ```
