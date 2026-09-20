@@ -58,7 +58,7 @@ func TestSlackSourceOverAFakeMCPServer(t *testing.T) {
 	}
 	leScript := scriptFile(t, map[string]string{
 		"conversations_history|#dev": "UserID,UserName,Channel,ThreadTs,Text,Time\n" +
-			"U1,marta,C0DEV,,\"Fixed the header\nsecond line\"," + slackTS(2*time.Hour) + "\n" +
+			"U1,dana,C0DEV,,\"Fixed the header\nsecond line\"," + slackTS(2*time.Hour) + "\n" +
 			"U2,me-login,C0DEV,,my own note," + slackTS(time.Hour) + "\n" +
 			"U3,old,C0DEV,,before the cutoff," + slackTS(40*time.Hour) + "\n" +
 			",,,,,\n",
@@ -106,7 +106,7 @@ func TestSlackSourceOverAFakeMCPServer(t *testing.T) {
 		t.Fatalf("events = %d: %+v", len(ch.Events), byTitle)
 	}
 	// A mapped channel message: the project's, first line only, info.
-	dev, ok := byTitle["#dev · marta: Fixed the header"]
+	dev, ok := byTitle["#dev · dana: Fixed the header"]
 	if !ok || dev.Project != "alpha" || dev.Group != "grp" || dev.Severity != SeverityInfo || dev.Detail != "workspace orbit" {
 		t.Fatalf("dev = %+v (have %v)", dev, keys(byTitle))
 	}
@@ -162,7 +162,7 @@ func TestSlackSourceFailures(t *testing.T) {
 		old := SlackTimeout
 		SlackTimeout = 500 * time.Millisecond
 		t.Cleanup(func() { SlackTimeout = old })
-		okScript := scriptFile(t, map[string]string{"conversations_history|#dev": "UserName,Text,Time\nmarta,hello," + slackTS(time.Hour) + "\n"})
+		okScript := scriptFile(t, map[string]string{"conversations_history|#dev": "UserName,Text,Time\ndana,hello," + slackTS(time.Hour) + "\n"})
 		cfg := cfgWith(map[string]bool{"slack": true})
 		cfg.Slack.Servers = []storage.SlackServer{
 			{Workspace: "hung", Command: exe, Env: map[string]string{"FAKE_MCP_MODE": "hang", "FAKE_MCP_SCRIPT": okScript}, Me: "@x"},
@@ -184,7 +184,7 @@ func TestSlackSourceFailures(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "workspace hung") || !strings.Contains(err.Error(), "workspace dead") {
 			t.Fatalf("err = %v", err)
 		}
-		if len(events) != 1 || events[0].Title != "#dev · marta: hello" || events[0].Project != "alpha" {
+		if len(events) != 1 || events[0].Title != "#dev · dana: hello" || events[0].Project != "alpha" {
 			t.Fatalf("events = %+v", events)
 		}
 		var pe *ProjectError
