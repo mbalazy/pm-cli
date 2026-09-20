@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // The executor launch overlay.

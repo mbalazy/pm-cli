@@ -17,11 +17,11 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/mbalazy/pm/internal/feed"
-	"github.com/mbalazy/pm/internal/report"
-	"github.com/mbalazy/pm/internal/runctl"
-	"github.com/mbalazy/pm/internal/service"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/feed"
+	"github.com/mbalazy/pm-cli/internal/report"
+	"github.com/mbalazy/pm-cli/internal/runctl"
+	"github.com/mbalazy/pm-cli/internal/service"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // newTestStore mirrors the MCP e2e fixture: a temp root with project "test"

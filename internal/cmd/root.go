@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"github.com/mbalazy/pm/internal/storage"
-	"github.com/mbalazy/pm/internal/version"
+	"github.com/mbalazy/pm-cli/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/version"
 	"github.com/spf13/cobra"
 )
 

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // SlackSource reads Slack through the user's Slack MCP server(s) - pm

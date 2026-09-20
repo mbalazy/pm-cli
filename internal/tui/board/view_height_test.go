@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // viewBoard must render EXACTLY m.height visual lines. One line too many and

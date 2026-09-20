@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // writeRawTask writes a task file directly to disk, bypassing writeTask's

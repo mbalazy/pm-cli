@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mbalazy/pm/internal/storage"
 	"github.com/mattn/go-runewidth"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // The Runs view's render: the `pm runs` table, plus a state line saying where

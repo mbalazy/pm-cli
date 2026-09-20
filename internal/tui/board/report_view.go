@@ -9,8 +9,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mbalazy/pm/internal/storage"
-	"github.com/mbalazy/pm/internal/tui/common"
+	"github.com/mbalazy/pm-cli/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/tui/common"
 )
 
 // The acceptance report: the markdown a `pm finish` run writes beside its

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/mbalazy/pm/internal/runctl"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/runctl"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // Run control over HTTP (pm-cli-118-21): the attention row's run actions -

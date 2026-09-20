@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/mbalazy/pm/internal/service"
-	"github.com/mbalazy/pm/internal/solo"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/service"
+	"github.com/mbalazy/pm-cli/internal/solo"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // Solo sessions from the cockpit (pm-cli-141): GET /api/solo/plan previews

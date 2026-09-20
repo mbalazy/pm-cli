@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // resolveWorktreeBase applies the base-branch precedence for a reused

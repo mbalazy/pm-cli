@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // blockerDetail is the slice of taskDetail these tests care about, decoded

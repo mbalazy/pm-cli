@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // runConfigCmd executes `pm config ...` through the real parent command, so the

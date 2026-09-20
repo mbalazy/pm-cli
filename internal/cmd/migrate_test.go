@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 func runMigrateIDsCmd(store storage.TaskStore) error {

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // journalFixture writes entries into a temp project dir via the REAL append path

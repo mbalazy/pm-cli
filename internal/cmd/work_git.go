@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // isGitRepo reports whether dir is inside a git work tree.

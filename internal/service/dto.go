@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // The read-side DTOs. Their json tags are the agent-facing contract every

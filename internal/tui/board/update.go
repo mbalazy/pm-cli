@@ -9,8 +9,8 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mbalazy/pm/internal/storage"
-	"github.com/mbalazy/pm/internal/tui/common"
+	"github.com/mbalazy/pm-cli/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/tui/common"
 )
 
 var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)

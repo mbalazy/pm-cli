@@ -5,7 +5,7 @@ import (
 	"io"
 	"strconv"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // The review FLOOR is the missing half of "review is decided by pm" (0.38.0).

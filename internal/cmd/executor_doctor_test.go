@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // findCheck returns the first finding whose message contains sub.

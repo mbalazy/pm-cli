@@ -7,8 +7,8 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mbalazy/pm/internal/storage"
 	"github.com/mattn/go-runewidth"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 func keyRunes(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }

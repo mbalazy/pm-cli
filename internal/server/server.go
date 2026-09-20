@@ -23,13 +23,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mbalazy/pm/internal/feed"
-	"github.com/mbalazy/pm/internal/report"
-	"github.com/mbalazy/pm/internal/review"
-	"github.com/mbalazy/pm/internal/runctl"
-	"github.com/mbalazy/pm/internal/service"
-	"github.com/mbalazy/pm/internal/solo"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/feed"
+	"github.com/mbalazy/pm-cli/internal/report"
+	"github.com/mbalazy/pm-cli/internal/review"
+	"github.com/mbalazy/pm-cli/internal/runctl"
+	"github.com/mbalazy/pm-cli/internal/service"
+	"github.com/mbalazy/pm-cli/internal/solo"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // dist holds the built SPA. `all:` is load-bearing: without it go:embed skips

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // newStore builds a temp store: project "test" (prefix t) whose path is a

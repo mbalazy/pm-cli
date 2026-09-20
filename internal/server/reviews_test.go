@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/review"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/review"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // POST a PR URL -> 202 running -> the fake claude's report on GET.

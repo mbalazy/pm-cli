@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // PMSource reads pm's own files - no network, no commands: status changes

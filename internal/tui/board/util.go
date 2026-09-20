@@ -8,8 +8,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mbalazy/pm/internal/storage"
 	"github.com/mattn/go-runewidth"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // truncateWidth shortens s to at most max display cells, appending "…" when it

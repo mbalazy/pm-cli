@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // Approving from the cockpit: the user reads a finished review and clicks

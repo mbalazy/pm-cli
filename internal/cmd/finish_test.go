@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // runFinishCmd executes `pm finish ...` through the real parent command, so the

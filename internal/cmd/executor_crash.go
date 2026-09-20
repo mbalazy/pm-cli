@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"syscall"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // The catchable half of "a dead manager says why" (the other half, for deaths

@@ -3,7 +3,7 @@ package server
 import (
 	"net/http"
 
-	"github.com/mbalazy/pm/internal/service"
+	"github.com/mbalazy/pm-cli/internal/service"
 )
 
 // Dismiss/restore on the attention queue and the solo shifts (pm-cli-125,

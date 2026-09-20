@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mbalazy/pm/internal/feed"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/feed"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // The change feed's HTTP face and its scheduler.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // ContextInput is the argument set of pm_context.

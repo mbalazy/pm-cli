@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mbalazy/pm/internal/storage"
-	"github.com/mbalazy/pm/internal/version"
+	"github.com/mbalazy/pm-cli/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/version"
 )
 
 func (m Model) View() string {

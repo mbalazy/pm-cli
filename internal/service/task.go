@@ -1,7 +1,7 @@
 package service
 
 import (
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // --- Inputs (the MCP tool schemas are generated from these structs) ---

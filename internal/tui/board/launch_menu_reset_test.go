@@ -3,7 +3,7 @@ package board
 import (
 	"testing"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // TestOpenClaudeMenuResetsAdditionalToggle covers pm-cli-74-2's stale-toggle

@@ -34,8 +34,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mbalazy/pm/internal/feed"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/feed"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // Timeout bounds one report: a summary of a day's events, not reasoning.

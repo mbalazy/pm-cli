@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 func seedServiceTimeline(t *testing.T, store *storage.Store, kind, text string, daysAgo, minutes int) {

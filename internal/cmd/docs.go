@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/mbalazy/pm/docs"
+	"github.com/mbalazy/pm-cli/docs"
 	"github.com/spf13/cobra"
 )
 

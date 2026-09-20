@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // Severity vocabulary of an event: the attention aggregation's, so a feed

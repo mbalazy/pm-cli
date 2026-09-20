@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // fakeMCP puts the fake stdio MCP server (testdata/fake_mcp.py) on PATH as

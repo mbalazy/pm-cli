@@ -8,8 +8,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mbalazy/pm/internal/storage"
-	"github.com/mbalazy/pm/internal/tui/common"
+	"github.com/mbalazy/pm-cli/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/tui/common"
 )
 
 // updateHelp owns the keyboard while the help overlay is up (overlayLadder's

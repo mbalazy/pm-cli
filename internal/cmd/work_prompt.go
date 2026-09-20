@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // buildWorkerPrompt assembles the user prompt for a worker: task identity, the

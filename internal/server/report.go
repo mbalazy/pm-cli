@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mbalazy/pm/internal/feed"
-	"github.com/mbalazy/pm/internal/report"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/feed"
+	"github.com/mbalazy/pm-cli/internal/report"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // The LLM report over the feed (pm-cli-118-20). GET /api/report is the

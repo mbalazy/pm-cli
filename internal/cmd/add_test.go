@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 func runAddCmd(store storage.TaskStore, args ...string) error {

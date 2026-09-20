@@ -5,8 +5,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/mbalazy/pm/internal/cmd"
-	"github.com/mbalazy/pm/internal/tui/board"
+	"github.com/mbalazy/pm-cli/internal/cmd"
+	"github.com/mbalazy/pm-cli/internal/tui/board"
 )
 
 func init() {

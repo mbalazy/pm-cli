@@ -13,8 +13,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mbalazy/pm/internal/storage"
-	"github.com/mbalazy/pm/internal/tui/common"
+	"github.com/mbalazy/pm-cli/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/tui/common"
 )
 
 // The Runs view's keyboard, plus the one thing this screen does that the rest of

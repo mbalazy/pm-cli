@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // TestDriveSubParkSemantics pins the ONE piece of pm state the two epic modes

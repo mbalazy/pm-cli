@@ -6,8 +6,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/mbalazy/pm/internal/service"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/service"
+	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
 

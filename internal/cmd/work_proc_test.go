@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // hangGuard bounds every wait in this file. It only has to beat the 300s sleeps

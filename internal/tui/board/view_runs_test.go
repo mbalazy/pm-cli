@@ -9,8 +9,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mbalazy/pm/internal/storage"
 	"github.com/mattn/go-runewidth"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // The Runs view: the screen pm did not have - every tracker's run and its

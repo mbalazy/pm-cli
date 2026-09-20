@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // bulkStatusMove moves every marked task to next(t), then clears select mode

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 func runTimelineCmd(t *testing.T, store storage.TaskStore, stdin string, args ...string) (string, error) {

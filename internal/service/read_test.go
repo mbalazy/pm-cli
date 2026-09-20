@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // seedProject writes a second project "beta" (statuses todo/doing/merged/done,

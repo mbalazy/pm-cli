@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbalazy/pm/internal/solo"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/solo"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // The cockpit's solo launcher (pm-cli-141): plan -> 202 start -> the launch

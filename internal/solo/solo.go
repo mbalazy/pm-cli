@@ -41,7 +41,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // Runtime values of Input.Runtime.

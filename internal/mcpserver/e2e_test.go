@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

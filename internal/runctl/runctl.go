@@ -28,7 +28,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // Action is one of the run-control actions an attention row may carry

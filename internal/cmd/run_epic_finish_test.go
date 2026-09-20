@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // fakePM installs a script standing in for the pm binary the chain spawns, and

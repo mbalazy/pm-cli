@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // CreateProjectInput is the argument set of pm_create_project.

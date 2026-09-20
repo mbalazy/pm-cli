@@ -4,8 +4,8 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mbalazy/pm/internal/storage"
-	"github.com/mbalazy/pm/internal/tui/board"
+	"github.com/mbalazy/pm-cli/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/tui/board"
 	"github.com/spf13/cobra"
 )
 

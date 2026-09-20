@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mbalazy/pm/internal/feed"
-	"github.com/mbalazy/pm/internal/server"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/feed"
+	"github.com/mbalazy/pm-cli/internal/server"
+	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
 

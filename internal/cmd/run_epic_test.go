@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // lockFailStore wraps a real TaskStore and forces LockProject to fail, so

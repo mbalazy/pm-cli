@@ -11,7 +11,7 @@
 // parameter description an agent ever reads.
 package service
 
-import "github.com/mbalazy/pm/internal/storage"
+import "github.com/mbalazy/pm-cli/internal/storage"
 
 // ValidationError is a failure the CALLER caused - a status outside the
 // project's set, a mode/epic_mode/finish_mode value that isn't one of the

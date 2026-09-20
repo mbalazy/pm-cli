@@ -1,4 +1,4 @@
-module github.com/mbalazy/pm
+module github.com/mbalazy/pm-cli
 
 go 1.24.2
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // The SSE feed says WHAT CHANGED, never what it changed to: `event: tasks`

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // handoffProject builds a project whose repo dir carries a playbook and a

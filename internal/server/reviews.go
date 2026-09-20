@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/mbalazy/pm/internal/review"
+	"github.com/mbalazy/pm-cli/internal/review"
 )
 
 // PR code reviews from the cockpit: POST a GitHub PR URL, pm runs

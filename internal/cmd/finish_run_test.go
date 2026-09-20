@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // Tests for the MAIN form of `pm finish` - the acceptance run. Everything here

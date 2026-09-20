@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // The reviewer cap moves ONE decision out of the prompt and into pm: how many

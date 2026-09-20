@@ -3,7 +3,7 @@ package board
 import (
 	"testing"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // TestColumnGeometry covers pm-cli-72-2 point 4: viewBoard (view.go) and

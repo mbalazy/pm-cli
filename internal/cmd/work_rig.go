@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // rigTimeout caps executor.rig. A WARM start of a runtime (boot a simulator,

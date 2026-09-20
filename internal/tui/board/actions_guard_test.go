@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // TestDoMoveGuardsEmptyStatuses covers the reproduced panic (pm-cli-74-2):

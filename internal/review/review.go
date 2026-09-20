@@ -28,9 +28,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mbalazy/pm/internal/report"
-	"github.com/mbalazy/pm/internal/solo"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/report"
+	"github.com/mbalazy/pm-cli/internal/solo"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // Timeout is how long a review may run before its process group is killed.

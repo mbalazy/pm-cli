@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // recoverWorkerEffort reads a dead worker's own transcript and returns how much

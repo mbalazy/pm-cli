@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbalazy/pm/internal/feed"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/feed"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // AttentionInput narrows the queue. Both empty = every active project.

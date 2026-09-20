@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // floorRepo: a git repo with one commit (the diff base) and a telemetry file

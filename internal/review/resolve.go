@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbalazy/pm/internal/feed"
-	"github.com/mbalazy/pm/internal/report"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/feed"
+	"github.com/mbalazy/pm-cli/internal/report"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // What the user pastes is not always a PR URL: it can be a sentence ("pr 555

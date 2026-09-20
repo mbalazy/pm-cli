@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // Dismiss / restore on the attention queue and the solo shifts (pm-cli-125,

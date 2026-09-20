@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/feed"
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/feed"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 func fakeClaude(t *testing.T, script string) string {

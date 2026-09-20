@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 // The acceptance draws its worktree slot from the SAME pool `pm work` and

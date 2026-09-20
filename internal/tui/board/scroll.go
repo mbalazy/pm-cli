@@ -3,7 +3,7 @@ package board
 import (
 	"strings"
 
-	"github.com/mbalazy/pm/internal/storage"
+	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
 func (m Model) statusIndex(s storage.TaskStatus) int {
