@@ -1,7 +1,5 @@
 # Executor internals (`pm work` / `pm run-epic` / `pm finish`)
 
-Moved out of `CLAUDE.md` on 2026-09-02 (retro pm-cli-119-4): this section was 29 KB of the 51 KB file, and every headless worker re-read it on each of its ~150 API calls while working on the TUI, the MCP server or the service layer. It is the same content, maintained here from now on - `CLAUDE.md` keeps the handful of rules that bite anyone touching the repo and points here for the rest. Decision history stays in `docs/design-log.md`.
-
 ## Running it
 
 The executor runs pm tasks autonomously through **isolated headless `claude -p` workers**, so a multi-subtask epic executes without blowing one session's context.
@@ -77,6 +75,8 @@ pm executor stats [project]   # journal rollup
 `pm executor init` is re-runnable and merge-aware: detected bindings refresh, hand-set fields survive (comments and unknown keys in `project.yaml` are preserved through a YAML node-tree merge), and hand-written playbook prose is never regenerated.
 
 ## Overview
+
+Moved out of `CLAUDE.md` on 2026-09-02 (retro pm-cli-119-4): this section was 29 KB of the 51 KB file, and every headless worker re-read it on each of its ~150 API calls while working on the TUI, the MCP server or the service layer. It is the same content, maintained here from now on - `CLAUDE.md` keeps the handful of rules that bite anyone touching the repo and points here for the rest. Decision history stays in `docs/design-log.md`.
 
 Runs pm tasks/epics via **isolated headless `claude -p` workers** (implement → test → review → verify), so a multi-subtask epic executes without blowing one session's context. (history: docs/design-log.md)
 
