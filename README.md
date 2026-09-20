@@ -76,7 +76,7 @@ pm projects add <slug> --path /path/to/repo
 
 `--path` is effectively required: cwd auto-detection (`pm_context`, `pm executor init`, ...) matches against it, so a project without one won't be found from inside its own repo. You can also just ask Claude Code ("create a pm project for this repo") once the MCP server is registered - it calls `pm_create_project` for you.
 
-Using the executor? One more step, once per project: `pm executor init <project>` (see [The executor](#the-executor)).
+Using the executor? One more step, once per project: `pm executor init <project>` (see [docs/executor.md](docs/executor.md)).
 
 ## Quick start
 
@@ -195,80 +195,6 @@ pm serve                                        # http://127.0.0.1:7070
 ```
 
 Development: run `pm serve` in one terminal and `cd web && npm run dev` in another - Vite proxies `/api` to the server (`PM_API_URL` points it elsewhere). `make web-check` runs lint, tsc and vitest; `make check` and `make install` stay node-free (a binary built without the bundle serves a placeholder page).
-
-## The executor
-
-The executor runs pm tasks autonomously through **isolated headless `claude -p` workers**, so a multi-subtask epic executes without blowing one session's context.
-
-First run:
-
-```sh
-pm executor init my-app       # once per project: detect skills/stack, draft the profile
-pm work my-app-12 --dry-run   # inspect the full worker prompt + argv, zero tokens
-pm work my-app-12             # run one task end-to-end → draft PR
-pm run-epic my-app-10         # drive a whole tracker's subtasks
-```
-
-Two commands do the work:
-
-### `pm work [project] <task>` - the atom
-
-Spawns one fresh worker in the project directory (so the project's own CLAUDE.md, skills and MCP servers load by cwd). The worker runs the inner loop - **implement → test → adversarial review → fix → verify** - and returns a schema-validated JSON contract: `{status, summary, branch, commits, unresolved}`. Standalone runs end with a draft PR; `--dry-run` prints the full prompt and argv without spending a token.
-
-### `pm run-epic [project] <tracker>` - the manager
-
-Drives a tracker's subtasks sequentially (by `order`) in one of two modes:
-
-**Integration mode** (default) - for one coherent feature. Creates `epic/<tracker>`, branches each sub off it, merges back `--no-ff` on verify-green, parks blocked/failed/conflicted subs on `waiting` and keeps going. Ends with ONE draft epic→main PR. Re-entrant: a re-run skips finished subs. Never merges to main, never closes the parent.
-
-**Independent (batch) mode** (`epic_mode: independent` on the tracker) - for a batch of unrelated tickets. Each sub gets its own branch off the base, the worker runs **best-effort** (never abandons; records `ASSUMPTION:` / `TODO:` / `SPEC-CONFLICT:` entries instead), and every branch carrying commits is pushed - even on failure, since partial work on origin beats work lost to the next branch wipe. Nothing merges; a human finishes each task on its own branch.
-
-### Per-sub gates
-
-- `depends_on: [ids]` - unmet deps skip the sub (no worker, no wasted tokens); a re-run picks it up once deps merge.
-- `mode: manual` - a permanent human gate: the manager never touches the sub; you do it by hand and move it to done yourself.
-- `model: sonnet` - per-sub model override, so trivial subs run cheap while investigation subs stay on the strong model.
-
-### `pm finish [tracker]` - the acceptance as a run
-
-The third run kind: a headless worker that invokes the global `batch-finish-auto` skill to accept a finished batch - walk the sub branches, verify, push fixes, write a report. Yolo by default (the guard hook still rides along), `--sim` only for attended runs - anything detached keeps its hands off shared runtime. Every acceptance starts by CLAIMING the run (`pm finish claim|release|status <tracker>`): a TTL lock stored beside the run's own state, so two acceptance sessions can never take the same run - even across machines. Its state, log and report live in `<tracker>.finish.json` / `.finish.log` / `.finish.md`, never overwriting the run's files.
-
-Set `finish_mode: auto` on a tracker (or pass `--then-finish`) and `pm run-epic` chains the acceptance itself when the run completes - detached, best-effort, same machine only. `pm runs` (and the board's `R` view) shows every tracker's run and acceptance across all projects, including remote runners registered in the global `~/.claude/pm/config.yaml` (`pm config show`), with the count of unresolved visual claims per acceptance - the morning TODO list.
-
-### Verification baseline - the "new failures only" verdict
-
-If `executor.baseline` is set (typically the project's full verification command), it is captured **once per run** on the branch the work forks from and injected into every worker prompt. Green baseline: any failure the worker sees is new. Red baseline: the listed failures are pre-existing, out of scope, and **must not demote the verdict** - the worker records them once as `PRE-EXISTING:` and moves on. This kills the two classic failure modes of agents in imperfect repos: blaming inherited breakage on themselves, and burning turns re-diagnosing it in every sub.
-
-### Worktree slots (`--additional`)
-
-Opt-in per run. The project defines a pool of worktree slots in `project.yaml` (`executor.worktrees`, each with a path and env overlay - e.g. its own Metro port and simulator UDID). A run claims the first free slot with an atomic, PID-checked lock (claim = `link(2)` of a fully written file; stale locks of dead processes are taken over), reuses the worktree across runs (installed deps survive), gives each task a fresh branch off a wiped tree, and leaves your main checkout completely alone. `executor.prepare` (e.g. `yarn install --frozen-lockfile`) runs once per run in the claimed slot. Interactive board launches share the same slot pool through a separate session-lock registry, so a manual worktree session and a headless run never fight over runtime resources.
-
-### Safety envelope
-
-Workers run under `acceptEdits` with a curated bash allowlist and explicit disallows (force-push, merge to main, hard reset); `--yolo` bypasses. Hard rules in the system prompt: stay strictly within the AC (scope creep is a failure, not a bonus), commit early and often, never switch branches. The executor itself never merges to main and never closes the parent tracker - those calls stay human.
-
-Worker environment: `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` are stripped so headless workers bill the Claude subscription, not the metered API; `PM_HEADLESS=1` lets project hooks skip interactive-only boot work; `CLAUDE_CONFIG_DIR` is pinned when the project uses a non-default Claude account.
-
-### Observability - pm is the bus
-
-- **Run state** (`<project>/.executor/<task>.json`): live JSON the TUI polls - PID, current sub/phase/session, per-sub outcomes. A 30s **heartbeat** re-stamps it while a worker is in flight, so a 40-minute sub is distinguishable from a hung manager. (The stamp proves "the manager is alive inside a worker", not "the worker is progressing" - documented honestly at the source.)
-- **Journal** (`<project>/.executor/journal.jsonl`): append-only history of every run - outcomes, durations, turns, cost, flags, run ids (pids get recycled; run ids do not). `pm executor stats` rolls it up: runs by kind, the six-outcome sub histogram (worker-backed vs gate decisions counted separately), duration/turns/cost totals.
-- All observability writes are **best-effort by contract**: a failed write costs a stale dashboard, never a wrong run.
-
-### Executor configuration and the handoff contract
-
-The `executor` block in `project.yaml` binds each phase to a skill, a command, the built-in generic, or skip; plus baseline, prepare, base branch, worktree slots, env, read-only `context_repos` (cross-repo facts a worker may read but never touch), and the **handoff**: a pointer to the project's evidence playbook and the skill that drives its runtime (simulator/browser).
-
-```sh
-pm executor init <project>    # auto-detects skills + stack, drafts the block,
-                              # scaffolds the evidence playbook (TODO slots for prose)
-pm executor show [project]    # the profile as RESOLVED: bindings, slots + env, handoff
-pm executor doctor [project]  # completeness check: ERRORs are binary filesystem facts,
-                              # WARNs are heuristics over prose; --strict promotes warns
-pm executor stats [project]   # journal rollup
-```
-
-`pm executor init` is re-runnable and merge-aware: detected bindings refresh, hand-set fields survive (comments and unknown keys in `project.yaml` are preserved through a YAML node-tree merge), and hand-written playbook prose is never regenerated.
 
 ## CLI reference
 
