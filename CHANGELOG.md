@@ -2,8 +2,10 @@
 
 One line per release, newest first. The version lives in the Makefile
 (`VERSION`) and is stamped into the binary through ldflags, so every entry
-below is the commit that changed that line - `git log -L 1,1:Makefile` is the
-full record.
+below is a commit that changed that line. `git log -L 1,1:Makefile` prints
+that line's history, with one catch: it does not diff merge commits, and
+0.61.0 came in on one, so that output never shows it being set - `git show
+5e3dec2:Makefile` does.
 
 There are no git tags, and versions promise each other nothing. The only
 promise is that your task files stay readable, because they are markdown.
