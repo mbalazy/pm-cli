@@ -17,12 +17,19 @@ func init() { Version = resolve(Version, debug.ReadBuildInfo) }
 
 // resolve reports the version to display. An ldflags value wins outright: it
 // is the most specific thing anyone said about this build. Otherwise the
-// module version the toolchain recorded is used - a tag such as "v0.64.0" for
-// `go install ...@v0.64.0`, or "(devel)" for a build from a working tree.
-// When there is no build info at all, or it carries no main version (a test
-// binary, or a toolchain that recorded none), the default stands.
+// module version the toolchain recorded is used - the tag for
+// `go install ...@v0.64.0`, a pseudo-version for an untagged commit, and
+// "(devel)" for a build from a working tree (which is also what `go test`
+// binaries report).
+//
+// It never returns an empty string, and that is the point of the first
+// branch: cobra does not register a --version flag when Command.Version is
+// empty, so an empty value does not print blank, it deletes `pm --version`
+// from the CLI. An empty ldflags value is reachable - make's `?=` keeps an
+// empty VERSION from the environment or the command line - so it is treated
+// as "nobody said", not as an answer.
 func resolve(ldflags string, readBuildInfo func() (*debug.BuildInfo, bool)) string {
-	if ldflags != defaultVersion {
+	if ldflags != defaultVersion && ldflags != "" {
 		return ldflags
 	}
 	info, ok := readBuildInfo()
