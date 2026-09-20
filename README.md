@@ -1,110 +1,16 @@
 # pm
 
-A local, file-based project manager that doubles as a **control plane for AI coding agents** - with a kanban TUI, an MCP server for Claude Code, and an autonomous executor that runs whole epics through isolated headless `claude -p` workers.
+**pm** is a task tracker that lives in markdown files and speaks MCP. Claude Code reads and updates your tasks as a side effect of the conversation; you keep a kanban TUI, a web cockpit and `grep`. One Go binary, files under `~/.claude/pm/`, no cloud, no database, no account.
 
-Everything lives in plain markdown files with YAML frontmatter under `~/.claude/pm/`. No cloud, no database, no account. `grep` works, `git` works, and any editor is a valid client.
+[![CI](https://github.com/mbalazy/pm-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/mbalazy/pm-cli/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/github/go-mod/go-version/mbalazy/pm-cli)](go.mod)
+[![MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-```
-┌─────────────┐   ┌──────────────┐   ┌───────────────────┐
-│  pm board   │   │  pm mcp      │   │  pm work /        │
-│  (TUI)      │   │  (MCP server │   │  pm run-epic      │
-│             │   │  for Claude  │   │  (executor:       │
-│  vim keys,  │   │  Code)       │   │  headless claude  │
-│  launches   │   │              │   │  workers)         │
-│  runs       │   │              │   │                   │
-└──────┬──────┘   └──────┬───────┘   └─────────┬─────────┘
-       │                 │                     │
-       └────────┬────────┴──────────┬──────────┘
-                ▼                   ▼
-        ~/.claude/pm/<project>/   the repo you work on
-        (tasks, config, run       (branches, worktree
-         state, journal)           slots, PRs)
-```
+<!-- screenshot: docs/img/board.png -->
 
-## Highlights
+## Why files
 
-- **Tasks are markdown files** - YAML frontmatter (id, status, brief, acceptance criteria, links, ...) plus a body split into a rewritable **Spec** zone and an append-only **Log** zone.
-- **TUI kanban board** (`pm board`) - vim navigation, per-project tabs, task detail with live executor dashboards, one-key launching of Claude Code sessions and executor runs.
-- **MCP server** (`pm mcp`) - 10 tools that let Claude Code read and update tasks mid-conversation, with strict output budgets so a session start costs ~15k chars, not 60k.
-- **Autonomous executor** - `pm work` runs one task end-to-end (implement → test → review → fix → verify) in a fresh headless worker; `pm run-epic` drives a whole parent+subtasks epic, merging verified subs into an integration branch or pushing independent branches for a batch of unrelated tickets.
-- **Learning loop built in** - every run appends to a durable journal; `pm executor stats` rolls it up, and lessons from real failures are baked back into the worker prompts (see [Design notes](#design-notes)).
-
-## Setup
-
-Requirements: Go 1.24+, git. For the executor: the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI (`claude`) and optionally `gh` for PRs.
-
-**1. Build and install:**
-
-```sh
-go install github.com/mbalazy/pm-cli/cmd/pm@latest
-```
-
-That needs no checkout; the binary reports whatever the module proxy resolved - a release tag when one exists, otherwise a pseudo-version of the commit it was built from. To work on pm, build from a clone instead - `make install` stamps the Makefile's `VERSION` through ldflags:
-
-```sh
-git clone https://github.com/mbalazy/pm-cli.git && cd pm-cli
-make install          # builds with version ldflags, installs to GOBIN
-```
-
-`make install` runs `go install`, which puts the binary at `$(go env GOBIN)`, or `$(go env GOPATH)/bin` when `GOBIN` is unset (that's `~/go/bin` on a stock Go setup). Find yours with:
-
-```sh
-go env GOBIN GOPATH   # empty GOBIN -> binary is at $GOPATH/bin/pm
-```
-
-Make sure that directory is on your `PATH` - the rest of this guide assumes `pm` is runnable by name.
-
-**2. Register the MCP server** with Claude Code (user scope, available in every project; substitute the path from the step above, e.g. `~/go/bin/pm`):
-
-```sh
-claude mcp add --transport stdio --scope user pm -- <path-from-step-1>/pm mcp
-```
-
-**3. Teach your agent** - install the usage contract into Claude Code's global memory:
-
-```sh
-pm docs claude >> ~/.claude/CLAUDE.md
-```
-
-This step is not optional. The MCP server gives the agent the *tools*; the guide gives it the *workflow* - when to proactively record things, the brief format, the Spec/Log write rules, task-authoring discipline (`pm docs authoring`), and the rule that only the human closes tasks. Without it the agent drives the tools blind. The guide is embedded in the binary and wrapped in `<!-- pm:agent-guide:start/end -->` markers - to refresh after an upgrade, delete the block and append again. Source of truth, versioned with the code: [docs/agent-guide.md](docs/agent-guide.md) and [docs/task-authoring.md](docs/task-authoring.md).
-
-**4. Create a project** for each repo you want to track (`pm init` only creates the top-level `~/.claude/pm/` data directory - it does not create a project):
-
-```sh
-pm projects add <slug> --path /path/to/repo
-```
-
-`--path` is effectively required: cwd auto-detection (`pm_context`, `pm executor init`, ...) matches against it, so a project without one won't be found from inside its own repo. You can also just ask Claude Code ("create a pm project for this repo") once the MCP server is registered - it calls `pm_create_project` for you.
-
-Using the executor? One more step, once per project: `pm executor init <project>` (see [docs/executor.md](docs/executor.md)).
-
-## Quick start
-
-**The primary interface is a conversation.** With the setup above done, you don't operate pm by hand - you just talk to Claude Code and it drives the tools:
-
-> "create a pm project for this repo" → `pm_create_project`
-> "add a task: fix the login flow" → `pm_add_task`
-> "what am I working on?" → `pm_context` (the session-start rollup)
-> "save a brief, I'm done for today" → `pm_update_task` with a where-we-left-off summary
-> "done, close it" → `pm_move_task`
-
-Claude reads the context at session start, records decisions into the task as you work, and leaves a brief for the next session - the tracker maintains itself as a side effect of the conversation.
-
-The CLI and TUI cover the moments a conversation doesn't:
-
-```sh
-pm board       # the kanban TUI: overview, reordering, launching sessions and executor runs
-pm context     # the same rollup as pm_context, offline
-pm work / pm run-epic   # hand tasks to autonomous workers (see The executor)
-```
-
-Direct CLI equivalents exist for everything (`pm init`, `pm add`, `pm mv`, ... - see [CLI reference](#cli-reference)). Data lands in `~/.claude/pm/<project>/` - one `project.yaml` plus one `.md` file per task, side by side.
-
-## Concepts
-
-### Tasks
-
-A task is a markdown file with frontmatter:
+A task is a markdown file with YAML frontmatter, next to its project's config in `~/.claude/pm/<project>/`. `grep` works, `git` works, any editor is a client.
 
 ```markdown
 ---
@@ -131,136 +37,101 @@ Current-truth spec, rewritten wholesale as decisions land.
 Append-only log: session notes, worker run records, history.
 ```
 
-Field semantics that make this work across many sessions:
+Per-field write rules are what make this survive many sessions:
 
 | Field | Write rule | Purpose |
 |---|---|---|
-| `brief` | overwrites | "where we left off" - the cold-start context for the next session |
-| `ac` | overwrites | acceptance criteria - the executor treats these as a hard scope bound |
-| Spec zone | rewritten in place | the living document; resolved questions get folded in, not appended |
+| `brief` | overwrites | "where we left off", the next session's cold start |
+| `ac` | overwrites | acceptance criteria; an agent treats them as a hard scope bound |
+| Spec zone | rewritten in place | the living document; answers get folded in, not appended |
 | Log zone | append-only | the audit trail; never rewritten |
-| `links` | merge-only | keys are never removed by updates |
-| `waiting_for` | overwrites | who or what the task is blocked on - free text, never validated, never auto-cleared |
-| `status_changed` | stamped by pm | when the status last actually changed; "waiting since when", which `updated` cannot answer (it moves on any edit). Empty on tasks older than the field - unknown, never guessed from `updated` |
+| `links` | merge-only | keys are never removed by an update |
 
-### Projects and statuses
+`waiting_for` names who or what blocks a task and is never auto-cleared. Statuses are per-project (default `todo / doing / waiting / done`; an epic's subtasks usually add `merged` and `pushed`) and every write path validates against the set. Files are never migrated: an older one lacks the newer fields, and readers report that as unknown instead of guessing.
 
-Statuses are **per-project** (`statuses:` in `project.yaml`, default `todo / doing / waiting / done`). `archived` is system-level and never appears in a project's list. Every mutation path validates the status against the project's set - a typo'd status is rejected instead of silently writing a task no board column renders.
+## Try it in 5 minutes
 
-### Trackers (parent + subtasks)
+`PM_DATA_DIR` relocates the data directory, so nothing below touches `~/.claude`.
 
-A task becomes a **tracker** when other tasks name it as `parent`. The rollup (progress, per-child status, one-line briefs) is **generated** by `pm context` / `pm_context` - never hand-maintained in the parent body, so it cannot desync. Subtask lifecycle in an epic: `todo → doing → merged → done`. Children order by `order` (then id), settable via `pm reorder <parent> <child>...`.
+```sh
+export PM_DATA_DIR=$(mktemp -d)
+pm init                              # create the data directory
+pm projects add demo --path "$PWD"   # one project per repo
+pm add demo "Try pm for a day"       # -> demo-1
+pm mv demo demo-1 doing
+pm list                              # the table
+pm context                           # the rollup an agent reads at session start
+cat "$PM_DATA_DIR"/demo/demo-1-*.md  # ... which is this file
+pm board                             # the TUI; q, then q again, leaves
+```
+
+## Install
+
+Go 1.24+ and `git`; the agent parts also want the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI, plus `gh` for pull requests.
+
+```sh
+go install github.com/mbalazy/pm-cli/cmd/pm@latest
+```
+
+The binary lands in `$(go env GOBIN)`, or `$(go env GOPATH)/bin` when that is empty; put it on your `PATH`. To work on pm, clone and use `make install`, which stamps the Makefile's `VERSION` through ldflags. Then register the MCP server, give the agent its usage contract and create a project:
+
+```sh
+claude mcp add --transport stdio --scope user pm -- $(command -v pm) mcp
+pm docs claude >> ~/.claude/CLAUDE.md
+pm projects add <slug> --path /path/to/repo
+```
+
+The second line is not optional: the MCP server gives the agent the *tools*, the guide gives it the *workflow* - when to record what, the brief format, the Spec/Log write rules, and the rule that only a human closes a task. It ships inside the binary between `<!-- pm:agent-guide:start/end -->` markers, versioned as [docs/agent-guide.md](docs/agent-guide.md). `--path` matters: cwd auto-detection matches against it, so a project without one is never found from its own repo.
+
+## Claude Code drives it
+
+After that you mostly stop operating pm by hand:
+
+> "create a pm project for this repo" -> `pm_create_project`
+> "add a task: fix the login flow" -> `pm_add_task`
+> "what am I working on?" -> `pm_context`
+> "save a brief, I'm done for today" -> `pm_update_task`
+
+`pm mcp` is a stdio MCP server with 14 tools: those four, six more for tasks and projects, and the journal and timeline pairs. It is built around an output budget, because a rollup that runs at every session start is paid for every time: `pm_context` caps bodies and collapses finished trackers, `pm_list_tasks` returns the 50 newest in an explicit `{total, shown, note}` wrapper. The same rollup is offline as `pm context [project]`, for when the MCP process holds a stale binary.
 
 ## The board
 
-`pm board` (or bare `pm`) opens the TUI: per-project tabs, vim keys, four views (board / detail / archive / project info).
+`pm board` (or bare `pm`) opens the TUI: per-project tabs, vim keys, and eight views - board, task detail, archive, project info, focus, the live run dashboard, the cross-project run list and the acceptance report.
 
-Beyond task management, the board is the **control room for the executor**: a launch overlay starts `pm work` / `pm run-epic` as detached background runs (with per-launch toggles for yolo mode and worktree slots, including live slot occupancy), the detail view renders a live run dashboard with a heartbeat age, `W` tails the worker's transcript live, and `K` kills a run (process group, SIGTERM → SIGKILL) while keeping the books straight.
+It is also the control room. A launch overlay starts unattended runs in the background with live worktree-slot occupancy; the detail view renders a run's heartbeat age and per-subtask outcomes; `W` tails a worker's transcript, `K` kills a run and keeps the books straight. It also starts interactive Claude Code sessions on a task - fresh, resumed by session id, or in a worktree - and links the session back.
 
-It also launches interactive Claude Code sessions on a task (fresh, resume by stored session id, or in a git worktree with per-slot env), auto-linking the session id to the task.
+## The cockpit
 
-## The MCP server
+<!-- screenshot: docs/img/cockpit-today.png -->
 
-`pm mcp` is a stdio MCP server exposing:
+`pm serve --addr 127.0.0.1:7070` serves a JSON API and a React front end built into the binary. Ten routes; the one that matters is Today, an attention queue computed from local files: failed runs, work that landed with nobody's acceptance, tasks waiting on a person (with the age, and an alarm when nobody wrote down who), the focus plan, stuck projects. `/api/events` says *what* changed, so the page refetches itself.
 
-`pm_context` · `pm_list_tasks` · `pm_get_task` · `pm_add_task` · `pm_update_task` · `pm_move_task` · `pm_delete_task` · `pm_list_projects` · `pm_create_project` · `pm_update_project`
+A change feed answers "what happened since yesterday evening" from pm's files, `git`, GitHub (`gh`) and Slack - which goes through your own Slack MCP server from `~/.claude.json`, so pm holds no second copy of your tokens. An optional LLM pass turns the feed into a short written report; it spends tokens, so it is off by default.
 
-Notable behaviors:
+**Security: there is none.** No auth, no TLS, and the API is not read-only - its POST routes edit tasks, start and kill runs, launch sessions and can spend tokens. The only guard is an `X-PM-Client` header, which stops a stray cross-site form, not a person. Bind it to localhost and reach it over a tunnel you trust.
 
-- `pm_context` auto-detects the project from the caller's cwd and returns the rollup: doing tasks (with full briefs), trackers, counts. Bodies cap at 2000 runes with a pointer to `pm_get_task`; finished trackers collapse their children. **The rollup is a summary, not a reading surface** - it runs at every session start, so it is kept cheap by construction.
-- `pm_list_tasks` defaults to the 50 newest with an explicit `{total, shown, note}` wrapper; briefs compress to one line in listings.
-- Update semantics mirror the field rules above: links merge, `body_append` appends to the Log, `spec` rewrites the Spec zone, brief/ac/waiting_for overwrite. Tri-state params (`*string`/`*int`) distinguish "omit" from "clear". `status_changed` is never a param - pm stamps it whenever a status really changes.
+## Unattended work
 
-The same rollup is available offline via `pm context [project]` - useful when a long-lived MCP process holds a stale binary. The fuller usage contract the agent needs on top of the tool schemas ships via `pm docs claude` (see [Setup](#setup)).
+pm has two ways to hand tasks to an agent while you are away. The **executor** (`pm work`, `pm run-epic`, `pm finish`) runs each task in a fresh headless `claude -p` worker: worktree slots so runs never share a checkout, a review policy enforced by a hook rather than by asking the worker nicely, a verification baseline captured once per run so inherited breakage cannot count against the worker, then an acceptance run. **Solo** is the other mode - one long-lived session working a queue under a guard hook that blocks pushes, pull requests and destructive git unless the launch says otherwise. The executor journals every run it makes; a solo shift leaves a state file and a written report.
 
-## The web cockpit (`pm serve`)
+The skills those modes invoke - the acceptance procedure behind `pm finish`, the solo procedure itself - live in the author's Claude configuration, not here: what is here launches them, guards them and records what they did. Internals: [docs/executor.md](docs/executor.md), [design log](docs/design-log.md).
 
-`pm serve --addr 127.0.0.1:7070` exposes the same data the MCP server returns, over HTTP, for the React cockpit built into the binary: `GET /api/projects`, `/api/tasks?project=&status=&limit=`, `/api/tasks/{project}/{id}`, `/api/context?project=`, `/api/runs` (`?remote=1` to include the remote runners - one ssh round-trip each, never by default), `/api/focus`, and `/api/events`, a Server-Sent Events feed that says *what changed* (`tasks`/`runs` with the project slug, `ping` while idle) so the page refetches. Every JSON body is the DTO the corresponding MCP tool returns; errors are `{"error": "..."}` with 400/404/500. Unauthenticated on purpose, and NOT read-only: the cockpit's POST routes mutate pm data, start and kill runs and can spend tokens. Bind it to localhost and reach it over Tailscale; anyone who can reach the port can do all of that. Anything outside `/api/` serves the bundle (index.html fallback for client-side routes) or a placeholder page until `make web` has built one.
+## Also in the box
 
-### Web UI
-
-The bundle is a React SPA in `web/` (Vite, TypeScript, Tailwind v4, TanStack Query + Router, shadcn/ui components copied into `web/src/components/ui`, lucide-react icons; npm). Five screens over the same API the MCP server answers from:
-
-- **Today** (`/`) - the attention queue: what needs you (failed runs, open visual claims, work landed without acceptance), accepted work without a PR, today's focus, live runs, tasks waiting on someone (with their age and a "no reason" alarm), the changes since the cutoff, stuck projects. `?g=<group>` narrows every section to one client.
-- **Group** (`/g/<slug>`) - one client or product over one or more repos, with Overview (where we left off, needs me + waiting, in progress, trackers), Board, Runs and Changes tabs.
-- **Changes** (`/changes`) - the feed of what changed since yesterday's cutoff, from pm itself, git, GitHub and Slack, with an optional LLM report on top.
-- **Runs** (`/runs`) - the `pm runs` table ordered "needs me first", with duration, time since the end and heartbeat age; remote runners only on an explicit button.
-- **Settings** (`/settings`) - the `cockpit:` block of `config.yaml` and the per-project group, Slack and asleep settings, saved from the browser.
-
-Most mutations - focus, status and blocker reason, brief, notes, marking changes seen, claiming, re-running or killing a run, launching a solo session - go through one confirmation dialog, and a run action shows the exact command before it starts. Dismissing an attention row, saving settings, approving a PR and refreshing the change feed post directly. The look is an editorial ledger: a masthead with the date, sections separated by rules rather than cards, rows as dispatch lines (glyph, project, id and title, the reason, the age, the actions), Fraunces for the headings and Instrument Sans for the rest, warm neutrals in OKLCH, a dark theme that follows the system (or the toggle in the sidebar's footer), state glyphs always next to their colour, and a phone layout from 390 px up. Keyboard: `1`/`2`/`3`/`,` switch screens, `j`/`k`/`Enter` walk the rows, `t` toggles focus, `g <letter>` filters by group, `[`/`]` step a group page's tabs, `?` lists the shortcuts, ⌘K / Ctrl+K opens the palette. The page listens to `/api/events` and refetches what changed, so a board edit or a run's heartbeat shows up within a couple of seconds; a manifest makes it installable on a phone.
-
-```sh
-make web-install && make web && make install   # or: make web-install && make install-full
-pm serve                                        # http://127.0.0.1:7070
-```
-
-Development: run `pm serve` in one terminal and `cd web && npm run dev` in another - Vite proxies `/api` to the server (`PM_API_URL` points it elsewhere). `make web-check` runs lint, tsc and vitest; `make check` and `make install` stay node-free (a binary built without the bundle serves a placeholder page).
+- **Journals** (`pm journal`) - an append-only record of how one repeatedly-troublesome subsystem actually behaves: symptom, the false conclusion it produced, the real cause, the fix. An entry with no fix is open, and the open set is the backlog.
+- **Timeline** (`pm timeline`) - what happened *to* a project, plus dated state snapshots whose every line carries its provenance: `[verified YYYY-MM-DD by <command>]` or `[assumed]`, a verified line older than a week flagged for re-checking. A month later that is the difference between a fact and a sentence someone wrote.
 
 ## CLI reference
 
-| Command | What it does |
-|---|---|
-| `pm` / `pm board` | open the TUI board (project auto-detected from cwd) |
-| `pm init` | initialize the `~/.claude/pm/` data directory (does not create a project) |
-| `pm projects add <slug> --path <repo>` | create a project |
-| `pm projects` | list projects |
-| `pm add <project> <title>` | add a task (`--order`, `--id`) |
-| `pm list [project]` | list tasks |
-| `pm show <task>` | print one task |
-| `pm mv <project> <task> <status>` | move a task (validated against project statuses) |
-| `pm done <task>` | shortcut for moving to done |
-| `pm edit <task>` | open the task file in `$EDITOR` |
-| `pm reorder <parent> <child>...` | renumber children 10, 20, 30... in the given sequence |
-| `pm context [project]` | print the session-start rollup (same data as MCP `pm_context`) |
-| `pm work [project] <task>` | run one task through a headless worker |
-| `pm run-epic [project] <tracker>` | drive a whole epic (`--then-finish` chains the acceptance) |
-| `pm finish [tracker]` | run the acceptance; `claim`/`release`/`status` manage the lock |
-| `pm runs` | table of every run + acceptance, all projects, local + remote |
-| `pm config show` | print the global config (remote-runner registry) |
-| `pm executor init/show/doctor/stats` | executor profile management |
-| `pm mcp` | run the stdio MCP server |
-| `pm serve` | serve the web cockpit: JSON API (reads, mutations, run control) + SSE change feed + embedded front end (localhost, unauthenticated) |
-| `pm docs claude` / `pm docs authoring` | print the embedded agent guide / task-authoring rules |
-| `pm session-id` | print the current Claude Code session UUID |
+**Tasks** - `pm add <project> <title>`, `pm list`, `pm show <project> <task-id>`, `pm mv <project> <task-id> <status>`, `pm done <project> <task-id>`, `pm edit <project> <task-id>`, `pm reorder <parent> <child-id>...`
 
-Common executor flags: `--dry-run`, `--model`, `--max-turns`, `--timeout`, `--yolo`, `--additional` (+ `--slot N`, `--base`), `--independent`, `--allow-dirty`, `--no-pr`.
+**Projects and setup** - `pm init` (the data directory, not a project), `pm projects` / `add <slug> --path <repo>` / `edit <slug>`, `pm config show`, `pm docs claude`, `pm docs authoring`, `pm session-id`
 
-## Data layout
+**Reading** - `pm board [project]` (or bare `pm`), `pm context [project]`, `pm today`, `pm runs`, `pm journal` (`list`/`show`/`add`/`stats`), `pm timeline [project]` (`add`/`list`)
 
-```
-~/.claude/pm/
-└── <project-slug>/
-    ├── project.yaml          # name, path, stack, statuses, links, executor block
-    ├── <id>-<slug>.md        # one file per task, next to the config
-    ├── .pm.lock              # cross-process flock serializing read-modify-write
-    ├── .sessions/            # interactive worktree-slot session locks
-    └── .executor/
-        ├── <task>.json       # live run state (overwritten)
-        ├── <task>.log        # run log for background runs
-        └── journal.jsonl     # append-only run history
-```
+**Agents** - `pm work [project] <task-id>`, `pm run-epic [project] <tracker-id>`, `pm finish [tracker]`, `pm executor` (`init`/`show`/`doctor`/`stats`), `pm mcp`, `pm serve`
 
-Set `PM_DATA_DIR` to point the whole data directory elsewhere (default `~/.claude/pm/`). Useful for sandboxed verification, and for headless executor workers - they run under a guard that refuses writes anywhere under `~/.claude`, so a worker task that needs to write into the data dir will fail without a relocated `PM_DATA_DIR`.
-
-Concurrency model in one paragraph: task writes are atomic (tmp+rename), so the only hazard is two pm processes interleaving read-modify-write and dropping each other's edits. `Store.LockProject` (an flock on `.pm.lock`) guards every mutating path - MCP handlers, the executor's long-window writers (which re-read the task fresh, since their copy predates a 30+ minute worker run), and `MoveTask` itself. Locks never nest in-process; release closures are idempotent for handoff to self-locking callees.
-
-## Development
-
-```sh
-make install               # build + install (VERSION from Makefile, via ldflags)
-make check                 # go vet + staticcheck + go test
-go test ./internal/... -v  # tests directly
-make web-install           # npm ci in web/ (once)
-make web-check             # lint + tsc + vitest for the web UI
-make web                   # build the bundle into internal/server/dist
-make install-full          # web + install
-```
-
-- Git hooks are versioned in `githooks/` (`git config core.hooksPath githooks`); pre-commit runs gofmt-check + vet + staticcheck + tests.
-- **Executor paths are tested through a fake `claude` binary** - a PATH-prepended script emitting a canned result envelope - so the real subprocess/parse/journal/run-state plumbing runs at zero token cost.
-- **MCP handlers have true end-to-end coverage in `internal/mcpserver/e2e_test.go`**, driven over the SDK's in-memory transport so the actual registered closures execute. The older `tools_test.go` invariant tests (links merge, Spec rewrite, Log append, brief lifecycle) are storage-level: they exercise `storage.WriteTask`/`FindTask` directly rather than going through a handler.
-- Concurrency invariants (lock races, atomic slot claims) have dedicated hammer tests; run suspects under `-race`.
-- Bump `VERSION` in the Makefile on each release.
+`pm help <command>` and `pm completion <shell>` come from cobra; `--help` on any command prints its flags.
 
 ## Design notes
 
@@ -272,6 +143,25 @@ A few principles this codebase holds onto, learned from real runs:
 - **Uncertainty is output, not noise.** Best-effort workers must ship their doubts in machine-readable form: `ASSUMPTION:` entries carry a concrete "- verify: how" check, `SPEC-CONFLICT:` flags a spec premise the evidence refuted, `TODO:` is the explicit human handoff. A wrong assumption buried inside working-looking code is the worst bug an agent can leave behind.
 - **Observability is best-effort; correctness is not.** Run state and journal writes never abort a run. Locks, atomic renames and status validation always do their job.
 - **The journal is the flywheel.** Every prompt rule above traces to a logged failure. Durable run history plus a retro habit is what lets the system get smarter instead of repeating itself.
+
+## Status
+
+A personal tool, in daily use since February 2026, currently 0.64.0. One machine, one user: no sync, no server, no account, no API key - the agent parts drive the `claude` CLI, so they run on a Claude subscription (the solo mode's `claude --bg` needs Claude Code 2.1.272 or newer). Developed on macOS; CI runs the suite on Linux, but the desktop bits are untested there. Not looking for contributions, though bug reports are welcome. No compatibility promise between versions, except that task files stay readable: markdown.
+
+## Development
+
+```sh
+make check        # gofmt-check + vet + staticcheck + go test
+make test-race    # the race detector, also run by CI
+make install      # build and install, VERSION stamped through ldflags
+make web-install  # npm ci in web/ (once)
+make web-check    # lint, tsc and vitest for the front end
+make install-full # the bundle plus the binary
+```
+
+Git hooks live in `githooks/` (`git config core.hooksPath githooks`) and pre-commit runs `make check`, the same target as CI. `make check` and `make install` are node-free on purpose, so a binary built without the bundle serves a placeholder page. The tests need `git` and `python3` on `PATH`, and the agent paths run against a fake `claude` binary - a PATH-prepended script emitting a canned result envelope - so the real subprocess, parsing, journal and run-state plumbing is covered at zero token cost.
+
+Developed with Claude Code; `CLAUDE.md` is the agent's working memory and doubles as the contributor guide. Docs: [agent guide](docs/agent-guide.md), [task authoring](docs/task-authoring.md), [executor](docs/executor.md), [design log](docs/design-log.md).
 
 ## License
 
