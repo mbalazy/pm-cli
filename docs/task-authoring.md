@@ -49,7 +49,7 @@ the job of the session that picks up the task.
 
 - Decisions: note rejected alternatives ("EXCLUDED: X, because Y")
 - References: file paths + line numbers, commit hashes, PR numbers, stakeholder names + dates
-- Cross-refs: link related tasks by ID (e.g. "split from orbit2-1" -> orbit2-2, orbit2-3)
+- Cross-refs: link related tasks by ID (e.g. "split from app-1" -> app-2, app-3)
 - Brief: keep it updated on "doing" tasks - sessions read the brief instead of the full body
 - Operational tasks (OTA, deploy): 1 sentence of context "why" + a link to the parent task
 
@@ -67,5 +67,5 @@ the job of the session that picks up the task.
 ## Project links convention
 
 - `project.yaml` links = stable service URLs (issue-tracker base, monitoring, docs)
-- task links = specific artifacts (ticket SCRUM-327, PR #1038, a commit)
+- task links = specific artifacts (ticket ACME-327, PR #42, a commit)
 - Keys: `jira`, `azure-board`, `azure-repo`, `figma`, `sentry`, `*-docs`
