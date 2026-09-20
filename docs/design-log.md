@@ -1,11 +1,32 @@
 # pm-cli design log
 
-Historical rationale, bug stories and measurements moved verbatim out of
-`CLAUDE.md`, which keeps the working rules. Each entry below is the original
-text, filed under the `CLAUDE.md` section it came from; the working file points
-here with "(history: docs/design-log.md)". Do not add new content here without
-also checking whether `CLAUDE.md` needs the operating rule - and never embed
-this file in the binary (it is not part of `pm docs`).
+Every rule in `CLAUDE.md` came out of something that happened. This is where that
+part stayed: the reasoning, the bug that forced a decision, the measurement that
+ended an argument - moved verbatim out of the working file so the rules there
+could stay short. A rule ending `(history: docs/design-log.md)` has its entry here.
+
+It is not a changelog and not a roadmap. Entries sit under the area they belong to
+and each names the release or the task it came from (`0.38.0`, `pm-cli-118-14`);
+most carry the numbers they were argued with - tokens spent, minutes lost, how many
+times something went wrong before anyone measured it. Nothing here is current truth:
+when a rule changed, the old entry stayed where it was and the new one was written
+elsewhere. To find something, use the contents below, or search for the wording of
+the rule as `CLAUDE.md` states it.
+
+Two house rules for adding to it: an entry moves here only after checking whether
+`CLAUDE.md` still needs the operating rule, and this file is never embedded in the
+binary - it is not part of what `pm docs` prints.
+
+## Contents
+
+- [Key patterns](#key-patterns)
+- [TUI patterns](#tui-patterns)
+- [Debugging TUI layout](#debugging-tui-layout)
+- [Agent docs (`pm docs`)](#agent-docs-pm-docs)
+- [MCP server (`pm mcp`)](#mcp-server-pm-mcp)
+- [Journals (`pm journal`)](#journals-pm-journal)
+- [Timeline (`pm timeline`)](#timeline-pm-timeline)
+- [Executor (`pm work` / `pm run-epic`)](#executor-pm-work--pm-run-epic)
 
 ## Key patterns
 
