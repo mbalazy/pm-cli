@@ -41,7 +41,7 @@ function compareTasks(a: TaskSummary, b: TaskSummary): number {
   return 0
 }
 
-/** Go's `taskIDNum`: the trailing integer of a task id ("atlas-26" -> 26), 0 when absent. */
+/** Go's `taskIDNum`: the trailing integer of a task id ("orbit-26" -> 26), 0 when absent. */
 function taskIdNum(id: string): number {
   const i = id.lastIndexOf('-')
   if (i < 0) return 0

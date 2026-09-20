@@ -13,10 +13,10 @@ describe('rowActions', () => {
     expect(actionMeta('teleport')).toEqual({ label: 'teleport', pending: 'unknown action' })
   })
   it('open goes to the task, or to the project when the row has none', () => {
-    expect(openTarget({ project: 'atlas', task_id: 'atlas-1' })).toEqual({
+    expect(openTarget({ project: 'orbit', task_id: 'orbit-1' })).toEqual({
       to: '/p/$slug/t/$id',
-      params: { slug: 'atlas', id: 'atlas-1' },
+      params: { slug: 'orbit', id: 'orbit-1' },
     })
-    expect(openTarget({ project: 'atlas' })).toEqual({ to: '/p/$slug', params: { slug: 'atlas' } })
+    expect(openTarget({ project: 'orbit' })).toEqual({ to: '/p/$slug', params: { slug: 'orbit' } })
   })
 })

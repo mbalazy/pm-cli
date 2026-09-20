@@ -297,7 +297,7 @@ func TestRuns(t *testing.T) {
 	srv := newServer(t, store, Options{
 		RemoteRuns: func(ctx context.Context, s storage.TaskStore) ([]storage.RunRow, error) {
 			remoteCalls++
-			return []storage.RunRow{{Remote: "runner", Project: "atlas", Tracker: "atlas-1", Title: "remote tracker"}}, nil
+			return []storage.RunRow{{Remote: "runner", Project: "orbit", Tracker: "orbit-1", Title: "remote tracker"}}, nil
 		},
 	})
 	m := getJSON(t, srv.URL+"/api/runs", 200)

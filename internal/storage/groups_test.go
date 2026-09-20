@@ -43,7 +43,7 @@ func TestProjectGroups(t *testing.T) {
 
 func TestProjectGroupsSoloArchivedGroupVanishes(t *testing.T) {
 	store := &Store{Root: t.TempDir()}
-	writeProjectDir(t, store, "atlas", &Project{Name: "LE", Group: "orbit", Archived: true})
+	writeProjectDir(t, store, "atlas", &Project{Name: "Atlas", Group: "orbit", Archived: true})
 	groups, err := store.ProjectGroups()
 	if err != nil {
 		t.Fatal(err)

@@ -50,7 +50,7 @@ func TestConfig(t *testing.T) {
 		if c.Refresh.EverySeconds != 600 {
 			t.Fatalf("refresh = %+v", c.Refresh)
 		}
-		if len(c.Groups) != 2 || c.Groups[0].Slug != "acme" || c.Groups[0].Name != "Acme" || c.Groups[1].Slug != "atlas" || c.Groups[1].Name != "atlas" {
+		if len(c.Groups) != 2 || c.Groups[0].Slug != "acme" || c.Groups[0].Name != "Acme" || c.Groups[1].Slug != "orbit" || c.Groups[1].Name != "orbit" {
 			t.Fatalf("groups = %+v", c.Groups)
 		}
 	})
@@ -80,7 +80,7 @@ func TestUpdateSettings(t *testing.T) {
 			Sources:       map[string]bool{"git": false},
 			Sidebar:       &SidebarPatch{Variant: &variant, ShowRepos: &off},
 			Groups: []ConfigGroupPatch{
-				{Slug: "atlas", Name: &[]string{"Orbit"}[0], Order: &[]int{1}[0]},
+				{Slug: "orbit", Name: &[]string{"Orbit"}[0], Order: &[]int{1}[0]},
 				{Slug: "acme", Order: &[]int{2}[0]},
 			},
 			Git: &GitPatch{AllBranches: &[]bool{true}[0]},
@@ -104,7 +104,7 @@ func TestUpdateSettings(t *testing.T) {
 		if c.Sidebar.Variant != "rail" || c.Sidebar.ShowRepos || c.Sidebar.Sort != "worst" {
 			t.Fatalf("sidebar = %+v", c.Sidebar)
 		}
-		if len(c.Groups) != 2 || c.Groups[0].Slug != "atlas" || c.Groups[0].Name != "Orbit" || c.Groups[0].Order != 1 ||
+		if len(c.Groups) != 2 || c.Groups[0].Slug != "orbit" || c.Groups[0].Name != "Orbit" || c.Groups[0].Order != 1 ||
 			c.Groups[1].Slug != "acme" || c.Groups[1].Name != "Acme" || c.Groups[1].Order != 2 {
 			t.Fatalf("groups = %+v", c.Groups)
 		}

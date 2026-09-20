@@ -416,7 +416,7 @@ func TestRunsProjectFilterAppliesToRemoteRows(t *testing.T) {
 	writeStoreConfig(t, store, configWithRemote)
 	remote := `{"rows":[` +
 		`{"project":"app","tracker":"app-7","title":"VPS app batch","updated":"2026-08-07T10:00:00Z","run":{"state":"done","done":1,"total":1}},` +
-		`{"project":"orbit","tracker":"atlas-9","title":"VPS other","updated":"2026-08-07T11:00:00Z","run":{"state":"done","done":1,"total":1}}]}`
+		`{"project":"orbit","tracker":"orbit-9","title":"VPS other","updated":"2026-08-07T11:00:00Z","run":{"state":"done","done":1,"total":1}}]}`
 	fakeSSH(t, "echo '"+remote+"'\n")
 
 	// An ABBREVIATION, not the exact slug: the filter runs on the resolved slug,
@@ -429,7 +429,7 @@ func TestRunsProjectFilterAppliesToRemoteRows(t *testing.T) {
 	if !strings.Contains(out, "app-7") {
 		t.Errorf("the remote row for the requested project is missing:\n%s", out)
 	}
-	if strings.Contains(out, "atlas-9") {
+	if strings.Contains(out, "orbit-9") {
 		t.Errorf("--project did not narrow the remote rows:\n%s", out)
 	}
 }
@@ -441,7 +441,7 @@ func TestRunsProjectFilterAppliesToRemoteRows(t *testing.T) {
 func TestRunsRemoteLeftoverDescendantStillCounts(t *testing.T) {
 	store := runsFixture(t)
 	writeStoreConfig(t, store, configWithRemote)
-	remote := `{"rows":[{"project":"orbit","tracker":"atlas-9","title":"VPS batch",` +
+	remote := `{"rows":[{"project":"orbit","tracker":"orbit-9","title":"VPS batch",` +
 		`"updated":"2026-08-07T10:00:00Z","run":{"state":"done","done":1,"total":1}}]}`
 	// The answer is printed and ssh exits 0, but a background child keeps the
 	// inherited stdout open past the exit.
@@ -454,7 +454,7 @@ func TestRunsRemoteLeftoverDescendantStillCounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pm runs: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "atlas-9") {
+	if !strings.Contains(out, "orbit-9") {
 		t.Errorf("a complete answer was discarded over a leftover descendant:\n%s", out)
 	}
 	if strings.Contains(out, "unreachable") {

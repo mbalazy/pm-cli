@@ -12,7 +12,7 @@ import (
 
 func TestExecutorTimeoutParsesDurationStrings(t *testing.T) {
 	const data = `
-name: LE
+name: Orbit
 executor:
   enabled: true
   timeout: 1h30m
@@ -28,7 +28,7 @@ executor:
 
 func TestExecutorTimeoutUnsetIsZero(t *testing.T) {
 	const data = `
-name: LE
+name: Orbit
 executor:
   enabled: true
 `
@@ -50,7 +50,7 @@ executor:
 func TestExecutorTimeoutRejectsBareNumber(t *testing.T) {
 	for _, bad := range []string{"90", "90 minutes", "true"} {
 		var p Project
-		err := yaml.Unmarshal([]byte("name: LE\nexecutor:\n  enabled: true\n  timeout: "+bad+"\n"), &p)
+		err := yaml.Unmarshal([]byte("name: Orbit\nexecutor:\n  enabled: true\n  timeout: "+bad+"\n"), &p)
 		if err == nil {
 			t.Fatalf("timeout: %s was accepted, want a parse error", bad)
 		}
@@ -69,7 +69,7 @@ func TestExecutorTimeoutRejectsBareNumber(t *testing.T) {
 func TestExecutorTimeoutSurvivesProjectRewrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "project.yaml")
-	if err := os.WriteFile(path, []byte("name: LE\nexecutor:\n    enabled: true\n    timeout: 90m\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("name: Orbit\nexecutor:\n    enabled: true\n    timeout: 90m\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 

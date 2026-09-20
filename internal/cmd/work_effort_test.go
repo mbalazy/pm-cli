@@ -237,11 +237,11 @@ func TestJournalSubsCarryReconstructedEffort(t *testing.T) {
 // floor, next to the total itself - a retro ranks its work by that number.
 func TestStatsReportsPartialEffort(t *testing.T) {
 	st := aggregateJournal([]storage.JournalEntry{
-		{Event: storage.JournalEventStart, TS: "2026-08-11T09:00:00Z", Kind: "run-epic", TaskID: "atlas-112", RunID: "r1", PID: 10},
-		{Event: storage.JournalEventEnd, TS: "2026-08-11T11:00:00Z", Kind: "run-epic", TaskID: "atlas-112", RunID: "r1", PID: 10,
+		{Event: storage.JournalEventStart, TS: "2026-08-11T09:00:00Z", Kind: "run-epic", TaskID: "orbit-112", RunID: "r1", PID: 10},
+		{Event: storage.JournalEventEnd, TS: "2026-08-11T11:00:00Z", Kind: "run-epic", TaskID: "orbit-112", RunID: "r1", PID: 10,
 			Status: storage.RunStatusDone, Subs: []storage.JournalSub{
-				{ID: "atlas-112-1", Result: "merged", Turns: 30, CostUSD: 4.5, DurationS: 900},
-				{ID: "atlas-112-2", Result: "failed", DurationS: 3749,
+				{ID: "orbit-112-1", Result: "merged", Turns: 30, CostUSD: 4.5, DurationS: 900},
+				{ID: "orbit-112-2", Result: "failed", DurationS: 3749,
 					Effort: &storage.WorkerEffort{Source: effortSourceTranscript, Turns: 161, OutputTokens: 250000}},
 			}},
 	}, func(int, time.Time) bool { return false }, testNow)
@@ -254,7 +254,7 @@ func TestStatsReportsPartialEffort(t *testing.T) {
 	if st.Turns.Samples != 1 || st.Turns.Total != 30 {
 		t.Errorf("turns stat = %+v, want only the envelope-backed sub", st.Turns)
 	}
-	out := renderJournalStats("atlas", "/tmp/j.jsonl", st)
+	out := renderJournalStats("orbit", "/tmp/j.jsonl", st)
 	for _, want := range []string{"1 sub(s) died with no envelope", "161 turn(s)", "250000 output token(s)", "FLOOR"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stats output missing %q:\n%s", want, out)

@@ -188,11 +188,11 @@ func TestE2EUpdateProject(t *testing.T) {
 	// alone passes, and the documented empty mapping removes the key. Both
 	// used to fail the SDK's validation before the handler ran.
 	if text, isErr := call(t, sess, "pm_update_project", map[string]any{
-		"project": "test", "slack": map[string]any{"workspace": "atlas"},
+		"project": "test", "slack": map[string]any{"workspace": "orbit"},
 	}); isErr {
 		t.Fatalf("slack without channels: %s", text)
 	}
-	if p, _ := store.GetProject("test"); p.Slack == nil || p.Slack.Workspace != "atlas" {
+	if p, _ := store.GetProject("test"); p.Slack == nil || p.Slack.Workspace != "orbit" {
 		t.Fatalf("slack workspace not applied: %+v", p.Slack)
 	}
 	if text, isErr := call(t, sess, "pm_update_project", map[string]any{

@@ -15,7 +15,7 @@ import {
 
 const config: CockpitConfig = {
   groups: [
-    { slug: 'atlas', name: 'Orbit', order: 1 },
+    { slug: 'atlas', name: 'Atlas', order: 1 },
     { slug: 'acme', name: 'acme', order: 0 },
   ],
   doing_idle_days: 7,
@@ -36,7 +36,7 @@ describe('form and patch', () => {
     const f = formFromConfig(config)
     expect(f.refresh_minutes).toBe(30)
     expect(f.groups).toEqual({
-      orbit: { name: 'Orbit', order: 1 },
+      atlas: { name: 'Atlas', order: 1 },
       acme: { name: '', order: 0 },
     })
     expect(patchFromForm(f, formFromConfig(config))).toBeNull()
@@ -78,7 +78,7 @@ describe('rows', () => {
   it('group rows: every derived group plus configured-but-asleep ones, in manual order', () => {
     const rows = groupRows(groups, formFromConfig(config), config.groups)
     expect(rows.map((r) => [r.slug, r.name, r.order, r.members, r.configured])).toEqual([
-      ['atlas', 'Orbit', 1, [], true],
+      ['atlas', 'Atlas', 1, [], true],
       ['acme', 'acme', 0, ['acme-api', 'acme-zap'], true],
       ['alpha', 'alpha', 0, ['alpha'], false],
     ])

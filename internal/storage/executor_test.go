@@ -122,7 +122,7 @@ executor:
 
 func TestExecutorContextRepos(t *testing.T) {
 	const data = `
-name: LE
+name: Orbit
 executor:
   enabled: true
   context_repos:

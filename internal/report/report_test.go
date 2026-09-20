@@ -31,7 +31,7 @@ func input() Input {
 		Cutoff: cutoff, Now: cutoff.Add(15 * time.Hour), Language: "en",
 		Events: []feed.Event{{ID: "e1", TS: cutoff.Add(time.Hour).Format(time.RFC3339), Source: "pm", Project: "acme-api", Group: "acme", TaskID: "acme-api-1", Title: "AcmeApi thing", Detail: "moved to waiting", Severity: "warn"}},
 		Attention: &storage.Attention{Sections: []storage.AttentionSection{
-			{Name: "needs_me", Total: 1, Rows: []storage.AttentionRow{{Project: "atlas", TaskID: "atlas-9", Title: "Epic", Reason: "run failed", Status: "doing"}}},
+			{Name: "needs_me", Total: 1, Rows: []storage.AttentionRow{{Project: "orbit", TaskID: "orbit-9", Title: "Epic", Reason: "run failed", Status: "doing"}}},
 			{Name: "changes", Total: 5, Rows: []storage.AttentionRow{{Title: "ignored here"}}},
 		}},
 		Groups: []storage.ProjectGroup{{Slug: "acme", Name: "Acme", Projects: []string{"acme-api", "acme-zap"}}},
@@ -40,7 +40,7 @@ func input() Input {
 
 func TestBuildPromptAndParse(t *testing.T) {
 	p := BuildPrompt(input())
-	for _, want := range []string{"- Acme (acme): repos acme-api, acme-zap", "pm acme-api acme-api-1: AcmeApi thing - moved to waiting [warn]", "### needs_me (1)", "- orbit atlas-9: Epic - run failed (status doing)", `language with code "en"`, "SUGGEST <task_id> <action>"} {
+	for _, want := range []string{"- Acme (acme): repos acme-api, acme-zap", "pm acme-api acme-api-1: AcmeApi thing - moved to waiting [warn]", "### needs_me (1)", "- orbit orbit-9: Epic - run failed (status doing)", `language with code "en"`, "SUGGEST <task_id> <action>"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, p)
 		}

@@ -1240,13 +1240,16 @@ describe('settings screen', () => {
     const slack = screen.getByRole('region', { name: 'Slack per project' })
     const channels = within(slack).getByRole('textbox', { name: 'slack channels of alpha' })
     await user.type(channels, '#dev, product')
-    await user.type(within(slack).getByRole('textbox', { name: 'slack workspace of alpha' }), 'atlas')
+    await user.type(
+      within(slack).getByRole('textbox', { name: 'slack workspace of alpha' }),
+      'orbit',
+    )
     await user.click(within(channels.closest('tr')!).getByRole('button', { name: 'save' }))
     await vi.waitFor(() => expect(posts).toHaveLength(2))
     expect(posts[1]).toEqual({
       path: '/api/projects/alpha',
       header: 'cockpit',
-      body: { slack: { workspace: 'atlas', channels: ['#dev', 'product'] } },
+      body: { slack: { workspace: 'orbit', channels: ['#dev', 'product'] } },
     })
   })
 
@@ -1653,7 +1656,7 @@ describe('review approve', () => {
     finished: '2026-01-02T09:08:00Z',
     state: 'done',
     no_issues: true,
-    slack: { workspace: 'atlas', channel: 'C1', ts: '1.2', thread_ts: '1.2', server: 'slack-work' },
+    slack: { workspace: 'orbit', channel: 'C1', ts: '1.2', thread_ts: '1.2', server: 'slack-work' },
     report: '### Code review - PR #7\n\nNo issues found.',
   }
 

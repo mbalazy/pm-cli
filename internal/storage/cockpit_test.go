@@ -108,8 +108,8 @@ func TestCockpitDecodesOverDefaults(t *testing.T) {
 	if c.Sidebar.ShowRepos || c.Sidebar.Width != 300 || c.Sidebar.Variant != "columns" {
 		t.Errorf("sidebar = %+v", c.Sidebar)
 	}
-	if c.GroupName("acme") != "Acme" || c.GroupName("atlas") != "atlas" || c.GroupName("other") != "other" {
-		t.Errorf("group names: acme=%q orbit=%q", c.GroupName("acme"), c.GroupName("atlas"))
+	if c.GroupName("acme") != "Acme" || c.GroupName("orbit") != "orbit" || c.GroupName("other") != "other" {
+		t.Errorf("group names: acme=%q orbit=%q", c.GroupName("acme"), c.GroupName("orbit"))
 	}
 }
 

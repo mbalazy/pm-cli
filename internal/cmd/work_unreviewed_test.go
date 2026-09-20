@@ -94,12 +94,12 @@ func TestLastReviewedHeadIsTheLastAllowedSpawn(t *testing.T) {
 // opening the journal by hand, next to the rounds it belongs with.
 func TestStatsReportsUnreviewedCommits(t *testing.T) {
 	st := aggregateJournal([]storage.JournalEntry{
-		{Event: storage.JournalEventStart, TS: "2026-08-11T09:00:00Z", Kind: "run-epic", TaskID: "atlas-114", RunID: "r1", PID: 10},
-		{Event: storage.JournalEventEnd, TS: "2026-08-11T10:00:00Z", Kind: "run-epic", TaskID: "atlas-114", RunID: "r1", PID: 10,
+		{Event: storage.JournalEventStart, TS: "2026-08-11T09:00:00Z", Kind: "run-epic", TaskID: "orbit-114", RunID: "r1", PID: 10},
+		{Event: storage.JournalEventEnd, TS: "2026-08-11T10:00:00Z", Kind: "run-epic", TaskID: "orbit-114", RunID: "r1", PID: 10,
 			Status: storage.RunStatusDone, Subs: []storage.JournalSub{
-				{ID: "atlas-114-1", Result: "blocked", Turns: 120, CostUSD: 23.75,
+				{ID: "orbit-114-1", Result: "blocked", Turns: 120, CostUSD: 23.75,
 					Review: &storage.ReviewTelemetry{Spawns: 4, Rounds: 2, LastReviewedHead: "abc", UnreviewedCommits: 1}},
-				{ID: "atlas-114-2", Result: "merged", Turns: 20,
+				{ID: "orbit-114-2", Result: "merged", Turns: 20,
 					Review: &storage.ReviewTelemetry{Spawns: 2, Rounds: 1, LastReviewedHead: "def"}},
 			}},
 	}, func(int, time.Time) bool { return false }, testNow)
@@ -107,7 +107,7 @@ func TestStatsReportsUnreviewedCommits(t *testing.T) {
 	if st.UnreviewedSubs != 1 || st.UnreviewedCommits != 1 {
 		t.Fatalf("UnreviewedSubs/Commits = %d/%d, want 1/1", st.UnreviewedSubs, st.UnreviewedCommits)
 	}
-	out := renderJournalStats("atlas", "/tmp/j.jsonl", st)
+	out := renderJournalStats("orbit", "/tmp/j.jsonl", st)
 	if !strings.Contains(out, "unreviewed 1 sub(s) landed 1 commit(s) after their last review") {
 		t.Errorf("stats does not report unreviewed commits:\n%s", out)
 	}

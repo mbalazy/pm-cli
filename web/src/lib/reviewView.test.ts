@@ -44,7 +44,7 @@ describe('reviewView', () => {
   it('approveView offers approve on a done review and words what happened', () => {
     const now = new Date('2026-09-14T11:30:00Z')
     const slack = {
-      workspace: 'atlas',
+      workspace: 'orbit',
       channel: 'C1',
       ts: '1.2',
       thread_ts: '1.2',
@@ -76,7 +76,7 @@ describe('reviewView', () => {
 
   it('slackSeenLine words the 👀 the start puts on the Slack message, in any state', () => {
     const slack = {
-      workspace: 'atlas',
+      workspace: 'orbit',
       channel: 'C1',
       ts: '1.2',
       thread_ts: '1.2',

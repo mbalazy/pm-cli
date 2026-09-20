@@ -17,7 +17,7 @@ type TrackerChild struct {
 	BriefLine string `json:"brief_line,omitempty"`
 }
 
-// taskIDNum extracts the trailing integer from a task ID (e.g. "atlas-26" -> 26).
+// taskIDNum extracts the trailing integer from a task ID (e.g. "orbit-26" -> 26).
 // Returns 0 when the ID has no numeric suffix.
 func taskIDNum(id string) int {
 	if i := strings.LastIndex(id, "-"); i >= 0 {
