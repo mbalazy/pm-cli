@@ -60,7 +60,7 @@ pm projects add demo --path "$PWD"   # one project per repo
 pm add demo "Try pm for a day"       # -> demo-1
 pm mv demo demo-1 doing
 pm list                              # the table
-pm context                           # the rollup an agent reads at session start
+pm context                           # the rollup an agent reads at startup
 cat "$PM_DATA_DIR"/demo/demo-1-*.md  # ... which is this file
 pm board                             # the TUI; q, then q again, leaves
 ```
@@ -73,7 +73,7 @@ Go 1.24+ and `git`; the agent parts also want the [Claude Code](https://docs.ant
 go install github.com/mbalazy/pm-cli/cmd/pm@latest
 ```
 
-The binary lands in `$(go env GOBIN)`, or `$(go env GOPATH)/bin` when that is empty; put it on your `PATH`. To work on pm, clone and use `make install`, which stamps the Makefile's `VERSION` through ldflags. Then register the MCP server, give the agent its usage contract and create a project:
+The binary lands in `$(go env GOBIN)`, or `$(go env GOPATH)/bin` when that is empty; put it on your `PATH`. To work on pm, clone and use `make install`, which stamps `VERSION` through ldflags. Then register the MCP server, give the agent its usage contract and create a project:
 
 ```sh
 claude mcp add --transport stdio --scope user pm -- pm mcp
@@ -92,11 +92,11 @@ After that you mostly stop operating pm by hand:
 > "what am I working on?" -> `pm_context`
 > "save a brief, I'm done for today" -> `pm_update_task`
 
-`pm mcp` is a stdio MCP server with 14 tools: those four, six more for tasks and projects, and the journal and timeline pairs. It is built around an output budget, because a rollup that runs at every session start is paid for every time: `pm_context` caps bodies and collapses finished trackers, `pm_list_tasks` returns the 50 newest in an explicit `{total, shown, note}` wrapper. The same rollup is offline as `pm context [project]`, for when the MCP process holds a stale binary.
+`pm mcp` is a stdio MCP server with 14 tools: those four, six more for tasks and projects, and the journal and timeline pairs. It runs on an output budget, because a rollup that runs at every session start is paid for every time: `pm_context` caps bodies and collapses finished trackers, `pm_list_tasks` returns the 50 newest in an explicit `{total, shown, note}` wrapper. The same rollup is offline as `pm context [project]`, for when the MCP process holds a stale binary.
 
 ## The board
 
-`pm board` (or bare `pm`) opens the TUI: per-project tabs, vim keys, and eight views - board, task detail, archive, project info, focus, the live run dashboard, the cross-project run list and the acceptance report.
+`pm board` (or bare `pm`) opens the TUI: per-project tabs, vim keys, eight views - board, task detail, archive, project info, focus, the live run dashboard, the cross-project run list and the acceptance report.
 
 It is also the control room. A launch overlay starts unattended runs in the background with live worktree-slot occupancy; the detail view renders a run's heartbeat age and per-subtask outcomes; `W` tails a worker's transcript, `K` kills a run and keeps the books straight. It also starts interactive Claude Code sessions on a task - fresh, resumed by session id, or in a worktree - and links the session back.
 
@@ -104,9 +104,9 @@ It is also the control room. A launch overlay starts unattended runs in the back
 
 <!-- screenshot: docs/img/cockpit-today.png -->
 
-`pm serve --addr 127.0.0.1:7070` serves a JSON API and a React front end built into the binary. Ten routes; the one that matters is Today, an attention queue computed from local files: failed runs, work that landed with nobody's acceptance, tasks waiting on a person (with the age, and an alarm when nobody wrote down who), the focus plan, stuck projects. `/api/events` says *what* changed, so the page refetches itself.
+`pm serve --addr 127.0.0.1:7070` serves a JSON API and the React cockpit. The front end is a Node build, so it is in the binary only after `make install-full` from a clone; a `go install` binary serves the API and says so on its front page. Ten routes; the one that matters is Today, an attention queue computed from local files: failed runs, work that landed with no acceptance, tasks waiting on a person (with the age, and an alarm when nobody wrote down who), the focus plan, stuck projects. `/api/events` says *what* changed, so the page refetches itself.
 
-A change feed answers "what happened since yesterday evening" from pm's files, `git`, GitHub (`gh`) and Slack - which goes through your own Slack MCP server from `~/.claude.json`, so pm holds no second copy of your tokens. An optional LLM pass turns the feed into a short written report; it spends tokens, so it is off by default.
+A change feed answers "what happened since yesterday evening" from pm's files, `git`, GitHub (`gh`) and Slack - which goes through your own Slack MCP server from `~/.claude.json`, so pm keeps no copy of your tokens. An optional LLM pass turns the feed into a short written report; it spends tokens, so it is off by default.
 
 **Security: there is none.** No auth, no TLS, and the API is not read-only - its POST routes edit tasks, start and kill runs, launch sessions and can spend tokens. The only guard is an `X-PM-Client` header, which stops a stray cross-site form, not a person. Bind it to localhost and reach it over a tunnel you trust.
 
@@ -118,8 +118,8 @@ The skills those modes invoke - the acceptance procedure behind `pm finish`, the
 
 ## Also in the box
 
-- **Journals** (`pm journal`) - an append-only record of how one repeatedly-troublesome subsystem actually behaves: symptom, the false conclusion it produced, the real cause, the fix. An entry with no fix is open, and the open set is the backlog.
-- **Timeline** (`pm timeline`) - what happened *to* a project, plus dated state snapshots whose every line carries its provenance: `[verified YYYY-MM-DD by <command>]` or `[assumed]`, a verified line older than a week flagged for re-checking. A month later that is the difference between a fact and a sentence someone wrote.
+- **Journals** (`pm journal`) - an append-only record of how one repeatedly-troublesome subsystem actually behaves: symptom, the false conclusion it caused, the real cause, the fix. An entry with no fix is open, and the open set is the backlog.
+- **Timeline** (`pm timeline`) - what happened *to* a project, plus dated state snapshots whose every line carries its provenance: `[verified YYYY-MM-DD by <command>]` or `[assumed]`, a verified line older than a week flagged for re-checking.
 
 ## CLI reference
 
@@ -131,7 +131,7 @@ The skills those modes invoke - the acceptance procedure behind `pm finish`, the
 
 **Agents** - `pm work [project] <task-id>`, `pm run-epic [project] <tracker-id>`, `pm finish [tracker]`, `pm executor` (`init`/`show`/`doctor`/`stats`), `pm mcp`, `pm serve`
 
-`pm help <command>` and `pm completion <shell>` come from cobra; `--help` on any command prints its flags.
+`pm help <command>` and `pm completion <shell>` come from cobra; `--help` prints any command's flags.
 
 ## Design notes
 
@@ -146,20 +146,20 @@ A few principles this codebase holds onto, learned from real runs:
 
 ## Status
 
-A personal tool, in daily use since February 2026, currently 0.64.0. One machine, one user: no sync, no server, no account, no API key - the agent parts drive the `claude` CLI, so they run on a Claude subscription (the solo mode's `claude --bg` needs Claude Code 2.1.272 or newer). Developed on macOS; CI runs the suite on Linux, but the desktop bits are untested there. Not looking for contributions, though bug reports are welcome. No compatibility promise between versions, except that task files stay readable: markdown.
+A personal tool, in daily use since February 2026, currently 0.64.0. One machine, one user: no sync, no account, no API key - the agent parts drive the `claude` CLI, so they run on a Claude subscription (the solo mode's `claude --bg` needs Claude Code 2.1.272 or newer). Developed on macOS; CI runs the suite on Linux, but the desktop bits are untested there. Not looking for contributions, though bug reports are welcome. Versions promise each other nothing, except that task files stay readable: markdown.
 
 ## Development
 
 ```sh
 make check        # gofmt-check + vet + staticcheck + go test
 make test-race    # the race detector, also run by CI
-make install      # build and install, VERSION stamped through ldflags
+make install      # build and install, version through ldflags
 make web-install  # npm ci in web/ (once)
-make web-check    # lint, tsc and vitest for the front end
-make install-full # the bundle plus the binary
+make web-check    # lint, tsc and vitest for the web
+make install-full # the front end plus the binary
 ```
 
-Git hooks live in `githooks/` (`git config core.hooksPath githooks`) and pre-commit runs `make check`, the same target as CI. `make check` and `make install` are node-free on purpose, so a binary built without the bundle serves a placeholder page. The tests need `git` and `python3` on `PATH`, and the agent paths run against a fake `claude` binary - a PATH-prepended script emitting a canned result envelope - so the real subprocess, parsing, journal and run-state plumbing is covered at zero token cost.
+Git hooks live in `githooks/` (`git config core.hooksPath githooks`) and pre-commit runs `make check`, the same target as CI. `make check` and `make install` are node-free on purpose, which is why the cockpit's front end has its own target. The tests need `git` and `python3` on `PATH`, and the agent paths run against a fake `claude` binary - a PATH-prepended script emitting a canned result envelope - so the real subprocess, parsing, journal and run-state plumbing is covered at zero token cost.
 
 Developed with Claude Code; `CLAUDE.md` is the agent's working memory and doubles as the contributor guide. Docs: [agent guide](docs/agent-guide.md), [task authoring](docs/task-authoring.md), [executor](docs/executor.md), [design log](docs/design-log.md).
 
