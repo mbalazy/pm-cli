@@ -186,7 +186,11 @@ describe('project settings actions', () => {
       subject: { project: 'acme-api', title: 'AcmeApi', group: '' },
     }
     expect(describeAction(leave, '').confirmLabel).toBe('leave group')
-    expect(requestFor(leave, '')).toEqual({ kind: 'project', project: 'acme-api', body: { group: '' } })
+    expect(requestFor(leave, '')).toEqual({
+      kind: 'project',
+      project: 'acme-api',
+      body: { group: '' },
+    })
   })
 })
 

@@ -57,7 +57,12 @@ const tasks = {
 const acmeApiTasks = {
   tasks: [
     { ...summary('acme-api-1', 'ACMEApi thing'), project: 'acme-api', status: 'waiting' },
-    { ...summary('acme-api-2', 'Old doing'), project: 'acme-api', status: 'doing', updated: '2025-12-01' },
+    {
+      ...summary('acme-api-2', 'Old doing'),
+      project: 'acme-api',
+      status: 'doing',
+      updated: '2025-12-01',
+    },
   ],
   total: 2,
   shown: 2,
@@ -527,7 +532,9 @@ const api = {
   '/api/attention?group=acme': attentionACME,
   '/api/tasks?project=acme-api&limit=200': acmeApiTasks,
   '/api/tasks?project=acme-zap&limit=200': acmeZapTasks,
-  '/api/context?project=acme-api': context('acme-api', [tracker('acme-api-9', 'Old epic', 2, { done: 2 })]),
+  '/api/context?project=acme-api': context('acme-api', [
+    tracker('acme-api-9', 'Old epic', 2, { done: 2 }),
+  ]),
   '/api/context?project=acme-zap': context('acme-zap', [
     tracker('acme-zap-1', 'Zap task', 2, { done: 1, doing: 1 }),
   ]),
@@ -1421,7 +1428,9 @@ describe('solo launch goes through the dialog with the claude --bg preview', () 
         ...api,
         '/api/solo': {
           shifts: [],
-          launches: [{ ...soloLaunch, project: 'acme-api', session_id: undefined, state: 'starting' }],
+          launches: [
+            { ...soloLaunch, project: 'acme-api', session_id: undefined, state: 'starting' },
+          ],
         },
       }),
     )
@@ -1592,9 +1601,7 @@ describe('review screen', () => {
     const input = screen.getByRole('textbox', { name: 'PR to review' })
     expect(screen.getByRole('button', { name: /^review/ })).toBeDisabled()
     await user.type(input, 'https://github.com/orbit-org/app.orbit/pull/1003/changes')
-    await user.click(
-      screen.getByRole('button', { name: 'review orbit-org/app.orbit#1003' }),
-    )
+    await user.click(screen.getByRole('button', { name: 'review orbit-org/app.orbit#1003' }))
     await vi.waitFor(() => expect(posts).toHaveLength(1))
     expect(posts[0]).toEqual({
       path: '/api/reviews',

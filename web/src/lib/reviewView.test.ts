@@ -19,9 +19,10 @@ const review = (over: Partial<Review>): Review => ({
 
 describe('reviewView', () => {
   it('parsePRUrl accepts a PR URL with anything after the number, nothing else', () => {
-    expect(
-      parsePRUrl('https://github.com/orbit-org/app.orbit/pull/1003/changes'),
-    ).toEqual({ repo: 'orbit-org/app.orbit', number: 1003 })
+    expect(parsePRUrl('https://github.com/orbit-org/app.orbit/pull/1003/changes')).toEqual({
+      repo: 'orbit-org/app.orbit',
+      number: 1003,
+    })
     expect(parsePRUrl(' https://github.com/o/r/pull/7 ')).toEqual({ repo: 'o/r', number: 7 })
     expect(parsePRUrl('https://github.com/o/r/issues/7')).toBeNull()
     expect(parsePRUrl('o/r#7')).toBeNull()

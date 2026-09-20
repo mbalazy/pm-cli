@@ -18,7 +18,13 @@ const done: ReportState = {
     duration_s: 12,
     text: '**Acme**: moved.\n\nDecide.',
     suggestions: [
-      { id: 'a', project: 'acme-api', task_id: 'acme-api-1', action: 'back_to_todo', text: 'lifted' },
+      {
+        id: 'a',
+        project: 'acme-api',
+        task_id: 'acme-api-1',
+        action: 'back_to_todo',
+        text: 'lifted',
+      },
       { id: 'b', task_id: 'x-9', text: 'unknown' },
     ],
     dismissed: ['b'],
