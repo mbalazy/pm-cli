@@ -41,7 +41,7 @@ export function ReviewPage() {
           <input
             type="text"
             aria-label="PR to review"
-            placeholder="PR URL, Slack link, or e.g. “pr 555 w repo orbit mobile”"
+            placeholder="PR URL, Slack link, or e.g. “pr 555 in the mobile repo”"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             className="field min-w-0 flex-1 basis-80"
