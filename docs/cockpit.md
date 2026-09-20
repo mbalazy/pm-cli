@@ -1,6 +1,6 @@
 # The cockpit
 
-`pm serve` is the HTTP face of pm: a JSON API, a change feed and a React app. The rules an agent editing it must obey stay in `CLAUDE.md`; this file is the design record of what was built, screen by screen. The `pm-cli-118-15` ids are this repo's convention; [design-log.md](design-log.md) has the dated entries.
+`pm serve` is the HTTP face of pm: a JSON API, a change feed and a React app. The rules an agent editing it must obey stay in `CLAUDE.md`; this file is the design record of what was built, screen by screen. The `pm-cli-118-15` ids are this repo's convention; [design-log.md](design-log.md) files the reasoning under the same ids.
 
 ## Today and the group sidebar
 

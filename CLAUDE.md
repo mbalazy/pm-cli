@@ -3,7 +3,7 @@
 Local task tracker. Data: `~/.claude/pm/<project-slug>/`, binary: `pm`.
 
 **What this file is.** The project instructions Claude Code loads in this repo, and the contributor guide with it: one rule per invariant, each stated with the why, because a rule whose reason is missing gets refactored away by whoever finds it inconvenient.
-A trailing `(history: docs/design-log.md)` points at the dated decision the rule came out of.
+A trailing `(history: docs/design-log.md)` points at the reasoning and the measurements the rule came out of.
 The cockpit's per-feature design record is [docs/cockpit.md](docs/cockpit.md), and [docs/README.md](docs/README.md) indexes the rest.
 
 ## Build
