@@ -346,15 +346,15 @@ func TestGitAndGitHubSourcesParseGH(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeTask(t, store, "alpha", storage.TaskMeta{ID: "a-1", Title: "the task", Status: storage.StatusDoing, Branch: "feat/task-branch", Created: "2026-09-01", Updated: at(time.Hour)})
-	prList := fmt.Sprintf(`[{"number":7,"title":"Add b","url":"https://gh/x/pull/7","updatedAt":%q,"createdAt":%q,"headRefName":"feat/task-branch","author":{"login":"mart"},"isDraft":true,"reviewDecision":"CHANGES_REQUESTED"},
+	prList := fmt.Sprintf(`[{"number":7,"title":"Add b","url":"https://gh/x/pull/7","updatedAt":%q,"createdAt":%q,"headRefName":"feat/task-branch","author":{"login":"me-login"},"isDraft":true,"reviewDecision":"CHANGES_REQUESTED"},
 	{"number":3,"title":"Stale","url":"https://gh/x/pull/3","updatedAt":%q,"createdAt":%q,"headRefName":"other","author":{"login":"x"}},
-	{"number":9,"title":"Merged one","url":"https://gh/x/pull/9","state":"MERGED","updatedAt":%[5]q,"createdAt":%[4]q,"mergedAt":%[5]q,"mergedBy":{"login":"lead"},"headRefName":"feat/task-branch","author":{"login":"mart"}},
-	{"number":10,"title":"Dropped","url":"https://gh/x/pull/10","state":"CLOSED","updatedAt":%[6]q,"createdAt":%[4]q,"closedAt":%[6]q,"headRefName":"feat/task-branch","author":{"login":"mart"}}]`,
+	{"number":9,"title":"Merged one","url":"https://gh/x/pull/9","state":"MERGED","updatedAt":%[5]q,"createdAt":%[4]q,"mergedAt":%[5]q,"mergedBy":{"login":"lead"},"headRefName":"feat/task-branch","author":{"login":"me-login"}},
+	{"number":10,"title":"Dropped","url":"https://gh/x/pull/10","state":"CLOSED","updatedAt":%[6]q,"createdAt":%[4]q,"closedAt":%[6]q,"headRefName":"feat/task-branch","author":{"login":"me-login"}}]`,
 		at(30*time.Minute), at(30*time.Minute), at(72*time.Hour), at(96*time.Hour), at(10*time.Minute), at(5*time.Minute))
 	prView9 := fmt.Sprintf(`{"number":9,"title":"Merged one","url":"https://gh/x/pull/9","comments":[
 	{"id":"n1","body":"### PR preview published","createdAt":%[1]q,"author":{"login":"github-actions"}},
 	{"id":"n2","body":"<!-- linear-linkback -->\nAPP-1","createdAt":%[1]q,"author":{"login":"linear-code"}},
-	{"id":"n3","body":"/preview","createdAt":%[1]q,"author":{"login":"mart"}},
+	{"id":"n3","body":"/preview","createdAt":%[1]q,"author":{"login":"me-login"}},
 	{"id":"n4","body":"thanks, verified after the merge","createdAt":%[1]q,"author":{"login":"rev"}}],"reviews":[]}`, at(8*time.Minute))
 	prView := fmt.Sprintf(`{"number":7,"title":"Add b","url":"https://gh/x/pull/7","reviewDecision":"CHANGES_REQUESTED",
 	"comments":[{"id":"c1","body":"looks off\nsecond line","createdAt":%q,"url":"https://gh/x/pull/7#c1","author":{"login":"rev"}},{"id":"c0","body":"old","createdAt":%q,"author":{"login":"rev"}}],
@@ -367,7 +367,7 @@ func TestGitAndGitHubSourcesParseGH(t *testing.T) {
 		}
 		switch {
 		case args[0] == "api":
-			return "mart\n", nil
+			return "me-login\n", nil
 		case args[1] == "list":
 			return prList, nil
 		case args[1] == "view" && args[2] == "7":
@@ -394,7 +394,7 @@ func TestGitAndGitHubSourcesParseGH(t *testing.T) {
 	for _, e := range ch.Events {
 		kinds[e.Source+":"+e.Detail] = e
 	}
-	if e, ok := kinds["git:PR #7 by mart opened (draft)"]; !ok || e.TaskID != "a-1" || e.URL != "https://gh/x/pull/7" {
+	if e, ok := kinds["git:PR #7 by me-login opened (draft)"]; !ok || e.TaskID != "a-1" || e.URL != "https://gh/x/pull/7" {
 		t.Errorf("PR event missing/wrong: %v", keysOf(kinds))
 	}
 	if e, ok := kinds["github:PR #7 comment by rev: looks off"]; !ok || e.URL != "https://gh/x/pull/7#c1" {
@@ -423,17 +423,17 @@ func TestGitAndGitHubSourcesParseGH(t *testing.T) {
 	}
 	// A merge and a close in the window are events of their own (not
 	// "updated"); talk under a merged PR is still read, machine chatter is not.
-	if e, ok := kinds["git:PR #9 by mart merged by lead"]; !ok || e.Severity != SeverityOK || e.TaskID != "a-1" {
+	if e, ok := kinds["git:PR #9 by me-login merged by lead"]; !ok || e.Severity != SeverityOK || e.TaskID != "a-1" {
 		t.Errorf("merge event missing/wrong: %v", keysOf(kinds))
 	}
-	if _, ok := kinds["git:PR #10 by mart closed without merging"]; !ok {
+	if _, ok := kinds["git:PR #10 by me-login closed without merging"]; !ok {
 		t.Errorf("close event missing: %v", keysOf(kinds))
 	}
 	if _, ok := kinds["github:PR #9 comment by rev: thanks, verified after the merge"]; !ok {
 		t.Errorf("comment under a merged PR missing: %v", keysOf(kinds))
 	}
 	for k := range kinds {
-		if strings.Contains(k, "#9 by mart updated") || strings.Contains(k, "github-actions") || strings.Contains(k, "linear-code") || strings.Contains(k, "/preview") {
+		if strings.Contains(k, "#9 by me-login updated") || strings.Contains(k, "github-actions") || strings.Contains(k, "linear-code") || strings.Contains(k, "/preview") {
 			t.Errorf("noise or duplicate event: %s", k)
 		}
 	}
@@ -567,12 +567,12 @@ func TestOpenPRsOnlyTheUsers(t *testing.T) {
 		case args[0] == "auth":
 			return "tok\n", nil
 		case args[0] == "api":
-			return "mart\n", nil
+			return "me-login\n", nil
 		case args[1] == "list":
 			if len(EnvFrom(ctx)) > 0 {
 				return listFor("Work-Account"), nil // the gh_account project
 			}
-			return listFor("mart"), nil
+			return listFor("me-login"), nil
 		case args[1] == "view":
 			return fmt.Sprintf(`{"number":%s,"title":"t","comments":[{"id":"c","body":"hi","createdAt":%q,"author":{"login":"rev"}}]}`, args[2], at(10*time.Minute)), nil
 		}
