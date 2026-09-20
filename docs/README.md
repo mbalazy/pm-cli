@@ -4,6 +4,6 @@
 - [task-authoring.md](task-authoring.md) - how to write a task a session can pick up cold, printed by `pm docs authoring`. Also embedded.
 - [executor.md](executor.md) - the executor: first the manual for `pm work`, `pm run-epic` and `pm finish`, then their internals - worktree slots, the review policy and the hook that enforces it, run state and journal, kill and crash forensics, acceptance claims, the verification baseline.
 - [cockpit.md](cockpit.md) - the design record of `pm serve` and the web cockpit, screen by screen: what each one shows, where its data comes from, which decisions are load-bearing.
-- [design-log.md](design-log.md) - the rationale, the bug stories and the measurements, moved verbatim out of `CLAUDE.md` and filed under the section each one came from: what was tried, what it cost, why the current shape won. A rule ending `(history: docs/design-log.md)` has its story here.
+- [design-log.md](design-log.md) - the rationale, the bug stories and the measurements behind the rules, moved verbatim out of `CLAUDE.md`: what was tried, what it cost, why the current shape won. A rule ending `(history: docs/design-log.md)` has its story here.
 
 [`CLAUDE.md`](../CLAUDE.md) at the repo root is the agent's working memory and the contributor guide - one rule per invariant, each with its why. The first two files above are what the binary prints for people *using* pm; CLAUDE.md is for whoever edits it.
