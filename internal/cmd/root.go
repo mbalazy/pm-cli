@@ -1,3 +1,12 @@
+// Package cmd is the cobra tree behind the `pm` binary - every subcommand,
+// and nothing else's semantics: the mutating commands call internal/service
+// and internal/storage, the same functions the MCP server and the HTTP API
+// call, so a validation rule cannot hold on one surface and not another.
+//
+// What is this package's own is the executor (work*.go, run_epic*.go,
+// finish*.go, worker_guard.go): launching headless `claude -p` workers,
+// enforcing the review policy from the outside through a PreToolUse hook,
+// and recording what every run did.
 package cmd
 
 import (

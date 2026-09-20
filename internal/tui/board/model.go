@@ -1,3 +1,14 @@
+// Package board is `pm board`, the Bubble Tea kanban TUI: per-project tabs,
+// eight views (board, task detail, archive, project info, focus, the live run
+// dashboard, the cross-project run list and the acceptance report), and the
+// launchers that start an unattended run or an interactive Claude Code
+// session from the card under the cursor.
+//
+// The files are split by concern rather than by view - update*.go dispatch,
+// view*.go rendering, actions.go the status mutations, launch_*.go and
+// tmux.go the processes - and overlay.go holds the single ordered table that
+// both Update and View resolve overlays through, so a new overlay is added
+// there instead of in another if-ladder.
 package board
 
 import (

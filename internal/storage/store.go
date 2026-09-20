@@ -1,3 +1,15 @@
+// Package storage is pm's data layer, and the files are the only source of
+// truth: a project is a directory under ~/.claude/pm/ (PM_DATA_DIR overrides
+// the root), a task is a markdown file with YAML frontmatter sitting next to
+// that project's project.yaml, and the journal, timeline and executor run
+// state are append-only files in that project's own subdirectories.
+//
+// Two rules shape almost everything here. Files are NEVER migrated between
+// versions, so every reader tolerates an older shape and reports a missing
+// field as unknown instead of guessing one. And a write that could race -
+// a task edit, project.yaml, the acceptance claim - takes the project's
+// flock through LockProject and re-reads the file fresh inside it, because
+// a lost update here is somebody's brief.
 package storage
 
 import (

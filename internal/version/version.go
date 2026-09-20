@@ -1,3 +1,7 @@
+// Package version reports the version this binary carries: the Makefile's
+// VERSION stamped in at link time, or - for a binary built without those
+// ldflags, such as one from `go install` - the module version the toolchain
+// recorded in the build info.
 package version
 
 import "runtime/debug"

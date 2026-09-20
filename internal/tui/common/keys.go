@@ -1,3 +1,6 @@
+// Package common holds what the TUI's packages share - today the one key map
+// every view binds against, so a key means the same thing wherever in the
+// board it is pressed.
 package common
 
 import "github.com/charmbracelet/bubbles/key"
