@@ -36,6 +36,12 @@ Requirements: Go 1.24+, git. For the executor: the [Claude Code](https://docs.an
 **1. Build and install:**
 
 ```sh
+go install github.com/mbalazy/pm-cli/cmd/pm@latest
+```
+
+That needs no checkout and reports the version of the tag it was built from. To work on pm, build from a clone instead - `make install` stamps the Makefile's `VERSION` through ldflags:
+
+```sh
 git clone https://github.com/mbalazy/pm-cli.git && cd pm-cli
 make install          # builds with version ldflags, installs to GOBIN
 ```
