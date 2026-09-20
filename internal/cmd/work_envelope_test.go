@@ -140,7 +140,7 @@ func TestParseWorkerOutputArrayEnvelopeRecoversFromTranscript(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
 	path := writeTranscript(t, cfg, dir, "sess-arr", transcriptLine(t, map[string]any{
-		"status": "verified", "summary": "pushed", "branch": "me-login/ACME-1671", "commits": []string{"2b499fea"}, "unresolved": []string{},
+		"status": "verified", "summary": "pushed", "branch": "me-login/acme-1671", "commits": []string{"2b499fea"}, "unresolved": []string{},
 	}))
 
 	var log bytes.Buffer
@@ -148,7 +148,7 @@ func TestParseWorkerOutputArrayEnvelopeRecoversFromTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected recovery, got %v", err)
 	}
-	if sid != "sess-arr" || res.Status != workerVerified || res.Branch != "me-login/ACME-1671" {
+	if sid != "sess-arr" || res.Status != workerVerified || res.Branch != "me-login/acme-1671" {
 		t.Errorf("sid=%q res=%+v", sid, res)
 	}
 	if res.Turns != 7 || res.CostUSD != 1.5 {

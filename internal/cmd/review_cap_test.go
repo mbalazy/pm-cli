@@ -21,7 +21,7 @@ func TestIsProductionFile(t *testing.T) {
 	}{
 		{"internal/cmd/work.go", true},
 		{"src/components/Button.tsx", true},
-		{"docs/ACME-1574/sim-test-plan.md", true}, // the orbit-106-3 change: 1 file, 1 reviewer
+		{"docs/acme-1574/sim-test-plan.md", true}, // the orbit-106-3 change: 1 file, 1 reviewer
 		{"README.md", true},
 		{"Makefile", true},
 
@@ -87,7 +87,7 @@ func TestProseClassification(t *testing.T) {
 		name string
 		want bool
 	}{
-		{"docs/ACME-1574/sim-test-plan.md", true},
+		{"docs/acme-1574/sim-test-plan.md", true},
 		{"README.MD", true},
 		{"notes.mdx", true},
 		{"CHANGELOG.txt", true},

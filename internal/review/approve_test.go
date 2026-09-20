@@ -68,7 +68,7 @@ func TestApprove(t *testing.T) {
 	})
 
 	t.Run("approve + the ✅ on the Slack message, once", func(t *testing.T) {
-		r, err := c.Start(bg, "https://example.slack.com/archives/C1/p1694012345123456")
+		r, err := c.Start(bg, "https://acme.slack.com/archives/C1/p1694012345123456")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -95,7 +95,7 @@ func TestApprove(t *testing.T) {
 
 	t.Run("a failed reaction keeps the approve and is retried", func(t *testing.T) {
 		approved, reacted = nil, nil
-		r, _ := c.Start(bg, "https://example.slack.com/archives/C1/p1694012345123456")
+		r, _ := c.Start(bg, "https://acme.slack.com/archives/C1/p1694012345123456")
 		waitState(t, c, r.ID, StateDone)
 		reactErr = errors.New("reactions_add: not_in_channel")
 		got, err := c.Approve(bg, r.ID)
@@ -145,7 +145,7 @@ func TestStartReactsEyes(t *testing.T) {
 	c.ReadSlack = func(context.Context, SlackLink) (string, string, error) {
 		return "anna: https://github.com/org/app/pull/7", "slack-work", nil
 	}
-	const link = "https://example.slack.com/archives/C1/p1694012345123456"
+	const link = "https://acme.slack.com/archives/C1/p1694012345123456"
 	nextCall := func() string {
 		t.Helper()
 		select {

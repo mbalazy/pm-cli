@@ -57,7 +57,7 @@ func TestParseWorkerOutputRecoversResultFromTranscript(t *testing.T) {
 	path := writeTranscript(t, cfg, dir, "sess-1", transcriptLine(t, map[string]any{
 		"status":     "verified",
 		"summary":    "moved the timezone row",
-		"branch":     "me-login/ACME-1387",
+		"branch":     "me-login/acme-1387",
 		"commits":    []string{"25b47a31"},
 		"unresolved": []string{"TODO: check on the simulator"},
 	}))
@@ -70,7 +70,7 @@ func TestParseWorkerOutputRecoversResultFromTranscript(t *testing.T) {
 	if sid != "sess-1" {
 		t.Errorf("session id = %q, want sess-1", sid)
 	}
-	if res.Status != "verified" || res.Branch != "me-login/ACME-1387" {
+	if res.Status != "verified" || res.Branch != "me-login/acme-1387" {
 		t.Errorf("recovered result = %+v", res)
 	}
 	if len(res.Commits) != 1 || res.Commits[0] != "25b47a31" {

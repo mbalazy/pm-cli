@@ -10,8 +10,8 @@ import (
 )
 
 func TestFindSlackLink(t *testing.T) {
-	l, ok := findSlackLink("zobacz https://example.slack.com/archives/C07ABC123/p1694012345123456?thread_ts=1694000000.000100&cid=C07ABC123 prosze")
-	if !ok || l.Workspace != "example" || l.Channel != "C07ABC123" || l.TS != "1694012345.123456" || l.ThreadTS != "1694000000.000100" {
+	l, ok := findSlackLink("zobacz https://acme.slack.com/archives/C07ABC123/p1694012345123456?thread_ts=1694000000.000100&cid=C07ABC123 prosze")
+	if !ok || l.Workspace != "acme" || l.Channel != "C07ABC123" || l.TS != "1694012345.123456" || l.ThreadTS != "1694000000.000100" {
 		t.Fatalf("link = %+v %v", l, ok)
 	}
 	l, ok = findSlackLink("https://x.slack.com/archives/D01/p1694012345123456")
@@ -59,7 +59,7 @@ func TestResolve(t *testing.T) {
 			}
 			return "ts,user,text\n1,anna,możesz zerknąć? https://github.com/org/app/pull/31", "slack-work", nil
 		}
-		res, err := c.Resolve(bg, "https://example.slack.com/archives/C1/p1694012345123456")
+		res, err := c.Resolve(bg, "https://acme.slack.com/archives/C1/p1694012345123456")
 		if err != nil || res.PR.Number != 31 || !strings.Contains(res.SlackText, "zerknąć") || prompt != "" {
 			t.Fatalf("res = %+v err = %v", res, err)
 		}
@@ -72,7 +72,7 @@ func TestResolve(t *testing.T) {
 		c.ReadSlack = func(context.Context, SlackLink) (string, string, error) {
 			return "anna: review PR 555 w mobile?", "slack-work", nil
 		}
-		res, err := c.Resolve(bg, "https://example.slack.com/archives/C1/p1694012345123456")
+		res, err := c.Resolve(bg, "https://acme.slack.com/archives/C1/p1694012345123456")
 		if err != nil || res.PR.Number != 555 || res.Slack == nil || !strings.Contains(prompt, "anna: review PR 555 w mobile?") {
 			t.Fatalf("res = %+v err = %v prompt = %q", res, err, prompt)
 		}
@@ -81,7 +81,7 @@ func TestResolve(t *testing.T) {
 	t.Run("failures are input errors", func(t *testing.T) {
 		var ie *InputError
 		c.ReadSlack = func(context.Context, SlackLink) (string, string, error) { return "", "", errors.New("not_in_channel") }
-		if _, err := c.Resolve(bg, "https://example.slack.com/archives/C1/p1694012345123456"); !errors.As(err, &ie) || !strings.Contains(err.Error(), "not_in_channel") {
+		if _, err := c.Resolve(bg, "https://acme.slack.com/archives/C1/p1694012345123456"); !errors.As(err, &ie) || !strings.Contains(err.Error(), "not_in_channel") {
 			t.Fatalf("slack err = %v", err)
 		}
 		for answer, want := range map[string]string{
