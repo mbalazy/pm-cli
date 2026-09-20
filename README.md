@@ -39,7 +39,7 @@ Requirements: Go 1.24+, git. For the executor: the [Claude Code](https://docs.an
 go install github.com/mbalazy/pm-cli/cmd/pm@latest
 ```
 
-That needs no checkout and reports the version of the tag it was built from. To work on pm, build from a clone instead - `make install` stamps the Makefile's `VERSION` through ldflags:
+That needs no checkout; the binary reports whatever the module proxy resolved - a release tag when one exists, otherwise a pseudo-version of the commit it was built from. To work on pm, build from a clone instead - `make install` stamps the Makefile's `VERSION` through ldflags:
 
 ```sh
 git clone https://github.com/mbalazy/pm-cli.git && cd pm-cli
