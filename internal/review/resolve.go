@@ -325,7 +325,7 @@ func (c *Controller) hostCmd(ctx context.Context, proj *storage.Project, pr PR, 
 		cmd = exec.CommandContext(ctx, glab, args...)
 		// glab reads the user's own login (keyring or GITLAB_TOKEN); there is
 		// no `glab auth token` to pin an account with, the way gh_account does.
-		cmd.Env = append(os.Environ(), "NO_COLOR=1", "GLAB_CHECK_UPDATE=0")
+		cmd.Env = append(os.Environ(), "NO_COLOR=1")
 		return cmd, nil
 	}
 	gh := c.GH
