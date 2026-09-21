@@ -232,7 +232,7 @@ func TestValidateTaskID(t *testing.T) {
 // task, so it has to pass the ID bar - otherwise a project accepts creation
 // and then rejects every single `pm add` on it.
 func TestValidateProjectPrefix(t *testing.T) {
-	for _, ok := range []string{"", "pm-cli", "best", "rc", "a1", "app.le"} {
+	for _, ok := range []string{"", "pm-cli", "best", "rc", "a1", "app.io"} {
 		if err := ValidateProjectPrefix(ok); err != nil {
 			t.Errorf("ValidateProjectPrefix(%q) = %v, want nil", ok, err)
 		}
