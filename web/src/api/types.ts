@@ -393,16 +393,21 @@ export interface Shift {
   summary?: ShiftSummary
 }
 
-/** review.Review - one PR code review (GET /api/reviews, /api/reviews/{id}). */
+/**
+ * review.Review - one code review of a GitHub pull request or a GitLab merge
+ * request (GET /api/reviews, /api/reviews/{id}).
+ */
 export interface Review {
   id: string
   url: string
-  /** owner/repo */
+  /** 'github' | 'gitlab'; absent on reviews stored before GitLab support, which read as github. */
+  host?: string
+  /** The repository's full path on the host: owner/repo, or group/subgroup/project on GitLab. */
   repo: string
   number: number
-  /** The PR title, from gh when the review started. */
+  /** Its title, from gh / glab when the review started. */
   title?: string
-  /** What the user pasted, when it was not the bare PR URL. */
+  /** What the user pasted, when it was not the bare URL. */
   input?: string
   project: string
   /** The project's checkout; the review runs in `worktree` at `commit`. */
@@ -422,7 +427,7 @@ export interface Review {
   no_issues?: boolean
   /** The Slack message the request came from, when it was a Slack link. */
   slack?: { workspace: string; channel: string; ts: string; thread_ts: string; server: string }
-  /** When the PR was approved from the cockpit, or why the last try failed. */
+  /** When the change was approved from the cockpit, or why the last try failed. */
   approved?: string
   approve_error?: string
   /** The ✅ on the Slack message after the approve. */

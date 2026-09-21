@@ -3,7 +3,6 @@ package review
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -36,7 +35,7 @@ func TestApprove(t *testing.T) {
 		if approveErr != nil {
 			return approveErr
 		}
-		approved = append(approved, fmt.Sprintf("%s#%d", pr.Slug(), pr.Number))
+		approved = append(approved, pr.Text())
 		return nil
 	}
 	c.ReactSlack = func(_ context.Context, l SlackLink, emoji string) error {
@@ -90,6 +89,23 @@ func TestApprove(t *testing.T) {
 		}
 		if strings.Join(approved, ",") != "org/app#7" || strings.Join(reacted, ",") != "slack-work C1 1694012345.123456 white_check_mark" {
 			t.Fatalf("calls: approved %v reacted %v", approved, reacted)
+		}
+	})
+
+	t.Run("a GitLab review approves its merge request", func(t *testing.T) {
+		approved, reacted = nil, nil
+		gitlabProject(t, c)
+		r, err := c.Start(bg, "https://gitlab.com/acme-group/lending/acme-web/-/merge_requests/43")
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitState(t, c, r.ID, StateDone)
+		got, err := c.Approve(bg, r.ID)
+		if err != nil || got.Approved == "" {
+			t.Fatalf("got = %+v err = %v", got, err)
+		}
+		if strings.Join(approved, ",") != "acme-group/lending/acme-web!43" {
+			t.Fatalf("approved %v", approved)
 		}
 	})
 

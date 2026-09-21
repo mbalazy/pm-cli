@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,10 +11,11 @@ import (
 )
 
 // Approving from the cockpit: the user reads a finished review and clicks
-// approve. pm runs `gh pr review <n> --approve` - no body, no comment, an
-// approve and nothing else - under the project's gh account, and when the
-// request came from a Slack message it reacts to that message with ✅
-// through the server that read it. slack-mcp-server keeps its reaction tools
+// approve. pm runs `gh pr review <n> --approve` on GitHub (under the
+// project's gh account) or `glab mr approve <n>` on GitLab - no body, no
+// comment, an approve and nothing else - and when the request came from a
+// Slack message it reacts to that message with ✅ through the server that
+// read it. slack-mcp-server keeps its reaction tools
 // off by default; pm turns them on for its own subprocess only, limited to
 // that one channel (SLACK_MCP_REACTION_TOOL=<channel>), never in the user's
 // config. The outcome lives in files next to the review
@@ -33,8 +32,9 @@ const (
 // SlackTimeout caps one Slack server start + call.
 const SlackTimeout = 90 * time.Second
 
-// Approve approves the review's PR on GitHub and reacts on Slack. An already
-// approved review is not approved twice; a failed reaction is retried.
+// Approve approves the review's change on its host and reacts on Slack. An
+// already approved review is not approved twice; a failed reaction is
+// retried.
 func (c *Controller) Approve(ctx context.Context, id string) (*Review, error) {
 	r, err := c.Get(id)
 	if err != nil {
@@ -42,16 +42,13 @@ func (c *Controller) Approve(ctx context.Context, id string) (*Review, error) {
 	}
 	if r.Approved == "" {
 		if r.State != StateDone {
-			return nil, &InputError{Msg: "only a finished review can approve its PR (this one is " + r.State + ")"}
+			return nil, &InputError{Msg: "only a finished review can approve its " + HostByName(r.Host).Unit + " (this one is " + r.State + ")"}
 		}
 		proj, err := c.Store.GetProject(r.Project)
 		if err != nil {
 			return nil, err
 		}
-		pr := PR{Number: r.Number}
-		if parts := strings.SplitN(r.Repo, "/", 2); len(parts) == 2 {
-			pr.Owner, pr.Repo = parts[0], parts[1]
-		}
+		pr := PR{Host: HostByName(r.Host), Path: r.Repo, Number: r.Number}
 		if err := c.approvePR(ctx, proj, pr); err != nil {
 			_ = os.WriteFile(c.path(id, ".approve_error"), []byte(err.Error()+"\n"), 0o644)
 			return nil, err
@@ -105,25 +102,16 @@ func (c *Controller) approvePR(ctx context.Context, proj *storage.Project, pr PR
 	if c.ApprovePR != nil {
 		return c.ApprovePR(ctx, proj, pr)
 	}
-	gh := c.GH
-	if gh == "" {
-		gh = "gh"
-	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, gh, "pr", "review", strconv.Itoa(pr.Number), "--repo", pr.Slug(), "--approve")
-	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1", "GH_PAGER=")
-	if proj.GHAccount != "" {
-		tok, err := c.ghToken(proj.GHAccount)
-		if err != nil {
-			return fmt.Errorf("gh_account %s: %w", proj.GHAccount, err)
-		}
-		cmd.Env = append(withoutKey(cmd.Env, "GH_TOKEN"), "GH_TOKEN="+tok)
+	cmd, err := c.hostCmd(ctx, proj, pr, "approve")
+	if err != nil {
+		return err
 	}
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return &InputError{Msg: fmt.Sprintf("gh pr review --approve %s#%d failed: %s", pr.Slug(), pr.Number, firstLines(stderr.String()+" "+err.Error(), 1))}
+		return &InputError{Msg: fmt.Sprintf("%s %s failed: %s", strings.Join(cmd.Args[:3], " "), pr.Text(), firstLines(stderr.String()+" "+err.Error(), 1))}
 	}
 	return nil
 }

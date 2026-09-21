@@ -18,13 +18,29 @@ const review = (over: Partial<Review>): Review => ({
 })
 
 describe('reviewView', () => {
-  it('parsePRUrl accepts a PR URL with anything after the number, nothing else', () => {
+  it('parsePRUrl accepts a PR or MR URL with anything after the number, nothing else', () => {
     expect(parsePRUrl('https://github.com/orbit-org/app.orbit/pull/1003/changes')).toEqual({
+      host: 'github',
       repo: 'orbit-org/app.orbit',
       number: 1003,
+      label: 'orbit-org/app.orbit#1003',
     })
-    expect(parsePRUrl(' https://github.com/o/r/pull/7 ')).toEqual({ repo: 'o/r', number: 7 })
+    expect(parsePRUrl(' https://github.com/o/r/pull/7 ')).toEqual({
+      host: 'github',
+      repo: 'o/r',
+      number: 7,
+      label: 'o/r#7',
+    })
+    expect(
+      parsePRUrl('https://gitlab.com/acme-group/lending/acme-web/-/merge_requests/43/diffs'),
+    ).toEqual({
+      host: 'gitlab',
+      repo: 'acme-group/lending/acme-web',
+      number: 43,
+      label: 'acme-group/lending/acme-web!43',
+    })
     expect(parsePRUrl('https://github.com/o/r/issues/7')).toBeNull()
+    expect(parsePRUrl('https://gitlab.com/acme-web/-/merge_requests/7')).toBeNull()
     expect(parsePRUrl('o/r#7')).toBeNull()
   })
 
@@ -39,6 +55,11 @@ describe('reviewView', () => {
     expect(running.duration).toBe('1h 30m')
     expect(reviewRow(review({ state: 'error' }), now).glyph).toBe('✗')
     expect(durationText(-5)).toBe('0m')
+    // GitLab writes a merge request's number with a !, and its repo nests groups.
+    expect(
+      reviewRow(review({ host: 'gitlab', repo: 'acme-group/lending/acme-web', number: 43 }), now)
+        .label,
+    ).toBe('acme-group/lending/acme-web!43')
   })
 
   it('approveView offers approve on a done review and words what happened', () => {
@@ -72,6 +93,18 @@ describe('reviewView', () => {
     expect(approveView(review({ approve_error: 'own PR' }), now).status).toEqual([
       'approve failed: own PR',
     ])
+    // The host is worded from the review, and an old review without one is GitHub.
+    const mr = approveView(
+      review({ host: 'gitlab', repo: 'acme-group/lending/acme-web', number: 43, no_issues: true }),
+      now,
+    )
+    expect(mr.label).toBe('approve on GitLab')
+    expect(mr.question).toBe(
+      'Approve acme-group/lending/acme-web!43 on GitLab? Only an approve, no comment.',
+    )
+    expect(
+      approveView(review({ host: 'gitlab', approved: '2026-09-14T11:00:00Z' }), now).status[0],
+    ).toBe('approved on GitLab 30m ago')
   })
 
   it('slackSeenLine words the 👀 the start puts on the Slack message, in any state', () => {
