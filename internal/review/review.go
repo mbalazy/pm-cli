@@ -1,16 +1,18 @@
-// Package review runs a code review of a GitHub pull request from the
-// cockpit: the user pastes a PR URL (or a Slack link, or a sentence - see
-// resolve.go), pm finds the local checkout of that repository among its
-// projects, starts a headless `claude -p "/review <url>"` in a throwaway
-// worktree of it under the project's Claude account, and keeps the report.
+// Package review runs a code review of a GitHub pull request or a GitLab
+// merge request from the cockpit: the user pastes its URL (or a Slack link,
+// or a sentence - see resolve.go), pm finds the local checkout of that
+// repository among its projects, starts a headless `claude -p "/review
+// <url>"` in a throwaway worktree of it under the project's Claude account,
+// and keeps the report. What differs between the two hosts - the URL, the
+// ref, the CLI, its tool lists - lives in host.go and nowhere else.
 //
 // The run is DETACHED (its own session, stdout and stderr written to files,
 // not pipes), so a review survives a restart of `pm serve`; its state is
 // derived from those files on every read - a result envelope on stdout is a
 // finished review, a live pid is a running one, anything else failed. The
 // review itself is the user's /review command (~/.claude/commands/review.md),
-// which reports in the conversation only and never writes to GitHub; the
-// deny list below and the worktree make sure of it whatever the account's
+// which reports in the conversation only and never writes to the host; the
+// deny lists below and the worktree make sure of it whatever the account's
 // settings allow.
 package review
 
@@ -23,7 +25,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -43,13 +44,12 @@ const (
 	StateError   = "error"
 )
 
-// AllowedTools is what the headless review may use without asking (a
-// headless run has nobody to ask, so everything else is refused): reading
-// the checkout, sub-agents, and read-only gh/git.
+// AllowedTools is what the headless review may use without asking whatever
+// host it runs against (a headless run has nobody to ask, so everything else
+// is refused): reading the checkout, sub-agents, read-only git. The host's
+// own CLI is added by Host.AllowedTools.
 var AllowedTools = []string{
 	"Read", "Grep", "Glob", "LS", "Task", "Agent", "TodoWrite",
-	"Bash(gh pr view:*)", "Bash(gh pr diff:*)", "Bash(gh pr list:*)", "Bash(gh pr checks:*)",
-	"Bash(gh issue view:*)", "Bash(gh issue list:*)", "Bash(gh search:*)", "Bash(gh api:*)",
 	"Bash(git log:*)", "Bash(git blame:*)", "Bash(git show:*)", "Bash(git diff:*)", "Bash(git grep:*)",
 }
 
@@ -58,61 +58,41 @@ var AllowedTools = []string{
 // allows git checkout/reset/stash, and on 2026-09-14 a reviewer sub-agent ran
 // `git checkout origin/<branch> -- .` in the user's checkout and lost an
 // uncommitted change. Deny rules win over allow rules, so every write to the
-// tree, to git state and to GitHub is listed here - on top of the review
-// running in its own worktree (see prepareWorktree), never the user's.
+// tree and to git state is listed here - on top of the review running in its
+// own worktree (see prepareWorktree), never the user's. The writes to a code
+// host are host.go's `write` lists, and Host.DisallowedTools adds EVERY
+// host's, not just the reviewed one's.
 var DisallowedTools = []string{
 	"Edit", "Write", "NotebookEdit",
 	"Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git restore:*)", "Bash(git reset:*)",
 	"Bash(git stash:*)", "Bash(git clean:*)", "Bash(git add:*)", "Bash(git commit:*)",
 	"Bash(git push:*)", "Bash(git pull:*)", "Bash(git merge:*)", "Bash(git rebase:*)",
 	"Bash(git cherry-pick:*)", "Bash(git revert:*)", "Bash(git worktree:*)", "Bash(git branch:*)",
-	"Bash(gh pr checkout:*)", "Bash(gh pr review:*)", "Bash(gh pr comment:*)", "Bash(gh pr merge:*)",
-	"Bash(gh pr edit:*)", "Bash(gh pr close:*)", "Bash(gh pr ready:*)", "Bash(gh issue comment:*)",
-	"Bash(gh api *-X*)", "Bash(gh api *--method*)", "Bash(gh api *-f *)", "Bash(gh api *-F *)",
-	"Bash(gh api *--field*)", "Bash(gh api *--raw-field*)", "Bash(gh api *--input*)",
 	"Bash(rm:*)", "Bash(mv:*)",
 }
 
 // ErrNotFound is an unknown review id.
 var ErrNotFound = errors.New("review not found")
 
-// InputError is a caller-caused failure: a URL that is not a PR, a repository
-// no project checks out.
+// InputError is a caller-caused failure: a URL that is not a pull or merge
+// request, a repository no project checks out.
 type InputError struct{ Msg string }
 
 func (e *InputError) Error() string { return e.Msg }
 
-// PR is a parsed pull request URL.
-type PR struct {
-	Owner  string
-	Repo   string
-	Number int
-}
-
-// Slug is owner/repo.
-func (p PR) Slug() string { return p.Owner + "/" + p.Repo }
-
-var prURL = regexp.MustCompile(`^https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/(\d+)(?:[/?#].*)?$`)
-
-// ParseURL reads a GitHub PR URL; anything after the number (/changes,
-// /files, a query) is ignored.
-func ParseURL(raw string) (PR, error) {
-	m := prURL.FindStringSubmatch(strings.TrimSpace(raw))
-	if m == nil {
-		return PR{}, &InputError{Msg: fmt.Sprintf("not a GitHub pull request URL: %q (want https://github.com/<owner>/<repo>/pull/<n>)", raw)}
-	}
-	n, _ := strconv.Atoi(m[3])
-	return PR{Owner: m[1], Repo: strings.TrimSuffix(m[2], ".git"), Number: n}, nil
-}
-
 // Review is one review, as stored plus what is derived on read.
 type Review struct {
-	ID     string `json:"id"`
-	URL    string `json:"url"`
+	ID  string `json:"id"`
+	URL string `json:"url"`
+	// Host is "github" or "gitlab"; ABSENT on every review written before
+	// GitLab support, which a reader takes as github (HostByName).
+	Host string `json:"host,omitempty"`
+	// Repo is the project's full path on the host (owner/repo on GitHub,
+	// group/subgroup/project on GitLab); Number its PR or MR number.
 	Repo   string `json:"repo"`
 	Number int    `json:"number"`
 	Title  string `json:"title,omitempty"`
-	// Input is what the user pasted, when it was not the PR URL itself.
+	// Input is what the user pasted, when it was not the change's URL itself.
 	Input   string `json:"input,omitempty"`
 	Project string `json:"project"`
 	// Dir is the project's checkout; the review runs in Worktree, a
@@ -135,7 +115,7 @@ type Review struct {
 
 	// Slack is the message the request came from, when it was a Slack link.
 	Slack *SlackLink `json:"slack,omitempty"`
-	// Approved is when the PR was approved from the cockpit; ApproveError
+	// Approved is when the change was approved from the cockpit; ApproveError
 	// the last failed attempt. SlackReacted / SlackReactError: the ✅ on the
 	// Slack message after the approve.
 	Approved        string `json:"approved,omitempty"`
@@ -151,20 +131,23 @@ type Review struct {
 // Controller starts and reads reviews under <pm-root>/.cockpit/reviews.
 type Controller struct {
 	Store storage.TaskStore
-	// Exe is the claude binary ("claude" on PATH); GH the gh binary.
-	Exe string
-	GH  string
+	// Exe is the claude binary ("claude" on PATH); GH the gh binary, Glab
+	// the glab one.
+	Exe  string
+	GH   string
+	Glab string
 	// Now is the clock; nil = time.Now.
 	Now func() time.Time
 	// Timeout overrides the package Timeout (tests).
 	Timeout time.Duration
 	// AskModel, ReadSlack and ViewPR replace the resolution's outside calls
-	// (haiku, the Slack MCP servers, gh pr view) in tests; nil = the real ones.
+	// (haiku, the Slack MCP servers, gh pr view / glab mr view) in tests;
+	// nil = the real ones.
 	AskModel  func(ctx context.Context, prompt string) (string, error)
 	ReadSlack func(ctx context.Context, link SlackLink) (text, server string, err error)
 	ViewPR    func(ctx context.Context, proj *storage.Project, pr PR) (title string, err error)
 	// ApprovePR and ReactSlack replace the approve's outside calls (gh pr
-	// review --approve, the Slack reaction) in tests.
+	// review --approve / glab mr approve, the Slack reaction) in tests.
 	ApprovePR  func(ctx context.Context, proj *storage.Project, pr PR) error
 	ReactSlack func(ctx context.Context, link SlackLink, emoji string) error
 	// WorktreeRoot is where review worktrees go; empty = $TMPDIR/pm-review.
@@ -183,45 +166,30 @@ func (c *Controller) now() time.Time {
 	return time.Now()
 }
 
-// Match finds the project whose checkout is the PR's repository: its
-// project.yaml `repo` names the repository, else a git remote of its `path`
-// does. Active projects only; the first match in slug order wins.
+// Match finds the project whose checkout is the change's repository: its
+// project.yaml `repo` names the repository on the same host, else a git
+// remote of its `path` does. Active projects only; the first match in slug
+// order wins.
 func (c *Controller) Match(pr PR) (slug string, proj *storage.Project, err error) {
 	cands, err := c.candidates()
 	if err != nil {
 		return "", nil, err
 	}
-	want := strings.ToLower(pr.Slug())
+	host, want := pr.host(), strings.ToLower(pr.Path)
 	for _, cd := range cands {
-		if cd.Repo == want {
+		if cd.Host == host && cd.Path == want {
 			return cd.Slug, cd.Proj, nil
 		}
 	}
-	return "", nil, &InputError{Msg: fmt.Sprintf("no pm project checks out %s - set `repo: https://github.com/%s` in that project's project.yaml (its `path` must exist)", pr.Slug(), pr.Slug())}
-}
-
-// repoSlug reduces a repo URL or remote (https, ssh, scp form) on github.com
-// to a lower-case owner/repo; anything else to "".
-func repoSlug(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	i := strings.Index(s, "github.com")
-	if i < 0 {
-		return ""
-	}
-	s = strings.TrimLeft(s[i+len("github.com"):], ":/")
-	s = strings.TrimSuffix(strings.TrimSuffix(s, "/"), ".git")
-	if parts := strings.Split(s, "/"); len(parts) >= 2 {
-		return parts[0] + "/" + parts[1]
-	}
-	return ""
+	return "", nil, &InputError{Msg: fmt.Sprintf("no pm project checks out %s - set `repo: https://%s/%s` in that project's project.yaml (its `path` must exist)", pr.Path, host.Domain, pr.Path)}
 }
 
 var idUnsafe = regexp.MustCompile(`[^a-z0-9._-]+`)
 var validID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
-// Start resolves the input to a PR (a URL, a Slack link, a sentence - see
-// resolve.go), matches it to a project, confirms the PR exists and spawns
-// the review in the background.
+// Start resolves the input to one change request (a URL, a Slack link, a
+// sentence - see resolve.go), matches it to a project, confirms the change
+// exists and spawns the review in the background.
 func (c *Controller) Start(ctx context.Context, input string) (*Review, error) {
 	ctx, cancel := context.WithTimeout(ctx, ResolveTimeout)
 	defer cancel()
@@ -239,10 +207,9 @@ func (c *Controller) Start(ctx context.Context, input string) (*Review, error) {
 		return nil, err
 	}
 	now := c.now()
-	id := idUnsafe.ReplaceAllString(strings.ToLower(fmt.Sprintf("%s-%s-%d-%s", pr.Owner, pr.Repo, pr.Number, now.Format("20060102-150405"))), "-")
-	url := fmt.Sprintf("https://github.com/%s/pull/%d", pr.Slug(), pr.Number)
+	id := idUnsafe.ReplaceAllString(strings.ToLower(fmt.Sprintf("%s-%d-%s", pr.Path, pr.Number, now.Format("20060102-150405"))), "-")
 	r := &Review{
-		ID: id, URL: url, Repo: pr.Slug(), Number: pr.Number, Title: title, Project: slug,
+		ID: id, URL: pr.URL(), Host: pr.Host.Name, Repo: pr.Path, Number: pr.Number, Title: title, Project: slug,
 		Dir: proj.Path, ConfigDir: proj.ResolveClaudeConfigDir(), Started: now.Format(time.RFC3339),
 	}
 	if _, err := ParseURL(input); err != nil {
@@ -261,9 +228,11 @@ func (c *Controller) Start(ctx context.Context, input string) (*Review, error) {
 	if solo.PinConfigDir(r.ConfigDir) {
 		env = append(env, "CLAUDE_CONFIG_DIR="+r.ConfigDir)
 	}
-	if proj.GHAccount != "" {
+	if pr.Host == GitHub && proj.GHAccount != "" {
 		// pm serve never loads a repo's direnv token: the project's gh account
-		// goes on the environment, never argv (the feed's rule).
+		// goes on the environment, never argv (the feed's rule). GitLab has no
+		// equivalent: `glab auth` cannot print a token, so glab in the
+		// subprocess reads the user's own keyring - pm serve runs as the user.
 		tok, err := c.ghToken(proj.GHAccount)
 		if err != nil {
 			return nil, fmt.Errorf("gh_account %s: %w", proj.GHAccount, err)
@@ -297,8 +266,8 @@ func (c *Controller) Start(ctx context.Context, input string) (*Review, error) {
 		exe = "claude"
 	}
 	// dontAsk: whatever is not allowed is refused, never classified by auto.
-	args := append([]string{"-p", "/review " + url, "--output-format", "json", "--permission-mode", "dontAsk", "--allowedTools"}, AllowedTools...)
-	args = append(append(args, "--disallowedTools"), DisallowedTools...)
+	args := append([]string{"-p", pr.Host.Prompt(pr), "--output-format", "json", "--permission-mode", "dontAsk", "--allowedTools"}, pr.Host.AllowedTools()...)
+	args = append(append(args, "--disallowedTools"), pr.Host.DisallowedTools()...)
 	cmd := exec.Command(exe, args...)
 	cmd.Dir = r.Worktree
 	cmd.Env = env
@@ -487,10 +456,11 @@ func (c *Controller) worktreeDir(id string) string {
 	return filepath.Join(os.TempDir(), "pm-review", id)
 }
 
-// prepareWorktree adds a detached worktree of repo at dir, at the PR's head
-// when it can be fetched from origin, else at the checkout's HEAD (the
-// review still reads the diff through gh). It returns the dir and a label
-// of the commit. The user's checkout is never touched: a worktree has its
+// prepareWorktree adds a detached worktree of repo at dir, at the change's
+// head when it can be fetched from origin (refs/pull/N/head on GitHub,
+// refs/merge-requests/N/head on GitLab), else at the checkout's HEAD (the
+// review still reads the diff through the host's CLI). It returns the dir
+// and a label of the commit. The user's checkout is never touched: a worktree has its
 // own files and index.
 func prepareWorktree(ctx context.Context, repo string, pr PR, dir string, env []string) (string, string, error) {
 	git := func(args ...string) (string, error) {
@@ -504,14 +474,14 @@ func prepareWorktree(ctx context.Context, repo string, pr PR, dir string, env []
 		}
 		return strings.TrimSpace(string(out)), nil
 	}
-	ref := fmt.Sprintf("refs/pull/%d/head", pr.Number)
+	ref := pr.Host.Ref(pr.Number)
 	rev, label := "", ""
 	lsOut, err := git("ls-remote", "origin", ref)
 	if err == nil && len(strings.Fields(lsOut)) > 0 {
 		sha := strings.Fields(lsOut)[0]
 		if _, err = git("fetch", "--quiet", "--no-tags", "origin", ref); err == nil {
 			if _, err = git("rev-parse", "--verify", "--quiet", sha+"^{commit}"); err == nil {
-				rev, label = sha, sha[:min(12, len(sha))]+" (PR head)"
+				rev, label = sha, sha[:min(12, len(sha))]+" ("+pr.Host.Unit+" head)"
 			}
 		}
 	} else if err == nil {
@@ -522,7 +492,7 @@ func prepareWorktree(ctx context.Context, repo string, pr PR, dir string, env []
 		if herr != nil {
 			return "", "", herr
 		}
-		rev, label = head, head[:min(12, len(head))]+" (your checkout's HEAD - the PR head was not fetched: "+err.Error()+")"
+		rev, label = head, head[:min(12, len(head))]+" (your checkout's HEAD - the "+pr.Host.Unit+" head was not fetched: "+err.Error()+")"
 	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return "", "", err

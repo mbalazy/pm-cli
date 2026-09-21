@@ -7,10 +7,10 @@ import { useRowMutation } from '../api/mutations'
 import { useReview } from '../api/queries'
 import { approveView, reviewRow, slackSeenLine } from '../lib/reviewView'
 
-// One PR code review: the state while it runs (with cancel), the error when
-// it failed, the report's markdown when it is done - and the approve: ONE
-// click approves on GitHub (and reacts ✅ on the Slack message the request
-// came from). No confirmation step, the user's call: the button only exists
+// One code review: the state while it runs (with cancel), the error when it
+// failed, the report's markdown when it is done - and the approve: ONE click
+// approves on the change's host, GitHub or GitLab (and reacts ✅ on the Slack
+// message the request came from). No confirmation step, the user's call: the button only exists
 // on a finished review, and its label says "approve anyway" with a warning
 // when the report found issues.
 

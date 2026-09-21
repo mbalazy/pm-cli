@@ -1613,6 +1613,33 @@ describe('review screen', () => {
     })
   })
 
+  it('a GitLab merge request is listed and started the same way', async () => {
+    const mr = {
+      ...reviewDone,
+      id: 'acme-group-lending-acme-web-43-1',
+      host: 'gitlab',
+      url: 'https://gitlab.com/acme-group/lending/acme-web/-/merge_requests/43',
+      repo: 'acme-group/lending/acme-web',
+      number: 43,
+    }
+    vi.stubGlobal('fetch', fakeFetch({ ...api, '/api/reviews': { reviews: [mr] } }))
+    const user = userEvent.setup()
+    renderAt('/review')
+    const table = await screen.findByRole('table', { name: 'Reviews' })
+    expect(
+      within(table).getByRole('link', { name: 'acme-group/lending/acme-web!43' }),
+    ).toHaveAttribute('href', '/review/acme-group-lending-acme-web-43-1')
+    await user.type(
+      screen.getByRole('textbox', { name: 'PR to review' }),
+      'https://gitlab.com/acme-group/lending/acme-web/-/merge_requests/43',
+    )
+    await user.click(screen.getByRole('button', { name: 'review acme-group/lending/acme-web!43' }))
+    await vi.waitFor(() => expect(posts).toHaveLength(1))
+    expect(posts[0].body).toEqual({
+      input: 'https://gitlab.com/acme-group/lending/acme-web/-/merge_requests/43',
+    })
+  })
+
   it('free text is sent as it was typed', async () => {
     vi.stubGlobal('fetch', fakeFetch({ ...api, '/api/reviews': { reviews: [] } }))
     const user = userEvent.setup()
@@ -1673,6 +1700,26 @@ describe('review approve', () => {
     await vi.waitFor(() => expect(posts).toHaveLength(1))
     expect(posts[0].path).toBe('/api/reviews/org-app-7-1/approve')
     expect(screen.queryByRole('button', { name: 'yes, approve' })).toBeNull()
+  })
+
+  it('a GitLab review approves on GitLab', async () => {
+    vi.stubGlobal(
+      'fetch',
+      fakeFetch({
+        ...api,
+        '/api/reviews/org-app-7-1': {
+          ...done,
+          host: 'gitlab',
+          repo: 'acme-group/lending/acme-web',
+          number: 43,
+        },
+      }),
+    )
+    renderAt('/review/org-app-7-1')
+    expect(await screen.findByRole('button', { name: 'approve on GitLab' })).toHaveAttribute(
+      'title',
+      'Approve acme-group/lending/acme-web!43 on GitLab and react ✅ on the Slack message? Only an approve, no comment.',
+    )
   })
 
   it('an approved review says so and offers no approve', async () => {

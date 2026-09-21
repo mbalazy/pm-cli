@@ -6,11 +6,11 @@ import { useRowMutation } from '../api/mutations'
 import { useReviews } from '../api/queries'
 import { parsePRUrl, reviewRow } from '../lib/reviewView'
 
-// The Review screen: paste a GitHub PR URL, a Slack link to a message asking
-// for a review, or a sentence naming the PR; pm resolves it to one PR, finds
-// the project checking that repository out and runs `/review <url>` there
-// headless; the list shows every review with its state, the report opens on
-// its own page.
+// The Review screen: paste a GitHub PR or GitLab MR URL, a Slack link to a
+// message asking for a review, or a sentence naming it; pm resolves it to one
+// change request, finds the project checking that repository out and runs
+// `/review <url>` there headless; the list shows every review with its state,
+// the report opens on its own page.
 
 export function ReviewPage() {
   const reviews = useReviews()
@@ -26,7 +26,8 @@ export function ReviewPage() {
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
           <h1 className="masthead">Review</h1>
           <span className="text-sm text-ink-2">
-            /review on a GitHub PR, run in the project's checkout · reported here, never posted
+            /review on a GitHub PR or GitLab MR, run in the project's checkout · reported here,
+            never posted
           </span>
         </div>
         <form
@@ -41,7 +42,7 @@ export function ReviewPage() {
           <input
             type="text"
             aria-label="PR to review"
-            placeholder="PR URL, Slack link, or e.g. “pr 555 in the mobile repo”"
+            placeholder="PR or MR URL, Slack link, or e.g. “pr 555 in the mobile repo”"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             className="field min-w-0 flex-1 basis-80"
@@ -52,7 +53,7 @@ export function ReviewPage() {
             disabled={input.trim() === '' || start.isPending}
           >
             <GitPullRequest aria-hidden="true" className="size-3" strokeWidth={1.75} />
-            {start.isPending ? 'finding the PR…' : pr ? `review ${pr.repo}#${pr.number}` : 'review'}
+            {start.isPending ? 'finding the PR…' : pr ? `review ${pr.label}` : 'review'}
           </button>
         </form>
         {start.isError && (
@@ -66,7 +67,7 @@ export function ReviewPage() {
       {reviews.isError && <p className="text-crit">error: {reviews.error.message}</p>}
       {reviews.data && rows.length === 0 && (
         <p className="px-2 text-sm text-ink-3">
-          No reviews yet - paste a PR URL, a Slack link or a sentence above.
+          No reviews yet - paste a PR or MR URL, a Slack link or a sentence above.
         </p>
       )}
       {rows.length > 0 && (
@@ -75,7 +76,7 @@ export function ReviewPage() {
             <thead>
               <tr>
                 <th className="w-6" aria-label="state" />
-                <th>PR</th>
+                <th>PR / MR</th>
                 <th>project</th>
                 <th>started</th>
                 <th>took</th>

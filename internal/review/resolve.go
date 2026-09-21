@@ -18,20 +18,21 @@ import (
 	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
-// What the user pastes is not always a PR URL: it can be a sentence ("pr 555
-// in the mobile repo") or a Slack link to a message asking for a review. The
-// resolution runs in steps, cheapest first:
+// What the user pastes is not always the URL of a pull or merge request: it
+// can be a sentence ("pr 555 in the mobile repo") or a Slack link to a
+// message asking for a review. The resolution runs in steps, cheapest first:
 //
-//  1. a GitHub PR URL anywhere in the text wins;
+//  1. a GitHub PR or GitLab MR URL anywhere in the text wins (the earliest
+//     one);
 //  2. a Slack permalink is read through the user's Slack MCP server (the
 //     servers registered in ~/.claude.json, tried in parallel - the first
-//     that returns the message wins), and a PR URL in that message wins;
+//     that returns the message wins), and such a URL in that message wins;
 //  3. otherwise a one-turn, tool-less haiku maps the text (+ the Slack
-//     message) to one of the projects' GitHub repositories and a PR number;
+//     message) to one of the projects' repositories and a number;
 //
-// and whatever came out is confirmed with `gh pr view` before a review
-// starts, so a wrong guess is a 400 naming the PR, not a 20-minute review of
-// nothing.
+// and whatever came out is confirmed with `gh pr view` / `glab mr view`
+// before a review starts, so a wrong guess is a 400 naming the change, not a
+// 20-minute review of nothing.
 
 // ResolveModel is the model that reads a free-text request.
 const ResolveModel = "haiku"
@@ -39,18 +40,6 @@ const ResolveModel = "haiku"
 // ResolveTimeout caps the whole resolution (Slack server start, the model,
 // gh) inside the POST.
 const ResolveTimeout = 2 * time.Minute
-
-var prURLAnywhere = regexp.MustCompile(`https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/(\d+)`)
-
-// findPRURL returns the first GitHub PR URL in text.
-func findPRURL(text string) (PR, bool) {
-	m := prURLAnywhere.FindStringSubmatch(text)
-	if m == nil {
-		return PR{}, false
-	}
-	n, _ := strconv.Atoi(m[3])
-	return PR{Owner: m[1], Repo: strings.TrimSuffix(m[2], ".git"), Number: n}, true
-}
 
 // SlackLink is a parsed Slack message permalink.
 type SlackLink struct {
@@ -79,16 +68,22 @@ func findSlackLink(text string) (SlackLink, bool) {
 	return l, true
 }
 
-// candidate is a project whose checkout is a GitHub repository.
+// candidate is a project whose checkout is a repository on a host pm knows.
 type candidate struct {
 	Slug string
-	Repo string // owner/repo, as spelled in the repo field or the remote
+	Host *Host
+	Path string // the project path on that host, lower case
 	Proj *storage.Project
 }
 
+// Key is how a candidate is listed to the model and matched against its
+// answer: the host's domain and the project path, so two repositories of the
+// same name on different hosts stay apart.
+func (c candidate) Key() string { return c.Host.Domain + "/" + c.Path }
+
 // candidates lists the active projects with an existing checkout of a
-// GitHub repository, in slug order: the repo field when it names one, else
-// the checkout's first github.com remote.
+// repository on a host pm knows, in slug order: the repo field when it names
+// one, else the checkout's first remote on such a host.
 func (c *Controller) candidates() ([]candidate, error) {
 	slugs, err := c.Store.ListActiveProjects()
 	if err != nil {
@@ -104,37 +99,38 @@ func (c *Controller) candidates() ([]candidate, error) {
 		if fi, err := os.Stat(p.Path); err != nil || !fi.IsDir() {
 			continue
 		}
-		repo := repoSlug(p.Repo)
-		if repo == "" {
+		host, path := splitRepo(p.Repo)
+		if host == nil {
 			if out, err := exec.Command("git", "-C", p.Path, "remote", "-v").Output(); err == nil {
 				for _, f := range strings.Fields(string(out)) {
-					if repo = repoSlug(f); repo != "" {
+					if host, path = splitRepo(f); host != nil {
 						break
 					}
 				}
 			}
 		}
-		if repo != "" {
-			out = append(out, candidate{Slug: s, Repo: repo, Proj: p})
+		if host != nil {
+			out = append(out, candidate{Slug: s, Host: host, Path: path, Proj: p})
 		}
 	}
 	return out, nil
 }
 
-// Resolution is what Resolve found: the PR, and the Slack message it came
-// from when the input was a Slack link (the server that read it is the one
-// that reacts to it after an approve).
+// Resolution is what Resolve found: the change request, and the Slack
+// message it came from when the input was a Slack link (the server that read
+// it is the one that reacts to it after an approve).
 type Resolution struct {
 	PR        PR
 	Slack     *SlackLink
 	SlackText string
 }
 
-// Resolve turns the pasted input into a PR (see the steps above).
+// Resolve turns the pasted input into one change request (see the steps
+// above).
 func (c *Controller) Resolve(ctx context.Context, input string) (Resolution, error) {
 	text := strings.TrimSpace(input)
 	if text == "" {
-		return Resolution{}, &InputError{Msg: "paste a PR URL, a Slack link or a sentence naming the PR"}
+		return Resolution{}, &InputError{Msg: "paste a pull request or merge request URL, a Slack link or a sentence naming it"}
 	}
 	var res Resolution
 	request := text
@@ -145,13 +141,13 @@ func (c *Controller) Resolve(ctx context.Context, input string) (Resolution, err
 		}
 		link.Server = server
 		res.Slack, res.SlackText = &link, msg
-		if pr, ok := findPRURL(msg); ok {
+		if pr, ok := findChange(msg); ok {
 			res.PR = pr
 			return res, nil
 		}
 		request = text + "\n\nThe linked Slack message (and its thread):\n" + msg
 	}
-	if pr, ok := findPRURL(text); ok {
+	if pr, ok := findChange(text); ok {
 		res.PR = pr
 		return res, nil
 	}
@@ -160,7 +156,7 @@ func (c *Controller) Resolve(ctx context.Context, input string) (Resolution, err
 		return res, err
 	}
 	if len(cands) == 0 {
-		return res, &InputError{Msg: "no pm project checks out a GitHub repository"}
+		return res, &InputError{Msg: "no pm project checks out a GitHub or GitLab repository"}
 	}
 	answer, err := c.askModel(ctx, resolvePrompt(request, cands))
 	if err != nil {
@@ -172,15 +168,15 @@ func (c *Controller) Resolve(ctx context.Context, input string) (Resolution, err
 
 func resolvePrompt(request string, cands []candidate) string {
 	var b strings.Builder
-	b.WriteString("You map a request for a code review to exactly one GitHub pull request.\n\n")
-	b.WriteString("Repositories checked out locally (owner/repo - project name - group - stack - tags):\n")
+	b.WriteString("You map a request for a code review to exactly one GitHub pull request or GitLab merge request.\n\n")
+	b.WriteString("Repositories checked out locally (repository - project name - group - stack - tags):\n")
 	for _, c := range cands {
-		fmt.Fprintf(&b, "- %s - %s - %s - %s - %s\n", c.Repo, c.Proj.Name, c.Proj.GroupSlug(c.Slug), c.Proj.Stack, strings.Join(c.Proj.Tags, ", "))
+		fmt.Fprintf(&b, "- %s - %s - %s - %s - %s\n", c.Key(), c.Proj.Name, c.Proj.GroupSlug(c.Slug), c.Proj.Stack, strings.Join(c.Proj.Tags, ", "))
 	}
-	b.WriteString("\nRequest (may be in any language, and may name a repo by its project name, its group or its stack rather than by owner/repo):\n")
+	b.WriteString("\nRequest (may be in any language, and may name a repo by its project name, its group or its stack rather than by its path):\n")
 	b.WriteString(request)
-	b.WriteString("\n\nAnswer with ONE line of JSON and nothing else: {\"repo\":\"owner/repo\",\"number\":123} with a repo from the list above, " +
-		"or {\"error\":\"<one sentence why>\"} when the request names no PR number or no listed repository fits.\n")
+	b.WriteString("\n\nAnswer with ONE line of JSON and nothing else: {\"repo\":\"<repository exactly as listed above>\",\"number\":123}, " +
+		"or {\"error\":\"<one sentence why>\"} when the request names no number or no listed repository fits.\n")
 	return b.String()
 }
 
@@ -203,9 +199,10 @@ func parseResolveAnswer(answer string, cands []candidate) (PR, error) {
 		return PR{}, &InputError{Msg: "could not tell which PR is meant: " + got.Error}
 	}
 	for _, c := range cands {
-		if strings.EqualFold(c.Repo, got.Repo) && got.Number > 0 {
-			parts := strings.SplitN(c.Repo, "/", 2)
-			return PR{Owner: parts[0], Repo: parts[1], Number: got.Number}, nil
+		// The model is asked for the listed spelling (host domain + path) but
+		// often answers with the path alone; both name one candidate.
+		if (strings.EqualFold(c.Key(), got.Repo) || strings.EqualFold(c.Path, got.Repo)) && got.Number > 0 {
+			return PR{Host: c.Host, Path: c.Path, Number: got.Number}, nil
 		}
 	}
 	return PR{}, &InputError{Msg: fmt.Sprintf("could not tell which PR is meant (got %q #%d, not a checked-out repository)", got.Repo, got.Number)}
@@ -290,31 +287,63 @@ func callSlack(ctx context.Context, server string, env []string, tool string, ar
 	return s.CallText(ctx, tool, args)
 }
 
-// viewPR confirms the PR exists and returns its title.
+// viewPR confirms the change exists and returns its title, through the CLI
+// of its host.
 func (c *Controller) viewPR(ctx context.Context, proj *storage.Project, pr PR) (string, error) {
 	if c.ViewPR != nil {
 		return c.ViewPR(ctx, proj, pr)
 	}
-	gh := c.GH
-	if gh == "" {
-		gh = "gh"
-	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, gh, "pr", "view", strconv.Itoa(pr.Number), "--repo", pr.Slug(), "--json", "title", "--jq", ".title")
-	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1", "GH_PAGER=")
-	if proj.GHAccount != "" {
-		tok, err := c.ghToken(proj.GHAccount)
-		if err != nil {
-			return "", fmt.Errorf("gh_account %s: %w", proj.GHAccount, err)
-		}
-		cmd.Env = append(withoutKey(cmd.Env, "GH_TOKEN"), "GH_TOKEN="+tok)
+	cmd, err := c.hostCmd(ctx, proj, pr, "view")
+	if err != nil {
+		return "", err
 	}
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return "", &InputError{Msg: fmt.Sprintf("%s#%d: gh pr view failed: %s", pr.Slug(), pr.Number, firstLines(stderr.String()+" "+err.Error(), 1))}
+		return "", &InputError{Msg: fmt.Sprintf("%s: %s failed: %s", pr.Text(), strings.Join(cmd.Args[:3], " "), firstLines(stderr.String()+" "+err.Error(), 1))}
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// hostCmd builds the one read ("view", the title) or the one write
+// ("approve") pm itself runs against a host, under the project's account.
+func (c *Controller) hostCmd(ctx context.Context, proj *storage.Project, pr PR, action string) (*exec.Cmd, error) {
+	n := strconv.Itoa(pr.Number)
+	var cmd *exec.Cmd
+	if pr.Host == GitLab {
+		glab := c.Glab
+		if glab == "" {
+			glab = "glab"
+		}
+		args := []string{"mr", "approve", n, "-R", pr.Path}
+		if action == "view" {
+			args = []string{"mr", "view", n, "-R", pr.Path, "-F", "json", "--jq", ".title"}
+		}
+		cmd = exec.CommandContext(ctx, glab, args...)
+		// glab reads the user's own login (keyring or GITLAB_TOKEN); there is
+		// no `glab auth token` to pin an account with, the way gh_account does.
+		cmd.Env = append(os.Environ(), "NO_COLOR=1")
+		return cmd, nil
+	}
+	gh := c.GH
+	if gh == "" {
+		gh = "gh"
+	}
+	args := []string{"pr", "review", n, "--repo", pr.Path, "--approve"}
+	if action == "view" {
+		args = []string{"pr", "view", n, "--repo", pr.Path, "--json", "title", "--jq", ".title"}
+	}
+	cmd = exec.CommandContext(ctx, gh, args...)
+	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1", "GH_PAGER=")
+	if proj.GHAccount != "" {
+		tok, err := c.ghToken(proj.GHAccount)
+		if err != nil {
+			return nil, fmt.Errorf("gh_account %s: %w", proj.GHAccount, err)
+		}
+		cmd.Env = append(withoutKey(cmd.Env, "GH_TOKEN"), "GH_TOKEN="+tok)
+	}
+	return cmd, nil
 }

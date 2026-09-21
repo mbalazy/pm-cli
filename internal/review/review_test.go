@@ -113,8 +113,11 @@ func TestParseURL(t *testing.T) {
 		{"https://github.com/orbit-org/app.orbit/pull/1003/changes", "orbit-org/app.orbit#1003", true},
 		{"https://github.com/o/r/pull/7", "o/r#7", true},
 		{" https://github.com/o/r/pull/7/files?diff=split ", "o/r#7", true},
+		{"https://gitlab.com/acme-group/lending/acme-web/-/merge_requests/43", "acme-group/lending/acme-web!43", true},
+		{"https://gitlab.com/acme-group/acme-web/-/merge_requests/7/diffs", "acme-group/acme-web!7", true},
 		{"https://github.com/o/r/issues/7", "", false},
 		{"https://gitlab.com/o/r/pull/7", "", false},
+		{"https://gitlab.com/acme-web/-/merge_requests/7", "", false},
 		{"o/r#7", "", false},
 	} {
 		pr, err := ParseURL(tc.in)
@@ -123,7 +126,7 @@ func TestParseURL(t *testing.T) {
 			continue
 		}
 		if tc.ok {
-			if got := fmt.Sprintf("%s#%d", pr.Slug(), pr.Number); got != tc.want {
+			if got := pr.Text(); got != tc.want {
 				t.Errorf("%q = %s", tc.in, got)
 			}
 		}
@@ -157,10 +160,14 @@ func TestStartRunsTheReviewInAWorktree(t *testing.T) {
 		t.Errorf("cwd/config dir/files = %q", lines[:3])
 	}
 	argv := strings.Join(lines[3:], "\n")
-	for _, want := range []string{"-p\n/review https://github.com/org/app/pull/7\n", "Bash(gh pr diff:*)", "--permission-mode\ndontAsk\n", "--disallowedTools\nEdit\n", "Bash(git checkout:*)"} {
+	for _, want := range []string{"-p\n/review https://github.com/org/app/pull/7\n", "Bash(gh pr diff:*)", "--permission-mode\ndontAsk\n", "--disallowedTools\nEdit\n", "Bash(git checkout:*)", "Bash(glab mr note:*)"} {
 		if !strings.Contains(argv, want) {
 			t.Errorf("argv lacks %q: %s", want, argv)
 		}
+	}
+	// A GitHub review is told nothing extra and holds no other host's reads.
+	if strings.Contains(argv, "Bash(glab mr view:*)") || strings.Contains(argv, "gh cannot see it") {
+		t.Errorf("a GitHub review carries GitLab tooling: %s", argv)
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for fileExists(r.Worktree) {
@@ -180,12 +187,17 @@ func TestStartRunsTheReviewInAWorktree(t *testing.T) {
 
 func TestMatchByGitRemote(t *testing.T) {
 	c, _, _ := setup(t)
-	slug, _, err := c.Match(PR{Owner: "Org", Repo: "Other", Number: 1})
+	slug, _, err := c.Match(PR{Host: GitHub, Path: "Org/Other", Number: 1})
 	if err != nil || slug != "other" {
 		t.Fatalf("match = %q %v", slug, err)
 	}
 	if _, err := c.Start(bg, "https://github.com/nobody/nothing/pull/1"); err == nil || !strings.Contains(err.Error(), "no pm project checks out nobody/nothing") {
 		t.Errorf("unknown repo err = %v", err)
+	}
+	// The same path on the other host is a different repository.
+	if _, err := c.Start(bg, "https://gitlab.com/Org/Other/-/merge_requests/1"); err == nil ||
+		!strings.Contains(err.Error(), "set `repo: https://gitlab.com/Org/Other`") {
+		t.Errorf("host is part of the match: %v", err)
 	}
 	if _, err := c.Start(bg, "not a url"); err == nil {
 		t.Error("a bad URL must fail")
@@ -219,4 +231,102 @@ func TestFailedAndCancelledReviews(t *testing.T) {
 	if _, err := c.Get("../../config"); err != ErrNotFound {
 		t.Errorf("traversal id = %v", err)
 	}
+}
+
+// gitlabProject adds a project whose checkout is a GitLab repository under a
+// nested group, with an origin that serves merge request 43's head at the
+// ref GitLab publishes it on. The checkout's own HEAD is one commit behind
+// it, so a review that ends up at the MR head cannot have fallen back to it.
+func gitlabProject(t *testing.T, c *Controller) (checkout, mrHead string) {
+	t.Helper()
+	checkout, origin := t.TempDir(), t.TempDir()
+	gitCommit(t, checkout)
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git(origin, "init", "-q", "--bare")
+	git(checkout, "remote", "add", "origin", origin)
+	git(checkout, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "the merge request")
+	mrHead = git(checkout, "rev-parse", "HEAD")
+	git(checkout, "push", "-q", "origin", "HEAD:refs/merge-requests/43/head")
+	git(checkout, "reset", "--hard", "-q", "HEAD~1")
+	store := c.Store.(*storage.Store)
+	if err := store.CreateProject("web", &storage.Project{
+		Name: "web", Prefix: "web", Path: checkout,
+		Repo: "https://gitlab.com/acme-group/lending/acme-web",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return checkout, mrHead
+}
+
+// A GitLab merge request is reviewed like a PR - same worktree, same report -
+// but from the MR's own ref, with glab's read-only commands in place of gh's
+// and a line telling the reviewer so.
+func TestStartAGitLabMergeRequest(t *testing.T) {
+	c, _, argvFile := setup(t)
+	checkout, mrHead := gitlabProject(t, c)
+	r, err := c.Start(bg, "https://gitlab.com/acme-group/lending/acme-web/-/merge_requests/43/diffs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Project != "web" || r.Host != HostGitLab || r.Dir != checkout ||
+		r.URL != "https://gitlab.com/acme-group/lending/acme-web/-/merge_requests/43" ||
+		r.Repo != "acme-group/lending/acme-web" || r.Number != 43 {
+		t.Fatalf("started = %+v", r)
+	}
+	if !strings.HasPrefix(r.Commit, mrHead[:12]) || !strings.Contains(r.Commit, "(merge request head)") {
+		t.Errorf("commit = %q, want the MR head %s", r.Commit, mrHead[:12])
+	}
+	done := waitState(t, c, r.ID, StateDone)
+	if !strings.Contains(done.Report, "No issues found.") {
+		t.Errorf("done = %+v", done)
+	}
+	argv := strings.Join(strings.Split(mustRead(t, argvFile), "\n")[3:], "\n")
+	for _, want := range []string{
+		"/review https://gitlab.com/acme-group/lending/acme-web/-/merge_requests/43\n",
+		"glab mr view 43 -R acme-group/lending/acme-web", "gh` cannot see it",
+		"Bash(glab mr diff:*)", "Bash(glab mr note:*)", "Bash(gh pr review:*)", "Bash(git checkout:*)",
+	} {
+		if !strings.Contains(argv, want) {
+			t.Errorf("argv lacks %q: %s", want, argv)
+		}
+	}
+	if strings.Contains(argv, "Bash(gh pr diff:*)") {
+		t.Errorf("a GitLab review carries gh reads: %s", argv)
+	}
+}
+
+// A stored review whose host field predates GitLab support reads as GitHub,
+// and every host's writing commands are denied whichever host is reviewed.
+func TestHostDefaultsAndToolLists(t *testing.T) {
+	if HostByName("").Name != HostGitHub || HostByName("bitbucket").Name != HostGitHub || HostByName(HostGitLab) != GitLab {
+		t.Fatalf("host lookup = %+v", HostByName(""))
+	}
+	for _, h := range hosts {
+		denied := strings.Join(h.DisallowedTools(), " ")
+		for _, want := range []string{"Bash(gh pr review:*)", "Bash(glab mr approve:*)", "Bash(git push:*)", "Edit"} {
+			if !strings.Contains(denied, want) {
+				t.Errorf("%s denies not %q", h.Name, want)
+			}
+		}
+		allowed := strings.Join(h.AllowedTools(), " ")
+		if strings.Contains(allowed, "Edit") || !strings.Contains(allowed, "Bash("+h.CLI+" ") {
+			t.Errorf("%s allows %q", h.Name, allowed)
+		}
+	}
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
