@@ -10,6 +10,7 @@ One file per surface, each readable cold. The README is the two-minute landing p
 - [board.md](board.md) - the TUI: views, every key, overlays, the launch menu and what each launch actually runs.
 - [cockpit.md](cockpit.md) - `pm serve` and the web cockpit: first how to use it (screens, keys, the API routes, what the API writes, the security stance), then the design record screen by screen.
 - [journals-and-timeline.md](journals-and-timeline.md) - the two per-project records: a journal of one troublesome subsystem, and the timeline of what happened to the project with its provenance-marked state snapshots.
+- [solo-and-batch.md](solo-and-batch.md) - working while nobody watches: a solo shift (one Claude Code background session on a queue, launched from the cockpit, its state and report read back from `.shift/`) and a batch (`pm run-epic` in independent mode, then `pm finish`), each as a recipe; the two skills the runs follow are not in this repository.
 - [executor.md](executor.md) - the executor: first the manual for `pm work`, `pm run-epic` and `pm finish`, then their internals - worktree slots, the review policy and the hook that enforces it, run state and journal, kill and crash forensics, acceptance claims, the verification baseline.
 
 **Written for the agent** (embedded in the binary, printed by `pm docs`)

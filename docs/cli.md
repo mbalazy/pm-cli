@@ -103,7 +103,7 @@ Print the session-start rollup an agent reads: every tracker with its children's
 
 ### pm today
 
-Print the attention queue, the cockpit's home screen as text: the sections in a fixed order (`needs_me`, `landed_no_pr`, `focus`, `in_progress`, `waiting`, `changes`, `stuck_projects`, plus the opt-in `new_since_cutoff` and `recent`), one line per row with the reason and the age. Thresholds come from the `cockpit:` block of the global config.
+Print the attention queue, the cockpit's home screen as text: the sections in a fixed order (`needs_me`, `solo_reports`, `landed_no_pr`, `focus`, `in_progress`, `waiting`, `changes`, `stuck_projects`, plus the opt-in `new_since_cutoff` and `recent`; `needs_me`, `landed_no_pr` and `in_progress` only with `cockpit.show_executor` on), one line per row with the reason and the age. Thresholds come from the `cockpit:` block of the global config.
 
 | flag | default | meaning |
 |---|---|---|
@@ -196,7 +196,7 @@ Entries newest first across every month.
 
 ## Agents
 
-The executor commands are documented end to end in [executor.md](executor.md); this section lists the flags. Each of `work`, `run-epic` and `finish` prints its result envelope as JSON on stdout, without a flag.
+The executor commands are documented end to end in [executor.md](executor.md); this section lists the flags. Each of `work`, `run-epic` and `finish` prints its result envelope as JSON on stdout, without a flag. Solo has no command of its own: a shift is launched from the cockpit's Runs screen and read back through `pm today` and the cockpit, see [solo-and-batch.md](solo-and-batch.md).
 
 ### pm work [project] <task-id>
 

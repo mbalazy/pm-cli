@@ -1,9 +1,11 @@
 # Executor internals (`pm work` / `pm run-epic` / `pm finish`)
 
-The executor is one of pm's two unattended modes. It runs one task, or a whole
+The executor is one of the two ways pm works while nobody watches. It runs one task, or a whole
 epic's subtasks, through headless `claude -p` workers. The other mode is a
-long-lived solo session, launched from the cockpit ([cockpit.md](cockpit.md),
-"Solo launch"), and since 2026-09-09 solo is the current path: the cockpit hides
+long-lived solo session, launched from the cockpit (the manual for it, and the
+batch recipe, is [solo-and-batch.md](solo-and-batch.md); the design record is
+[cockpit.md](cockpit.md), "Solo launch"), and since 2026-09-09 solo is the
+current path: the cockpit hides
 executor runs unless `cockpit.show_executor` is turned on (the code calls the
 executor frozen in favour of solo). Everything below still runs from the CLI and
 the board. **Running it** is the manual: commands, flags, modes. **Overview** and
