@@ -1,10 +1,14 @@
 # Executor internals (`pm work` / `pm run-epic` / `pm finish`)
 
-The executor is one of pm's two unattended modes - the other is a long-lived solo
-session, and the README introduces both. It runs one task, or a whole epic's
-subtasks, through headless `claude -p` workers. **Running it** below is the
-manual: commands, flags, modes. **Overview** and the sections after it are how it
-works inside, in the words each rule was written in when it was decided.
+The executor is one of pm's two unattended modes. It runs one task, or a whole
+epic's subtasks, through headless `claude -p` workers. The other mode is a
+long-lived solo session, launched from the cockpit ([cockpit.md](cockpit.md),
+"Solo launch"), and since 2026-09-09 solo is the current path: the cockpit hides
+executor runs unless `cockpit.show_executor` is turned on (the code calls the
+executor frozen in favour of solo). Everything below still runs from the CLI and
+the board. **Running it** is the manual: commands, flags, modes. **Overview** and
+the sections after it are how it works inside, in the words each rule was
+written in when it was decided.
 
 ## Running it
 
@@ -23,7 +27,7 @@ Two commands do the work:
 
 ### `pm work [project] <task>` - the atom
 
-Spawns one fresh worker in the project directory (so the project's own CLAUDE.md, skills and MCP servers load by cwd). The worker runs the inner loop - **implement → test → adversarial review → fix → verify** - and returns a schema-validated JSON contract: `{status, summary, branch, commits, unresolved}`. Standalone runs end with a draft PR; `--dry-run` prints the full prompt and argv without spending a token.
+Spawns one fresh worker in the project directory (so the project's own CLAUDE.md, skills and MCP servers load by cwd). The worker runs the inner loop - **implement → test → adversarial review → fix → verify** - and returns a schema-validated JSON contract: `{status, summary, branch, commits, unresolved}`. Standalone runs end with a draft PR; `--epic` is the form the manager calls it in (commit on the current branch, no per-sub PR); `--dry-run` prints the full prompt and argv without spending a token. Every flag of every executor command is tabled in [cli.md](cli.md).
 
 ### `pm run-epic [project] <tracker>` - the manager
 

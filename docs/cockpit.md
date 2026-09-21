@@ -1,10 +1,69 @@
 # The cockpit
 
-`pm serve` is the HTTP face of pm: a JSON API, a change feed and a React app. The rules an agent editing it must obey stay in `CLAUDE.md`; this file is the design record of what was built, screen by screen. The `pm-cli-118-15` ids are this repo's own convention for a task; where [design-log.md](design-log.md) has an entry under the same id, it carries the reasoning.
+`pm serve` is the HTTP face of pm: a JSON API, a change feed and a React app. **Using it** below is the current state - screens, keys, routes, what the API writes. The sections after it are the design record of what was built, screen by screen, each in the words of the task that built it; a later entry supersedes an earlier one, so where an early entry says a button is "disabled until X lands", the entry for X is where it went live. The rules an agent editing it must obey stay in `CLAUDE.md`. The `pm-cli-118-15` ids are this repo's own convention for a task; where [design-log.md](design-log.md) has an entry under the same id, it carries the reasoning.
+
+## Using it
+
+```sh
+pm serve --addr 127.0.0.1:7070
+```
+
+The front end is a Node build, so it is in the binary only after `make install-full` from a clone; a `go install` binary serves the API and a placeholder page that says so. The change feed's scheduler runs `git` and `gh` in the projects' checkouts every `cockpit.refresh.every` inside `cockpit.refresh.window`; its cache lives under `<pm data dir>/.cockpit/`.
+
+**Security: there is none.** No auth, no TLS, and the API is not read-only: its POST routes edit tasks, focus and settings, start and kill runs, launch sessions and can spend tokens. The only guard is the `X-PM-Client: cockpit` header every POST must carry, which stops a stray cross-site form, not a person. Bind it to localhost and reach it over a tunnel you trust (Tailscale, ssh).
+
+**Screens** (`web/src/routes/router.tsx`):
+
+| route | screen |
+|---|---|
+| `/` `?g=<group>` | Today: the attention queue, group chips, refresh, dismiss / restore per section |
+| `/g/$group` `?tab=&repo=` | one group: overview (where we left off, doing list, trackers), board, runs, changes |
+| `/p/$slug` | a project: alias to its group's board tab |
+| `/p/$slug/t/$id` | one task: Spec / Log, status select, brief and `waiting_for` edits |
+| `/runs` | solo shifts first, with the solo launch form; the executor runs table only when `cockpit.show_executor` is on; "fetch remote" is an explicit button |
+| `/changes` `?g=` | the change feed with source chips, mark seen, and the LLM report panel |
+| `/review`, `/review/$id` | PR code review: start from a PR URL, a Slack message or a sentence; the report, cancel, one-click approve |
+| `/solo/$project/$shift` | a solo shift's report as a digest, mark read |
+| `/settings` | the `cockpit:` block as a form, plus per-project group / Slack mapping / asleep |
+
+**Keys** (`web/src/lib/shortcuts.ts`): `1` Today, `2` Changes, `3` Runs, `4` Review, `,` Settings; `j`/`k`/`Enter` walk rows; `t` toggles focus on the selected task; `g` then a letter filters by group; `[`/`]` switch tabs; `Esc` closes; `?` help; `Cmd/Ctrl+K` the palette.
+
+**Row actions** are the closed `actions` set the API puts on every attention row; the UI words them and never invents one (`web/src/lib/rowActions.ts`). Live: `open`, `claim`, `rerun_finish`, `resume_run`, `kill`, `release_claim`, `dismiss`, `open_report`, `focus_toggle`, `set_waiting_for`, `back_to_todo`, `mark_seen`, `sleep_project`. Still pending: `report` (no acceptance-report view yet) and `open_pr` (needs the task's PR link). Every action but `dismiss` goes through a confirm dialog.
+
+**API** (`internal/server/server.go`; every route is method-qualified, an unknown `/api/*` path is a JSON 404, errors are `{"error": "..."}` with 400 for a validation or ambiguity error, 404 for an unknown task or project, 409 for a busy claim or a stale run, 500 otherwise):
+
+| GET | |
+|---|---|
+| `/api/projects`, `/api/groups`, `/api/config` | projects with counts; groups; the resolved `cockpit:` block |
+| `/api/tasks`, `/api/tasks/{project}/{id}`, `/api/context` | the `pm_list_tasks` / `pm_get_task` / `pm_context` shapes |
+| `/api/timeline/{project}` | the timeline default read with its verification block |
+| `/api/attention` `?project=` `?group=` | the queue, `pm today --json` byte for byte |
+| `/api/runs` `?remote=1`, `/api/runs/{project}/{id}/plan` | run rows (remote only on request), the argv a launch would run |
+| `/api/focus`, `/api/changes`, `/api/report` | today's plan; the feed; the LLM report state |
+| `/api/reviews`, `/api/reviews/{id}` | PR reviews |
+| `/api/solo`, `/api/solo/plan`, `/api/solo/{id}`, `/api/solo/{project}/{shift}/report` | shifts, the launch preview, one shift, its report digest |
+| `/api/events` | SSE: `tasks {project}`, `runs {project}`, `changes {sources}`, `report`, `settings`, `ping` - what changed, never what to do; the page refetches |
+
+| POST (needs `X-PM-Client: cockpit`) | |
+|---|---|
+| `/api/tasks/{project}/{id}` | status, brief, `waiting_for` |
+| `/api/focus/toggle` | add / remove a task on today's plan |
+| `/api/projects/{slug}` | group, Slack mapping, `archived` |
+| `/api/settings` | the `cockpit:` block, written back with comments kept |
+| `/api/runs/{project}/{id}/{action}` `?yolo=&additional=` | `claim`, `release_claim`, `rerun_finish`, `resume_run`, `kill` through `internal/runctl` |
+| `/api/changes/refresh`, `/api/changes/seen` | refresh the feed now; mark rows seen |
+| `/api/report`, `/api/report/dismiss` | write the LLM report (spends tokens); dismiss its suggestion |
+| `/api/reviews`, `/api/reviews/{id}/cancel`, `/api/reviews/{id}/approve` | start, cancel, approve a PR review |
+| `/api/solo`, `/api/solo/{id}/stop` | launch a solo shift (`claude --bg`, Claude Code 2.1.272 or newer), stop one |
+| `/api/attention/dismiss`, `/api/attention/restore` | hide rows of `needs_me` / `solo_reports` / `landed_no_pr`; bring them back |
+
+The SSE poll fingerprints directory metadata only (names, sizes, mtimes of `*.md`, `project.yaml`, `.timeline/*.jsonl`, `.executor/*.json` and `*.claim`) every 2 s, pings every 15 s. The remote-runs ssh fetch is injected from `internal/cmd` and never runs unless asked.
+
+## The design record
 
 ## Today and the group sidebar
 
-**Today + the group sidebar (pm-cli-118-15)**: `/` is the Today screen over `/api/attention` (`routes/TodayPage.tsx`), `?g=<group>` narrows every section to one group through the API's own `?group=` (the filter lives in the URL so a phone bookmark carries it; `indexRoute.validateSearch` + `lib/groupFilter`); the old project list is no longer `/`, its content lives on under `/p/$slug`. Sections render EXACTLY the ones the API returns, in its order - the UI knows their wording (`lib/attentionView` `sectionMeta`: title, one "how it is counted" line, the empty-state sentence) and a view cap (`SECTION_CAP` 7 + "show all", `capSection`; the API's own truncation, e.g. the changes digest, is reported as "+N more on this section's screen"), never their membership. A row (`components/AttentionRow`) is glyph + project chip + id/title + the API's `reason` + age (`lib/ageLabel`: `age_seconds` null renders "since ?", never another stamp) + one button per entry of the row's `actions` - `lib/rowActions` words each action and says which sub enables it (`open` works, `open_pr`/`report` wait for a link/endpoint, the rest are disabled with the sub id as the title until 118-16/118-21 land). Glyphs are text, never colour alone (`lib/glyphs`: severity ✗▲●○, the waiting/stuck sections override with ⧗/◔; the sidebar's counter columns ✗👁⧗◔). The sidebar (`components/GroupSidebar`) reads the `groups` summary of the unscoped attention query and the `cockpit.sidebar` block of `/api/config` through `lib/sidebarView`: `columns` (default: glyph, name, four counters with zeros as dots, member repos under a multi-repo group when `show_repos`), `plain` (no counters), `rail` (glyphs only, names in tooltips), `width` in px; `sort` `worst` = the API's order, `last_activity` sorted in lib, `manual` FALLS BACK to the API order (JSON object keys carry no order - an explicit order field on the config endpoint is what would enable it); asleep projects are one "asleep (N)" line. A group link opens its first repo's board until the group page (118-17) exists (`groupTarget`). On a phone the sidebar is a chip strip over the content (the drawer is gone). Keys: `1/2/3/,` switch screens (`/`, `/changes`, `/runs`, `/settings` - the two 118-18 screens are placeholder routes so the keys already lead somewhere), `j/k/Enter` walk the home rows, `t` is registered for focus (wired in 118-16), `g <letter>` is a chord filtering by group (`groupHotkeys` assigns one letter per group, `useShortcuts` arms it for 1.5 s). New query key: `['config']`. Tests: `lib/*.test.ts` per rule, `shell.test.tsx` home over a fake `/api/attention` (order, empty sentence, cap/elsewhere, actions, `?g=` narrowing via the exact-URL fake route, the chord, `1/3`, `j/k/Enter`, the three sidebar variants + `last_activity`).
+**Today + the group sidebar (pm-cli-118-15)**: `/` is the Today screen over `/api/attention` (`routes/TodayPage.tsx`), `?g=<group>` narrows every section to one group through the API's own `?group=` (the filter lives in the URL so a phone bookmark carries it; `indexRoute.validateSearch` + `lib/groupFilter`); the old project list is no longer `/`, its content lives on under `/p/$slug`. Sections render EXACTLY the ones the API returns, in its order - the UI knows their wording (`lib/attentionView` `sectionMeta`: title, one "how it is counted" line, the empty-state sentence) and a view cap (`SECTION_CAP` 7 + "show all", `capSection`; the API's own truncation, e.g. the changes digest, is reported as "+N more on this section's screen"), never their membership. A row (`components/AttentionRow`) is glyph + project chip + id/title + the API's `reason` + age (`lib/ageLabel`: `age_seconds` null renders "since ?", never another stamp) + one button per entry of the row's `actions` - `lib/rowActions` words each action and says which sub enables it (`open` works, `open_pr`/`report` wait for a link/endpoint, the rest are disabled with the sub id as the title until 118-16/118-21 land - they did, and every action but `report` and `open_pr` is live now, see Using it). Glyphs are text, never colour alone (`lib/glyphs`: severity ✗▲●○, the waiting/stuck sections override with ⧗/◔; the sidebar's counter columns ✗👁⧗◔). The sidebar (`components/GroupSidebar`) reads the `groups` summary of the unscoped attention query and the `cockpit.sidebar` block of `/api/config` through `lib/sidebarView`: `columns` (default: glyph, name, four counters with zeros as dots, member repos under a multi-repo group when `show_repos`), `plain` (no counters), `rail` (glyphs only, names in tooltips), `width` in px; `sort` `worst` = the API's order, `last_activity` sorted in lib, `manual` FALLS BACK to the API order (JSON object keys carry no order - an explicit order field on the config endpoint is what would enable it); asleep projects are one "asleep (N)" line. A group link opens its first repo's board until the group page (118-17) exists (`groupTarget`). On a phone the sidebar is a chip strip over the content (the drawer is gone). Keys: `1/2/3/,` switch screens (`/`, `/changes`, `/runs`, `/settings` - the two 118-18 screens are placeholder routes so the keys already lead somewhere; `4` = `/review` arrived with the PR review screen), `j/k/Enter` walk the home rows, `t` is registered for focus (wired in 118-16), `g <letter>` is a chord filtering by group (`groupHotkeys` assigns one letter per group, `useShortcuts` arms it for 1.5 s). New query key: `['config']`. Tests: `lib/*.test.ts` per rule, `shell.test.tsx` home over a fake `/api/attention` (order, empty sentence, cap/elsewhere, actions, `?g=` narrowing via the exact-URL fake route, the chord, `1/3`, `j/k/Enter`, the three sidebar variants + `last_activity`).
 
 ## The group page and the Runs screen
 
@@ -58,7 +117,7 @@
 
 ## The shell
 
-**The shell (pm-cli-118-9)**: `/p/$slug` is a LAYOUT route whose Outlet holds the task detail (`/p/$slug/t/$id`) - beside the list from 768 px up, instead of it below; `/runs` is the `pm runs` table with cells worded by `lib/runCells` (a port of `RunCell.String`/`AcceptCell.String` - keep them in step) and an explicit "fetch remote" button on `useRemoteRuns` (key `['runs-remote']`, deliberately NOT under `['runs']`, so a `runs` event can never trigger an ssh round-trip). The Spec/Log split is `lib/splitSpecLog` (the TUI's `bodyToDisplayMarkdown` rule), relative times are `lib/relativeTime` (calendar days in the reader's zone like the TUI, minutes/hours within the day; an empty `status_changed` renders as unknown, never as "just now"), palette matching is `lib/paletteItems` (cmdk's own filter is off), the key map is `lib/shortcuts` (one table drives the listener AND the `?` dialog). `api/useLiveInvalidation` is the one EventSource: a `tasks` event invalidates `['tasks', slug]`, `['task', slug]`, `['context', slug]`, `['projects']` (sidebar counts), `['groups']` and `['attention']`, a `runs` event `['runs']` + `['attention']`, a `changes` event `['changes']` + `['attention']`; `useChanges`/`useRefreshChanges`/`useMarkChangesSeen` (`apiPost` in `client.ts`) are the feed's hooks; reconnects are EventSource's own. PWA = `public/manifest.webmanifest` + generated `icon-192/512.png` (no service worker); the server registers the `.webmanifest` MIME type because Go's table lacks it. Tests: `src/lib/*.test.ts` per function, `src/shell.test.tsx` end to end over a fake `fetch` (detail zones, j/k/Enter/Esc incl. "j while typing does nothing", `?`, ⌘K filter + navigate, runs + fetch remote), `api/useLiveInvalidation.test.tsx` over a fake EventSource. jsdom shims live in `src/test/setup.ts` (`<dialog>` open/close, ResizeObserver for cmdk, scrollIntoView).
+**The shell (pm-cli-118-9)**: `/p/$slug` is a LAYOUT route whose Outlet holds the task detail (`/p/$slug/t/$id`) - beside the list from 768 px up, instead of it below; `/runs` was born as the `pm runs` table (today it leads with solo shifts and the executor table is gated on `show_executor`, see "Solo shifts, dismiss, and hiding the executor") with cells worded by `lib/runCells` (a port of `RunCell.String`/`AcceptCell.String` - keep them in step) and an explicit "fetch remote" button on `useRemoteRuns` (key `['runs-remote']`, deliberately NOT under `['runs']`, so a `runs` event can never trigger an ssh round-trip). The Spec/Log split is `lib/splitSpecLog` (the TUI's `bodyToDisplayMarkdown` rule), relative times are `lib/relativeTime` (calendar days in the reader's zone like the TUI, minutes/hours within the day; an empty `status_changed` renders as unknown, never as "just now"), palette matching is `lib/paletteItems` (cmdk's own filter is off), the key map is `lib/shortcuts` (one table drives the listener AND the `?` dialog). `api/useLiveInvalidation` is the one EventSource: a `tasks` event invalidates `['tasks', slug]`, `['task', slug]`, `['context', slug]`, `['projects']` (sidebar counts), `['groups']` and `['attention']`, a `runs` event `['runs']` + `['attention']`, a `changes` event `['changes']` + `['attention']`; `useChanges`/`useRefreshChanges`/`useMarkChangesSeen` (`apiPost` in `client.ts`) are the feed's hooks; reconnects are EventSource's own. PWA = `public/manifest.webmanifest` + generated `icon-192/512.png` (no service worker); the server registers the `.webmanifest` MIME type because Go's table lacks it. Tests: `src/lib/*.test.ts` per function, `src/shell.test.tsx` end to end over a fake `fetch` (detail zones, j/k/Enter/Esc incl. "j while typing does nothing", `?`, ⌘K filter + navigate, runs + fetch remote), `api/useLiveInvalidation.test.tsx` over a fake EventSource. jsdom shims live in `src/test/setup.ts` (`<dialog>` open/close, ResizeObserver for cmdk, scrollIntoView).
 
 ## The look
 
