@@ -487,6 +487,12 @@ var (
 type heldClaim struct {
 	claim *storage.FinishClaim
 	stop  chan struct{}
+	// released is set by Release under c.mu, and the heartbeat's refresh
+	// runs under that same mutex: closing stop alone cannot stop a tick
+	// that is already past the select, and such a refresh RE-CREATES the
+	// claim file Release just deleted - a released claim coming back to
+	// life for its whole TTL.
+	released bool
 }
 
 // Claim takes the acceptance claim of taskID for the cockpit
@@ -542,9 +548,13 @@ func (c *Controller) heartbeat(key, stateDir, tracker string, h *heldClaim) {
 			return
 		case <-tick.C:
 			c.mu.Lock()
-			claim := h.claim
+			if h.released {
+				c.mu.Unlock()
+				return
+			}
+			err := storage.RefreshFinishClaim(stateDir, tracker, h.claim)
 			c.mu.Unlock()
-			if err := storage.RefreshFinishClaim(stateDir, tracker, claim); err != nil {
+			if err != nil {
 				c.forget(key)
 				return
 			}
@@ -571,6 +581,7 @@ func (c *Controller) Release(project, taskID string) (*ClaimResult, error) {
 	c.mu.Lock()
 	h, ok := c.held[key]
 	if ok {
+		h.released = true
 		close(h.stop)
 		delete(c.held, key)
 	}

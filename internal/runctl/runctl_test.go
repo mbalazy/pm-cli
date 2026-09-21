@@ -357,3 +357,33 @@ func TestClaimAndRelease(t *testing.T) {
 		t.Fatalf("plan warnings = %v", p.Warnings)
 	}
 }
+
+// TestReleasedClaimStaysReleased pins the fix for the heartbeat that
+// resurrected a released claim: closing the stop channel does not interrupt a
+// tick already past the select, so a refresh could land AFTER Release deleted
+// the file and re-create it - leaving the user blocked for the claim's whole
+// TTL. The refresh now runs under the same mutex Release sets `released` in,
+// so the two are serialized. With a 1ms heartbeat the old code loses this
+// within a few ticks.
+func TestReleasedClaimStaysReleased(t *testing.T) {
+	store, projDir := newStore(t)
+	c := newController(t, store, "/bin/false")
+	old := ClaimHeartbeat
+	ClaimHeartbeat = time.Millisecond
+	t.Cleanup(func() { ClaimHeartbeat = old })
+
+	for i := 0; i < 20; i++ {
+		if _, err := c.Claim("test", "t-2"); err != nil {
+			t.Fatalf("claim %d: %v", i, err)
+		}
+		time.Sleep(3 * time.Millisecond) // let the heartbeat tick at least once
+		if _, err := c.Release("test", "t-2"); err != nil {
+			t.Fatalf("release %d: %v", i, err)
+		}
+		// The window the bug lived in: several tick intervals after Release.
+		time.Sleep(5 * time.Millisecond)
+		if cur, _ := storage.ReadFinishClaim(projDir, "t-2"); cur != nil {
+			t.Fatalf("round %d: the heartbeat re-created a released claim: %+v", i, cur)
+		}
+	}
+}
