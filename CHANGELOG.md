@@ -10,6 +10,19 @@ that line's history, with one catch: it does not diff merge commits, and
 There are no git tags, and versions promise each other nothing. The only
 promise is that your task files stay readable, because they are markdown.
 
+## 0.65.0 - 2026-09-21
+
+Eight fixes from the 2026-09-08 batch land. In the executor: a worktree
+slot forks from `origin/<base>` instead of trying to hold a branch the
+main checkout owns, `pm executor stats` reserves a row for aborted subs,
+`run-epic` judges rerun skips by the sub's status rather than the result
+word, `ResolveProject` case-folds candidate directory names, and a
+project whose tasks cannot be read is reported on stderr instead of
+dropped in silence. In the board: Enter toggles a status in the
+column-visibility menu, a failed Codex worktree setup aborts with a toast,
+and a worktree launch saves its session only once setup succeeded. Plus:
+a released acceptance claim no longer comes back from its own heartbeat.
+
 ## 0.64.0 - 2026-09-20
 
 Prepared for a public repository: the module path is now
