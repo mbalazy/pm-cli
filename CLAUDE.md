@@ -6,6 +6,31 @@ Local task tracker. Data: `~/.claude/pm/<project-slug>/`, binary: `pm`.
 A trailing `(history: docs/design-log.md)` points at the reasoning and the measurements the rule came out of.
 The cockpit's per-feature design record is [docs/cockpit.md](docs/cockpit.md), and [docs/README.md](docs/README.md) indexes the rest.
 
+## Nothing here may name a real client, colleague or machine
+
+**This repository is public, and its history was rewritten once to take those names out.** That rewrite was cheap while the repo was private and is not available again: published commits survive in every clone someone made, in GitHub's `refs/pull/*` refs, which the owner cannot delete, and in whatever cached the page. So a name that must not be public never goes in, rather than coming out later.
+
+The rule covers everything you add, not just production code: comments, tests, fixtures, docs, **commit messages and branch names** (`git log` is as public as the tree). Nothing may name a real client, employer, colleague, host, IP, notification topic, ticket board or private shell alias, or carry a path under a real person's home directory. If a comment needs to cite a real run for its measurements, describe it by date and shape ("a 2026-08 epic, 55M tokens"), never by whose it was.
+
+Fixtures reuse the names already in the tree, so one grep finds a convention instead of five:
+
+| for | use | examples in tree |
+|---|---|---|
+| a client or project slug | `acme`, `acme-api`, `acme-zap`, `acme-crm`, `acme-best`, `orbit`, `vega`, `atlas` | `internal/storage/attention_test.go`, `web/src/shell.test.tsx` |
+| a remote machine | `runner` | `internal/cmd/runs_test.go`, `Makefile` (`VPS_HOST`) |
+| a login, reviewer or account | `me-login`, `work-account`, `reviewer-two` | `internal/feed/feed_test.go` |
+| a home path | `/Users/alice`, or `$HOME` | `internal/cmd/sessionid.go` |
+| a host or address | `example.com`, `jira.example.com`, `acme.slack.com`, `t@example.com` | `internal/storage/project_test.go`, `internal/review/resolve_test.go` |
+| an imported ticket key | `ACME-253` | `internal/storage/task.go` |
+
+The concrete deny-list of real names is deliberately NOT in this repo: writing it down here would publish exactly what it exists to hide. What is checkable from inside the repo is the shape, so before committing prose or fixtures, read every added line that names something outside it:
+
+```
+git diff --cached -U0 | grep -E '^\+' | grep -inE '/(Users|home)/[a-z]|@[a-z0-9.-]+\.[a-z]{2,}|https?://[a-z0-9.-]+|\b[A-Z][A-Z0-9]{1,9}-[0-9]+\b'
+```
+
+Every hit must be one of the names in the table above, `github.com/mbalazy/pm-cli`, or a genuinely public third-party URL (a Go module path, a docs link). Anything else is a leak, and once pushed it is no longer fixable by a later commit: say so instead of quietly patching the tip.
+
 ## Build
 
 ```
