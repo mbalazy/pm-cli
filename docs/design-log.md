@@ -18,6 +18,18 @@ Two house rules for adding to it: an entry moves here only after checking whethe
 `CLAUDE.md` still needs the operating rule, and this file is never embedded in the
 binary - it is not part of what `pm docs` prints.
 
+## The principles the entries add up to
+
+Six things this codebase holds onto, each learned from a run that went wrong. The
+entries below are their stories.
+
+- **Write rules per field, not per file.** Append-only rot killed every long-lived task body until the body split into a rewritable Spec and an append-only Log with opposite rules. Brief overwrites; links merge. Every surface (CLI, TUI, MCP, executor) enforces the same rules.
+- **Generated beats hand-maintained.** Tracker rollups are computed on read. The one hand-maintained status table this project ever had desynced; it is not coming back.
+- **Judge workers on new failures only.** A red test suite the worker did not break must not fail the worker - and without a captured baseline, every worker re-diagnoses the same inherited breakage. The baseline made that structural.
+- **Uncertainty is output, not noise.** Best-effort workers must ship their doubts in machine-readable form: `ASSUMPTION:` entries carry a concrete "- verify: how" check, `SPEC-CONFLICT:` flags a spec premise the evidence refuted, `TODO:` is the explicit human handoff. A wrong assumption buried inside working-looking code is the worst bug an agent can leave behind.
+- **Observability is best-effort; correctness is not.** Run state and journal writes never abort a run. Locks, atomic renames and status validation always do their job.
+- **The journal is the flywheel.** Every prompt rule above traces to a logged failure. Durable run history plus a retro habit is what lets the system get smarter instead of repeating itself.
+
 ## Contents
 
 - [Key patterns](#key-patterns)
