@@ -434,11 +434,22 @@ func (s *Store) AddTask(projectSlug string, t *Task) error {
 		return err
 	}
 
+	// A duplicate ID is a conflict whatever the title: the file name carries
+	// the title's slug, so the O_EXCL below only catches a same-title retry,
+	// and a second file claiming an existing ID leaves one of the two
+	// unaddressable (findByExactID answers whichever ReadDir yields first).
+	// The read runs under the caller's lock (see the doc comment), so a
+	// concurrent mint cannot slip between it and the create. A store that
+	// cannot be read falls through to O_EXCL, which still guards the name.
+	if existing, err := s.findByExactID(projectSlug, t.Meta.ID); err == nil && existing != nil {
+		return conflict("task %s already exists in project %s: %s", t.Meta.ID, projectSlug, existing.FilePath)
+	}
+
 	// O_EXCL: atomic create-or-fail, no race between stat and write
 	f, err := os.OpenFile(t.FilePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
 		if os.IsExist(err) {
-			return fmt.Errorf("task file already exists: %s", t.FilePath)
+			return conflict("task file already exists: %s", t.FilePath)
 		}
 		return err
 	}

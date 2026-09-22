@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -157,6 +158,24 @@ func TestAddTaskPreventsDuplicates(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "already exists") {
 			t.Errorf("error should mention 'already exists', got: %v", err)
+		}
+	})
+
+	t.Run("duplicate id under another title rejected as a conflict", func(t *testing.T) {
+		// A different title means a different FILE name, so O_EXCL alone let
+		// this through and the project held two tasks answering to a-1
+		// (pm-cli-149). The typed error is what the CLI turns into exit 4.
+		dup := NewTask("a-1", "Same id, another title", "alpha")
+		err := store.AddTask("alpha", dup)
+		var ce *ConflictError
+		if !errors.As(err, &ce) {
+			t.Fatalf("want a *ConflictError, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "already exists") {
+			t.Errorf("error should mention 'already exists', got: %v", err)
+		}
+		if _, statErr := os.Stat(dup.FilePath); statErr == nil {
+			t.Errorf("no file may be written for the duplicate: %s", dup.FilePath)
 		}
 	})
 

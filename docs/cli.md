@@ -347,6 +347,22 @@ Start the MCP server on stdin/stdout ([mcp.md](mcp.md)) for whichever MCP client
 
 `pm work`, `pm run-epic` and `pm finish` always print their result envelope as indented JSON; there is no flag. Every other command prints text.
 
+**stdout carries the result, stderr carries everything else.** A `--json` command (and the three envelope printers) writes exactly one JSON document to stdout and nothing more; every diagnostic - the `Error: ...` line, lock-degradation warnings, a skipped project - goes to stderr. A script may pipe stdout straight into a JSON parser. On failure stdout stays empty.
+
+## Exit codes
+
+Every failure used to exit 1, so a script could not tell a typo from a missing task from a broken store. Four codes, read them before stderr (`internal/cmd/exit.go`; pm-cli-149):
+
+| code | meaning | examples |
+|---|---|---|
+| `0` | ok | |
+| `1` | every other failure | an unreadable `project.yaml`, an I/O error, a worker crash, a lock that could not be taken |
+| `2` | bad usage - the fix is in the command line | unknown command or flag, wrong argument count, no project given and none detected from cwd, an ambiguous task query, a value the store rejects: a status outside the project's set, an unsafe `--id`, an unknown `--kind`, a `--date` that is not a day, a future date, a malformed `[verified ...]` marker |
+| `3` | not found | the project, the task (`pm show`, `pm mv`, `pm reorder`'s parent) or the journal named does not exist |
+| `4` | conflict - the store's current state refuses the mutation | `pm add --id` naming an id the project already holds, a finish claim held by another process |
+
+The error line is printed once, to stderr, as `Error: <message>`. Nothing finer is defined on purpose: pm has no bulk mutations, so "no effect" / "partial effect" codes would describe nothing.
+
 ## Environment variables
 
 Read by pm:

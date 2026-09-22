@@ -44,7 +44,7 @@ func resolveProjectSlugArg(store storage.TaskStore, args []string) (string, erro
 		slug = detectProjectFromCwd(store)
 	}
 	if slug == "" {
-		return "", fmt.Errorf("no project (pass a project or run inside a project dir)")
+		return "", usageErr(fmt.Errorf("no project (pass a project or run inside a project dir)"))
 	}
 	return slug, nil
 }

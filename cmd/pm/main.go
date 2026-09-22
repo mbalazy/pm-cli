@@ -21,7 +21,9 @@ func init() {
 
 func main() {
 	if err := cmd.NewRootCmd().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		// Diagnostics go to stderr, structured output stays on stdout, and
+		// the exit code says which kind of failure this was (cmd/exit.go).
+		fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(cmd.ExitCode(err))
 	}
 }

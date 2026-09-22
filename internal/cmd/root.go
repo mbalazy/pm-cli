@@ -35,6 +35,9 @@ func NewRootCmd() *cobra.Command {
 			return runBoard(store, detectProjectFromCwd(store))
 		},
 		SilenceUsage: true,
+		// main prints the error ONCE, to stderr, and picks the exit code
+		// from it (exit.go); cobra's own print would double every message.
+		SilenceErrors: true,
 	}
 
 	root.AddCommand(
@@ -65,6 +68,7 @@ func NewRootCmd() *cobra.Command {
 		newWorkerGuardCmd(),
 		newDocsCmd(),
 	)
+	classifyUsage(root)
 
 	return root
 }

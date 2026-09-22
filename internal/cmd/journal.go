@@ -70,10 +70,10 @@ func journalSubject(proj *storage.Project, name string) (*storage.JournalSubject
 	}
 	declared := proj.JournalNames()
 	if len(declared) == 0 {
-		return nil, fmt.Errorf("no journals declared for this project - add a `journals:` list to project.yaml:\n"+
-			"    journals:\n        - name: %s\n          subject: <what is being tracked>", name)
+		return nil, notFoundErr(fmt.Errorf("no journals declared for this project - add a `journals:` list to project.yaml:\n"+
+			"    journals:\n        - name: %s\n          subject: <what is being tracked>", name))
 	}
-	return nil, fmt.Errorf("no journal %q in this project (declared: %s)", name, strings.Join(declared, ", "))
+	return nil, notFoundErr(fmt.Errorf("no journal %q in this project (declared: %s)", name, strings.Join(declared, ", ")))
 }
 
 func newJournalListCmd(store storage.TaskStore) *cobra.Command {

@@ -22,7 +22,7 @@ func ValidateStatus(s TaskStatus, allowed []TaskStatus) error {
 	for i, a := range allowed {
 		names[i] = string(a)
 	}
-	return fmt.Errorf("invalid status %q (valid: %s)", s, strings.Join(names, ", "))
+	return invalidValue("invalid status %q (valid: %s)", s, strings.Join(names, ", "))
 }
 
 type TaskStatus string
@@ -137,7 +137,7 @@ func ValidateRuntime(r string) error {
 	case "", RuntimeOn, RuntimeOff:
 		return nil
 	}
-	return fmt.Errorf("invalid runtime %q (valid: on, off, or empty for off)", r)
+	return invalidValue("invalid runtime %q (valid: on, off, or empty for off)", r)
 }
 
 // RuntimeEnabled reports whether the task opted into the runtime phase.
@@ -156,7 +156,7 @@ func ValidateEpicMode(m string) error {
 	case "", EpicModeIndependent:
 		return nil
 	}
-	return fmt.Errorf("invalid epic_mode %q (valid: independent, or empty for integration mode)", m)
+	return invalidValue("invalid epic_mode %q (valid: independent, or empty for integration mode)", m)
 }
 
 // FinishMode values for a tracker's finish_mode field. Empty is a third legal
@@ -174,7 +174,7 @@ func ValidateFinishMode(m string) error {
 	case "", FinishModeAuto, FinishModeOff:
 		return nil
 	}
-	return fmt.Errorf("invalid finish_mode %q (valid: auto, off, or empty for off)", m)
+	return invalidValue("invalid finish_mode %q (valid: auto, off, or empty for off)", m)
 }
 
 // ValidateMode checks a task's mode field. Empty means "auto" (default,
@@ -184,7 +184,7 @@ func ValidateMode(m string) error {
 	case "", "auto", "manual":
 		return nil
 	}
-	return fmt.Errorf("invalid mode %q (valid: auto, manual)", m)
+	return invalidValue("invalid mode %q (valid: auto, manual)", m)
 }
 
 // slugPattern is deliberately NOT "slug == Slugify(slug)": Slugify drops
@@ -199,7 +199,7 @@ var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 // path component (ProjectDir/ProjectYAML join it under the pm root).
 func ValidateSlug(slug string) error {
 	if !slugPattern.MatchString(slug) {
-		return fmt.Errorf("invalid slug %q - must start with a lowercase letter or digit and contain only lowercase letters, digits, '.', '_' or '-' (no path separators)", slug)
+		return invalidValue("invalid slug %q - must start with a lowercase letter or digit and contain only lowercase letters, digits, '.', '_' or '-' (no path separators)", slug)
 	}
 	return nil
 }
@@ -229,7 +229,7 @@ var taskIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 // later is safe; narrowing it after IDs exist is not.
 func ValidateTaskID(id string) error {
 	if !taskIDPattern.MatchString(id) {
-		return fmt.Errorf("invalid task id %q - must start with a letter or digit and contain only letters, digits, '.', '_' or '-' (no path separators)", id)
+		return invalidValue("invalid task id %q - must start with a letter or digit and contain only letters, digits, '.', '_' or '-' (no path separators)", id)
 	}
 	return nil
 }
@@ -245,7 +245,7 @@ func ValidateProjectPrefix(prefix string) error {
 		return nil
 	}
 	if err := ValidateTaskID(prefix); err != nil {
-		return fmt.Errorf("invalid prefix %q - task ids are minted as \"<prefix>-<n>\", so the prefix must start with a letter or digit and contain only letters, digits, '.', '_' or '-' (no path separators or spaces)", prefix)
+		return invalidValue("invalid prefix %q - task ids are minted as \"<prefix>-<n>\", so the prefix must start with a letter or digit and contain only letters, digits, '.', '_' or '-' (no path separators or spaces)", prefix)
 	}
 	return nil
 }

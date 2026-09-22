@@ -113,14 +113,14 @@ func ValidateStateMarkers(kind, text string, now time.Time) error {
 			continue
 		}
 		if sl.Date == "" {
-			return fmt.Errorf("state line %d: a [verified ...] marker needs the day it was checked, e.g. [verified %s by <command or doc>]", sl.N, now.Format("2006-01-02"))
+			return invalidValue("state line %d: a [verified ...] marker needs the day it was checked, e.g. [verified %s by <command or doc>]", sl.N, now.Format("2006-01-02"))
 		}
 		d, err := time.ParseInLocation("2006-01-02", sl.Date, now.Location())
 		if err != nil {
-			return fmt.Errorf("state line %d: [verified %s] is not a calendar day (want YYYY-MM-DD)", sl.N, sl.Date)
+			return invalidValue("state line %d: [verified %s] is not a calendar day (want YYYY-MM-DD)", sl.N, sl.Date)
 		}
 		if !d.Before(tomorrow) {
-			return fmt.Errorf("state line %d: [verified %s] is in the future - a verification already happened", sl.N, sl.Date)
+			return invalidValue("state line %d: [verified %s] is in the future - a verification already happened", sl.N, sl.Date)
 		}
 	}
 	return nil

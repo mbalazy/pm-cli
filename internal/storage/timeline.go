@@ -109,7 +109,7 @@ func ValidateTimelineKind(kind string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("invalid timeline kind %q (want one of: %s)", kind, strings.Join(TimelineKinds, ", "))
+	return invalidValue("invalid timeline kind %q (want one of: %s)", kind, strings.Join(TimelineKinds, ", "))
 }
 
 // TimelineBackdate turns a `--date YYYY-MM-DD` value into the ts a back-dated
@@ -123,7 +123,7 @@ func ValidateTimelineKind(kind string) error {
 func TimelineBackdate(date string, now time.Time) (string, error) {
 	t, err := time.ParseInLocation(stampDateLayout, date, now.Location())
 	if err != nil {
-		return "", fmt.Errorf("--date %q: want YYYY-MM-DD", date)
+		return "", invalidValue("--date %q: want YYYY-MM-DD", date)
 	}
 	if t.Format(stampDateLayout) == now.Format(stampDateLayout) {
 		return now.Format(time.RFC3339), nil
@@ -152,14 +152,14 @@ func AppendTimelineEntry(projectDir string, e *TimelineEntry) error {
 	}
 	e.Text = strings.TrimSpace(e.Text)
 	if e.Text == "" {
-		return fmt.Errorf("a timeline entry needs text")
+		return invalidValue("a timeline entry needs text")
 	}
 	if e.TS == "" {
 		e.TS = time.Now().Format(time.RFC3339)
 	}
 	when, ok := e.When()
 	if !ok {
-		return fmt.Errorf("timeline entry ts %q is not RFC3339", e.TS)
+		return invalidValue("timeline entry ts %q is not RFC3339", e.TS)
 	}
 	// An entry records something that already happened. A future date - a
 	// typo'd back-date, typically - would sit after every real entry: as a
@@ -167,7 +167,7 @@ func AppendTimelineEntry(projectDir string, e *TimelineEntry) error {
 	// that day, and an append-only file offers no way to correct it.
 	now := time.Now()
 	if !when.Before(time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())) {
-		return fmt.Errorf("timeline entry dated %s is in the future - an entry records something that already happened", when.Format("2006-01-02"))
+		return invalidValue("timeline entry dated %s is in the future - an entry records something that already happened", when.Format("2006-01-02"))
 	}
 	if err := ValidateStateMarkers(e.Kind, e.Text, now); err != nil {
 		return err

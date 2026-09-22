@@ -35,7 +35,7 @@ func newReorderCmd(store storage.TaskStore) *cobra.Command {
 				}
 			}
 			if slug == "" {
-				return fmt.Errorf("parent task %q not found", parentID)
+				return fmt.Errorf("parent %w: %q", storage.ErrTaskNotFound, parentID)
 			}
 
 			// Everything below is a read-modify-write over SEVERAL task files,
