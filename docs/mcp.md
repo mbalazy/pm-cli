@@ -1,13 +1,22 @@
 # MCP server
 
-The reference for `pm mcp`: the 14 tools Claude Code gets, every parameter, every output shape, the budgets, and the traps. For anyone writing or debugging an agent against pm. The *workflow* - when to record what, the brief format, who closes a task - is a separate document, [agent-guide.md](agent-guide.md), printed by `pm docs claude` for pasting into a `CLAUDE.md`; this file is the contract's reference, that one is the contract.
+The reference for `pm mcp`: the 14 tools the agent gets, every parameter, every output shape, the budgets, and the traps. For anyone writing or debugging an agent against pm. The *workflow* - when to record what, the brief format, who closes a task - is a separate document, [agent-guide.md](agent-guide.md), printed by `pm docs guide` for pasting into the client's instructions file (`CLAUDE.md`, `AGENTS.md`); this file is the contract's reference, that one is the contract.
 
-`pm mcp` is a stdio server (`internal/mcpserver`). Register it once, user-scope:
+`pm mcp` is a stdio server (`internal/mcpserver`), so any MCP client that can spawn a process can register it. Once, user-scope, for Claude Code:
 
 ```sh
 claude mcp add --transport stdio --scope user pm -- pm mcp
-pm docs claude >> ~/.claude/CLAUDE.md
+pm docs guide >> ~/.claude/CLAUDE.md
 ```
+
+For Codex (`~/.codex/config.toml` gets `[mcp_servers.pm]` with `command = "pm"`, `args = ["mcp"]`; a per-tool `approval_mode = "approve"` under `[mcp_servers.pm.tools.<tool>]` stops the prompt on every read):
+
+```sh
+codex mcp add pm -- pm mcp
+pm docs guide >> ~/.codex/AGENTS.md
+```
+
+Nothing below depends on the client: the tools, their parameters and their budgets are the same whoever spawned the server. The one Claude-Code-only piece is on the CLI side, `pm session-id` (the source of the `sessions` field), and the guide says so where it names it.
 
 Every tool's semantics live in `internal/service`; the handlers only decode, call and respond. The HTTP API of `pm serve` calls the same functions, so a rule below holds on the web too.
 

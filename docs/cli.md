@@ -85,7 +85,7 @@ Print the resolved global config and the file it came from: every remote runner 
 
 ### pm docs
 
-Print the embedded agent docs. `pm docs claude` prints the usage contract shaped as a CLAUDE.md block between `<!-- pm:agent-guide:start/end -->` markers (install with `pm docs claude >> ~/.claude/CLAUDE.md`); `pm docs authoring` prints the task-authoring rules. Both are versioned in `docs/agent-guide.md` and `docs/task-authoring.md`.
+Print the embedded agent docs. `pm docs guide` prints the usage contract as one markdown block between `<!-- pm:agent-guide:start/end -->` markers, the same bytes for every client - install with `pm docs guide >> ~/.claude/CLAUDE.md` (Claude Code) or `pm docs guide >> ~/.codex/AGENTS.md` (Codex); `pm docs claude` is the older name and stays as an alias. `pm docs authoring` prints the task-authoring rules. Both are versioned in `docs/agent-guide.md` and `docs/task-authoring.md`.
 
 ### pm session-id
 
@@ -329,7 +329,7 @@ Serve the web cockpit ([cockpit.md](cockpit.md)): the JSON API under `/api/`, th
 
 ### pm mcp
 
-Start the MCP server on stdin/stdout for Claude Code ([mcp.md](mcp.md)). Register it once with `claude mcp add --transport stdio --scope user pm -- pm mcp`.
+Start the MCP server on stdin/stdout ([mcp.md](mcp.md)) for whichever MCP client spawned it. Register it once: `claude mcp add --transport stdio --scope user pm -- pm mcp` for Claude Code, `codex mcp add pm -- pm mcp` for Codex.
 
 ## Hidden commands
 

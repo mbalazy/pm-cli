@@ -15,7 +15,7 @@ One file per surface, each readable cold. The README is the two-minute landing p
 
 **Written for the agent** (embedded in the binary, printed by `pm docs`)
 
-- [agent-guide.md](agent-guide.md) - the usage contract an agent works to: when to record what, the brief format, the Spec/Log write rules, blockers, journals, timelines, and who closes a task - a merged pull request does it, everything else waits for the user. Printed by `pm docs claude`, which is how it reaches your own `CLAUDE.md`.
+- [agent-guide.md](agent-guide.md) - the usage contract an agent works to: when to record what, the brief format, the Spec/Log write rules, blockers, journals, timelines, and who closes a task - a merged pull request does it, everything else waits for the user. Printed by `pm docs guide`, which is how it reaches your own `CLAUDE.md` (Claude Code) or `AGENTS.md` (Codex) - one block, the same for every client.
 - [task-authoring.md](task-authoring.md) - how to write a task a session can pick up cold, printed by `pm docs authoring`.
 
 **Working on pm**

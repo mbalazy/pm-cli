@@ -1,6 +1,6 @@
 # Data model
 
-What pm writes to disk and the rules every writer follows: the data directory, the task file and its per-field write rules, `project.yaml`, the global `config.yaml`, the attention queue those files feed, and the locks around them. For anyone who edits the files by hand, greps them, or writes a client. The rationale behind the rules is in [design-log.md](design-log.md); the agent-facing summary is what `pm docs claude` prints.
+What pm writes to disk and the rules every writer follows: the data directory, the task file and its per-field write rules, `project.yaml`, the global `config.yaml`, the attention queue those files feed, and the locks around them. For anyone who edits the files by hand, greps them, or writes a client. The rationale behind the rules is in [design-log.md](design-log.md); the agent-facing summary is what `pm docs guide` prints.
 
 ## Where the data lives
 

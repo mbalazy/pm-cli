@@ -1,4 +1,4 @@
-<!-- pm:agent-guide:start (installed via `pm docs claude`; to refresh after an upgrade, delete this block and append again) -->
+<!-- pm:agent-guide:start (installed via `pm docs guide`; to refresh after an upgrade, delete this block and append again) -->
 # Project Manager (`pm`)
 
 Local task tracker and control plane for AI coding agents. Data lives in `~/.claude/pm/` as markdown files with YAML frontmatter. CLI binary: `pm`. MCP server: `pm mcp` (stdio, registered as `pm`). TUI: `pm board` (the user runs it).
@@ -10,7 +10,7 @@ Local task tracker and control plane for AI coding agents. Data lives in `~/.cla
 - The user merges a PR into the base branch (main/development) → move the task to `done` yourself and say so; anything without a PR → suggest done, never move it (see Closing)
 - The user switches projects, starts a session, or asks "what am I working on?" → `pm_context` (recent first, flag tasks stale 7+ days, short bullets per project)
 - The user mentions project setup, links, stack or path changes → `pm_update_project`. `group` (a slug) joins several repos into ONE cockpit project (acme = acme-api + acme-zap + ...); a project without one is its own group. A dormant project is `archived: true` on the project - that flag alone puts it to sleep for every cross-project view (the board's hidden list is not it).
-- The user asks to attach/link the session to a task → run `pm session-id` for the UUID, then `pm_update_task` with `sessions: ["<uuid>"]`
+- The user asks to attach/link the session to a task → run `pm session-id` for the UUID (works inside `claude` only; in another client, take the session id from that client's own surface), then `pm_update_task` with `sessions: ["<uuid>"]`
 - The user is blocked on someone else (review, client, an answer) → `pm_update_task` with status `waiting` + `waiting_for` naming who/what ("review by the lead, PR #940", "client answer") - a bare `waiting` says nothing about the blocker
 
 **Attention block** (`attention` in `pm_context`; the cross-project one is the whole queue, the project one is narrowed to that project) - what needs the human, computed once by pm and shared with the cockpit's home screen and `pm today`: `needs_me` (worst first, each row with a `reason` and `age_seconds`), `waiting` (the `no_reason` rows first - a waiting task with no `waiting_for` is an ALARM to fix, not a blank; `age_seconds: null` means the task predates `status_changed`, never "just now"), `stuck_projects`, `counts`, `wip`. Every row carries the closed set of `actions` legal for its state. Open a session with the right question from it instead of listing tasks; the full queue is `pm today --json`.

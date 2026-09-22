@@ -20,10 +20,11 @@ func runDocs(t *testing.T, topic string) string {
 	return buf.String()
 }
 
-func TestDocsClaudePrintsInstallableGuide(t *testing.T) {
-	out := runDocs(t, "claude")
-	// The guide must be an appendable CLAUDE.md block: refresh tooling keys on
-	// the markers, and the content must carry the core contract.
+func TestDocsGuidePrintsInstallableGuide(t *testing.T) {
+	out := runDocs(t, "guide")
+	// The guide must be an appendable instructions block (CLAUDE.md, AGENTS.md):
+	// refresh tooling keys on the markers, and the content must carry the core
+	// contract.
 	for _, want := range []string{
 		"<!-- pm:agent-guide:start",
 		"<!-- pm:agent-guide:end -->",
@@ -36,8 +37,22 @@ func TestDocsClaudePrintsInstallableGuide(t *testing.T) {
 		"never the state alone",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("pm docs claude output missing %q", want)
+			t.Errorf("pm docs guide output missing %q", want)
 		}
+	}
+	// The block is one text for every client: nothing in it may name Claude
+	// Code as the reader, or a Codex user installs a guide that talks past them.
+	if strings.Contains(out, "Claude Code") {
+		t.Errorf("pm docs guide names Claude Code; the guide is client-neutral")
+	}
+}
+
+// `pm docs claude` was the only name until 0.67.0 and is installed in users'
+// shell history and CLAUDE.md refresh notes; it stays as an alias that prints
+// the same bytes.
+func TestDocsClaudeIsAnAliasOfGuide(t *testing.T) {
+	if got, want := runDocs(t, "claude"), runDocs(t, "guide"); got != want {
+		t.Errorf("pm docs claude and pm docs guide differ")
 	}
 }
 

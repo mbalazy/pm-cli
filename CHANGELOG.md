@@ -7,8 +7,18 @@ that line's history, with one catch: it does not diff merge commits, and
 0.61.0 came in on one, so that output never shows it being set - `git show
 5e3dec2:Makefile` does.
 
-There are no git tags, and versions promise each other nothing. The only
+Tags exist from v0.65.0 on, and versions promise each other nothing. The only
 promise is that your task files stay readable, because they are markdown.
+
+## 0.68.0 - 2026-09-22
+
+pm is documented for Codex as well as Claude Code. `pm docs guide` is the
+new name of the agent-guide printer (`pm docs claude` stays as an alias),
+its help shows both installs - `>> ~/.claude/CLAUDE.md` and
+`>> ~/.codex/AGENTS.md` - and the guide's text is client-neutral, which
+the test now asserts. README and docs/mcp.md carry the Codex
+registration (`codex mcp add pm -- pm mcp`, the per-tool `approval_mode`
+knob) next to the Claude Code one.
 
 ## 0.67.0 - 2026-09-22
 

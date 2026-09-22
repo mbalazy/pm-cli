@@ -1,16 +1,18 @@
 // Package docs embeds the canonical agent-facing documentation so the binary
-// can print it wherever pm is installed (`pm docs claude` / `pm docs
+// can print it wherever pm is installed (`pm docs guide` / `pm docs
 // authoring`). The markdown files in this directory stay the single source of
 // truth: they are readable in the repo, versioned with the code, and shipped
-// inside the binary - a user's CLAUDE.md is a consumer of `pm docs claude`
-// output, never a second copy to keep in sync by hand.
+// inside the binary - a user's CLAUDE.md or AGENTS.md is a consumer of
+// `pm docs guide` output, never a second copy to keep in sync by hand.
 package docs
 
 import _ "embed"
 
 // AgentGuide is the canonical usage contract for AI agents driving pm via MCP.
-// It is shaped as a CLAUDE.md block (wrapped in pm:agent-guide markers) so the
-// install is a plain append: `pm docs claude >> ~/.claude/CLAUDE.md`.
+// It is one markdown block (wrapped in pm:agent-guide markers) that any MCP
+// client's instructions file takes, so the install is a plain append:
+// `pm docs guide >> ~/.claude/CLAUDE.md` for Claude Code,
+// `pm docs guide >> ~/.codex/AGENTS.md` for Codex.
 //
 //go:embed agent-guide.md
 var AgentGuide string
