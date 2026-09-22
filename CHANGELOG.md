@@ -10,6 +10,18 @@ that line's history, with one catch: it does not diff merge commits, and
 Tags exist from v0.65.0 on, and versions promise each other nothing. The only
 promise is that your task files stay readable, because they are markdown.
 
+## 0.69.0 - 2026-09-22
+
+The session-start call fits again: the cross-project `pm_context` had
+grown to 97k chars on a 13-project store and Claude Code refused it. A
+tracker now lists only its open children (closed ones are counted, not
+listed), the cross-project rollup carries open trackers as headers, the
+doing-task body cap is 1500 runes, and a budget test on a store-shaped
+fixture fails when either shape passes 60k chars. The CLI gained exit
+codes for scripts - 2 bad usage, 3 not found, 4 conflict, 1 the rest -
+prints its error once, keeps `--json` output alone on stdout, and
+`pm add --id` refuses an id the project already holds.
+
 ## 0.68.0 - 2026-09-22
 
 pm is documented for Codex as well as Claude Code. `pm docs guide` is the
