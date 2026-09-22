@@ -53,6 +53,15 @@ pm projects add <slug> --path /path/to/repo
 
 The second line is not optional: the MCP server gives the agent the *tools*, the guide gives it the *workflow* - when to record what, the brief format, the Spec/Log write rules, and who closes a task. `--path` matters: cwd auto-detection matches against it, so a project without one is never found from its own repo. After that you mostly stop operating pm by hand: "add a task: fix the login flow", "what am I working on?", "save a brief, I'm done for today".
 
+The procedures the agent follows when nobody watches are not in this binary: `/solo`, the acceptance `pm finish` runs, the simulator and browser verification live in [mbalazy/claude-skills](https://github.com/mbalazy/claude-skills). Without them a launch starts a session with nothing to follow, so install them once - `install.sh` links every skill into `~/.claude/skills` (or the config dir in `CLAUDE_CONFIG_DIR`) and a `git pull` there updates them in place:
+
+```sh
+git clone https://github.com/mbalazy/claude-skills
+./claude-skills/install.sh
+```
+
+`pm executor doctor <project>` warns while `solo` or `batch-finish-auto` is missing, and so does the cockpit's launch preview.
+
 ## Status
 
 A personal tool, in daily use since February 2026; releases are one line each in [CHANGELOG.md](CHANGELOG.md). One machine, one user: no sync, no account, no API key - the agent parts drive the `claude` CLI, so they run on a Claude subscription. Developed on macOS; CI runs the suite on Linux, but the desktop bits are untested there. Not looking for contributions, though bug reports are welcome. Versions promise each other nothing, except that task files stay readable: markdown.

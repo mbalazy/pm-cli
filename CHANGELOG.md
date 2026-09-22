@@ -10,6 +10,18 @@ that line's history, with one catch: it does not diff merge commits, and
 There are no git tags, and versions promise each other nothing. The only
 promise is that your task files stay readable, because they are markdown.
 
+## 0.67.0 - 2026-09-22
+
+The skills pm launches are not in this repository, and every surface now
+says so before it matters: the README's Install has the clone-and-link step
+for [mbalazy/claude-skills](https://github.com/mbalazy/claude-skills), `pm executor doctor` warns when `solo` or
+`batch-finish-auto` is missing under the project's Claude config dir, and the
+cockpit's solo launch preview carries the same warning.
+
+## 0.66.0 - 2026-09-22
+
+Review GitLab merge requests from the cockpit, not just GitHub pull requests.
+
 ## 0.65.0 - 2026-09-21
 
 Eight fixes from the 2026-09-08 batch land. In the executor: a worktree

@@ -381,6 +381,11 @@ func (c *Controller) Plan(in Input) (*Plan, error) {
 	} else {
 		p.Exe = exe
 	}
+	// The prompt types `/solo`; a config dir without that skill starts a
+	// session that answers "unknown skill" and sits there.
+	if missing := storage.MissingSkills(p.ConfigDir, "solo"); len(missing) > 0 {
+		p.Warnings = append(p.Warnings, fmt.Sprintf("no /solo skill under %s/skills - the session would start with nothing to follow; %s", p.ConfigDir, storage.SkillsInstallHint(p.ConfigDir)))
+	}
 	if p.AskRules > 0 {
 		if _, err := os.Stat(filepath.Join(cwd, ".claude", "settings.local.json")); err != nil {
 			p.Warnings = append(p.Warnings, fmt.Sprintf("%s/.claude/settings.json has %d ask rule(s) and there is no .claude/settings.local.json: the shared deny list is NOT in effect under --setting-sources user,local - mirror it first, or the skill's launch-check refuses the shift", cwd, p.AskRules))

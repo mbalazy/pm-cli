@@ -39,13 +39,26 @@ stop)
 esac
 `
 
+// cfgDir is the project's pinned Claude config dir for the current test: a
+// temp dir that holds the /solo skill, so a plan on it is warning-free and
+// the fake claude sees it as CLAUDE_CONFIG_DIR. Package-level because the
+// assertions compare against it; the tests never run in parallel.
+var cfgDir string
+
 func setup(t *testing.T) (*Controller, string, string) {
 	t.Helper()
 	root := t.TempDir()
 	store := &storage.Store{Root: root}
 	checkout := t.TempDir()
 	gitInit(t, checkout)
-	if err := store.CreateProject("app", &storage.Project{Name: "app", Prefix: "app", Path: checkout, ClaudeConfigDir: "/tmp/cfg-company"}); err != nil {
+	cfgDir = filepath.Join(t.TempDir(), "cfg-company")
+	if err := os.MkdirAll(filepath.Join(cfgDir, "skills", "solo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "skills", "solo", "SKILL.md"), []byte("# solo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateProject("app", &storage.Project{Name: "app", Prefix: "app", Path: checkout, ClaudeConfigDir: cfgDir}); err != nil {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
@@ -159,7 +172,7 @@ func TestPlan(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if p.Cwd != checkout || p.ConfigDir != "/tmp/cfg-company" || p.Name != "solo-app" || p.Prompt != "/solo app-7 --no-runtime --base main" {
+		if p.Cwd != checkout || p.ConfigDir != cfgDir || p.Name != "solo-app" || p.Prompt != "/solo app-7 --no-runtime --base main" {
 			t.Fatalf("plan = %+v", p)
 		}
 		if p.Argv[len(p.Argv)-1] != p.Prompt || p.Argv[len(p.Argv)-2] != "--bg" {
@@ -167,6 +180,25 @@ func TestPlan(t *testing.T) {
 		}
 		if len(p.Warnings) != 0 {
 			t.Fatalf("warnings = %v", p.Warnings)
+		}
+	})
+
+	t.Run("warns when the config dir has no /solo skill", func(t *testing.T) {
+		if err := c.Store.CreateProject("bare", &storage.Project{Name: "bare", Prefix: "bare", Path: checkout, ClaudeConfigDir: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+		p, err := c.Plan(Input{Project: "bare", Queue: "bare-1", Runtime: RuntimeOff, Base: "main"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var hit bool
+		for _, w := range p.Warnings {
+			if strings.Contains(w, "no /solo skill under "+p.ConfigDir+"/skills") && strings.Contains(w, storage.SkillsRepoURL) {
+				hit = true
+			}
+		}
+		if !hit {
+			t.Fatalf("expected the missing-skill warning naming the config dir and the skills repo, got %v", p.Warnings)
 		}
 	})
 
@@ -283,12 +315,12 @@ func TestStartListStop(t *testing.T) {
 	}
 	// No supervisor row yet: starting, with the attach command carrying the
 	// non-default config dir.
-	if l.State != StateStarting || l.Attach != "CLAUDE_CONFIG_DIR=/tmp/cfg-company claude attach ab12cd34" || l.Logs != "CLAUDE_CONFIG_DIR=/tmp/cfg-company claude logs ab12cd34" {
+	if l.State != StateStarting || l.Attach != "CLAUDE_CONFIG_DIR="+cfgDir+" claude attach ab12cd34" || l.Logs != "CLAUDE_CONFIG_DIR="+cfgDir+" claude logs ab12cd34" {
 		t.Fatalf("launch = %+v", l)
 	}
 	rec, _ := os.ReadFile(out)
 	got := string(rec)
-	for _, want := range []string{checkout + "\n", "cfg=/tmp/cfg-company\n", "source=cockpit\n", "sid= headless= cc= job=\n", "--bg\n/solo app-7 --no-runtime\n", "--model\nopus\n"} {
+	for _, want := range []string{checkout + "\n", "cfg=" + cfgDir + "\n", "source=cockpit\n", "sid= headless= cc= job=\n", "--bg\n/solo app-7 --no-runtime\n", "--model\nopus\n"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("fake claude saw:\n%s\nwant %q", got, want)
 		}
@@ -301,7 +333,7 @@ func TestStartListStop(t *testing.T) {
 	// (remembered on disk, so a later read without the row keeps it).
 	setAgents(t, `[{"pid":1,"kind":"interactive","cwd":"/x","startedAt":1},
 	  {"id":"ab12cd34","kind":"background","cwd":"`+checkout+`","startedAt":2,"sessionId":"ab12cd34-1111-2222-3333-444444444444","name":"solo-app","pid":4242,"status":"waiting","state":"blocked","waitingFor":"permission prompt"}]`)
-	c.invalidate("/tmp/cfg-company")
+	c.invalidate(cfgDir)
 	l, err = c.Get("ab12cd34")
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +342,7 @@ func TestStartListStop(t *testing.T) {
 		t.Fatalf("launch = %+v", l)
 	}
 	setAgents(t, `[]`)
-	c.invalidate("/tmp/cfg-company")
+	c.invalidate(cfgDir)
 	c.Now = func() time.Time { return time.Now().Add(time.Hour) }
 	l, _ = c.Get("ab12cd34")
 	if l.State != StateUnknown || l.SessionID != "ab12cd34-1111-2222-3333-444444444444" {
@@ -320,7 +352,7 @@ func TestStartListStop(t *testing.T) {
 
 	// A second plan warns about the live launch.
 	setAgents(t, `[{"id":"ab12cd34","kind":"background","cwd":"x","startedAt":2,"state":"working","status":"busy"}]`)
-	c.invalidate("/tmp/cfg-company")
+	c.invalidate(cfgDir)
 	p2, _ := c.Plan(Input{Project: "app", Queue: "app-8"})
 	if !hasWarning(p2, "solo session ab12cd34 of app is still working") {
 		t.Fatalf("warnings = %v", p2.Warnings)
@@ -346,11 +378,11 @@ func TestStartListStop(t *testing.T) {
 	if l.Stopped == "" {
 		t.Fatalf("launch = %+v", l)
 	}
-	if b, _ := os.ReadFile(os.Getenv("FAKE_CALLS")); !strings.Contains(string(b), "stop ab12cd34 cfg=/tmp/cfg-company") {
+	if b, _ := os.ReadFile(os.Getenv("FAKE_CALLS")); !strings.Contains(string(b), "stop ab12cd34 cfg="+cfgDir) {
 		t.Fatalf("calls = %s", b)
 	}
 	setAgents(t, `[]`)
-	c.invalidate("/tmp/cfg-company")
+	c.invalidate(cfgDir)
 	c.Now = func() time.Time { return time.Now().Add(time.Hour) }
 	if l, _ = c.Get("ab12cd34"); l.State != StateStopped {
 		t.Fatalf("launch = %+v", l)
@@ -429,8 +461,8 @@ func TestPinConfigDir(t *testing.T) {
 		}
 	}
 	var pinned bool
-	for _, kv := range Environ("/tmp/cfg-company") {
-		pinned = pinned || kv == "CLAUDE_CONFIG_DIR=/tmp/cfg-company"
+	for _, kv := range Environ(cfgDir) {
+		pinned = pinned || kv == "CLAUDE_CONFIG_DIR="+cfgDir
 	}
 	if !pinned {
 		t.Fatal("non-default dir missing from the environment")

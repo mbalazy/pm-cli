@@ -150,6 +150,35 @@ func TestDoctorPlaybookMissingIsError(t *testing.T) {
 	}
 }
 
+func TestDoctorAgentSkillsMissingIsWarn(t *testing.T) {
+	proj, _ := handoffProject(t, "x")
+	proj.ClaudeConfigDir = t.TempDir() // no skills at all
+
+	checks := runExecutorDoctor(proj)
+	c := levelOf(t, checks, "skill(s) solo, batch-finish-auto not found under "+proj.ClaudeConfigDir+"/skills")
+	if c != levelWarn {
+		t.Error("missing agent skills are machine state, not a profile defect: WARN")
+	}
+	if failed(checks, false) {
+		t.Error("a WARN must not fail without --strict")
+	}
+	if !failed(checks, true) {
+		t.Error("--strict must promote it")
+	}
+	for _, c := range checks {
+		if strings.Contains(c.Msg, "not found under") && !strings.Contains(c.Hint, storage.SkillsRepoURL) {
+			t.Errorf("the hint must name the skills repository: %q", c.Hint)
+		}
+	}
+
+	// A project with no executor block still launches solo: the check runs
+	// before the early return.
+	bare := &storage.Project{Name: "bare", ClaudeConfigDir: proj.ClaudeConfigDir}
+	if levelOf(t, runExecutorDoctor(bare), "skill(s) solo, batch-finish-auto not found") != levelWarn {
+		t.Error("a project without an executor block must still be told its machine has no skills")
+	}
+}
+
 func TestDoctorUnknownRuntimeSkillIsError(t *testing.T) {
 	proj, _ := handoffProject(t, "x")
 	proj.Executor.Handoff.RuntimeSkill = "no-such-skill"

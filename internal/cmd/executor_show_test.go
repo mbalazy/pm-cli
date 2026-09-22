@@ -28,10 +28,18 @@ func handoffProject(t *testing.T, playbook string) (*storage.Project, string) {
 	writeFile(t, filepath.Join(skill, "scripts", "measure-element.py"), "")
 	writeFile(t, filepath.Join(skill, "scripts", "read-rn-logs.sh"), "")
 	writeFile(t, filepath.Join(repo, ".claude", "skills", "start-rig", "SKILL.md"), "# start-rig")
+	// The agent skills (solo, batch-finish-auto) live in the Claude config
+	// dir, not the repo; pin one that has them so the doctor's verdict comes
+	// from this fixture and never from the developer's own ~/.claude.
+	cfg := t.TempDir()
+	for _, s := range storage.AgentSkills {
+		writeFile(t, filepath.Join(cfg, "skills", s, "SKILL.md"), "# "+s)
+	}
 
 	proj := &storage.Project{
-		Name: "Demo",
-		Path: repo,
+		Name:            "Demo",
+		Path:            repo,
+		ClaudeConfigDir: cfg,
 		// A project that actually runs epics lists both landing statuses;
 		// without them doctor rightly warns that a green sub has nowhere to go.
 		Statuses: []string{"todo", "doing", "merged", "pushed", "waiting", "done"},

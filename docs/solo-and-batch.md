@@ -18,6 +18,19 @@ launch, the process harness, the files and the screens; the skills live in
 `~/.claude/skills` of the machine that runs them. This page is the manual for
 what pm does; the executor's internals are in [executor.md](executor.md).
 
+Install the skills once, before the first shift - `install.sh` links them into
+`~/.claude/skills` (or the config dir in `CLAUDE_CONFIG_DIR`, for a project
+pinned to another one):
+
+```sh
+git clone https://github.com/mbalazy/claude-skills
+./claude-skills/install.sh
+```
+
+`pm executor doctor <project>` warns while `solo` or `batch-finish-auto` is
+missing under the project's Claude config dir, and the launch form's preview
+carries the same warning.
+
 ## Solo
 
 ### Starting a shift

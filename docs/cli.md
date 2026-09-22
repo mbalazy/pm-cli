@@ -309,7 +309,7 @@ Print the resolved profile: worktree slot paths expanded with env merged, contex
 
 ### pm executor doctor [project]
 
-Check the profile for completeness, not YAML syntax: the declared playbook and runtime skill exist, context repos and slot paths are usable, the playbook mentions every script the runtime skill ships and hardcodes no runtime ids. Exit 1 on an error, 0 on warnings.
+Check the profile for completeness, not YAML syntax: the skills a launch invokes (`solo`, `batch-finish-auto`) are under the project's Claude config dir, the declared playbook and runtime skill exist, context repos and slot paths are usable, the playbook mentions every script the runtime skill ships and hardcodes no runtime ids. Exit 1 on an error, 0 on warnings.
 
 | flag | default | meaning |
 |---|---|---|

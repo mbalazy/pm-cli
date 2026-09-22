@@ -129,6 +129,10 @@ func runExecutorDoctor(proj *storage.Project) []check {
 	var out []check
 	add := func(l checkLevel, msg, hint string) { out = append(out, check{Level: l, Msg: msg, Hint: hint}) }
 
+	// Machine knowledge first, before anything the executor block declares: a
+	// project with no block still launches solo shifts, and those need the
+	// skill as much as `pm finish` needs its own.
+	out = append(out, checkAgentSkills(proj)...)
 	if !proj.HasExecutor() {
 		add(levelWarn, "no `executor` block in project.yaml",
 			"`pm executor init` drafts one by scanning the repo's skills and stack")
@@ -163,6 +167,22 @@ func runExecutorDoctor(proj *storage.Project) []check {
 	out = append(out, checkHooksPath(proj.Path)...)
 	out = append(out, checkWorkerConfigDir(e, proj)...)
 	return out
+}
+
+// checkAgentSkills: the procedures a launch from pm hands off to (`/solo`,
+// `batch-finish-auto`) are not in this binary - they come from the skills
+// repository and are linked into the project's Claude config dir by its
+// install.sh. Missing ones are a WARN, not an ERROR: the profile is fine, the
+// machine is not, and `--strict` promotes it for anyone who wants the gate.
+func checkAgentSkills(proj *storage.Project) []check {
+	dir := proj.ResolveClaudeConfigDir()
+	missing := storage.MissingSkills(dir, storage.AgentSkills...)
+	if len(missing) == 0 {
+		return nil
+	}
+	return []check{{levelWarn,
+		fmt.Sprintf("skill(s) %s not found under %s/skills - a solo launch or `pm finish` from this machine starts a session with nothing to follow", strings.Join(missing, ", "), dir),
+		storage.SkillsInstallHint(dir)}}
 }
 
 // checkWorkerConfigDir: a declared worker config dir that does not exist is an
