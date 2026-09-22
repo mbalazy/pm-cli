@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -896,19 +897,22 @@ func TestBuildTrackers(t *testing.T) {
 		}
 	})
 
-	t.Run("children sorted by ID", func(t *testing.T) {
-		ids := []string{trackers[0].Children[0].ID, trackers[0].Children[1].ID, trackers[0].Children[2].ID}
-		want := []string{"p-1-1", "p-1-2", "p-1-3"}
-		for i := range want {
-			if ids[i] != want[i] {
-				t.Errorf("children[%d] = %q, want %q", i, ids[i], want[i])
-			}
+	t.Run("open children sorted by ID, the done one only counted", func(t *testing.T) {
+		// p-1-1 is done: the human closed it, so it lives in progress and
+		// not in the list (pm-cli-149).
+		var ids []string
+		for _, c := range trackers[0].Children {
+			ids = append(ids, c.ID)
+		}
+		want := []string{"p-1-2", "p-1-3"}
+		if fmt.Sprint(ids) != fmt.Sprint(want) {
+			t.Errorf("children = %v, want %v", ids, want)
 		}
 	})
 
 	t.Run("brief_line strips bold and takes first line", func(t *testing.T) {
-		// p-1-2 is children[1] after sort
-		if got := trackers[0].Children[1].BriefLine; got != "Goal: build two" {
+		// p-1-2 is children[0] after sort
+		if got := trackers[0].Children[0].BriefLine; got != "Goal: build two" {
 			t.Errorf("brief_line = %q, want %q", got, "Goal: build two")
 		}
 	})

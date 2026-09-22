@@ -57,9 +57,19 @@ type Tracker struct {
 	BriefLine string         `json:"brief_line,omitempty"`
 	Total     int            `json:"total"`
 	Progress  map[string]int `json:"progress"`
-	Children  []TrackerChild `json:"children,omitempty"`
-	// ChildrenOmitted marks a finished tracker whose child list was collapsed
-	// to Progress/Total. See trackerFinished.
+	// Children lists the children still open - the ones NOT closed by the
+	// human (done / archived). A closed child is counted in Progress/Total
+	// only: the rollup answers "what is left to look at", and the closed
+	// children of a long-lived tracker were half of a large project's
+	// pm_context payload (pm-cli-149). The executor's landing statuses
+	// (merged / pushed) are NOT closed - a pushed child still waits for its
+	// acceptance and PR - so they stay listed. The full child list is one
+	// pm_list_tasks away.
+	Children []TrackerChild `json:"children,omitempty"`
+	// ChildrenOmitted marks a tracker whose child list was collapsed to
+	// Progress/Total entirely: a finished tracker (see trackerFinished), or
+	// every tracker in the cross-project pm_context, which carries headers
+	// only.
 	ChildrenOmitted bool `json:"children_omitted,omitempty"`
 }
 
@@ -93,6 +103,14 @@ func terminalStatus(s TaskStatus, extra []TaskStatus) bool {
 		return true
 	}
 	return slices.Contains(extra, s)
+}
+
+// childClosed reports whether a child is closed by the human and therefore
+// drops out of a tracker's child list (see Tracker.Children). Exactly the two
+// statuses only a person sets - done and archived; a landing status is the
+// executor's and keeps the child listed.
+func childClosed(s TaskStatus) bool {
+	return s == StatusDone || s == StatusArchived
 }
 
 // trackerFinished reports whether a tracker is done being watched: the parent
@@ -157,6 +175,9 @@ func BuildTrackers(tasks []*Task, extraTerminal ...TaskStatus) ([]Tracker, map[s
 		children := make([]TrackerChild, 0, len(kids))
 		for _, k := range kids {
 			progress[string(k.Meta.Status)]++
+			if childClosed(k.Meta.Status) {
+				continue
+			}
 			children = append(children, TrackerChild{
 				ID:        k.Meta.ID,
 				Title:     k.Meta.Title,

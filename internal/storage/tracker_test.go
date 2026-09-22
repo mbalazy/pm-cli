@@ -195,8 +195,18 @@ func TestBuildTrackersCollapsesFinishedTracker(t *testing.T) {
 			if c.wantCollapse && len(tr.Children) != 0 {
 				t.Errorf("collapsed tracker still lists %d children", len(tr.Children))
 			}
-			if !c.wantCollapse && len(tr.Children) != len(c.kids) {
-				t.Errorf("children = %d, want %d", len(tr.Children), len(c.kids))
+			if !c.wantCollapse {
+				// An open tracker lists its OPEN children only; the ones the
+				// human closed are counted in Progress and nothing else.
+				open := 0
+				for _, ks := range c.kids {
+					if !childClosed(ks) {
+						open++
+					}
+				}
+				if len(tr.Children) != open {
+					t.Errorf("children = %d, want the %d open ones", len(tr.Children), open)
+				}
 			}
 			// Progress/Total survive the collapse - they are what a finished
 			// tracker still has to say.
@@ -252,4 +262,43 @@ func TestBuildTrackersHonoursProjectLandingStatuses(t *testing.T) {
 			t.Errorf("Total = %d, want 2 (progress survives the collapse)", trackers[0].Total)
 		}
 	})
+}
+
+// The rollup answers "what is left to look at": a child the human closed
+// (done / archived) is counted in Progress/Total and dropped from the list,
+// while a landed one (merged / pushed - the executor's statuses) stays, since
+// it still waits for the human. Closed children of long-lived trackers were
+// half of a large project's pm_context payload (pm-cli-149).
+func TestBuildTrackersListsOpenChildrenOnly(t *testing.T) {
+	tasks := []*Task{
+		statusTask("p-9", "", StatusDoing, ""),
+		statusTask("p-9-1", "p-9", StatusDone, "closed"),
+		statusTask("p-9-2", "p-9", StatusArchived, "closed"),
+		statusTask("p-9-3", "p-9", "pushed", "landed, awaiting the human"),
+		statusTask("p-9-4", "p-9", "merged", "landed"),
+		statusTask("p-9-5", "p-9", StatusWaiting, "open"),
+	}
+	trackers, suppressed := BuildTrackers(tasks, "pushed")
+	tr := trackers[0]
+	var got []string
+	for _, c := range tr.Children {
+		got = append(got, c.ID)
+	}
+	want := []string{"p-9-3", "p-9-4", "p-9-5"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("children = %v, want %v", got, want)
+	}
+	if tr.ChildrenOmitted {
+		t.Errorf("an open tracker is not collapsed")
+	}
+	if tr.Total != 5 || tr.Progress[string(StatusDone)] != 1 || tr.Progress[string(StatusArchived)] != 1 {
+		t.Errorf("Total/Progress must still count the closed children: total=%d progress=%v", tr.Total, tr.Progress)
+	}
+	// Dropping a child from the LIST never un-suppresses it from the flat
+	// doing list - it is closed, not orphaned.
+	for _, id := range []string{"p-9-1", "p-9-2"} {
+		if !suppressed[id] {
+			t.Errorf("%s must stay suppressed", id)
+		}
+	}
 }

@@ -90,7 +90,7 @@ func registerTools(s *mcp.Server, store storage.TaskStore) {
 	// pm_context
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "pm_context",
-		Description: "Get project context for session start. Auto-detects project from cwd. Returns project info, active tasks, and task counts. Doing tasks carry their full brief; briefs in the tracker rollup and focus list are compressed to one line and finished trackers omit their children - use pm_get_task for full detail. The `attention` block is the cockpit's queue of what needs the human (failed/crashed runs, acceptances with open visual claims, runs landed without acceptance, waiting tasks with their age and a no_reason alarm, stuck projects) - the same picture the user's home screen shows.",
+		Description: "Get project context for session start. Auto-detects project from cwd. Returns project info, active tasks, and task counts. Doing tasks carry their full brief; briefs in the tracker rollup and focus list are compressed to one line, a tracker lists only its OPEN children (done/archived ones are counted in progress) and a finished tracker omits them all - use pm_get_task / pm_list_tasks for full detail. Without a project (the cross-project rollup) trackers are headers only: open trackers, no child lists - pass the project for the child rollup. The `attention` block is the cockpit's queue of what needs the human (failed/crashed runs, acceptances with open visual claims, runs landed without acceptance, waiting tasks with their age and a no_reason alarm, stuck projects) - the same picture the user's home screen shows.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in contextInput) (*mcp.CallToolResult, any, error) {
 		return respond(service.Context(store, in))
 	})

@@ -28,8 +28,10 @@ const MaxListLimit = 200
 // ContextBodyLimit caps each doing task's body in Context output: a project
 // with a dozen doing tasks carrying full Spec/Log bodies dumps 100k+ chars
 // into the calling session otherwise. The brief stays complete (it is the
-// designed cold-start vehicle); the full body is one GetTask away.
-const ContextBodyLimit = 2000
+// designed cold-start vehicle); the full body is one GetTask away. 2000
+// until pm-cli-149, when the measured cold start left too little room
+// under the tool's cap (context_budget_test.go has the numbers).
+const ContextBodyLimit = 1500
 
 // TaskSummary is the listing shape of a task.
 type TaskSummary struct {
@@ -186,12 +188,14 @@ type ProjectContextResult struct {
 
 // ProjectSummary is one project's row in the cross-project Context.
 type ProjectSummary struct {
-	Slug       string            `json:"slug"`
-	Name       string            `json:"name"`
-	Repo       string            `json:"repo,omitempty"`
-	TaskCounts map[string]int    `json:"task_counts"`
-	DoingTasks []TaskSummary     `json:"doing_tasks,omitempty"`
-	Trackers   []storage.Tracker `json:"trackers,omitempty"`
+	Slug       string         `json:"slug"`
+	Name       string         `json:"name"`
+	Repo       string         `json:"repo,omitempty"`
+	TaskCounts map[string]int `json:"task_counts"`
+	DoingTasks []TaskSummary  `json:"doing_tasks,omitempty"`
+	// Trackers are the OPEN trackers as headers only (no child list) - see
+	// trackerHeaders in context.go.
+	Trackers []storage.Tracker `json:"trackers,omitempty"`
 	// TimelineState is "<date>: <first line>" of the latest timeline state
 	// ("(stale)" appended when due); absent when the project has no state.
 	TimelineState string `json:"timeline_state,omitempty"`
@@ -206,6 +210,9 @@ type CrossProjectContextResult struct {
 	FocusTasks []TaskSummary    `json:"focus_tasks,omitempty"`
 	Note       string           `json:"note,omitempty"`
 	Projects   []ProjectSummary `json:"projects"`
+	// TrackersNote says where the child rollup went; set only when some
+	// project has an open tracker (see trackerHeaders).
+	TrackersNote string `json:"trackers_note,omitempty"`
 }
 
 // ProjectInfo is one project's row in ListProjects.

@@ -149,7 +149,7 @@ func CrossProjectContext(store storage.TaskStore, note string) (*CrossProjectCon
 			continue
 		}
 		trackers, suppressed := storage.BuildTrackers(tasks, store.GetLandingStatuses(slug)...)
-		ps.Trackers = trackers
+		ps.Trackers = trackerHeaders(trackers)
 		for _, t := range tasks {
 			ps.TaskCounts[string(t.Meta.Status)]++
 			if t.Meta.Status == storage.StatusDoing && !suppressed[t.Meta.ID] {
@@ -176,6 +176,12 @@ func CrossProjectContext(store storage.TaskStore, note string) (*CrossProjectCon
 	if note != "" {
 		noteParts = append(noteParts, note)
 	}
+	for _, ps := range result {
+		if len(ps.Trackers) > 0 {
+			output.TrackersNote = crossProjectTrackersNote
+			break
+		}
+	}
 	var attentionNote string
 	output.Attention, attentionNote = contextAttention(store, AttentionInput{})
 	if attentionNote != "" {
@@ -186,4 +192,30 @@ func CrossProjectContext(store storage.TaskStore, note string) (*CrossProjectCon
 		output.Note = strings.Join(noteParts, "; ")
 	}
 	return output, nil
+}
+
+// crossProjectTrackersNote tells the reader where the child rollup went.
+const crossProjectTrackersNote = "trackers are headers only (open trackers, children counted in progress) - call pm_context with project for the child rollup"
+
+// trackerHeaders is the cross-project shape of a project's tracker rollup:
+// the OPEN trackers, each collapsed to its header (id, title, status, one
+// brief line, progress counts) with no child list. The cross-project call
+// is the session-start call outside any repo, and its budget is the SUM of
+// every active project's rollup - with full child lists the two biggest
+// projects alone put 56k chars into it and the whole result no longer fit
+// the tool output (pm-cli-149). A finished tracker (BuildTrackers already
+// collapsed it) is left out entirely: the human closed it, and the
+// project's task_counts carry it. The full rollup is one project-scoped
+// pm_context away.
+func trackerHeaders(trackers []storage.Tracker) []storage.Tracker {
+	var out []storage.Tracker
+	for _, tr := range trackers {
+		if tr.ChildrenOmitted {
+			continue
+		}
+		tr.Children = nil
+		tr.ChildrenOmitted = true
+		out = append(out, tr)
+	}
+	return out
 }

@@ -42,7 +42,7 @@ A rollup that runs at every session start is paid for every time, so the readers
 |---|---|---|
 | `DefaultListLimit` | 50 | `pm_list_tasks` default page |
 | `MaxListLimit` | 200 | `pm_list_tasks` hard cap on `limit` |
-| `ContextBodyLimit` | 2000 runes | each doing task's `body` in `pm_context`; the brief is never cut |
+| `ContextBodyLimit` | 1500 runes | each doing task's `body` in `pm_context`; the brief is never cut |
 | `DefaultJournalLimit` / `MaxJournalLimit` | 20 / 200 | `pm_journal_list` |
 | `DefaultTimelineLimit` / `MaxTimelineLimit` | 20 / 200 | `pm_timeline_list` filtered reads |
 | `ContextTimelineLimit` | 20 | entries after the state in `pm_context`; the state itself is whole |
@@ -87,13 +87,15 @@ The session-start rollup. Explicit `project` wins; else `cwd` is matched against
 
 **The output has two shapes**, and a client must branch on which it got.
 
-Project-scoped: `project {slug, name, repo?, stack?, notes?, links?, statuses}`, `task_counts`, `doing_tasks[]` (details, body cut at 2000 runes, brief FULL; children and trackers suppressed), `trackers[]?` (the parent + subtask rollup), `focus_tasks[]?` (today's plan only), `attention?` + `attention_note?`, `journals[]?` (counts only: `name, subject?, total, open`) + `journals_note?`, `timeline?` (the state whole, up to 20 entries after it, `since_omitted`, `verification`, `stale`, `note`), `executor_profile?` (a pointer string telling you to run `pm executor show`, not the profile).
+Project-scoped: `project {slug, name, repo?, stack?, notes?, links?, statuses}`, `task_counts`, `doing_tasks[]` (details, body cut at 1500 runes, brief FULL; children and trackers suppressed), `trackers[]?` (the parent + subtask rollup), `focus_tasks[]?` (today's plan only), `attention?` + `attention_note?`, `journals[]?` (counts only: `name, subject?, total, open`) + `journals_note?`, `timeline?` (the state whole, up to 20 entries after it, `since_omitted`, `verification`, `stale`, `note`), `executor_profile?` (a pointer string telling you to run `pm executor show`, not the profile).
 
-Cross-project: `projects[]` of `{slug, name, repo?, task_counts, doing_tasks[]? (summaries, briefs one-lined), trackers[]?, timeline_state?}`, `focus_tasks[]?`, `attention?`, `note?`.
+Cross-project: `projects[]` of `{slug, name, repo?, task_counts, doing_tasks[]? (summaries, briefs one-lined), trackers[]? (OPEN trackers as headers only - no `children`, `children_omitted: true` - a finished tracker is left out), timeline_state?}`, `focus_tasks[]?`, `attention?`, `note?`, `trackers_note?` (says where the child rollup went, present when any project has an open tracker).
 
 The `attention` digest is `{wip, needs_me[], waiting[] (at most 10, no_reason rows first), waiting_total, stuck_projects[], counts{}, note?}` - the same queue the cockpit's home screen and `pm today` show, narrowed to the project when scoped. A row is `{section, severity, project, group, task_id?, title, status?, reason, waiting_for?, age_seconds (null = unknown), since?, flags[]?, actions[]}`.
 
-A tracker in the rollup is `{id, title, status, brief_line?, total, progress{}, children[]?, children_omitted?}`; a finished tracker drops its children.
+A tracker in the rollup is `{id, title, status, brief_line?, total, progress{}, children[]?, children_omitted?}`. `children` lists the OPEN children only - a child the human closed (`done` / `archived`) is counted in `progress` and `total` and dropped from the list, a landed one (`merged` / `pushed`) stays; a finished tracker drops its children entirely. The full child list is a `pm_list_tasks` away.
+
+The whole call is under a cold-start budget: `internal/service/context_budget_test.go` fails when the project-scoped or the cross-project result on a store-shaped fixture grows past 60 000 chars (the method and the measurement behind the number are in the test).
 
 ### pm_list_projects
 

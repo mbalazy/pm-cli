@@ -299,7 +299,11 @@ func TestContextCmdNoDoing(t *testing.T) {
 		t.Fatalf("context: %v", err)
 	}
 	mustContain(t, out, "📋 app-1  [waiting]  (1 total: 1 done)")
-	mustContain(t, out, "   ✅ app-2         done    o:0   \n")
+	// The done child is counted in the progress line and NOT listed - the
+	// rollup lists open children only (pm-cli-149).
+	if strings.Contains(out, "app-2") {
+		t.Errorf("a done child must not be listed under its tracker, got:\n%s", out)
+	}
 	if strings.Contains(out, "## Doing (standalone)") {
 		t.Errorf("expected no standalone doing section, got:\n%s", out)
 	}
