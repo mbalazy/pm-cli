@@ -456,9 +456,6 @@ func printEpicDryRun(plan *epicPlan, opts epicOptions) error {
 // integration branch (or verify the base in independent mode), prepare + capture
 // the baseline once, then drive every ready sub and record the run.
 func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) error {
-	tracker, slug, subs := plan.tracker, plan.slug, plan.subs
-	epicBranch, baseBranch, doneStatus := plan.epicBranch, plan.baseBranch, plan.doneStatus
-	independentMode := plan.independent
 	errOut := opts.stderr()
 
 	// Hard gate, not a warning (see epicDoneStatusGate). Resolved in planEpic
@@ -471,47 +468,115 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		fmt.Fprintf(errOut, "pm run-epic: %s\n", plan.doneStatusNote)
 	}
 
-	// Additional mode: the whole epic runs in ONE claimed worktree slot
-	// (first free, or --slot N), leaving the user's main checkout untouched.
-	// Ensure + seed + lock it ONCE for the run; the deferred release frees
-	// the lock on every normal exit (a kill is handled by the board, see
-	// killRun). Every per-sub plan targets this claimed slot via
-	// opts.slotDir/slotEnv - subs never re-resolve the pool mid-run.
-	workDir := plan.proj.Path
-	var claimedEnv []string
+	r := &epicRun{store: store, plan: plan, opts: opts, errOut: errOut, workDir: plan.proj.Path}
 	if opts.additional {
-		slot, release, err := acquireWorktreeSlot(plan.proj, slug, plan.slots, opts.slotPin, tracker.Meta.ID, "run-epic")
+		release, err := r.claimSlot()
 		if err != nil {
 			return err
 		}
 		defer release()
-		workDir = slot.Path
-		claimedEnv = slot.Env
-		if len(plan.slots) > 1 {
-			fmt.Fprintf(errOut, "pm run-epic: claimed worktree slot %s\n", workDir)
-		}
-		// Wipe any leftovers from a previous (possibly killed) run before
-		// touching the integration branch, so half-done work never bleeds in.
-		// Preserves the integration branch's COMMITTED history (re-entrancy)
-		// and ignored deps/configs - it only drops the dirty working tree.
-		if err := gitCleanWorktree(workDir); err != nil {
-			return fmt.Errorf("reset worktree %s to a clean state: %w", workDir, err)
-		}
 	}
 
 	// Precondition: clean working tree (the manager switches branches in
 	// place). Skipped in additional mode - the worktree is executor-managed
 	// and the user's main checkout is intentionally left alone.
 	if !opts.allowDirty && !opts.additional {
-		if err := requireCleanWorkingTree(workDir); err != nil {
+		if err := requireCleanWorkingTree(r.workDir); err != nil {
 			return err
 		}
 	}
+	if err := r.setupBranches(); err != nil {
+		return err
+	}
+	if err := r.prepareSlot(); err != nil {
+		return err
+	}
+	r.checkRig()
+	workOpts := r.workOptions()
+	r.captureBaseline(&workOpts)
 
-	// The ref every sub forks from in independent mode. In the main checkout it
-	// is the local base branch; in a slot it is origin/<base> (see below).
-	forkRef := baseBranch
-	if independentMode {
+	start := r.startRecording()
+	// From here until the end line below, a catchable signal (a terminal's Ctrl-C,
+	// a session harness taking the process group down, the board's kill) journals
+	// its own terminal line naming the signal instead of leaving this start line
+	// orphaned - see armCrashJournal.
+	defer armCrashJournal(r.stateDir, start)()
+
+	r.driveSubs(workOpts)
+	r.recordEnd()
+	r.finish()
+	return nil
+}
+
+// epicRun is one executeEpic call's state, filled in phase by phase: where the
+// run works (the main checkout or the claimed slot) and from which ref the subs
+// fork, what the rig and baseline steps found, the run-state writer and the
+// journal fields shared by the start and end lines, and the subs' outcomes.
+type epicRun struct {
+	store  storage.TaskStore
+	plan   *epicPlan
+	opts   epicOptions
+	errOut io.Writer
+
+	workDir    string
+	claimedEnv []string
+	// forkRef is the ref every sub forks from in independent mode. In the
+	// main checkout it is the local base branch; in a slot it is
+	// origin/<base> (see setupBranches).
+	forkRef string
+
+	rigUsed      string
+	rigPrompt    string
+	baselineUsed string
+
+	stateDir      string
+	runID         string
+	rw            *storage.RunWriter
+	journalBranch string
+	journalDir    string
+	epicStart     time.Time
+
+	outcomes     []subOutcome
+	abortReason  string         // non-empty once an account wall stopped the run
+	subDurations map[string]int // sub id -> driveSub wall-clock seconds
+}
+
+// claimSlot runs the whole epic in ONE claimed worktree slot (additional
+// mode: first free, or --slot N), leaving the user's main checkout untouched.
+// Ensure + seed + lock it ONCE for the run; the caller defers the returned
+// release, which frees the lock on every normal exit (a kill is handled by
+// the board, see killRun). Every per-sub plan targets this claimed slot via
+// opts.slotDir/slotEnv - subs never re-resolve the pool mid-run.
+func (r *epicRun) claimSlot() (func(), error) {
+	plan := r.plan
+	slot, release, err := acquireWorktreeSlot(plan.proj, plan.slug, plan.slots, r.opts.slotPin, plan.tracker.Meta.ID, "run-epic")
+	if err != nil {
+		return nil, err
+	}
+	r.workDir = slot.Path
+	r.claimedEnv = slot.Env
+	if len(plan.slots) > 1 {
+		fmt.Fprintf(r.errOut, "pm run-epic: claimed worktree slot %s\n", r.workDir)
+	}
+	// Wipe any leftovers from a previous (possibly killed) run before
+	// touching the integration branch, so half-done work never bleeds in.
+	// Preserves the integration branch's COMMITTED history (re-entrancy)
+	// and ignored deps/configs - it only drops the dirty working tree.
+	if err := gitCleanWorktree(r.workDir); err != nil {
+		// The slot was claimed: the caller never sees release, so free it here.
+		release()
+		return nil, fmt.Errorf("reset worktree %s to a clean state: %w", r.workDir, err)
+	}
+	return release, nil
+}
+
+// setupBranches verifies the fork base (independent mode) or creates or
+// continues the integration branch.
+func (r *epicRun) setupBranches() error {
+	plan, errOut, workDir := r.plan, r.errOut, r.workDir
+	baseBranch := plan.baseBranch
+	r.forkRef = baseBranch
+	if plan.independent {
 		// Every sub forks from base: a stale local base is what produced the
 		// false SPEC-CONFLICT of a 2026-08 run (pm-cli-119-7). In the main
 		// checkout that means fast-forwarding the local base to origin. IN A
@@ -520,9 +585,9 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		// to move it (pm-cli-131) - see slotForkRef. That also means a slot only
 		// needs the fork ref to RESOLVE (origin/<base> alone is enough), where
 		// the main checkout needs the local branch it is about to work on.
-		if opts.additional {
-			forkRef = slotForkRef(errOut, workDir, baseBranch)
-			if !gitRefExists(workDir, forkRef) {
+		if r.opts.additional {
+			r.forkRef = slotForkRef(errOut, workDir, baseBranch)
+			if !gitRefExists(workDir, r.forkRef) {
 				return fmt.Errorf("independent mode: base %q resolves to neither %s nor origin/%s at %s", baseBranch, baseBranch, baseBranch, workDir)
 			}
 		} else {
@@ -533,63 +598,77 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 				return fmt.Errorf("independent mode: %w", err)
 			}
 		}
-		fmt.Fprintf(errOut, "pm run-epic: %s INDEPENDENT - each sub on its own branch off %s (%d sub(s))\n", tracker.Meta.ID, forkRef, len(subs))
-	} else {
-		// A FRESH integration branch forks from base, so base is brought up to
-		// origin first; a re-run continues the existing branch and must not
-		// have its base moved under it.
-		if !branchExists(workDir, epicBranch) {
-			if err := freshenBase(errOut, workDir, baseBranch); err != nil {
-				return err
-			}
-		}
-		if err := gitEnsureBranch(workDir, epicBranch, baseBranch); err != nil {
-			return fmt.Errorf("create integration branch %s: %w", epicBranch, err)
-		}
-		fmt.Fprintf(errOut, "pm run-epic: %s on %s (%d sub(s))\n", tracker.Meta.ID, epicBranch, len(subs))
+		fmt.Fprintf(errOut, "pm run-epic: %s INDEPENDENT - each sub on its own branch off %s (%d sub(s))\n", plan.tracker.Meta.ID, r.forkRef, len(plan.subs))
+		return nil
 	}
-
-	// Prepare the claimed slot ONCE for the whole run (deps install etc.) -
-	// per-sub would repeat it for every worker. Runs after branch setup so
-	// the lockfile prepare sees is the one every sub forks from; in
-	// independent mode check that fork ref out first for the same reason -
-	// DETACHED, because this is a slot and the base branch may be held by the
-	// user's main checkout (pm-cli-131).
-	if opts.additional {
-		if prep := strings.TrimSpace(plan.exc.Prepare); prep != "" {
-			if independentMode {
-				if err := gitCheckoutDetached(workDir, forkRef); err != nil {
-					return fmt.Errorf("checkout %s for prepare: %w", forkRef, err)
-				}
-			}
-			fmt.Fprintf(errOut, "pm run-epic: prepare in %s: %s\n", workDir, prep)
-			if err := runPrepare(workDir, prep); err != nil {
-				return fmt.Errorf("prepare cmd (%s) failed in %s: %w", prep, workDir, err)
-			}
+	// A FRESH integration branch forks from base, so base is brought up to
+	// origin first; a re-run continues the existing branch and must not
+	// have its base moved under it.
+	if !branchExists(workDir, plan.epicBranch) {
+		if err := freshenBase(errOut, workDir, baseBranch); err != nil {
+			return err
 		}
 	}
+	if err := gitEnsureBranch(workDir, plan.epicBranch, baseBranch); err != nil {
+		return fmt.Errorf("create integration branch %s: %w", plan.epicBranch, err)
+	}
+	fmt.Fprintf(errOut, "pm run-epic: %s on %s (%d sub(s))\n", plan.tracker.Meta.ID, plan.epicBranch, len(plan.subs))
+	return nil
+}
 
-	// Prove the slot's runtime is up (executor.rig) ONCE for the whole run,
-	// after prepare (a bundler needs the deps) and with the slot's env - but
-	// only when a sub of this run will drive it: a run with no `runtime: on`
-	// sub never touches the rig. The verdict is rendered into every
-	// runtime-enabled sub's prompt; a dead rig is their handoff, never the
-	// run's error.
-	rigUsed := ""
-	rigPrompt := ""
-	if opts.additional {
-		if rig := strings.TrimSpace(plan.exc.Rig); rig != "" {
-			if need := runtimeSubs(subs, doneStatus); len(need) > 0 {
-				fmt.Fprintf(errOut, "pm run-epic: rig check for %d runtime sub(s) in %s: %s\n", len(need), workDir, rig)
-				verdict := runRig(errOut, workDir, rig, claimedEnv)
-				rigPrompt = rigSection(verdict, storage.ExpandRuntimeTools(plan.exc.RuntimeTools, workDir), claimedEnv)
-				rigUsed = verdict.journalWord()
-			}
+// prepareSlot prepares the claimed slot ONCE for the whole run (deps install
+// etc.) - per-sub would repeat it for every worker. Runs after branch setup so
+// the lockfile prepare sees is the one every sub forks from; in independent
+// mode check that fork ref out first for the same reason - DETACHED, because
+// this is a slot and the base branch may be held by the user's main checkout
+// (pm-cli-131).
+func (r *epicRun) prepareSlot() error {
+	if !r.opts.additional {
+		return nil
+	}
+	prep := strings.TrimSpace(r.plan.exc.Prepare)
+	if prep == "" {
+		return nil
+	}
+	if r.plan.independent {
+		if err := gitCheckoutDetached(r.workDir, r.forkRef); err != nil {
+			return fmt.Errorf("checkout %s for prepare: %w", r.forkRef, err)
 		}
 	}
+	fmt.Fprintf(r.errOut, "pm run-epic: prepare in %s: %s\n", r.workDir, prep)
+	if err := runPrepare(r.workDir, prep); err != nil {
+		return fmt.Errorf("prepare cmd (%s) failed in %s: %w", prep, r.workDir, err)
+	}
+	return nil
+}
 
+// checkRig proves the slot's runtime is up (executor.rig) ONCE for the whole
+// run, after prepare (a bundler needs the deps) and with the slot's env - but
+// only when a sub of this run will drive it: a run with no `runtime: on` sub
+// never touches the rig. The verdict is rendered into every runtime-enabled
+// sub's prompt; a dead rig is their handoff, never the run's error.
+func (r *epicRun) checkRig() {
+	if !r.opts.additional {
+		return
+	}
+	rig := strings.TrimSpace(r.plan.exc.Rig)
+	if rig == "" {
+		return
+	}
+	if need := runtimeSubs(r.plan.subs, r.plan.doneStatus); len(need) > 0 {
+		fmt.Fprintf(r.errOut, "pm run-epic: rig check for %d runtime sub(s) in %s: %s\n", len(need), r.workDir, rig)
+		verdict := runRig(r.errOut, r.workDir, rig, r.claimedEnv)
+		r.rigPrompt = rigSection(verdict, storage.ExpandRuntimeTools(r.plan.exc.RuntimeTools, r.workDir), r.claimedEnv)
+		r.rigUsed = verdict.journalWord()
+	}
+}
+
+// workOptions is what every sub's worker shares; driveSubs applies a sub's
+// own model on top.
+func (r *epicRun) workOptions() workOptions {
+	plan, opts := r.plan, r.opts
 	workOpts := workOptions{
-		rig: rigPrompt,
+		rig: r.rigPrompt,
 		// model/effort come from the PLAN, resolved once against executor.model /
 		// executor.effort, and are marked as set so the sub's own planWork keeps
 		// them (a sub's `model:` frontmatter is applied below, per sub).
@@ -598,66 +677,77 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		// timeout comes from the PLAN, already resolved against the project's
 		// executor.timeout, and is marked as set so the sub's own planWork keeps
 		// the manager's number instead of resolving it a second time.
-		allowDirty: true, timeout: plan.timeout, timeoutSet: true, additional: opts.additional, independent: independentMode,
-		errOut: errOut,
+		allowDirty: true, timeout: plan.timeout, timeoutSet: true, additional: opts.additional, independent: plan.independent,
+		errOut: r.errOut,
 	}
 	if opts.additional {
-		workOpts.slotDir = workDir
-		workOpts.slotEnv = claimedEnv
+		workOpts.slotDir = r.workDir
+		workOpts.slotEnv = r.claimedEnv
 	}
+	return workOpts
+}
 
-	// Capture the verification baseline ONCE for the whole run, on the
-	// branch every sub forks from (base in independent mode, the
-	// integration branch otherwise), so each worker judges its verify on
-	// NEW failures only - instead of every sub re-discovering the same
-	// pre-existing breakage and reporting a false failure. Best-effort: a
-	// baseline that cannot run degrades to no-baseline, never aborts.
-	baselineUsed := ""
-	if bl := strings.TrimSpace(plan.exc.Baseline); bl != "" {
-		ref := epicBranch
-		checkout := func() error { return gitEnsureBranch(workDir, ref, "") }
-		if independentMode {
-			ref = forkRef
-			// A slot never checks the base branch out by name (pm-cli-131).
-			if opts.additional {
-				checkout = func() error { return gitCheckoutDetached(workDir, ref) }
-			}
-		}
-		if err := checkout(); err != nil {
-			fmt.Fprintf(errOut, "pm run-epic: checkout %s for baseline failed (%v) - continuing without a baseline\n", ref, err)
-		} else {
-			fmt.Fprintf(errOut, "pm run-epic: baseline in %s: %s\n", workDir, bl)
-			workOpts.baseline = captureBaseline(errOut, workDir, bl)
-			if workOpts.baseline != "" {
-				baselineUsed = bl
-			}
+// captureBaseline captures the verification baseline ONCE for the whole run,
+// on the branch every sub forks from (base in independent mode, the
+// integration branch otherwise), so each worker judges its verify on NEW
+// failures only - instead of every sub re-discovering the same pre-existing
+// breakage and reporting a false failure. Best-effort: a baseline that cannot
+// run degrades to no-baseline, never aborts.
+func (r *epicRun) captureBaseline(workOpts *workOptions) {
+	bl := strings.TrimSpace(r.plan.exc.Baseline)
+	if bl == "" {
+		return
+	}
+	workDir := r.workDir
+	ref := r.plan.epicBranch
+	checkout := func() error { return gitEnsureBranch(workDir, ref, "") }
+	if r.plan.independent {
+		ref = r.forkRef
+		// A slot never checks the base branch out by name (pm-cli-131).
+		if r.opts.additional {
+			checkout = func() error { return gitCheckoutDetached(workDir, ref) }
 		}
 	}
+	if err := checkout(); err != nil {
+		fmt.Fprintf(r.errOut, "pm run-epic: checkout %s for baseline failed (%v) - continuing without a baseline\n", ref, err)
+		return
+	}
+	fmt.Fprintf(r.errOut, "pm run-epic: baseline in %s: %s\n", workDir, bl)
+	workOpts.baseline = captureBaseline(r.errOut, workDir, bl)
+	if workOpts.baseline != "" {
+		r.baselineUsed = bl
+	}
+}
 
+// startRecording writes the run-state and the journal's start line, which it
+// returns for the crash journal to arm on.
+func (r *epicRun) startRecording() storage.JournalEntry {
+	plan, opts := r.plan, r.opts
+	tracker, slug := plan.tracker, plan.slug
 	// Run-state for observability: the manager owns the epic-level file;
 	// driveSub fills in each sub's worker session as it goes. It lives in
 	// the pm data dir (where the TUI reads it), NOT the git repo. Every
 	// WriteRunState below is best-effort observability: a failed write only
 	// costs a stale dashboard, never correctness, so the error is dropped.
-	stateDir := store.ProjectDir(slug)
+	r.stateDir = r.store.ProjectDir(slug)
 	// One id for this physical run, stamped on the run-state and on
 	// every journal line below, so `pm executor stats` can tell this run
 	// apart from any other that happens to reuse the pid.
-	runID := storage.NewRunID()
+	r.runID = storage.NewRunID()
 	run := &storage.RunState{
 		TaskID:   tracker.Meta.ID,
-		RunID:    runID,
+		RunID:    r.runID,
 		Project:  slug,
 		Kind:     storage.RunKindEpic,
 		Status:   storage.RunStatusRunning,
 		PID:      os.Getpid(),
-		RepoPath: workDir,
+		RepoPath: r.workDir,
 		Started:  time.Now().UTC().Format(time.RFC3339),
-		LogPath:  storage.ExecutorLogPath(stateDir, tracker.Meta.ID),
+		LogPath:  storage.ExecutorLogPath(r.stateDir, tracker.Meta.ID),
 	}
-	for _, s := range subs {
+	for _, s := range plan.subs {
 		init := "pending"
-		if s.Meta.Status == doneStatus || s.Meta.Status == storage.StatusDone {
+		if s.Meta.Status == plan.doneStatus || s.Meta.Status == storage.StatusDone {
 			init = "skipped"
 		}
 		run.Subs = append(run.Subs, storage.SubRun{ID: s.Meta.ID, Status: init})
@@ -667,38 +757,39 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 	// by task id, so a re-run of the same tracker - frequently the re-run OF
 	// that crash - would otherwise overwrite the dead run's forensics one step
 	// before the reconciler looks for them.
-	reportReconciledCrashes(errOut, stateDir, "pm run-epic")
+	reportReconciledCrashes(r.errOut, r.stateDir, "pm run-epic")
 	// From here on the run-state is only touched through the writer: each
 	// sub's worker heartbeats this same struct from its own goroutine, so
 	// every mutation has to be serialized (see storage.RunWriter).
-	rw := storage.NewRunWriter(stateDir, run)
-	_ = rw.Update(nil)
+	r.rw = storage.NewRunWriter(r.stateDir, run)
+	_ = r.rw.Update(nil)
 
 	// Journal: durable cross-run history (retro feedstock). Start line now;
 	// end line with per-sub outcomes after the loop. Best-effort like the
 	// run-state writes above. Independent mode has no integration branch,
 	// so the journal records the fork base instead.
-	journalBranch := epicBranch
-	if independentMode {
-		journalBranch = "independent:" + forkRef
+	r.journalBranch = plan.epicBranch
+	if plan.independent {
+		r.journalBranch = "independent:" + r.forkRef
 	}
-	journalDir := ""
 	if opts.additional {
-		journalDir = workDir
+		r.journalDir = r.workDir
 	}
-	epicStart := time.Now()
+	r.epicStart = time.Now()
 	start := storage.JournalEntry{
-		Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID, RunID: runID,
-		PID: os.Getpid(), Model: plan.model, Additional: opts.additional, Yolo: opts.yolo, Independent: independentMode, Branch: journalBranch,
-		WorkDir: journalDir, Baseline: baselineUsed, Source: storage.LaunchSource(), Rig: rigUsed,
+		Event: storage.JournalEventStart, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID, RunID: r.runID,
+		PID: os.Getpid(), Model: plan.model, Additional: opts.additional, Yolo: opts.yolo, Independent: plan.independent, Branch: r.journalBranch,
+		WorkDir: r.journalDir, Baseline: r.baselineUsed, Source: storage.LaunchSource(), Rig: r.rigUsed,
 	}
-	_ = storage.AppendJournal(stateDir, &start)
-	// From here until the end line below, a catchable signal (a terminal's Ctrl-C,
-	// a session harness taking the process group down, the board's kill) journals
-	// its own terminal line naming the signal instead of leaving this start line
-	// orphaned - see armCrashJournal.
-	defer armCrashJournal(stateDir, start)()
+	_ = storage.AppendJournal(r.stateDir, &start)
+	return start
+}
 
+// driveSubs runs every sub that is ready, in order, and stops at an account
+// wall.
+func (r *epicRun) driveSubs(workOpts workOptions) {
+	plan, errOut, rw := r.plan, r.errOut, r.rw
+	subs := plan.subs
 	// ID -> sub for the dependency gate. Pointers are shared with the loop,
 	// so statuses mutated by driveSub are visible to later subs' gates.
 	byID := make(map[string]*storage.Task, len(subs))
@@ -706,19 +797,17 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		byID[s.Meta.ID] = s
 	}
 
-	var outcomes []subOutcome
-	var abortReason string           // non-empty once an account wall stopped the run
-	subDurations := map[string]int{} // sub id -> driveSub wall-clock seconds
+	r.subDurations = map[string]int{}
 	for _, sub := range subs {
 		// Decide, without spending a worker, whether this sub runs. Covers
 		// the re-entrant done skip, the manual gate, the not-ready skip, the
 		// crash-recovery pickup, and the depends_on gate (see classifySub).
-		oc, drive, announce := classifySub(sub, byID, plan.startStatus, doneStatus, plan.crashRecovered)
+		oc, drive, announce := classifySub(sub, byID, plan.startStatus, plan.doneStatus, plan.crashRecovered)
 		if announce != "" {
 			fmt.Fprintf(errOut, "pm run-epic: %s\n", announce)
 		}
 		if !drive {
-			outcomes = append(outcomes, oc)
+			r.outcomes = append(r.outcomes, oc)
 			_ = rw.Update(func(run *storage.RunState) { updateSubRun(run, oc.id, oc.result, oc.note) })
 			continue
 		}
@@ -735,13 +824,13 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		}
 
 		subStart := time.Now()
-		if independentMode {
-			oc = driveSubIndependent(store, workDir, slug, tracker, sub, forkRef, doneStatus, subOpts, rw, opts.additional)
+		if plan.independent {
+			oc = driveSubIndependent(r.store, r.workDir, plan.slug, plan.tracker, sub, r.forkRef, plan.doneStatus, subOpts, rw, r.opts.additional)
 		} else {
-			oc = driveSub(store, workDir, slug, tracker, sub, epicBranch, doneStatus, subOpts, rw, opts.additional)
+			oc = driveSub(r.store, r.workDir, plan.slug, plan.tracker, sub, plan.epicBranch, plan.doneStatus, subOpts, rw, r.opts.additional)
 		}
-		subDurations[oc.id] = int(time.Since(subStart).Seconds())
-		outcomes = append(outcomes, oc)
+		r.subDurations[oc.id] = int(time.Since(subStart).Seconds())
+		r.outcomes = append(r.outcomes, oc)
 
 		_ = rw.Update(func(run *storage.RunState) {
 			run.CurrentSub = ""
@@ -756,93 +845,103 @@ func executeEpic(store storage.TaskStore, plan *epicPlan, opts epicOptions) erro
 		// (it never got a fair run) and the rest are recorded as skipped, so a
 		// re-run once the wall clears picks all of them up untouched.
 		if oc.result == subAborted {
-			abortReason = oc.note
-			logIfErr(errOut, "return "+oc.id+" to "+string(plan.startStatus), store.MoveTask(sub, plan.startStatus))
-			outcomes = append(outcomes, abortSkips(subs, outcomes, oc.id)...)
+			r.abortReason = oc.note
+			logIfErr(errOut, "return "+oc.id+" to "+string(plan.startStatus), r.store.MoveTask(sub, plan.startStatus))
+			r.outcomes = append(r.outcomes, abortSkips(subs, r.outcomes, oc.id)...)
 			fmt.Fprintf(errOut, "\npm run-epic: ABORTING the run - %s\n", oc.note)
 			fmt.Fprintf(errOut, "pm run-epic: %s is back on %s and the remaining sub(s) were not started; re-run once this is resolved.\n", oc.id, plan.startStatus)
 			break
 		}
 	}
+}
 
+// recordEnd closes the run-state and writes the journal's end line.
+func (r *epicRun) recordEnd() {
+	plan, opts := r.plan, r.opts
 	runStatus := storage.RunStatusDone
-	if abortReason != "" {
+	if r.abortReason != "" {
 		runStatus = storage.RunStatusFailed
 	}
-	_ = rw.Update(func(run *storage.RunState) {
+	_ = r.rw.Update(func(run *storage.RunState) {
 		run.Status = runStatus
-		run.Error = abortReason
+		run.Error = r.abortReason
 	})
 
 	// Journal end line: the run's durable record (outcome + duration per sub).
 	// The per-sub stats are read through the writer like every other access.
 	var jSubs []storage.JournalSub
-	rw.Read(func(run *storage.RunState) { jSubs = journalSubs(outcomes, subDurations, run) })
-	_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
-		Event: storage.JournalEventEnd, Kind: "run-epic", Project: slug, TaskID: tracker.Meta.ID, RunID: runID,
-		PID: os.Getpid(), Model: plan.model, Additional: opts.additional, Yolo: opts.yolo, Independent: independentMode, Branch: journalBranch,
-		WorkDir: journalDir, Baseline: baselineUsed, Rig: rigUsed,
-		Status: runStatus, Error: abortReason, DurationS: int(time.Since(epicStart).Seconds()),
+	r.rw.Read(func(run *storage.RunState) { jSubs = journalSubs(r.outcomes, r.subDurations, run) })
+	_ = storage.AppendJournal(r.stateDir, &storage.JournalEntry{
+		Event: storage.JournalEventEnd, Kind: "run-epic", Project: plan.slug, TaskID: plan.tracker.Meta.ID, RunID: r.runID,
+		PID: os.Getpid(), Model: plan.model, Additional: opts.additional, Yolo: opts.yolo, Independent: plan.independent, Branch: r.journalBranch,
+		WorkDir: r.journalDir, Baseline: r.baselineUsed, Rig: r.rigUsed,
+		Status: runStatus, Error: r.abortReason, DurationS: int(time.Since(r.epicStart).Seconds()),
 		Subs: jSubs,
 	})
+}
 
-	// The chain runs LAST, after the summary and (integration mode) the epic PR,
-	// so the acceptance starts against a run that is completely finished on
-	// disk. Nothing below it can fail the run: chainFinish returns instead of
-	// erroring, always.
-	maybeChainFinish := func() {
-		if !plan.autoFinish {
-			return
-		}
-		// An aborted run is the one case where a chain would be actively wrong:
-		// an account wall stopped the subs, so most of the batch was never run,
-		// and the acceptance would spend a fresh worker walking into the same
-		// wall. Say so - silence here would read as "the chain is broken".
-		if abortReason != "" {
-			fmt.Fprintf(errOut, "pm run-epic: not chaining the acceptance of %s - the run aborted (%s); re-run it, then accept with `pm finish %s`\n",
-				tracker.Meta.ID, abortReason, tracker.Meta.ID)
-			return
-		}
-		// Independent mode ends with the LAST sub's own branch checked out (it
-		// never restores the base - integration mode does, below). The
-		// acceptance then walks every sub's branch, and `git worktree add`
-		// refuses a branch that is already checked out somewhere in the repo -
-		// so without this the last sub of every batch is the one sub the acceptance
-		// cannot open. Best-effort and chain-only: a run nobody chains keeps
-		// exactly the branch it kept before.
-		if independentMode {
-			if opts.additional {
-				// A slot leaves the base branch alone entirely (pm-cli-131) -
-				// detaching frees the sub's branch just as well.
-				logIfErr(errOut, "detach at "+forkRef+" before the acceptance", gitCheckoutDetached(workDir, forkRef))
-			} else {
-				logIfErr(errOut, "restore "+baseBranch+" before the acceptance", gitEnsureBranch(workDir, baseBranch, ""))
-			}
-		}
-		chainFinish(errOut, stateDir, slug, tracker.Meta.ID, workDir)
-	}
-
-	if independentMode {
-		printEpicSummary(opts.stdout(), tracker, "independent, off "+forkRef, outcomes, slug, plan.startStatus, rerunSkips(store, slug, outcomes, plan.startStatus, doneStatus))
+// finish prints the summary, opens the epic PR (integration mode) and chains
+// the acceptance.
+func (r *epicRun) finish() {
+	plan, errOut := r.plan, r.errOut
+	if plan.independent {
+		printEpicSummary(r.opts.stdout(), plan.tracker, "independent, off "+r.forkRef, r.outcomes, plan.slug, plan.startStatus, rerunSkips(r.store, plan.slug, r.outcomes, plan.startStatus, plan.doneStatus))
 		fmt.Fprintf(errOut, "\nEach sub lives on its own branch (pushed to origin when it carried commits). Finish + verify every task by hand, then open per-task PRs - nothing was merged anywhere.\n")
-		maybeChainFinish()
-		return nil
+		r.maybeChainFinish()
+		return
 	}
 
 	// Leave the worktree (or main checkout) on the integration branch with
 	// the accumulated work. Best-effort: the branch already exists (created
 	// above) and any real checkout failure surfaced earlier; a stray here
 	// only affects which branch is checked out at exit.
-	_ = gitEnsureBranch(workDir, epicBranch, "")
+	_ = gitEnsureBranch(r.workDir, plan.epicBranch, "")
 
-	printEpicSummary(opts.stdout(), tracker, "integration: "+epicBranch, outcomes, slug, plan.startStatus, rerunSkips(store, slug, outcomes, plan.startStatus, doneStatus))
+	printEpicSummary(r.opts.stdout(), plan.tracker, "integration: "+plan.epicBranch, r.outcomes, plan.slug, plan.startStatus, rerunSkips(r.store, plan.slug, r.outcomes, plan.startStatus, plan.doneStatus))
 
-	if !opts.noPR && anyMerged(outcomes) {
-		openEpicPR(errOut, workDir, epicBranch, baseBranch, tracker)
+	if !r.opts.noPR && anyMerged(r.outcomes) {
+		openEpicPR(errOut, r.workDir, plan.epicBranch, plan.baseBranch, plan.tracker)
 	}
-	fmt.Fprintf(errOut, "\nThe epic->%s PR and closing %s stay human-gated - review the integration branch when convenient.\n", baseBranch, tracker.Meta.ID)
-	maybeChainFinish()
-	return nil
+	fmt.Fprintf(errOut, "\nThe epic->%s PR and closing %s stay human-gated - review the integration branch when convenient.\n", plan.baseBranch, plan.tracker.Meta.ID)
+	r.maybeChainFinish()
+}
+
+// maybeChainFinish runs LAST, after the summary and (integration mode) the
+// epic PR, so the acceptance starts against a run that is completely finished
+// on disk. Nothing in it can fail the run: chainFinish returns instead of
+// erroring, always.
+func (r *epicRun) maybeChainFinish() {
+	plan, errOut := r.plan, r.errOut
+	tracker := plan.tracker
+	if !plan.autoFinish {
+		return
+	}
+	// An aborted run is the one case where a chain would be actively wrong:
+	// an account wall stopped the subs, so most of the batch was never run,
+	// and the acceptance would spend a fresh worker walking into the same
+	// wall. Say so - silence here would read as "the chain is broken".
+	if r.abortReason != "" {
+		fmt.Fprintf(errOut, "pm run-epic: not chaining the acceptance of %s - the run aborted (%s); re-run it, then accept with `pm finish %s`\n",
+			tracker.Meta.ID, r.abortReason, tracker.Meta.ID)
+		return
+	}
+	// Independent mode ends with the LAST sub's own branch checked out (it
+	// never restores the base - integration mode does, below). The
+	// acceptance then walks every sub's branch, and `git worktree add`
+	// refuses a branch that is already checked out somewhere in the repo -
+	// so without this the last sub of every batch is the one sub the acceptance
+	// cannot open. Best-effort and chain-only: a run nobody chains keeps
+	// exactly the branch it kept before.
+	if plan.independent {
+		if r.opts.additional {
+			// A slot leaves the base branch alone entirely (pm-cli-131) -
+			// detaching frees the sub's branch just as well.
+			logIfErr(errOut, "detach at "+r.forkRef+" before the acceptance", gitCheckoutDetached(r.workDir, r.forkRef))
+		} else {
+			logIfErr(errOut, "restore "+plan.baseBranch+" before the acceptance", gitEnsureBranch(r.workDir, plan.baseBranch, ""))
+		}
+	}
+	chainFinish(errOut, r.stateDir, plan.slug, tracker.Meta.ID, r.workDir)
 }
 
 // classifySub decides what happens to a sub BEFORE any worker is spawned. It is
