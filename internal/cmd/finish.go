@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mbalazy/pm-cli/internal/exitcode"
+	"github.com/mbalazy/pm-cli/internal/projectarg"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
@@ -830,9 +831,9 @@ func scanFinishStructuredOutput(r io.Reader) *finishResult {
 func finishProjectSlug(cmd *cobra.Command, store storage.TaskStore, tracker string) (string, error) {
 	flag, _ := cmd.Flags().GetString("project")
 	if flag != "" {
-		return resolveProjectSlugArg(store, []string{flag})
+		return projectarg.Slug(store, []string{flag})
 	}
-	if slug := detectProjectFromCwd(store); slug != "" {
+	if slug := projectarg.FromCwd(store); slug != "" {
 		return slug, nil
 	}
 	slug, err := projectFromTaskID(store, tracker)

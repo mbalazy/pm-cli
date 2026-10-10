@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mbalazy/pm-cli/internal/projectarg"
 	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
@@ -163,7 +164,7 @@ func TestDescribeBinding(t *testing.T) {
 	}
 }
 
-// A slug-only command must not inherit resolveProjectArg's fatal project load.
+// A slug-only command must not inherit projectarg.Load's fatal project load.
 // `pm context` and `pm executor stats` are read-only diagnostics that never
 // touch the project struct - before the resolver was shared they printed their
 // rollup regardless of what project.yaml held, and an unparseable one is
@@ -184,9 +185,9 @@ func TestSlugOnlyCommandsSurviveUnreadableProjectYAML(t *testing.T) {
 		return store, "app"
 	}
 
-	t.Run("resolveProjectSlugArg resolves it", func(t *testing.T) {
+	t.Run("projectarg.Slug resolves it", func(t *testing.T) {
 		store, slug := newStore(t)
-		got, err := resolveProjectSlugArg(store, []string{slug})
+		got, err := projectarg.Slug(store, []string{slug})
 		if err != nil {
 			t.Fatalf("slug resolution must not load project.yaml, got: %v", err)
 		}
@@ -195,9 +196,9 @@ func TestSlugOnlyCommandsSurviveUnreadableProjectYAML(t *testing.T) {
 		}
 	})
 
-	t.Run("resolveProjectArg still fails (the struct really is unusable)", func(t *testing.T) {
+	t.Run("projectarg.Load still fails (the struct really is unusable)", func(t *testing.T) {
 		store, slug := newStore(t)
-		if _, _, err := resolveProjectArg(store, []string{slug}); err == nil {
+		if _, _, err := projectarg.Load(store, []string{slug}); err == nil {
 			t.Error("a command needing the project struct must still get the load error")
 		}
 	})

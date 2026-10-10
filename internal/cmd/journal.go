@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mbalazy/pm-cli/internal/projectarg"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
@@ -57,7 +58,7 @@ func journalProject(cmd *cobra.Command, store storage.TaskStore) (string, *stora
 	if flag != "" {
 		args = []string{flag}
 	}
-	return resolveProjectArg(store, args)
+	return projectarg.Load(store, args)
 }
 
 // journalSubject resolves a journal name against the project's declared list.

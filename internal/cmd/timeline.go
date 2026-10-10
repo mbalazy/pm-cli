@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mbalazy/pm-cli/internal/projectarg"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
@@ -66,7 +67,7 @@ func timelineProject(cmd *cobra.Command, store storage.TaskStore, args []string)
 			args = []string{flag}
 		}
 	}
-	return resolveProjectSlugArg(store, args)
+	return projectarg.Slug(store, args)
 }
 
 func newTimelineAddCmd(store storage.TaskStore) *cobra.Command {

@@ -13,6 +13,7 @@
 package cmd
 
 import (
+	"github.com/mbalazy/pm-cli/internal/projectarg"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/mbalazy/pm-cli/internal/version"
 	"github.com/spf13/cobra"
@@ -32,7 +33,7 @@ func NewRootCmd() *cobra.Command {
 		Version: version.Version,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// default: open board, auto-detect project from cwd
-			return runBoard(store, detectProjectFromCwd(store))
+			return runBoard(store, projectarg.FromCwd(store))
 		},
 		SilenceUsage: true,
 		// main prints the error ONCE, to stderr, and picks the exit code

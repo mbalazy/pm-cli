@@ -1,9 +1,8 @@
 package cmd
 
 import (
-	"os"
-
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mbalazy/pm-cli/internal/projectarg"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/mbalazy/pm-cli/internal/tui/board"
 	"github.com/spf13/cobra"
@@ -24,23 +23,11 @@ func newBoardCmd(store storage.TaskStore) *cobra.Command {
 				project = slug
 			}
 			if project == "" {
-				project = detectProjectFromCwd(store)
+				project = projectarg.FromCwd(store)
 			}
 			return runBoard(store, project)
 		},
 	}
-}
-
-func detectProjectFromCwd(store storage.TaskStore) string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	slug, err := storage.ResolveProjectFromCwd(store, cwd)
-	if err != nil {
-		return ""
-	}
-	return slug
 }
 
 func runBoard(store storage.TaskStore, project string) error {

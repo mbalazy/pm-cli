@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/mbalazy/pm-cli/internal/projectarg"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -48,7 +49,7 @@ func newExecutorInitCmd(store storage.TaskStore) *cobra.Command {
 			"the output lists which fields were preserved. An existing playbook file is never rewritten.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slug, proj, err := resolveProjectArg(store, args)
+			slug, proj, err := projectarg.Load(store, args)
 			if err != nil {
 				return err
 			}

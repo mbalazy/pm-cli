@@ -9,7 +9,7 @@ import (
 	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
-// twoProjectStore builds two projects with no Path (so detectProjectFromCwd
+// twoProjectStore builds two projects with no Path (so projectarg.FromCwd
 // never matches and every lookup goes through the cross-project fallback).
 func twoProjectStore(t *testing.T) *storage.Store {
 	t.Helper()
@@ -90,7 +90,7 @@ func TestResolveWorkTaskCwdIsATiebreakNotAnOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	// "local" is the project whose path encloses the test's cwd, so
-	// detectProjectFromCwd resolves to it for real.
+	// projectarg.FromCwd resolves to it for real.
 	if err := store.CreateProject("local", &storage.Project{Name: "local", Path: cwd}); err != nil {
 		t.Fatal(err)
 	}

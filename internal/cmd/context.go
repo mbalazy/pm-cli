@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mbalazy/pm-cli/internal/projectarg"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
@@ -15,7 +16,7 @@ func newContextCmd(store storage.TaskStore) *cobra.Command {
 		Short: "Show session context: trackers (parent+subtask rollup), active tasks, counts",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slug, err := resolveProjectSlugArg(store, args)
+			slug, err := projectarg.Slug(store, args)
 			if err != nil {
 				return err
 			}

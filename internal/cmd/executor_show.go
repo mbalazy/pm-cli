@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mbalazy/pm-cli/internal/projectarg"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
@@ -20,7 +21,7 @@ func newExecutorShowCmd(store storage.TaskStore) *cobra.Command {
 			"path or copying simulator UDIDs and ports out of project.yaml by hand.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slug, proj, err := resolveProjectArg(store, args)
+			slug, proj, err := projectarg.Load(store, args)
 			if err != nil {
 				return err
 			}
@@ -28,41 +29,6 @@ func newExecutorShowCmd(store storage.TaskStore) *cobra.Command {
 			return nil
 		},
 	}
-}
-
-// resolveProjectSlugArg resolves the optional [project] argument shared by the
-// commands that take one: explicit arg, else cwd detection.
-func resolveProjectSlugArg(store storage.TaskStore, args []string) (string, error) {
-	var slug string
-	if len(args) == 1 {
-		s, err := store.ResolveProject(args[0])
-		if err != nil {
-			return "", err
-		}
-		slug = s
-	} else {
-		slug = detectProjectFromCwd(store)
-	}
-	if slug == "" {
-		return "", usageErr(fmt.Errorf("no project (pass a project or run inside a project dir)"))
-	}
-	return slug, nil
-}
-
-// resolveProjectArg additionally loads the project, for the commands that need
-// the project struct. Commands that only need the slug must call
-// resolveProjectSlugArg instead: an unreadable project.yaml is fatal here, and
-// inheriting that failure would break commands that work fine without it.
-func resolveProjectArg(store storage.TaskStore, args []string) (string, *storage.Project, error) {
-	slug, err := resolveProjectSlugArg(store, args)
-	if err != nil {
-		return "", nil, err
-	}
-	proj, err := store.GetProject(slug)
-	if err != nil {
-		return "", nil, fmt.Errorf("load project %s: %w", slug, err)
-	}
-	return slug, proj, nil
 }
 
 // renderExecutorProfile renders the resolved profile. Pure (given the project

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mbalazy/pm-cli/internal/proc"
+	"github.com/mbalazy/pm-cli/internal/projectarg"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
@@ -279,7 +280,7 @@ func resolveWorkTask(store storage.TaskStore, args []string, cmdName string) (*s
 	// `pm work pm-cli-18` from a repo holding "Port pm-cli-18 learnings" and
 	// the 60-minute worker committed there. Standing somewhere breaks a tie;
 	// it does not outrank a stronger match.
-	cwdSlug := detectProjectFromCwd(store)
+	cwdSlug := projectarg.FromCwd(store)
 
 	// Scan every project. FindTask also matches on TITLE
 	// SUBSTRING, so a short query ("auth") can hit several projects - and

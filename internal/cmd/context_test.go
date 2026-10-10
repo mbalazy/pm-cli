@@ -100,7 +100,7 @@ func TestCountsLine(t *testing.T) {
 }
 
 // contextFixture builds a store in a temp dir holding one project ("app") with
-// the given tasks. The project has no Path, so detectProjectFromCwd can never
+// the given tasks. The project has no Path, so projectarg.FromCwd can never
 // match it - context always has to be reached via the explicit project arg.
 func contextFixture(t *testing.T, tasks ...*storage.Task) *storage.Store {
 	t.Helper()

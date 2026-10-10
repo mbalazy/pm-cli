@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mbalazy/pm-cli/internal/projectarg"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
@@ -73,7 +74,7 @@ func newExecutorDoctorCmd(store storage.TaskStore) *cobra.Command {
 		// the command untestable.
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			slug, proj, err := resolveProjectArg(store, args)
+			slug, proj, err := projectarg.Load(store, args)
 			if err != nil {
 				cmd.SilenceErrors = false // real failures should still print
 				return err
