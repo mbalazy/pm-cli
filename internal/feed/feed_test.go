@@ -445,8 +445,11 @@ func TestGitAndGitHubSourcesParseGH(t *testing.T) {
 	if states[9].State != "merged" || states[9].TaskID != "a-1" || states[7].State != "open" || !states[7].Draft || states[10].State != "closed" {
 		t.Errorf("PR states = %+v", states)
 	}
-	// A later refresh that lists nothing keeps the known states.
-	stateAt := time.Now()
+	// A later refresh that lists nothing keeps the known states. "Later" is
+	// measured from the fixture's clock, not the wall clock: the fixture rows
+	// are pinned in time and would fall out of the keep window as real days
+	// pass, which is the pruning working, not the snapshot losing rows.
+	stateAt := feedNow.Add(24 * time.Hour)
 	if err := f.mergePRStates(nil, stateAt); err != nil {
 		t.Fatal(err)
 	}
