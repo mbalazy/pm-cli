@@ -879,156 +879,236 @@ var workerHeartbeatInterval = storage.HeartbeatInterval
 func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, opts workOptions) (*workerResult, error) {
 	// dir is the worker cwd and the target of every git op: the "additional"
 	// worktree in worktree mode, else the main checkout.
-	dir := plan.workDir
+	w := &workRun{store: store, task: task, plan: plan, opts: opts, dir: plan.workDir}
 	if opts.standalone {
-		if plan.worktree {
-			// The "additional" worktree is reused across tasks. Give this task a
-			// FRESH branch forked from the resolved base branch's current tip, first
-			// wiping any leftovers (uncommitted or partially-committed work from a
-			// prior, possibly killed, run) so nothing bleeds into it. Ignored
-			// deps/configs survive. Base was resolved in planWork (--base >
-			// executor.base_branch > main checkout's current branch).
-			if err := freshenBase(opts.stderr(), dir, plan.base); err != nil {
-				return nil, err
-			}
-			if err := gitFreshBranch(dir, plan.branch, plan.base); err != nil {
-				return nil, fmt.Errorf("prepare fresh branch %s (base %s): %w", plan.branch, plan.base, err)
-			}
-		} else {
-			// Non-worktree: the user's own checkout. Enforce the clean-tree
-			// precondition and continue/create the branch in place.
-			if !opts.allowDirty {
-				if err := requireCleanWorkingTree(dir); err != nil {
-					return nil, err
-				}
-			}
-			if err := gitCheckoutBranch(dir, plan.branch); err != nil {
-				return nil, fmt.Errorf("prepare branch %s: %w", plan.branch, err)
-			}
+		if err := w.prepareBranch(); err != nil {
+			return nil, err
 		}
 	}
-
-	// Make the worktree's dependencies current BEFORE the worker spends turns
-	// discovering they aren't (executor.prepare, worktree mode only, cwd = the
-	// claimed slot). A failed prepare aborts the run - the worker would fail on
-	// the same broken deps anyway, just slower and less legibly.
-	if plan.worktree && plan.prepare != "" {
-		fmt.Fprintf(opts.stderr(), "pm work: prepare in %s: %s\n", dir, plan.prepare)
-		if err := runPrepare(dir, plan.prepare); err != nil {
-			return nil, fmt.Errorf("prepare cmd (%s) failed in %s: %w", plan.prepare, dir, err)
-		}
+	if err := w.runPrepare(); err != nil {
+		return nil, err
 	}
+	w.captureBaseline()
+	w.checkRig()
 
-	// Capture the verification baseline (executor.baseline) on the branch the
-	// worker is about to start from, so the worker can judge its verify verdict
-	// on NEW failures only instead of rediscovering (and being failed by)
-	// pre-existing breakage. Runs after branch setup + prepare - it measures
-	// exactly the state the work forks from. Standalone runs only; epic subs
-	// carry the manager's once-per-run capture, already baked in by planWork.
-	baselineUsed := ""
-	if plan.baselineCmd != "" {
-		fmt.Fprintf(opts.stderr(), "pm work: baseline in %s: %s\n", dir, plan.baselineCmd)
-		if section := captureBaseline(opts.stderr(), dir, plan.baselineCmd); section != "" {
-			plan.prompt += "\n" + section
-			plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false, plan.allowExtra)
-			baselineUsed = plan.baselineCmd
-		}
-	}
-
-	// Prove the slot's runtime is up (executor.rig) for a task that will
-	// drive it - after prepare (a bundler needs the deps) and with the slot's
-	// env (SIM_UDID, the port). Whatever it finds goes into the prompt; a
-	// dead rig is a handoff the worker records, never an aborted run.
-	rigUsed := ""
-	if plan.rigCmd != "" {
-		verdict := runRig(opts.stderr(), dir, plan.rigCmd, plan.env)
-		plan.prompt += "\n" + rigSection(verdict, plan.allowExtra, plan.env)
-		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false, plan.allowExtra)
-		rigUsed = verdict.journalWord()
-	}
-
-	// Run-state for observability (standalone only; in epic mode the manager
-	// owns the epic-level run-state and updates the per-sub entry). The run-state
-	// lives in the pm data dir (where the TUI reads it), NOT the git repo. Every
-	// WriteRunState below is best-effort: a failed write only costs a stale
-	// dashboard, never correctness, so the error is dropped.
-	stateDir := store.ProjectDir(task.Project)
-	journalDir := ""
+	w.stateDir = store.ProjectDir(task.Project)
 	if plan.worktree {
-		journalDir = dir
+		w.journalDir = w.dir
 	}
-	var runw *storage.RunWriter
 	// One id for this physical run, stamped on the run-state and on every
 	// journal line below (see storage.NewRunID). Epic subs are journaled by the
 	// manager under ITS run id, so this only matters standalone.
-	runID := storage.NewRunID()
+	w.runID = storage.NewRunID()
 	if opts.standalone {
-		// Close any earlier crash of this project that never got a terminal
-		// line, BEFORE this run writes its own run-state below: the file is
-		// keyed by task id, so a re-run of the same task - the most common
-		// follow-up to a crash - would otherwise overwrite the dead run's
-		// forensics one step before the reconciler looks for them.
-		reportReconciledCrashes(opts.stderr(), stateDir, "pm work")
-		run := &storage.RunState{
-			TaskID:         task.Meta.ID,
-			RunID:          runID,
-			Project:        task.Project,
-			Kind:           storage.RunKindWork,
-			Status:         storage.RunStatusRunning,
-			PID:            os.Getpid(),
-			RepoPath:       dir,
-			Started:        time.Now().UTC().Format(time.RFC3339),
-			LogPath:        storage.ExecutorLogPath(stateDir, task.Meta.ID),
-			CurrentSub:     task.Meta.ID,
-			CurrentSession: plan.sessionID,
-			Phase:          "running",
-			Subs:           []storage.SubRun{{ID: task.Meta.ID, Status: storage.RunStatusRunning, Session: plan.sessionID}},
-		}
-		// From here on the run-state is only touched through the writer - the
-		// heartbeat goroutine below shares this exact struct.
-		runw = storage.NewRunWriter(stateDir, run)
-		_ = runw.Update(nil)
-		// Journal start line (durable cross-run history; epic subs are journaled
-		// by the manager instead). Best-effort like the run-state writes.
-		start := storage.JournalEntry{
-			Event: storage.JournalEventStart, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
-			PID: os.Getpid(), Model: plan.opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-			WorkDir: journalDir, Baseline: baselineUsed, Source: storage.LaunchSource(), Rig: rigUsed,
-		}
-		_ = storage.AppendJournal(stateDir, &start)
+		start := w.startRecording()
 		// From here until the end line, a catchable signal journals its own
 		// terminal line instead of leaving the start line orphaned.
-		defer armCrashJournal(stateDir, start)()
+		defer armCrashJournal(w.stateDir, start)()
 	}
 
 	fmt.Fprintf(opts.stderr(), "pm work: launching headless worker for %s on %s (%s)...\n", task.Meta.ID, plan.branch, modeLabel(opts.standalone))
 
-	workStart := time.Now()
-	// journalEnd pairs the start line above with exactly one terminal line; the
-	// three exit paths below differ only in status/error and the sub's stats.
-	journalEnd := func(status, errMsg string, sub storage.JournalSub) {
-		sub.ID = task.Meta.ID
-		sub.Branch = plan.branch
-		sub.DurationS = int(time.Since(workStart).Seconds())
-		_ = storage.AppendJournal(stateDir, &storage.JournalEntry{
-			Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: runID,
-			PID: os.Getpid(), Model: plan.opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
-			WorkDir: journalDir, Baseline: baselineUsed, Rig: rigUsed,
-			Status: status, DurationS: sub.DurationS, Error: errMsg,
-			Subs: []storage.JournalSub{sub},
-		})
+	w.workStart = time.Now()
+	res, sessionID, telemetry, err := w.runWorker()
+	if err != nil {
+		w.recordWorkerFailure(err, telemetry)
+		return nil, err
 	}
+	if err := applyWorkerResult(opts.stderr(), store, task, plan.branch, sessionID, res, opts.standalone, opts.independent); err != nil {
+		w.recordApplyFailure(err, res, sessionID, telemetry)
+		return nil, err
+	}
+	w.recordDone(res, sessionID, telemetry)
+	return res, nil
+}
 
+// workRun is one executeWork call's state, filled in phase by phase: the
+// worker's dir, what the baseline and rig steps found, and the run-state
+// writer and journal fields its start and end lines share.
+type workRun struct {
+	store storage.TaskStore
+	task  *storage.Task
+	plan  *workPlan
+	opts  workOptions
+	dir   string
+
+	baselineUsed string
+	rigUsed      string
+
+	// Run-state for observability (standalone only; in epic mode the manager
+	// owns the epic-level run-state and updates the per-sub entry). The
+	// run-state lives in the pm data dir (where the TUI reads it), NOT the git
+	// repo. Every WriteRunState is best-effort: a failed write only costs a
+	// stale dashboard, never correctness, so the error is dropped.
+	stateDir   string
+	journalDir string
+	runID      string
+	runw       *storage.RunWriter // nil unless standalone
+	workStart  time.Time
+}
+
+// prepareBranch puts a standalone run on its branch.
+func (w *workRun) prepareBranch() error {
+	plan, dir := w.plan, w.dir
+	if plan.worktree {
+		// The "additional" worktree is reused across tasks. Give this task a
+		// FRESH branch forked from the resolved base branch's current tip, first
+		// wiping any leftovers (uncommitted or partially-committed work from a
+		// prior, possibly killed, run) so nothing bleeds into it. Ignored
+		// deps/configs survive. Base was resolved in planWork (--base >
+		// executor.base_branch > main checkout's current branch).
+		if err := freshenBase(w.opts.stderr(), dir, plan.base); err != nil {
+			return err
+		}
+		if err := gitFreshBranch(dir, plan.branch, plan.base); err != nil {
+			return fmt.Errorf("prepare fresh branch %s (base %s): %w", plan.branch, plan.base, err)
+		}
+		return nil
+	}
+	// Non-worktree: the user's own checkout. Enforce the clean-tree
+	// precondition and continue/create the branch in place.
+	if !w.opts.allowDirty {
+		if err := requireCleanWorkingTree(dir); err != nil {
+			return err
+		}
+	}
+	if err := gitCheckoutBranch(dir, plan.branch); err != nil {
+		return fmt.Errorf("prepare branch %s: %w", plan.branch, err)
+	}
+	return nil
+}
+
+// runPrepare makes the worktree's dependencies current BEFORE the worker
+// spends turns discovering they aren't (executor.prepare, worktree mode only,
+// cwd = the claimed slot). A failed prepare aborts the run - the worker would
+// fail on the same broken deps anyway, just slower and less legibly.
+func (w *workRun) runPrepare() error {
+	plan := w.plan
+	if !plan.worktree || plan.prepare == "" {
+		return nil
+	}
+	fmt.Fprintf(w.opts.stderr(), "pm work: prepare in %s: %s\n", w.dir, plan.prepare)
+	if err := runPrepare(w.dir, plan.prepare); err != nil {
+		return fmt.Errorf("prepare cmd (%s) failed in %s: %w", plan.prepare, w.dir, err)
+	}
+	return nil
+}
+
+// rebuildArgs re-renders the worker argv after the prompt or the guard changed.
+func (w *workRun) rebuildArgs() {
+	plan, opts := w.plan, w.opts
+	plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, w.dir, false, plan.allowExtra)
+}
+
+// captureBaseline captures the verification baseline (executor.baseline) on
+// the branch the worker is about to start from, so the worker can judge its
+// verify verdict on NEW failures only instead of rediscovering (and being
+// failed by) pre-existing breakage. Runs after branch setup + prepare - it
+// measures exactly the state the work forks from. Standalone runs only; epic
+// subs carry the manager's once-per-run capture, already baked in by planWork.
+func (w *workRun) captureBaseline() {
+	plan := w.plan
+	if plan.baselineCmd == "" {
+		return
+	}
+	fmt.Fprintf(w.opts.stderr(), "pm work: baseline in %s: %s\n", w.dir, plan.baselineCmd)
+	if section := captureBaseline(w.opts.stderr(), w.dir, plan.baselineCmd); section != "" {
+		plan.prompt += "\n" + section
+		w.rebuildArgs()
+		w.baselineUsed = plan.baselineCmd
+	}
+}
+
+// checkRig proves the slot's runtime is up (executor.rig) for a task that
+// will drive it - after prepare (a bundler needs the deps) and with the slot's
+// env (SIM_UDID, the port). Whatever it finds goes into the prompt; a dead rig
+// is a handoff the worker records, never an aborted run.
+func (w *workRun) checkRig() {
+	plan := w.plan
+	if plan.rigCmd == "" {
+		return
+	}
+	verdict := runRig(w.opts.stderr(), w.dir, plan.rigCmd, plan.env)
+	plan.prompt += "\n" + rigSection(verdict, plan.allowExtra, plan.env)
+	w.rebuildArgs()
+	w.rigUsed = verdict.journalWord()
+}
+
+// startRecording writes a standalone run's run-state and journal start line,
+// which it returns for the crash journal to arm on.
+func (w *workRun) startRecording() storage.JournalEntry {
+	task, plan, opts := w.task, w.plan, w.opts
+	// Close any earlier crash of this project that never got a terminal
+	// line, BEFORE this run writes its own run-state below: the file is
+	// keyed by task id, so a re-run of the same task - the most common
+	// follow-up to a crash - would otherwise overwrite the dead run's
+	// forensics one step before the reconciler looks for them.
+	reportReconciledCrashes(opts.stderr(), w.stateDir, "pm work")
+	run := &storage.RunState{
+		TaskID:         task.Meta.ID,
+		RunID:          w.runID,
+		Project:        task.Project,
+		Kind:           storage.RunKindWork,
+		Status:         storage.RunStatusRunning,
+		PID:            os.Getpid(),
+		RepoPath:       w.dir,
+		Started:        time.Now().UTC().Format(time.RFC3339),
+		LogPath:        storage.ExecutorLogPath(w.stateDir, task.Meta.ID),
+		CurrentSub:     task.Meta.ID,
+		CurrentSession: plan.sessionID,
+		Phase:          "running",
+		Subs:           []storage.SubRun{{ID: task.Meta.ID, Status: storage.RunStatusRunning, Session: plan.sessionID}},
+	}
+	// From here on the run-state is only touched through the writer - the
+	// heartbeat goroutine shares this exact struct.
+	w.runw = storage.NewRunWriter(w.stateDir, run)
+	_ = w.runw.Update(nil)
+	// Journal start line (durable cross-run history; epic subs are journaled
+	// by the manager instead). Best-effort like the run-state writes.
+	start := storage.JournalEntry{
+		Event: storage.JournalEventStart, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: w.runID,
+		PID: os.Getpid(), Model: plan.opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
+		WorkDir: w.journalDir, Baseline: w.baselineUsed, Source: storage.LaunchSource(), Rig: w.rigUsed,
+	}
+	_ = storage.AppendJournal(w.stateDir, &start)
+	return start
+}
+
+// journalEnd pairs the start line with exactly one terminal line; the three
+// exit paths of executeWork differ only in status/error and the sub's stats.
+func (w *workRun) journalEnd(status, errMsg string, sub storage.JournalSub) {
+	task, plan, opts := w.task, w.plan, w.opts
+	sub.ID = task.Meta.ID
+	sub.Branch = plan.branch
+	sub.DurationS = int(time.Since(w.workStart).Seconds())
+	_ = storage.AppendJournal(w.stateDir, &storage.JournalEntry{
+		Event: storage.JournalEventEnd, Kind: "work", Project: task.Project, TaskID: task.Meta.ID, RunID: w.runID,
+		PID: os.Getpid(), Model: plan.opts.model, Additional: opts.additional, Yolo: opts.yolo, Branch: plan.branch,
+		WorkDir: w.journalDir, Baseline: w.baselineUsed, Rig: w.rigUsed,
+		Status: status, DurationS: sub.DurationS, Error: errMsg,
+		Subs: []storage.JournalSub{sub},
+	})
+}
+
+// heartbeatWriter is the run-state the worker's heartbeat stamps: the
+// standalone run's own state, or (epic) the manager's shared epic-level one.
+func (w *workRun) heartbeatWriter() *storage.RunWriter {
+	if w.runw != nil {
+		return w.runw
+	}
+	return w.opts.runWriter
+}
+
+// runWorker runs the worker under a heartbeat and collects its review
+// telemetry, applying the review floor to a result that arrived.
+func (w *workRun) runWorker() (*workerResult, string, *storage.ReviewTelemetry, error) {
+	store, task, plan, opts, dir := w.store, w.task, w.plan, w.opts, w.dir
 	// Heartbeat: while the worker runs, nothing else stamps the run-state, so a
 	// 40-minute sub looks exactly like a hung one to an observer. Re-stamp the
-	// run-state on a ticker for exactly as long as the worker lives - the
-	// standalone run's own state, or (epic) the manager's shared epic-level one.
+	// run-state on a ticker for exactly as long as the worker lives.
 	// stopHeartbeat waits for the goroutine to exit, so after it returns nothing
 	// can touch the file again.
-	hbw := opts.runWriter
-	if runw != nil {
-		hbw = runw
-	}
+	hbw := w.heartbeatWriter()
 	// Create the telemetry file before the worker starts, so a worker that
 	// spawned nobody leaves an empty file rather than no file - see
 	// storage.InitReviewTelemetry.
@@ -1039,7 +1119,7 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 	// before the cap existed.
 	if sha := gitHeadSHA(dir); sha != "" && sha != plan.guard.diffBase {
 		plan.guard.diffBase = sha
-		plan.cmdArgs = buildClaudeArgs(plan.prompt, plan.sysPrompt, plan.sessionID, plan.opts.model, plan.opts.effort, opts.maxTurns, opts.yolo, plan.guard, dir, false, plan.allowExtra)
+		w.rebuildArgs()
 	}
 	stopHeartbeat := hbw.Heartbeat(workerHeartbeatInterval)
 	// Stopping is idempotent, so the defer only matters if runWorker panics -
@@ -1084,78 +1164,89 @@ func executeWork(store storage.TaskStore, task *storage.Task, plan *workPlan, op
 		// merges or pushes anything (pm-cli-130).
 		demoteUnreviewed(opts.stderr(), res, telemetry, dir, plan.guard.diffBase)
 	}
-	if err != nil {
-		// No envelope arrived, so this sub's turns and cost are 0 - and a sub
-		// that burned an hour then died is, in the journal, indistinguishable
-		// from one nobody started. Read the effort back off the worker's own
-		// transcript instead. Recorded on the run-state by id, which serves both
-		// callers: standalone (one sub) and the epic manager's shared state,
-		// whose journalSubs lifts it from there.
-		deadEffort := recoverWorkerEffort(plan.proj.ResolveWorkerClaudeConfigDir(), dir, plan.sessionID)
-		if deadEffort != nil {
-			fmt.Fprintf(opts.stderr(), "pm work: %s\n", describeEffort(deadEffort))
-			_ = hbw.Update(func(run *storage.RunState) { setSubEffort(run, task.Meta.ID, deadEffort) })
-		}
-		if runw != nil {
-			_ = runw.Update(func(run *storage.RunState) {
-				run.Status = storage.RunStatusFailed
-				run.Phase = ""
-				run.Error = err.Error()
-				if len(run.Subs) > 0 {
-					run.Subs[0].Status = storage.RunStatusFailed
-					run.Subs[0].Note = err.Error()
-					run.Subs[0].Review = telemetry
-				}
-			})
-			journalEnd(storage.RunStatusFailed, err.Error(),
-				storage.JournalSub{Result: "failed", Note: err.Error(), Session: plan.sessionID, Review: telemetry, Effort: deadEffort})
-		}
-		return nil, err
+	return res, sessionID, telemetry, err
+}
+
+// recordWorkerFailure records a worker that never delivered an envelope.
+func (w *workRun) recordWorkerFailure(err error, telemetry *storage.ReviewTelemetry) {
+	task, plan, opts := w.task, w.plan, w.opts
+	// No envelope arrived, so this sub's turns and cost are 0 - and a sub
+	// that burned an hour then died is, in the journal, indistinguishable
+	// from one nobody started. Read the effort back off the worker's own
+	// transcript instead. Recorded on the run-state by id, which serves both
+	// callers: standalone (one sub) and the epic manager's shared state,
+	// whose journalSubs lifts it from there.
+	deadEffort := recoverWorkerEffort(plan.proj.ResolveWorkerClaudeConfigDir(), w.dir, plan.sessionID)
+	if deadEffort != nil {
+		fmt.Fprintf(opts.stderr(), "pm work: %s\n", describeEffort(deadEffort))
+		_ = w.heartbeatWriter().Update(func(run *storage.RunState) { setSubEffort(run, task.Meta.ID, deadEffort) })
 	}
-	if err := applyWorkerResult(opts.stderr(), store, task, plan.branch, sessionID, res, opts.standalone, opts.independent); err != nil {
-		if runw != nil {
-			_ = runw.Update(func(run *storage.RunState) {
-				run.Status = storage.RunStatusFailed
-				run.Phase = ""
-				run.Error = err.Error()
-				if len(run.Subs) > 0 {
-					run.Subs[0].Status = storage.RunStatusFailed
-					run.Subs[0].Note = err.Error()
-					run.Subs[0].Turns = res.Turns
-					run.Subs[0].CostUSD = res.CostUSD
-					run.Subs[0].Tokens = res.Tokens
-					run.Subs[0].Review = telemetry
-				}
-			})
-			// The worker itself succeeded here (only the post-processing
-			// applyWorkerResult write failed), so res carries real turns/cost
-			// off the claude envelope - unlike the runWorker-failure branch
-			// above, where res is nil and those fields stay zero.
-			journalEnd(storage.RunStatusFailed, err.Error(),
-				storage.JournalSub{Result: "failed", Note: err.Error(), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Tokens: res.Tokens, Review: telemetry})
+	if w.runw == nil {
+		return
+	}
+	_ = w.runw.Update(func(run *storage.RunState) {
+		run.Status = storage.RunStatusFailed
+		run.Phase = ""
+		run.Error = err.Error()
+		if len(run.Subs) > 0 {
+			run.Subs[0].Status = storage.RunStatusFailed
+			run.Subs[0].Note = err.Error()
+			run.Subs[0].Review = telemetry
 		}
-		return nil, err
+	})
+	w.journalEnd(storage.RunStatusFailed, err.Error(),
+		storage.JournalSub{Result: "failed", Note: err.Error(), Session: plan.sessionID, Review: telemetry, Effort: deadEffort})
+}
+
+// recordApplyFailure records a worker that succeeded but whose result could
+// not be written into pm.
+func (w *workRun) recordApplyFailure(err error, res *workerResult, sessionID string, telemetry *storage.ReviewTelemetry) {
+	if w.runw == nil {
+		return
 	}
-	if runw != nil {
-		_ = runw.Update(func(run *storage.RunState) {
-			run.Status = storage.RunStatusDone
-			run.Phase = ""
-			run.CurrentSub = ""
-			run.CurrentSession = ""
-			if len(run.Subs) > 0 {
-				run.Subs[0].Status = res.Status
-				run.Subs[0].Note = strings.TrimSpace(res.Summary)
-				run.Subs[0].Commits = res.Commits
-				run.Subs[0].Turns = res.Turns
-				run.Subs[0].CostUSD = res.CostUSD
-				run.Subs[0].Tokens = res.Tokens
-				run.Subs[0].Review = telemetry
-			}
-		})
-		journalEnd(storage.RunStatusDone, "",
-			storage.JournalSub{Result: res.Status, Note: strings.TrimSpace(res.Summary), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Tokens: res.Tokens, Review: telemetry})
+	_ = w.runw.Update(func(run *storage.RunState) {
+		run.Status = storage.RunStatusFailed
+		run.Phase = ""
+		run.Error = err.Error()
+		if len(run.Subs) > 0 {
+			run.Subs[0].Status = storage.RunStatusFailed
+			run.Subs[0].Note = err.Error()
+			run.Subs[0].Turns = res.Turns
+			run.Subs[0].CostUSD = res.CostUSD
+			run.Subs[0].Tokens = res.Tokens
+			run.Subs[0].Review = telemetry
+		}
+	})
+	// The worker itself succeeded here (only the post-processing
+	// applyWorkerResult write failed), so res carries real turns/cost
+	// off the claude envelope - unlike the runWorker-failure branch
+	// above, where res is nil and those fields stay zero.
+	w.journalEnd(storage.RunStatusFailed, err.Error(),
+		storage.JournalSub{Result: "failed", Note: err.Error(), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Tokens: res.Tokens, Review: telemetry})
+}
+
+// recordDone records a run whose result landed in pm.
+func (w *workRun) recordDone(res *workerResult, sessionID string, telemetry *storage.ReviewTelemetry) {
+	if w.runw == nil {
+		return
 	}
-	return res, nil
+	_ = w.runw.Update(func(run *storage.RunState) {
+		run.Status = storage.RunStatusDone
+		run.Phase = ""
+		run.CurrentSub = ""
+		run.CurrentSession = ""
+		if len(run.Subs) > 0 {
+			run.Subs[0].Status = res.Status
+			run.Subs[0].Note = strings.TrimSpace(res.Summary)
+			run.Subs[0].Commits = res.Commits
+			run.Subs[0].Turns = res.Turns
+			run.Subs[0].CostUSD = res.CostUSD
+			run.Subs[0].Tokens = res.Tokens
+			run.Subs[0].Review = telemetry
+		}
+	})
+	w.journalEnd(storage.RunStatusDone, "",
+		storage.JournalSub{Result: res.Status, Note: strings.TrimSpace(res.Summary), Session: sessionID, Turns: res.Turns, CostUSD: res.CostUSD, Tokens: res.Tokens, Review: telemetry})
 }
 
 func modeLabel(standalone bool) string {
