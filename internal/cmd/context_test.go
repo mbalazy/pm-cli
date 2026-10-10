@@ -349,3 +349,35 @@ func TestContextCmdErrors(t *testing.T) {
 		}
 	})
 }
+
+// `pm context` is a read-only diagnostic that never touches the project
+// struct, so an unparseable project.yaml - exactly the situation it is run in -
+// must not stop it printing its rollup.
+func TestContextSurvivesUnreadableProjectYAML(t *testing.T) {
+	newStore := func(t *testing.T) (*storage.Store, string) {
+		t.Helper()
+		store := &storage.Store{Root: t.TempDir()}
+		if err := store.CreateProject("app", &storage.Project{Name: "App"}); err != nil {
+			t.Fatalf("create project: %v", err)
+		}
+		// Valid enough for ListProjects/ResolveProject to see the project,
+		// unparseable for ReadProject.
+		writeTestFile(t, store.ProjectYAML("app"), "name: App\nstatuses: [todo, doing\n\tbad: \"unclosed\n")
+		if _, err := store.GetProject("app"); err == nil {
+			t.Fatal("fixture is not corrupt: GetProject must fail for this test to mean anything")
+		}
+		return store, "app"
+	}
+
+	t.Run("pm context prints its rollup", func(t *testing.T) {
+		store, slug := newStore(t)
+		addTask(t, store, slug, storage.TaskMeta{ID: "app-1", Title: "A doing task", Status: storage.StatusDoing}, "")
+		out, err := execContextCmd(t, store, slug)
+		if err != nil {
+			t.Fatalf("context must not fail on an unreadable project.yaml, got: %v", err)
+		}
+		if !strings.Contains(out, "A doing task") {
+			t.Errorf("expected the doing task in the rollup, got %q", out)
+		}
+	})
+}

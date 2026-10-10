@@ -13,6 +13,7 @@
 package cmd
 
 import (
+	"github.com/mbalazy/pm-cli/internal/executor"
 	"github.com/mbalazy/pm-cli/internal/projectarg"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/mbalazy/pm-cli/internal/version"
@@ -54,19 +55,19 @@ func NewRootCmd() *cobra.Command {
 		newDoneCmd(store),
 		newEditCmd(store),
 		newBoardCmd(store),
-		newWorkCmd(store),
-		newRunEpicCmd(store),
-		newFinishCmd(store),
+		executor.NewWorkCmd(store),
+		executor.NewRunEpicCmd(store),
+		executor.NewFinishCmd(store),
 		newRunsCmd(store),
 		newServeCmd(store),
 		newConfigCmd(store),
-		newExecutorCmd(store),
+		executor.NewExecutorCmd(store),
 		newJournalCmd(store),
 		newTimelineCmd(store),
 		newMcpCmd(store),
 		newMigrateIDsCmd(store),
 		newSessionIDCmd(),
-		newWorkerGuardCmd(),
+		executor.NewWorkerGuardCmd(),
 		newDocsCmd(),
 	)
 	classifyUsage(root)

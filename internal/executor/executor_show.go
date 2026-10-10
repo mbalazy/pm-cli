@@ -1,0 +1,233 @@
+package executor
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/mbalazy/pm-cli/internal/projectarg"
+	"github.com/mbalazy/pm-cli/internal/storage"
+	"github.com/spf13/cobra"
+)
+
+func newExecutorShowCmd(store storage.TaskStore) *cobra.Command {
+	return &cobra.Command{
+		Use:   "show [project]",
+		Short: "Print the project's resolved executor profile (phases, slots, runtimes, handoff)",
+		Long: "Prints the executor profile as RESOLVED, not as written: worktree slot paths expanded and " +
+			"their env merged (executor-level overlaid by per-slot), context repos, phase bindings, and the " +
+			"handoff contract with the runtime skill's scripts derived from disk.\n\n" +
+			"This is the single call an acceptance session makes instead of hardcoding a playbook " +
+			"path or copying simulator UDIDs and ports out of project.yaml by hand.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			slug, proj, err := projectarg.Load(store, args)
+			if err != nil {
+				return err
+			}
+			fmt.Print(renderExecutorProfile(slug, proj))
+			return nil
+		},
+	}
+}
+
+// renderExecutorProfile renders the resolved profile. Pure (given the project
+// struct + what it reads off disk) so it is table-testable.
+func renderExecutorProfile(slug string, proj *storage.Project) string {
+	var b strings.Builder
+	e := proj.GetExecutor()
+
+	fmt.Fprintf(&b, "# executor profile: %s\n", slug)
+	if proj.Path != "" {
+		fmt.Fprintf(&b, "repo: %s\n", proj.Path)
+	}
+	if !proj.HasExecutor() {
+		b.WriteString("\nNo `executor` block in project.yaml - every phase resolves to the built-in\n")
+		b.WriteString("generic and no worktree slots exist. Draft one with `pm executor init`.\n")
+		return b.String()
+	}
+	if !e.Enabled {
+		b.WriteString("\n!! executor disabled (enabled: false)\n")
+	}
+
+	b.WriteString("\n## Phases\n")
+	for _, p := range storage.ExecutorPhases {
+		fmt.Fprintf(&b, "  %-10s %s\n", p, describeBinding(e.Phase(p)))
+	}
+
+	b.WriteString("\n## Run config\n")
+	fmt.Fprintf(&b, "  base_branch:  %s\n", orUnset(e.BaseBranch))
+	fmt.Fprintf(&b, "  prepare:      %s\n", orUnset(e.Prepare))
+	fmt.Fprintf(&b, "  baseline:     %s\n", orUnset(e.Baseline))
+	// The runtime pair: the once-per-run rig check and the extra allowlist a
+	// `runtime: on` worker gets. Printed next to prepare/baseline because that
+	// is the family they belong to (once per run, in the claimed slot).
+	fmt.Fprintf(&b, "  rig:          %s\n", orUnset(e.Rig))
+	if len(e.RuntimeTools) > 0 {
+		fmt.Fprintf(&b, "  runtime_tools: %s\n", strings.Join(e.RuntimeTools, " "))
+	} else {
+		fmt.Fprintf(&b, "  runtime_tools: (unset - a `runtime: on` worker gets only the built-in allowlist outside --yolo)\n")
+	}
+	// Two done statuses because the two epic modes do different things with a
+	// green sub: integration merges it into the epic branch, independent only
+	// pushes its branch. Printed side by side so the difference is visible
+	// without reading the code that resolves it.
+	indepDone, indepExplicit := e.IndependentDoneStatus()
+	indepSuffix := " (default)"
+	if indepExplicit {
+		indepSuffix = ""
+	}
+	fmt.Fprintf(&b, "  statuses:     start=%s wip=%s done=%s\n", e.StartStatus, e.WipStatus, e.DoneStatus)
+	fmt.Fprintf(&b, "                done (independent/batch)=%s%s\n", indepDone, indepSuffix)
+	fmt.Fprintf(&b, "  fix_rounds:   %d\n", e.FixRounds)
+	// Worker model/effort: printed with their fallbacks spelled out, because
+	// "unset" here means a concrete thing (opus / Claude's own effort default)
+	// and a reader budgeting a batch needs the number, not the absence.
+	if e.Model != "" {
+		fmt.Fprintf(&b, "  model:        %s (workers; a sub's `model:` and --model still win)\n", e.Model)
+	} else {
+		fmt.Fprintf(&b, "  model:        %s (built-in default - set `model: sonnet` to change it)\n", defaultWorkerModel)
+	}
+	if e.Effort != "" {
+		fmt.Fprintf(&b, "  effort:       %s (workers; --effort still wins)\n", e.Effort)
+	} else {
+		fmt.Fprintf(&b, "  effort:       unset (Claude's default - set `effort: medium` to change it)\n")
+	}
+	fmt.Fprintf(&b, "  review_model: %s\n", orUnset(e.ReviewModel))
+	// Printed whether or not it is set, unlike the optional strings above: an
+	// unset ceiling is not "no ceiling", it is 120 minutes, and a reader deciding
+	// whether a long sub will survive needs the number either way.
+	if e.Timeout > 0 {
+		fmt.Fprintf(&b, "  timeout:      %s per worker\n", e.Timeout)
+	} else {
+		fmt.Fprintf(&b, "  timeout:      %s per worker (built-in default - set `timeout: 180m` to change it)\n", defaultWorkerTimeout)
+	}
+	if len(e.SeedExclude) > 0 {
+		fmt.Fprintf(&b, "  seed_exclude: %s\n", strings.Join(e.SeedExclude, ", "))
+	}
+
+	slots := e.ResolveWorktrees(proj.Path)
+	if len(slots) == 0 {
+		b.WriteString("\n## Worktree slots\n  (none - `--additional` runs are not available)\n")
+	} else {
+		fmt.Fprintf(&b, "\n## Worktree slots (%d)  [claim with --additional, pin with --slot N]\n", len(slots))
+		for i, s := range slots {
+			fmt.Fprintf(&b, "  slot %d  %s\n", i+1, s.Path)
+			for _, kv := range s.Env {
+				fmt.Fprintf(&b, "          %s\n", kv)
+			}
+			if len(s.Env) == 0 {
+				b.WriteString("          (no env)\n")
+			}
+		}
+		b.WriteString("  ^ these are the authoritative runtime identifiers (ports, device ids).\n")
+		b.WriteString("    Read them from here; never copy them into a doc that can drift.\n")
+	}
+
+	if len(e.ContextRepos) > 0 {
+		b.WriteString("\n## Reference repos (READ-ONLY)\n")
+		for _, name := range sortedKeys(e.ContextRepos) {
+			fmt.Fprintf(&b, "  %-10s %s\n", name, e.ContextRepos[name])
+		}
+	}
+
+	// Which config dir the WORKERS load - the skill catalogue, user CLAUDE.md
+	// and memory in it ride in every one of their API calls (pm-cli-119).
+	b.WriteString("\n## Worker Claude config dir\n")
+	if wd, pd := proj.ResolveWorkerClaudeConfigDir(), proj.ResolveClaudeConfigDir(); wd != pd {
+		fmt.Fprintf(&b, "  %s  (executor.worker_claude_config_dir - workers only; pm finish stays on %s)\n", wd, pd)
+	} else {
+		fmt.Fprintf(&b, "  %s  (the project's claude_config_dir; set executor.worker_claude_config_dir to give workers a slim one)\n", wd)
+	}
+
+	b.WriteString("\n## Handoff (acceptance)\n")
+	b.WriteString(renderHandoff(e.ResolveHandoff(proj.Path, proj.ResolveClaudeConfigDir())))
+
+	if e.Notes != "" {
+		fmt.Fprintf(&b, "\n## Notes\n%s\n", strings.TrimRight(e.Notes, "\n"))
+	}
+	return b.String()
+}
+
+func renderHandoff(h storage.ResolvedHandoff) string {
+	var b strings.Builder
+	if !h.Declared {
+		b.WriteString("  (no handoff block - an acceptance session has no declared playbook or\n")
+		b.WriteString("   runtime skill here and will have to guess. See `pm executor doctor`.)\n")
+		return b.String()
+	}
+	if h.PlaybookPath == "" {
+		b.WriteString("  playbook:      (unset)\n")
+	} else {
+		state := "MISSING"
+		if h.PlaybookExists {
+			state = "ok"
+		}
+		fmt.Fprintf(&b, "  playbook:      %s  [%s]\n", h.PlaybookPath, state)
+	}
+	if h.RuntimeSkill == "" {
+		b.WriteString("  runtime skill: (unset)\n")
+	} else {
+		renderSkillLoc(&b, "runtime skill:", h.RuntimeSkill, h.SkillPath)
+		if h.RuntimeSkillGlobal {
+			b.WriteString("  ^ resolved in the pinned Claude config dir, not in the repo - a machine\n")
+			b.WriteString("    syncing this repo needs the skill installed there too (see doctor).\n")
+		}
+		if len(h.Scripts) > 0 {
+			fmt.Fprintf(&b, "  scripts:       %s\n", h.ScriptsDir)
+			for _, s := range h.Scripts {
+				fmt.Fprintf(&b, "                 %s\n", s)
+			}
+			b.WriteString("  ^ what each script is FOR and when to reach for it: see the playbook.\n")
+		}
+	}
+	if h.RigSkill != "" {
+		renderSkillLoc(&b, "rig skill:    ", h.RigSkill, h.RigSkillPath)
+		b.WriteString("  ^ stands the runtime up when it is down (cold start). Read it in full\n")
+		b.WriteString("    before restarting anything by hand; status check first, never restart\n")
+		b.WriteString("    what already runs.\n")
+	}
+	return b.String()
+}
+
+// renderSkillLoc prints one handoff skill's name and resolved location - the
+// shared shape for the runtime and rig lines, so an unresolved skill can never
+// render differently between the two.
+func renderSkillLoc(b *strings.Builder, label, name, path string) {
+	loc := "NOT FOUND"
+	if path != "" {
+		loc = path
+	}
+	fmt.Fprintf(b, "  %s /%s\n", label, name)
+	fmt.Fprintf(b, "                 %s\n", loc)
+}
+
+// describeBinding renders a phase binding the way the worker prompt resolves it.
+func describeBinding(pb storage.PhaseBinding) string {
+	switch pb.Kind() {
+	case storage.BindSkill:
+		return "skill: " + pb.Skill
+	case storage.BindCmd:
+		return "cmd:   " + pb.Cmd
+	case storage.BindSkip:
+		return "skip"
+	default:
+		return "generic (built-in)"
+	}
+}
+
+func orUnset(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "(unset)"
+	}
+	return s
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}

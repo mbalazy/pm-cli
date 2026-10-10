@@ -1,0 +1,548 @@
+package executor
+
+import (
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/mbalazy/pm-cli/internal/storage"
+)
+
+// testExecutor is the minimal executor block a manager run needs. The block
+// round-trips through project.yaml (CreateProject -> ReadProject ->
+// Executor.UnmarshalYAML overlays defaultExecutor()), so these statuses would
+// resolve to the same values if omitted - they are spelled out so a test
+// asserting on them reads without that indirection.
+func testExecutor() *storage.Executor {
+	return &storage.Executor{Enabled: true, StartStatus: "todo", DoneStatus: "merged"}
+}
+
+// epicFixture creates a store with one git-backed project ("app") holding a
+// tracker plus subs, and returns the store. The subs' Orders deliberately
+// CONTRADICT their alphabetical IDs (app-1-1 is last), so a comparator that
+// dropped the Order key and fell back to the ID tiebreaker fails the
+// sequencing assertion instead of passing by coincidence.
+func epicFixture(t *testing.T, exc *storage.Executor) (*storage.Store, string) {
+	t.Helper()
+	store := &storage.Store{Root: t.TempDir()}
+	repo := t.TempDir()
+	gitInitRepo(t, repo)
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, repo, "add", ".")
+	gitT(t, repo, "commit", "-q", "-m", "init")
+
+	if err := store.CreateProject("app", &storage.Project{Name: "App", Path: repo, Executor: exc}); err != nil {
+		t.Fatal(err)
+	}
+	addTask(t, store, "app", storage.TaskMeta{ID: "app-1", Title: "Epic", Status: storage.StatusDoing}, "")
+	addTask(t, store, "app", storage.TaskMeta{ID: "app-1-1", Title: "Last", Status: storage.StatusTodo, Parent: "app-1", Order: 30}, "")
+	addTask(t, store, "app", storage.TaskMeta{ID: "app-1-3", Title: "Middle", Status: storage.StatusTodo, Parent: "app-1", Order: 20}, "")
+	addTask(t, store, "app", storage.TaskMeta{ID: "app-1-2", Title: "First", Status: storage.StatusWaiting, Parent: "app-1", Order: 10}, "")
+	return store, repo
+}
+
+func subIDs(subs []*storage.Task) []string {
+	out := make([]string, len(subs))
+	for i, s := range subs {
+		out[i] = s.Meta.ID
+	}
+	return out
+}
+
+// TestPlanEpicPreflightErrors covers the four refusals the manager owes the
+// user BEFORE anything is touched. They used to live inside a 316-line RunE
+// closure and were unreachable from a test.
+func TestPlanEpicPreflightErrors(t *testing.T) {
+	t.Run("project without a path", func(t *testing.T) {
+		store := &storage.Store{Root: t.TempDir()}
+		if err := store.CreateProject("app", &storage.Project{Name: "App", Executor: testExecutor()}); err != nil {
+			t.Fatal(err)
+		}
+		addTask(t, store, "app", storage.TaskMeta{ID: "app-1", Title: "Epic", Status: storage.StatusDoing}, "")
+		_, err := planEpic(store, []string{"app", "app-1"}, epicOptions{})
+		if err == nil || !strings.Contains(err.Error(), "has no path") {
+			t.Fatalf("expected a no-path error, got %v", err)
+		}
+	})
+
+	t.Run("project path is not a git repo", func(t *testing.T) {
+		store := &storage.Store{Root: t.TempDir()}
+		if err := store.CreateProject("app", &storage.Project{Name: "App", Path: t.TempDir(), Executor: testExecutor()}); err != nil {
+			t.Fatal(err)
+		}
+		addTask(t, store, "app", storage.TaskMeta{ID: "app-1", Title: "Epic", Status: storage.StatusDoing}, "")
+		_, err := planEpic(store, []string{"app", "app-1"}, epicOptions{})
+		if err == nil || !strings.Contains(err.Error(), "not a git repository") {
+			t.Fatalf("expected a not-a-git-repo error, got %v", err)
+		}
+	})
+
+	t.Run("executor disabled", func(t *testing.T) {
+		store, _ := epicFixture(t, &storage.Executor{Enabled: false})
+		_, err := planEpic(store, []string{"app", "app-1"}, epicOptions{})
+		if err == nil || !strings.Contains(err.Error(), "executor disabled") {
+			t.Fatalf("expected an executor-disabled error, got %v", err)
+		}
+	})
+
+	t.Run("--additional without configured slots", func(t *testing.T) {
+		store, _ := epicFixture(t, testExecutor())
+		_, err := planEpic(store, []string{"app", "app-1"}, epicOptions{additional: true})
+		if err == nil || !strings.Contains(err.Error(), "no worktree slots configured") {
+			t.Fatalf("expected a no-slots error, got %v", err)
+		}
+	})
+
+	t.Run("task with no children is not a tracker", func(t *testing.T) {
+		store, _ := epicFixture(t, testExecutor())
+		addTask(t, store, "app", storage.TaskMeta{ID: "app-9", Title: "Lonely", Status: storage.StatusTodo}, "")
+		_, err := planEpic(store, []string{"app", "app-9"}, epicOptions{})
+		if err == nil || !strings.Contains(err.Error(), "is not a tracker") {
+			t.Fatalf("expected a not-a-tracker error, got %v", err)
+		}
+	})
+
+	t.Run("invalid epic_mode on the tracker", func(t *testing.T) {
+		store, _ := epicFixture(t, testExecutor())
+		// Written straight to disk: storage validates epic_mode on write, so a
+		// bad value can only reach the manager via a hand-edited file.
+		tracker, err := store.FindTask("app", "app-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(tracker.FilePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		corrupted := strings.Replace(string(raw), "---\n", "---\nepic_mode: sideways\n", 1)
+		if err := os.WriteFile(tracker.FilePath, []byte(corrupted), 0644); err != nil {
+			t.Fatal(err)
+		}
+		_, err = planEpic(store, []string{"app", "app-1"}, epicOptions{})
+		if err == nil || !strings.Contains(err.Error(), "epic_mode") {
+			t.Fatalf("expected an epic_mode validation error, got %v", err)
+		}
+	})
+}
+
+// TestPlanEpicResolvesSubsAndBranches: the plan sequences every child by Order
+// (regardless of readiness - the per-sub gate is classifySub's job) and resolves
+// the branches the run will use.
+func TestPlanEpicResolvesSubsAndBranches(t *testing.T) {
+	store, _ := epicFixture(t, testExecutor())
+
+	plan, err := planEpic(store, []string{"app", "app-1"}, epicOptions{})
+	if err != nil {
+		t.Fatalf("planEpic: %v", err)
+	}
+	// By Order (10, 20, 30), NOT by ID - the two disagree in this fixture.
+	if got := strings.Join(subIDs(plan.subs), ","); got != "app-1-2,app-1-3,app-1-1" {
+		t.Errorf("subs = %s, want them sorted by Order", got)
+	}
+	if plan.epicBranch != "epic/app-1" {
+		t.Errorf("epicBranch = %q", plan.epicBranch)
+	}
+	if plan.baseBranch != "main" {
+		t.Errorf("baseBranch = %q, want the main fallback", plan.baseBranch)
+	}
+	if plan.startStatus != "todo" || plan.doneStatus != "merged" {
+		t.Errorf("statuses = %q/%q", plan.startStatus, plan.doneStatus)
+	}
+	if plan.independent {
+		t.Error("a tracker without epic_mode must plan as an integration run")
+	}
+	if plan.workDir != plan.proj.Path {
+		t.Errorf("workDir = %q, want the main checkout %q", plan.workDir, plan.proj.Path)
+	}
+
+	// The plan feeds the gate: only the ready sub is driven, the waiting one is
+	// skipped without a worker.
+	byID := map[string]*storage.Task{}
+	for _, s := range plan.subs {
+		byID[s.Meta.ID] = s
+	}
+	want := map[string]bool{"app-1-1": true, "app-1-2": false, "app-1-3": true}
+	for _, s := range plan.subs {
+		_, drive, _ := classifySub(s, byID, plan.startStatus, plan.doneStatus, nil)
+		if drive != want[s.Meta.ID] {
+			t.Errorf("classifySub(%s) drive = %v, want %v", s.Meta.ID, drive, want[s.Meta.ID])
+		}
+	}
+}
+
+// TestPlanEpicCrashRecovery: a sub left on "doing" by a manager that DIED
+// mid-sub (run-state still "running", pid dead) is planned as recoverable and
+// driven by the gate, instead of being skipped as "not ready" - the failure
+// observed on epic pm-cli-100, where a SIGKILLed manager's re-run reported
+// "done" while the sub it had been driving was never picked up again.
+func TestPlanEpicCrashRecovery(t *testing.T) {
+	store, _ := epicFixture(t, testExecutor())
+	sub, err := store.FindTask("app", "app-1-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MoveTask(sub, storage.StatusDoing); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.WriteRunState(store.ProjectDir("app"), &storage.RunState{
+		TaskID: "app-1", Project: "app", Kind: storage.RunKindEpic,
+		Status: storage.RunStatusRunning, PID: deadPID,
+		Started:    "2026-01-01T00:00:00Z",
+		CurrentSub: "app-1-3",
+		Subs:       []storage.SubRun{{ID: "app-1-3", Status: storage.RunStatusRunning}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := planEpic(store, []string{"app", "app-1"}, epicOptions{})
+	if err != nil {
+		t.Fatalf("planEpic: %v", err)
+	}
+	if !plan.crashRecovered["app-1-3"] {
+		t.Fatalf("crashRecovered = %v, want app-1-3 marked", plan.crashRecovered)
+	}
+
+	byID := map[string]*storage.Task{}
+	for _, s := range plan.subs {
+		byID[s.Meta.ID] = s
+	}
+	for _, s := range plan.subs {
+		_, drive, announce := classifySub(s, byID, plan.startStatus, plan.doneStatus, plan.crashRecovered)
+		switch s.Meta.ID {
+		case "app-1-3":
+			if !drive {
+				t.Error("the crashed run's doing sub must be driven on the re-run")
+			}
+			if !strings.Contains(announce, "recovered after crash") {
+				t.Errorf("recovery announce missing, got %q", announce)
+			}
+		case "app-1-2": // waiting - untouched by recovery
+			if drive {
+				t.Error("an unrelated non-ready sub must stay skipped")
+			}
+		}
+	}
+}
+
+func TestPlanEpicIndependentMode(t *testing.T) {
+	t.Run("tracker frontmatter enables it without a flag", func(t *testing.T) {
+		store, _ := epicFixture(t, testExecutor())
+		tracker, _ := store.FindTask("app", "app-1")
+		tracker.Meta.EpicMode = storage.EpicModeIndependent
+		if err := store.WriteTask(tracker); err != nil {
+			t.Fatal(err)
+		}
+		plan, err := planEpic(store, []string{"app", "app-1"}, epicOptions{})
+		if err != nil {
+			t.Fatalf("planEpic: %v", err)
+		}
+		if !plan.independent {
+			t.Error("epic_mode: independent on the tracker must plan as a batch run")
+		}
+	})
+
+	t.Run("--independent overrides a tracker without it", func(t *testing.T) {
+		store, _ := epicFixture(t, testExecutor())
+		plan, err := planEpic(store, []string{"app", "app-1"}, epicOptions{independent: true})
+		if err != nil {
+			t.Fatalf("planEpic: %v", err)
+		}
+		if !plan.independent {
+			t.Error("--independent must plan as a batch run")
+		}
+	})
+}
+
+// TestPlanEpicBasePrecedence pins the deliberately asymmetric rule: in DEFAULT
+// mode executor.base_branch is not consulted at all (pre-worktree behaviour),
+// while --additional and independent mode both honour it - and --base always
+// wins.
+func TestPlanEpicBasePrecedence(t *testing.T) {
+	exc := func() *storage.Executor {
+		e := testExecutor()
+		e.BaseBranch = "development"
+		// A slot, so the --additional case gets past planEpic's no-slots refusal.
+		e.Worktrees = []storage.WorktreeSlot{{Path: "../app-additional"}}
+		return e
+	}
+	cases := []struct {
+		name string
+		opts epicOptions
+		want string
+	}{
+		{"default mode ignores executor.base_branch", epicOptions{}, "main"},
+		{"--base wins in default mode", epicOptions{base: "release/1"}, "release/1"},
+		{"--additional honours executor.base_branch", epicOptions{additional: true}, "development"},
+		{"independent mode honours executor.base_branch", epicOptions{independent: true}, "development"},
+		{"--base wins over executor.base_branch", epicOptions{independent: true, base: "release/1"}, "release/1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _ := epicFixture(t, exc())
+			plan, err := planEpic(store, []string{"app", "app-1"}, tc.opts)
+			if err != nil {
+				t.Fatalf("planEpic: %v", err)
+			}
+			if plan.baseBranch != tc.want {
+				t.Errorf("baseBranch = %q, want %q", plan.baseBranch, tc.want)
+			}
+		})
+	}
+}
+
+// TestPlanEpicHasNoSideEffects is the property the split exists for: planning a
+// run must not create a branch, move a sub, or write a run-state/journal. It is
+// what lets --dry-run print the real plan and what makes the preflight above
+// safe to test.
+func TestPlanEpicHasNoSideEffects(t *testing.T) {
+	store, repo := epicFixture(t, testExecutor())
+
+	branchesBefore := gitBranches(t, repo)
+	headBefore := gitHead(t, repo)
+	statusesBefore := subStatuses(t, store)
+
+	if _, err := planEpic(store, []string{"app", "app-1"}, epicOptions{}); err != nil {
+		t.Fatalf("planEpic: %v", err)
+	}
+
+	if got := gitBranches(t, repo); got != branchesBefore {
+		t.Errorf("planEpic created/removed branches: %q -> %q", branchesBefore, got)
+	}
+	if got := gitHead(t, repo); got != headBefore {
+		t.Errorf("planEpic moved HEAD: %q -> %q", headBefore, got)
+	}
+	if got := subStatuses(t, store); got != statusesBefore {
+		t.Errorf("planEpic moved subs: %q -> %q", statusesBefore, got)
+	}
+	execDir := filepath.Join(store.ProjectDir("app"), ".executor")
+	if _, err := os.Stat(execDir); !os.IsNotExist(err) {
+		t.Errorf("planEpic wrote executor run state at %s (err=%v)", execDir, err)
+	}
+}
+
+func gitBranches(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "branch", "--list", "--format=%(refname:short)").Output()
+	if err != nil {
+		t.Fatalf("git branch: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func gitHead(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func subStatuses(t *testing.T, store *storage.Store) string {
+	t.Helper()
+	tasks, err := store.GetTasks("app")
+	if err != nil {
+		t.Fatalf("GetTasks: %v", err)
+	}
+	var lines []string
+	for _, task := range tasks {
+		lines = append(lines, task.Meta.ID+"="+string(task.Meta.Status))
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, ",")
+}
+
+// TestApplyWorkerResultRefusesToResurrectADeletedTask: the executor holds its
+// task copy across a 30+ minute worker run. If the task is deleted meanwhile
+// (a parallel pm_delete_task), the fresh re-read misses - and writing the copy
+// in hand would recreate the file, complete with a worker brief nobody will
+// ever go looking for. The write must be refused instead.
+func TestApplyWorkerResultRefusesToResurrectADeletedTask(t *testing.T) {
+	for _, status := range []string{"merged", "blocked"} {
+		t.Run("worker "+status, func(t *testing.T) {
+			store := &storage.Store{Root: t.TempDir()}
+			if err := store.CreateProject("app", &storage.Project{Name: "App"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.AddTask("app", &storage.Task{
+				Meta: storage.TaskMeta{ID: "app-1", Title: "T", Status: storage.StatusDoing},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			stale, err := store.FindTask("app", "app-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// "Another session" deletes the task while the worker runs.
+			if err := store.DeleteTask(stale); err != nil {
+				t.Fatal(err)
+			}
+
+			res := &workerResult{Status: status, Summary: "done", Branch: "feat/x", Commits: []string{"abc"}}
+			err = applyWorkerResult(io.Discard, store, stale, "feat/x", "sess-1", res, true, false)
+			if err == nil {
+				t.Fatal("writing a worker result onto a deleted task must fail, not resurrect it")
+			}
+			if !strings.Contains(err.Error(), "app-1") {
+				t.Errorf("error should name the task, got: %v", err)
+			}
+			if _, statErr := os.Stat(stale.FilePath); !os.IsNotExist(statErr) {
+				t.Fatalf("the deleted task file is back at %s (err=%v)", stale.FilePath, statErr)
+			}
+			if found, findErr := store.FindTask("app", "app-1"); findErr == nil {
+				t.Fatalf("deleted task resurrected: %+v", found.Meta)
+			}
+		})
+	}
+}
+
+// TestRecordSubFeedbackRefusesToResurrectADeletedParent: same hazard on the
+// manager side - the parent tracker is read once at run start and rewritten
+// after EVERY sub, so a tracker deleted mid-run used to come back from a stale
+// pointer.
+func TestRecordSubFeedbackRefusesToResurrectADeletedParent(t *testing.T) {
+	store, slug := tempStore(t)
+	parent := addTask(t, store, slug, storage.TaskMeta{ID: "proj-20", Title: "Epic", Status: storage.StatusDoing},
+		storage.SpecStart+"\n## Description\nbuild it\n"+storage.SpecEnd)
+
+	if err := store.DeleteTask(parent); err != nil {
+		t.Fatal(err)
+	}
+	filePath := parent.FilePath
+
+	err := recordSubFeedback(store, parent, "proj-20-1", "blocked", []string{"needs a decision"}, io.Discard)
+	if err == nil {
+		t.Fatal("recording feedback onto a deleted parent must fail, not resurrect it")
+	}
+	if !strings.Contains(err.Error(), "proj-20") {
+		t.Errorf("error should name the parent, got: %v", err)
+	}
+	if _, statErr := os.Stat(filePath); !os.IsNotExist(statErr) {
+		t.Fatalf("the deleted parent file is back at %s (err=%v)", filePath, statErr)
+	}
+}
+
+// The green sub lands where the manager's own action puts it: merged into the
+// epic branch, or pushed on its own branch. The fallback exists so upgrading pm
+// never refuses a batch on a project whose statuses predate "pushed".
+// TestDryRunAppliesTheDoneStatusGate closes the gap measured on a fresh
+// project: `pm executor doctor` reported 0 errors, `pm run-epic --dry-run`
+// printed a confident plan including "done status: merged" and exited 0, and
+// the real run then refused on its first line. A dry-run that reports readiness
+// it never checked is worse than none - it is the check people run INSTEAD of
+// the real thing.
+func TestDryRunAppliesTheDoneStatusGate(t *testing.T) {
+	// epicFixture's project has no `statuses`, so DefaultStatuses applies:
+	// [todo doing waiting done] - no `merged`. This is the fresh-project state.
+	store, _ := epicFixture(t, testExecutor())
+
+	plan, err := planEpic(store, []string{"app", "app-1"}, epicOptions{})
+	if err != nil {
+		t.Fatalf("planEpic must still plan - the dry-run has to print what it resolved: %v", err)
+	}
+	if plan.doneStatusGate == nil {
+		t.Fatal("the plan must carry the verdict, so both halves cannot drift apart again")
+	}
+
+	var out strings.Builder
+	err = printEpicDryRun(plan, epicOptions{out: &out, errOut: io.Discard})
+	if err == nil {
+		t.Fatal("--dry-run must exit non-zero for a run it can already see will refuse to start")
+	}
+	if !strings.Contains(err.Error(), `done status "merged" is not in project app statuses`) {
+		t.Errorf("dry-run must report the same refusal the real run does, got %v", err)
+	}
+	// The blocker does not replace the plan: the subs it resolved still print.
+	for _, want := range []string{"app-1-1", "app-1-3"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the full plan must print before the blocker, %q missing:\n%s", want, out.String())
+		}
+	}
+
+	t.Run("a project that lists the status is clean", func(t *testing.T) {
+		if _, err := store.MutateProject("app", func(p *storage.Project) error {
+			p.Statuses = []string{"todo", "doing", "merged", "waiting", "done"}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		plan, err := planEpic(store, []string{"app", "app-1"}, epicOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := printEpicDryRun(plan, epicOptions{out: io.Discard, errOut: io.Discard}); err != nil {
+			t.Fatalf("a ready project's dry-run must stay green: %v", err)
+		}
+	})
+}
+
+func TestResolveEpicDoneStatus(t *testing.T) {
+	statuses := func(ss ...string) []storage.TaskStatus {
+		out := make([]storage.TaskStatus, len(ss))
+		for i, s := range ss {
+			out[i] = storage.TaskStatus(s)
+		}
+		return out
+	}
+	base := func() storage.Executor {
+		return storage.Executor{DoneStatus: "merged"}
+	}
+
+	t.Run("integration mode uses done_status", func(t *testing.T) {
+		got, note := resolveEpicDoneStatus(base(), false, statuses("todo", "doing", "merged", "done"))
+		if got != "merged" || note != "" {
+			t.Errorf("got (%q, %q), want (merged, no note)", got, note)
+		}
+	})
+
+	t.Run("independent mode defaults to pushed when the project lists it", func(t *testing.T) {
+		got, note := resolveEpicDoneStatus(base(), true, statuses("todo", "doing", "merged", "pushed", "done"))
+		if got != "pushed" || note != "" {
+			t.Errorf("got (%q, %q), want (pushed, no note)", got, note)
+		}
+	})
+
+	t.Run("unlisted default degrades to done_status with a note", func(t *testing.T) {
+		got, note := resolveEpicDoneStatus(base(), true, statuses("todo", "doing", "merged", "done"))
+		if got != "merged" {
+			t.Errorf("got %q, want the merged fallback so the run still works", got)
+		}
+		if !strings.Contains(note, "pushed") || !strings.Contains(note, "statuses") {
+			t.Errorf("the degrade must say what to add and why, got %q", note)
+		}
+	})
+
+	t.Run("explicit unlisted status is left for the gate to reject", func(t *testing.T) {
+		exc := base()
+		exc.DoneStatusIndependent = "reviewd" // typo in project.yaml
+		got, note := resolveEpicDoneStatus(exc, true, statuses("todo", "doing", "merged", "done"))
+		if got != "reviewd" || note != "" {
+			t.Errorf("got (%q, %q) - a configured status must reach the gate verbatim, not silently fall back", got, note)
+		}
+	})
+
+	t.Run("gate is resolved in the plan", func(t *testing.T) {
+		if err := epicDoneStatusGate("merged", "app", statuses("todo", "doing", "merged")); err != nil {
+			t.Errorf("a listed status must pass the gate, got %v", err)
+		}
+		err := epicDoneStatusGate("merged", "app", statuses("todo", "doing", "done"))
+		if err == nil || !strings.Contains(err.Error(), `done status "merged" is not in project app statuses`) {
+			t.Errorf("an unlisted status must be refused by name, got %v", err)
+		}
+	})
+
+	t.Run("neither usable: report the real independent status", func(t *testing.T) {
+		exc := storage.Executor{DoneStatus: "landed"}
+		got, note := resolveEpicDoneStatus(exc, true, statuses("todo", "doing", "done"))
+		if got != "pushed" || note != "" {
+			t.Errorf("got (%q, %q), want (pushed, no note) so the gate names the status the run actually wanted", got, note)
+		}
+	})
+}
