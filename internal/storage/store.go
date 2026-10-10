@@ -63,7 +63,7 @@ func (s *Store) RootDir() string {
 // warnLockDegrade reports a silent-degrade hazard: a caller that could not
 // take the project lock and is about to write UNLOCKED anyway. Without this,
 // a concurrent session's edit can get clobbered with no trace - see
-// applyWorkerResult (internal/cmd/work.go), the one site that already got
+// applyWorkerResult (internal/executor/work.go), the one site that already got
 // this right, whose wording this mirrors.
 func warnLockDegrade(op, slug string, lockErr error) {
 	fmt.Fprintf(os.Stderr, "pm: project lock unavailable for %q (%v) - %s without it\n", slug, lockErr, op)

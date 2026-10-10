@@ -165,7 +165,7 @@ type ReviewTelemetry struct {
 	// Reviewers is how many of Spawns pm treated as REVIEWERS: top-level,
 	// allowed, of a generic type (or none, which the guard turns into the
 	// reviewer type). It is the number the review FLOOR is judged against
-	// (see cmd's review_floor.go): a custom-type helper is not a review, and
+	// (see internal/executor/review_floor.go): a custom-type helper is not a review, and
 	// a refused spawn never ran. Kept apart from Spawns rather than replacing
 	// it because Spawns is what every older line and stat already means.
 	Reviewers int `json:"reviewers,omitempty"`
