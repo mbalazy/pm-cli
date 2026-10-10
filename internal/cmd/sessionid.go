@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mbalazy/pm-cli/internal/ccpath"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
@@ -112,7 +113,7 @@ func sessionFromProjectDir() (string, bool) {
 	// Honor CLAUDE_CONFIG_DIR: this command runs INSIDE the claude process, so a
 	// project that runs claude under a non-default config dir (e.g. a company
 	// account in its own config dir via a shell wrapper) has it set in the env.
-	projectKey := encodeProjectPath(cwd)
+	projectKey := ccpath.Encode(cwd)
 	sessDir := filepath.Join(storage.DefaultClaudeConfigDir(), "projects", projectKey)
 
 	entries, err := os.ReadDir(sessDir)
@@ -144,17 +145,6 @@ func sessionFromProjectDir() (string, bool) {
 		return "", false
 	}
 	return strings.TrimSuffix(bestName, ".jsonl"), true
-}
-
-// encodeProjectPath converts a filesystem path to CC's project directory name:
-// every "/" and "." becomes "-". Matches board.pathToCCProject.
-//
-//	/Users/alice/.claude/pm-cli      -> -Users-alice--claude-pm-cli
-//	/Users/alice/repos/x/app.mobile  -> -Users-alice-repos-x-app-mobile
-func encodeProjectPath(path string) string {
-	s := strings.ReplaceAll(path, "/", "-")
-	s = strings.ReplaceAll(s, ".", "-")
-	return s
 }
 
 func parentPID(pid int) (int, error) {

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mbalazy/pm-cli/internal/ccpath"
 )
 
 // transcriptLine renders one assistant record carrying a StructuredOutput call,
@@ -33,7 +35,7 @@ func transcriptLine(t *testing.T, res map[string]any) string {
 // dir under the given claude config dir, and returns its path.
 func writeTranscript(t *testing.T, configDir, dir, sessionID string, lines ...string) string {
 	t.Helper()
-	projDir := filepath.Join(configDir, "projects", encodeProjectPath(dir))
+	projDir := filepath.Join(configDir, "projects", ccpath.Encode(dir))
 	if err := os.MkdirAll(projDir, 0o755); err != nil {
 		t.Fatalf("mkdir transcript dir: %v", err)
 	}

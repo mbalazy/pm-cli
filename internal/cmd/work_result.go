@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mbalazy/pm-cli/internal/ccpath"
 	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
@@ -133,7 +134,7 @@ func transcriptCandidates(configDir, dir, sessionID string) []string {
 	var out []string
 	for _, cfg := range cfgs {
 		for _, d := range dirs {
-			out = append(out, filepath.Join(cfg, "projects", encodeProjectPath(d), sessionID+".jsonl"))
+			out = append(out, filepath.Join(cfg, "projects", ccpath.Encode(d), sessionID+".jsonl"))
 		}
 	}
 	return out

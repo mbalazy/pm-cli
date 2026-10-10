@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mbalazy/pm-cli/internal/ccpath"
 	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
@@ -92,7 +93,7 @@ func TestRecoverWorkerEffortFindsTheTranscript(t *testing.T) {
 	cfg := t.TempDir()
 	dir := t.TempDir()
 	sessionID := "11111111-2222-3333-4444-555555555555"
-	path := filepath.Join(cfg, "projects", encodeProjectPath(dir), sessionID+".jsonl")
+	path := filepath.Join(cfg, "projects", ccpath.Encode(dir), sessionID+".jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +169,7 @@ func TestExecuteWorkDeadWorkerJournalsItsEffort(t *testing.T) {
 
 	// The transcript the dying worker left behind. pm can find it because pm
 	// minted the session id (plan.sessionID) and pinned it with --session-id.
-	path := filepath.Join(cfg, "projects", encodeProjectPath(plan.workDir), plan.sessionID+".jsonl")
+	path := filepath.Join(cfg, "projects", ccpath.Encode(plan.workDir), plan.sessionID+".jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}

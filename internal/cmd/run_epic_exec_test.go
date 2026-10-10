@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mbalazy/pm-cli/internal/ccpath"
 	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
@@ -495,7 +496,7 @@ exit 1`)
 	// is asserted against accountWallReason in work_failure_test.go.)
 
 	store, repo, cfg := epicRunFixtureN(t, 3)
-	t.Setenv("PM_TEST_TRANSCRIPT_DIR", filepath.Join(cfg, "projects", encodeProjectPath(repo)))
+	t.Setenv("PM_TEST_TRANSCRIPT_DIR", filepath.Join(cfg, "projects", ccpath.Encode(repo)))
 
 	_, errOut := runEpic(t, store, epicOptions{noPR: true})
 
@@ -566,7 +567,7 @@ printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"con
 exit 1`)
 
 	store, repo, cfg := epicRunFixtureN(t, 2)
-	t.Setenv("PM_TEST_TRANSCRIPT_DIR", filepath.Join(cfg, "projects", encodeProjectPath(repo)))
+	t.Setenv("PM_TEST_TRANSCRIPT_DIR", filepath.Join(cfg, "projects", ccpath.Encode(repo)))
 
 	_, errOut := runEpic(t, store, epicOptions{noPR: true})
 
