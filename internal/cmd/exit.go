@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mbalazy/pm-cli/internal/exitcode"
 	"github.com/mbalazy/pm-cli/internal/service"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
@@ -33,46 +34,27 @@ import (
 // every diagnostic, the error line included, goes to stderr - a caller
 // piping stdout into a JSON parser must never see prose there.
 const (
-	ExitError    = 1
-	ExitUsage    = 2
-	ExitNotFound = 3
-	ExitConflict = 4
+	ExitError    = exitcode.Error
+	ExitUsage    = exitcode.Usage
+	ExitNotFound = exitcode.NotFound
+	ExitConflict = exitcode.Conflict
 )
 
-// exitError pins an exit code on an error the classifier below could not
-// tell from its type alone: a cobra flag/argument error (plain errors),
-// "no project given", a journal name outside the declared list, a claim
-// another process holds. Error() is the wrapped text unchanged.
-type exitError struct {
-	code int
-	err  error
-}
-
-func (e *exitError) Error() string { return e.err.Error() }
-func (e *exitError) Unwrap() error { return e.err }
-
-func withExit(code int, err error) error {
-	if err == nil {
-		return nil
-	}
-	return &exitError{code: code, err: err}
-}
-
-func usageErr(err error) error    { return withExit(ExitUsage, err) }
-func notFoundErr(err error) error { return withExit(ExitNotFound, err) }
-func conflictErr(err error) error { return withExit(ExitConflict, err) }
+func usageErr(err error) error    { return exitcode.With(ExitUsage, err) }
+func notFoundErr(err error) error { return exitcode.With(ExitNotFound, err) }
+func conflictErr(err error) error { return exitcode.With(ExitConflict, err) }
 
 // ExitCode maps the error a command returned to the process exit code.
-// An explicit exitError wins; then the store's typed errors and sentinels;
+// An explicit exitcode.CodedError wins; then the store's typed errors and sentinels;
 // the service layer's ValidationError (pm today goes through it) is bad
 // usage; anything else is 1.
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
 	}
-	var ee *exitError
+	var ee *exitcode.CodedError
 	if errors.As(err, &ee) {
-		return ee.code
+		return ee.Code
 	}
 	var iv *storage.InvalidValueError
 	var ce *storage.ConflictError

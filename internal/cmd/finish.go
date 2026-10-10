@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mbalazy/pm-cli/internal/exitcode"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
@@ -1014,13 +1015,13 @@ func newFinishReleaseCmd(store storage.TaskStore) *cobra.Command {
 				// Void already - everything else reports it free, so clearing it
 				// takes nothing from anybody, whichever machine wrote it.
 			case current.Host != storage.Hostname():
-				return conflictErr(fmt.Errorf("claim on %s is held by %s (pid %d), not by this host (%s) - "+
+				return exitcode.With(exitcode.Conflict, fmt.Errorf("claim on %s is held by %s (pid %d), not by this host (%s) - "+
 					"release it there, or leave it: an unrefreshed claim expires after %s",
 					tracker, current.Host, current.PID, storage.Hostname(), storage.FinishClaimTTL))
 			case started != "" && started == current.Started:
 			case session != "" && session == current.Session:
 			default:
-				return conflictErr(fmt.Errorf("claim on %s is held by %s (pid %d), started %s%s - "+
+				return exitcode.With(exitcode.Conflict, fmt.Errorf("claim on %s is held by %s (pid %d), started %s%s - "+
 					"pass --started %s (or the --session you claimed with) to release it, "+
 					"or leave it: an unrefreshed claim expires after %s",
 					tracker, current.Host, current.PID, current.Started,
