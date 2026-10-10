@@ -20,6 +20,7 @@ One file per surface, each readable cold. The README is the two-minute landing p
 
 **Working on pm**
 
+- [architecture.md](architecture.md) - one diagram of how the packages fit: the storage layer, the service layer, the four front ends (CLI, board, MCP server, web cockpit) and the executor beside them, drawn from the real import graph.
 - [development.md](development.md) - build, test, the web toolchain, CI, releasing, the deploy target, and the one rule about names in a public repo.
 - [design-log.md](design-log.md) - the rationale, the bug stories and the measurements behind the rules in `CLAUDE.md`: what was tried, what it cost, why the current shape won. A rule ending `(history: docs/design-log.md)` has its story here.
 
