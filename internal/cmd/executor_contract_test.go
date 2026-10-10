@@ -39,6 +39,7 @@ func seedHeldClaim(t *testing.T, store *storage.Store, c storage.FinishClaim) {
 func TestExecutorExitCodesEndToEnd(t *testing.T) {
 	store := exitFixture(t)
 	now := time.Now().UTC()
+	started := now.Add(-time.Minute).Format(time.RFC3339)
 
 	cases := []struct {
 		name  string
@@ -46,11 +47,11 @@ func TestExecutorExitCodesEndToEnd(t *testing.T) {
 		args  []string
 		want  int
 	}{
+		// Named by its own stamp, so only the host check can refuse it.
 		{"finish release of another host's live claim", &storage.FinishClaim{
 			TrackerID: "acme-1", Host: "runner", PID: 4711,
-			Started:   now.Add(-time.Minute).Format(time.RFC3339),
-			Refreshed: now.Format(time.RFC3339),
-		}, []string{"finish", "release", "acme-1", "--project", "acme"}, ExitConflict},
+			Started: started, Refreshed: now.Format(time.RFC3339),
+		}, []string{"finish", "release", "acme-1", "--project", "acme", "--started", started}, ExitConflict},
 		{"finish release of this host's live claim without naming it", &storage.FinishClaim{
 			TrackerID: "acme-1", Host: storage.Hostname(), PID: 1, Session: "sess-a",
 			Started:   now.Add(-time.Minute).Format(time.RFC3339),
