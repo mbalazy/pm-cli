@@ -1,6 +1,6 @@
 # CLI reference
 
-Every command the `pm` binary exposes, with its flags and defaults, derived from `internal/cmd`. This is for people running pm from a shell or a script; an agent normally goes through the MCP server instead ([mcp.md](mcp.md)). `pm help <command>` and `pm completion <shell>` come from cobra, and `--help` prints any command's flags. A bare `pm` opens the board.
+Every command the `pm` binary exposes, with its flags and defaults, derived from `internal/cmd` (and `internal/executor` for `pm work`, `pm run-epic`, `pm finish` and `pm executor`). This is for people running pm from a shell or a script; an agent normally goes through the MCP server instead ([mcp.md](mcp.md)). `pm help <command>` and `pm completion <shell>` come from cobra, and `--help` prints any command's flags. A bare `pm` opens the board.
 
 Argument conventions: `<project>` is a project slug (a case-folded prefix works when it is unique), `<task-id>` is a full task id such as `acme-12` unless the command says it searches. `[project]` in brackets means the project is optional and is detected from the current directory when omitted, by matching cwd against each project's `path`.
 

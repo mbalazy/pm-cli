@@ -30,7 +30,7 @@ go test ./internal/storage/ -run TestSlugify -v    # one test
 - Go stdlib `testing`, table-driven, `t.Run("case", ...)` subtests, `t.TempDir()` for anything that touches disk.
 - Tests live in the same package as the code so they reach unexported functions. `setupTestStore(t)` in `internal/storage/store_test.go` builds a store with a project and tasks.
 - The write-rule invariants (links merge, Log appends, Spec rewrites, brief lifecycle) live in `internal/mcpserver/tools_test.go`; `ApplySpec` and `ExtractSpec` have unit tests in `internal/storage/spec_test.go`.
-- Executor paths run through the fake `claude` binary (`fakeClaude` in `internal/cmd/work_exec_test.go`), covering the verified, blocked, crash and garbage-output paths of a worker. The envelope has two shapes, an object or a message array whose last element is the object.
+- Executor paths run through the fake `claude` binary (`fakeClaude` in `internal/executor/work_exec_test.go`), covering the verified, blocked, crash and garbage-output paths of a worker. The envelope has two shapes, an object or a message array whose last element is the object.
 - MCP handlers are tested end to end through the SDK's in-memory transport (`startMCP` in `internal/mcpserver/e2e_test.go`) so the real registered closures run; the test body never re-simulates handler logic.
 - Lock and race invariants live in `internal/storage/lock_test.go` and the two-acquirer hammer in `internal/storage/worktree_test.go`. Run suspects under `-race`; `make test-race` runs the whole suite that way before anything touching locking is pushed.
 - HTTP routes are tested in `internal/server/server_test.go` with `httptest` over the same temp-store fixture, including the SSE feed and the remote-runs hook through a fake, never ssh.

@@ -12,7 +12,7 @@ the board still run all of it.
 
 Both paths hand the *procedure* to a skill that is **not in this repository**:
 solo runs the `/solo` skill, and `pm finish` tells its worker to invoke the
-`batch-finish-auto` skill (`internal/cmd/finish_prompt.go`). pm supplies the
+`batch-finish-auto` skill (`internal/executor/finish_prompt.go`). pm supplies the
 launch, the process harness, the files and the screens; the skills live in
 [mbalazy/claude-skills](https://github.com/mbalazy/claude-skills), linked into
 `~/.claude/skills` of the machine that runs them. This page is the manual for
