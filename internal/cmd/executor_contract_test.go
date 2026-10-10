@@ -100,6 +100,14 @@ func TestExecutorExitCodesEndToEnd(t *testing.T) {
 		{"executor with an unknown subcommand prints its help", nil, []string{"executor", "bogus"}, 0},
 		{"worker-guard unknown flag", nil, []string{"worker-guard", "--bogus"}, ExitUsage},
 	}
+	// What a succeeding case must print, so it is not green on its exit code
+	// alone: a status that ignored the claim, or an executor that stopped
+	// printing its help, would still exit 0.
+	wantStdout := map[string]string{
+		"finish status of a free tracker":                     "free (no claim)",
+		"finish status of a held tracker":                     "claimed by runner",
+		"executor with an unknown subcommand prints its help": "Usage:",
+	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			_ = os.Remove(storage.FinishClaimPath(store.ProjectDir("acme"), "acme-1"))
@@ -113,15 +121,19 @@ func TestExecutorExitCodesEndToEnd(t *testing.T) {
 			if code != 0 && stdout != "" {
 				t.Errorf("pm %s: a failing command wrote to stdout: %q", strings.Join(c.args, " "), stdout)
 			}
+			if want := wantStdout[c.name]; !strings.Contains(stdout, want) {
+				t.Errorf("pm %s: stdout %q, want it to contain %q", strings.Join(c.args, " "), stdout, want)
+			}
 		})
 	}
 }
 
 // The acceptance run itself on a tracker somebody else is accepting: the claim
 // is taken before anything is spawned, so the run must stop there, leave the
-// other claim in place and print nothing to stdout. A `claude` that fails is
-// first on PATH, so even a regression that got past the claim spawns nothing
-// real.
+// other claim in place and print nothing to stdout. A `claude` that leaves a
+// marker and fails is first on PATH: the exit code alone cannot tell a refused
+// claim from a worker that ran and failed, the marker can, and a regression
+// that got past the claim still spawns nothing real.
 func TestExecutorFinishOnAHeldClaim(t *testing.T) {
 	store := exitFixture(t)
 	repo := t.TempDir()
@@ -135,7 +147,8 @@ func TestExecutorFinishOnAHeldClaim(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
+	spawned := filepath.Join(bin, "spawned")
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\ntouch '"+spawned+"'\nexit 1\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -156,6 +169,9 @@ func TestExecutorFinishOnAHeldClaim(t *testing.T) {
 	}
 	if h := storage.LiveFinishClaimHolder(store.ProjectDir("acme"), "acme-1"); h == nil || h.Host != "runner" || h.Started != held.Started {
 		t.Errorf("claim after the refused run = %+v, want the untouched runner claim", h)
+	}
+	if _, err := os.Stat(spawned); err == nil {
+		t.Error("the refused acceptance spawned claude")
 	}
 }
 
