@@ -54,8 +54,8 @@ flowchart TB
     runctl --> storage
     solo --> storage
 
-    tui -. "starts pm work / run-epic / finish" .-> bin
-    runctl -. "starts pm work / run-epic / finish" .-> bin
+    tui -.->|starts pm work, run-epic, finish| bin
+    runctl -.->|starts pm work, run-epic, finish| bin
 ```
 
 ## The boxes
