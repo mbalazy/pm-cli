@@ -1,6 +1,6 @@
 # Architecture
 
-pm is one data layer with several front ends on top of it, plus the executor as a module beside them. Everything lives in one binary, `cmd/pm`. The diagram is drawn from the real import graph (`go list -f '{{.ImportPath}}: {{join .Imports " "}}' ./...`): a solid arrow means "imports", and every one of them is an import in the code. A dashed arrow is not an import. It marks a process boundary: the package starts `pm` as a child process to run the executor. These are not the only `pm` child processes. The board also runs `pm runs --json`, and the executor runs `pm finish` after `run-epic --then-finish` and registers `pm worker-guard` as a hook.
+pm is one data layer with several front ends on top of it, plus the executor as a module beside them. Everything lives in one binary, `cmd/pm`. The diagram is drawn from the real import graph (`go list -f '{{.ImportPath}}: {{join .Imports " "}}' ./...`): a solid arrow means "imports", and every one of them is an import in the code. A dashed arrow is not an import. It marks a process boundary: the package starts `pm` as a child process to run the executor. These are not the only `pm` child processes. The board also runs `pm runs --json`, and the executor runs `pm finish` after `run-epic --then-finish` (or on a tracker with `finish_mode: auto`) and registers `pm worker-guard` as a hook.
 
 ```mermaid
 flowchart TB
@@ -62,7 +62,7 @@ flowchart TB
 
 - **`internal/storage`** - the data layer. Tasks are markdown files with YAML frontmatter under `~/.claude/pm/<project>/`, next to `project.yaml`. This package also owns the executor's run state and journal, the per-project journals and timeline, the attention queue and the cross-process locks. It imports no other pm package.
 - **`internal/service`** - what each MCP tool means: status validation, the tri-state fields, link merging, the Spec/Log rules, output budgets. The MCP server and the web API both call it, so the two cannot drift apart. It imports `internal/feed` only to read the change feed's digest into the attention queue.
-- **`internal/cmd`** - the CLI. It is the only package that knows all the others: it builds the cobra tree and registers every command, the executor's included. No other package imports it.
+- **`internal/cmd`** - the CLI. It builds the cobra tree and registers every command, the executor's included, and starts the board, the MCP server and the web server. No other package imports it.
 - **`internal/tui/board`** - the Bubble Tea board. It reads and writes through `internal/storage` directly, not through `internal/service`.
 - **`internal/mcpserver`** - the stdio MCP server. Its handlers are thin: decode, call `internal/service`, encode.
 - **`internal/server`** - the HTTP server behind the web cockpit, plus the embedded SPA (`web/`). Its reads go through `internal/service` and `internal/storage`. What only the cockpit does lives in the packages it imports:
@@ -73,7 +73,7 @@ flowchart TB
   - **`internal/solo`** - starting a solo Claude Code session.
 - **`internal/executor`** - runs pm tasks through headless `claude -p` workers: the `pm work`, `pm run-epic`, `pm finish` and `pm executor` commands, and the `pm worker-guard` hook. It depends on `internal/storage` and the leaf helpers below, never on `internal/cmd`. Its internals are in [executor.md](executor.md).
 
-The leaf helpers are left out of the diagram to keep it on one screen. Only `internal/cmd`, `internal/executor`, `internal/mcpserver` and `internal/tui/board` import them:
+The leaf helpers are left out of the diagram to keep it on one screen. Their importers are `internal/cmd`, `internal/executor`, `internal/mcpserver`, `internal/tui/board` and, for `exitcode`, `internal/projectarg`:
 
 - **`internal/proc`** - process groups.
 - **`internal/exitcode`** - exit codes.
