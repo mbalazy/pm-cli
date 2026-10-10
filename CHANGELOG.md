@@ -10,6 +10,23 @@ that line's history, with one catch: it does not diff merge commits, and
 Tags exist from v0.65.0 on, and versions promise each other nothing. The only
 promise is that your task files stay readable, because they are markdown.
 
+## 0.70.0 - 2026-10-10
+
+Nothing changes for a user; the code is easier to find your way around.
+The executor (`pm work`, `pm run-epic`, `pm finish`, `pm executor` and
+the `pm worker-guard` hook) moved out of `internal/cmd` into its own
+package, `internal/executor`, and the helpers both sides use went into
+small packages of their own (`internal/proc`, `internal/exitcode`,
+`internal/projectarg`, `internal/ccpath`). `internal/cmd` is now the CLI
+and registers the executor's commands. New tests pin the executor
+commands' exit codes and command tree through the root command, and
+`docs/architecture.md` draws the package layers from the import graph.
+Five of the longest functions were split, each after tests pinned what it
+did: the board's and the task detail's key handling, the Claude Code
+launcher, the `run-epic` manager loop and a single `pm work` run. A feed
+test that compared a fixed September date with today's clock no longer
+expires.
+
 ## 0.69.0 - 2026-09-22
 
 The session-start call fits again: the cross-project `pm_context` had
