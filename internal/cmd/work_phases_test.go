@@ -183,3 +183,23 @@ func TestExecuteWorkSetupRefusals(t *testing.T) {
 		})
 	}
 }
+
+// TestExecuteWorkAllowDirtyKeepsTheChanges pins --allow-dirty in the main
+// checkout: the dirty tree is not refused and survives the run untouched.
+func TestExecuteWorkAllowDirtyKeepsTheChanges(t *testing.T) {
+	fakeClaude(t, "echo '"+envelope(workerVerified, "all green")+"'")
+	store, task, plan, opts := executorFixture(t)
+	opts.allowDirty = true
+	if err := os.WriteFile(filepath.Join(plan.workDir, "f.txt"), []byte("dirty\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executeWork(store, task, plan, opts); err != nil {
+		t.Fatalf("--allow-dirty must not refuse a dirty tree: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(plan.workDir, "f.txt")); string(b) != "dirty\n" {
+		t.Errorf("the dirty change was lost: %q", b)
+	}
+	if got := gitReadT(t, plan.workDir, "rev-parse", "--abbrev-ref", "HEAD"); got != plan.branch {
+		t.Errorf("checkout on %q, want %q", got, plan.branch)
+	}
+}
