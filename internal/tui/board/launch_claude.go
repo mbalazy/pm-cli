@@ -13,6 +13,10 @@ import (
 	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
+// execProcess is tea.ExecProcess, held in a variable so a test can see the
+// command a launch would hand to the terminal without running it.
+var execProcess = tea.ExecProcess
+
 // claudeSessionArgs builds the argv for a plain `claude --session-id ... prompt`
 // launch (kinds "here"/"tmux", and the project-scope launch which has no
 // worktree/resume/fork variants). Pure so it is unit-testable without
@@ -107,7 +111,7 @@ func (m Model) launchProjectClaude(kind string) (tea.Model, tea.Cmd) {
 		}
 		origWin := tmuxGetWindowName()
 		tmuxRenameWindow(tmuxWindowName("cc", slug, sessionID))
-		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+		return m, execProcess(c, func(err error) tea.Msg {
 			tmuxRenameWindow(origWin)
 			return reloadMsg{}
 		})
@@ -249,7 +253,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		setDir(c)
 		origWin := tmuxGetWindowName()
 		tmuxRenameWindow(tmuxWindowName("cc", t.Meta.ID, sessionID))
-		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+		return m, execProcess(c, func(err error) tea.Msg {
 			tmuxRenameWindow(origWin)
 			return reloadMsg{}
 		})
@@ -296,7 +300,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		setDir(c, claim.env...)
 		origWin := tmuxGetWindowName()
 		tmuxRenameWindow(tmuxWindowName("wt", t.Meta.ID, sessionID))
-		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+		return m, execProcess(c, func(err error) tea.Msg {
 			tmuxRenameWindow(origWin)
 			return reloadMsg{}
 		})
@@ -343,7 +347,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		setResumeDir(c)
 		origWin := tmuxGetWindowName()
 		tmuxRenameWindow(tmuxWindowName("cc", t.Meta.ID, sessionID))
-		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+		return m, execProcess(c, func(err error) tea.Msg {
 			tmuxRenameWindow(origWin)
 			return reloadMsg{}
 		})
@@ -380,7 +384,7 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 		setResumeDir(c)
 		origWin := tmuxGetWindowName()
 		tmuxRenameWindow(tmuxWindowName("cc", t.Meta.ID, newID))
-		return m, tea.ExecProcess(c, func(err error) tea.Msg {
+		return m, execProcess(c, func(err error) tea.Msg {
 			tmuxRenameWindow(origWin)
 			return reloadMsg{}
 		})
