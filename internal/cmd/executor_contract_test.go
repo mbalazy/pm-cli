@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -72,7 +73,12 @@ func TestExecutorExitCodesEndToEnd(t *testing.T) {
 		{"finish claim of an unsafe id", nil, []string{"finish", "claim", "../x", "--project", "acme"}, ExitUsage},
 		{"finish claim without a tracker", nil, []string{"finish", "claim"}, ExitUsage},
 		{"finish unknown flag", nil, []string{"finish", "--bogus"}, ExitUsage},
-		{"finish with a positional tracker", nil, []string{"finish", "acme-1"}, ExitError},
+		{"finish in a project with no path", nil, []string{"finish", "acme-1"}, ExitError},
+		{"finish on an unknown tracker", nil, []string{"finish", "nope", "--project", "acme"}, ExitNotFound},
+		{"finish record over another session's live claim", &storage.FinishClaim{
+			TrackerID: "acme-1", Host: "runner", PID: 4711,
+			Started: started, Refreshed: now.Format(time.RFC3339),
+		}, []string{"finish", "record", "acme-1", "--project", "acme", "--result", "done"}, ExitError},
 		{"finish record without --result", nil, []string{"finish", "record", "acme-1", "--project", "acme"}, ExitError},
 		{"finish record of an unknown tracker", nil, []string{"finish", "record", "nope", "--project", "acme", "--result", "done"}, ExitNotFound},
 		{"work on an unknown id", nil, []string{"work", "nope-1"}, ExitError},
@@ -108,6 +114,48 @@ func TestExecutorExitCodesEndToEnd(t *testing.T) {
 				t.Errorf("pm %s: a failing command wrote to stdout: %q", strings.Join(c.args, " "), stdout)
 			}
 		})
+	}
+}
+
+// The acceptance run itself on a tracker somebody else is accepting: the claim
+// is taken before anything is spawned, so the run must stop there, leave the
+// other claim in place and print nothing to stdout. A `claude` that fails is
+// first on PATH, so even a regression that got past the claim spawns nothing
+// real.
+func TestExecutorFinishOnAHeldClaim(t *testing.T) {
+	store := exitFixture(t)
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	if _, err := store.MutateProject("acme", func(p *storage.Project) error {
+		p.Path = repo
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	now := time.Now().UTC()
+	held := storage.FinishClaim{
+		TrackerID: "acme-1", Host: "runner", PID: 4711,
+		Started: now.Add(-time.Minute).Format(time.RFC3339), Refreshed: now.Format(time.RFC3339),
+	}
+	seedHeldClaim(t, store, held)
+
+	code, stdout, _ := runRoot(t, "finish", "acme-1", "--project", "acme")
+	if code != ExitError {
+		t.Errorf("pm finish acme-1 on a held claim: exit %d, want %d", code, ExitError)
+	}
+	if stdout != "" {
+		t.Errorf("a refused acceptance wrote to stdout: %q", stdout)
+	}
+	if h := storage.LiveFinishClaimHolder(store.ProjectDir("acme"), "acme-1"); h == nil || h.Host != "runner" || h.Started != held.Started {
+		t.Errorf("claim after the refused run = %+v, want the untouched runner claim", h)
 	}
 }
 
