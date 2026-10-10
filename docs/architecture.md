@@ -1,6 +1,6 @@
 # Architecture
 
-pm is one data layer with several front ends on top of it, plus the executor as a module beside them. Everything lives in one binary, `cmd/pm`. The diagram is drawn from the real import graph (`go list -f '{{.ImportPath}}: {{join .Imports " "}}' ./...`): a solid arrow means "imports", and every one of them is an import in the code. A dashed arrow is not an import. It marks a process boundary: the package runs `pm` as a child process.
+pm is one data layer with several front ends on top of it, plus the executor as a module beside them. Everything lives in one binary, `cmd/pm`. The diagram is drawn from the real import graph (`go list -f '{{.ImportPath}}: {{join .Imports " "}}' ./...`): a solid arrow means "imports", and every one of them is an import in the code. A dashed arrow is not an import. It marks a process boundary: the package starts `pm` as a child process to run the executor. These are not the only `pm` child processes. The board also runs `pm runs --json`, and the executor runs `pm finish` after `run-epic --then-finish` and registers `pm worker-guard` as a hook.
 
 ```mermaid
 flowchart TB
@@ -73,7 +73,7 @@ flowchart TB
   - **`internal/solo`** - starting a solo Claude Code session.
 - **`internal/executor`** - runs pm tasks through headless `claude -p` workers: the `pm work`, `pm run-epic`, `pm finish` and `pm executor` commands, and the `pm worker-guard` hook. It depends on `internal/storage` and the leaf helpers below, never on `internal/cmd`. Its internals are in [executor.md](executor.md).
 
-The leaf helpers are left out of the diagram, since nearly every box imports one of them:
+The leaf helpers are left out of the diagram to keep it on one screen. Only `internal/cmd`, `internal/executor`, `internal/mcpserver` and `internal/tui/board` import them:
 
 - **`internal/proc`** - process groups.
 - **`internal/exitcode`** - exit codes.
@@ -89,4 +89,4 @@ None of them imports another pm package, except `projectarg`, which imports `exi
 
 - **Nothing imports `internal/cmd`** except the binary. `go list -f '{{.ImportPath}}: {{join .Imports " "}}' ./internal/... | grep pm-cli/internal/cmd` lists only `internal/cmd`'s own line.
 - **The board and the cockpit never import the executor.** They start it as a process (`exec.Command` with `pm work ...`). Their contract with it is the command names, the flags, the run-state files in `<project>/.executor/` and the shape of `pm runs --json`, not Go types. That is why `internal/cmd/executor_contract_test.go` pins those names and exit codes through the root command.
-- **The storage layer is the only shared state.** Every front end, and the executor, reads and writes the same files through `internal/storage`. `internal/cmd` imports the other front ends only to start them (`pm board`, `pm mcp`, `pm serve`).
+- **The front ends share state through files, not calls.** Tasks, projects, run state, journals and the timeline go through `internal/storage`. The one exception is the change feed's on-disk cache (`<data dir>/.cockpit/changes`), which `internal/feed` writes itself. `pm today` (through `internal/service`) and `pm serve` both read it. `internal/cmd` imports the other front ends only to start them (`pm board`, `pm mcp`, `pm serve`).
