@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mbalazy/pm-cli/internal/proc"
 	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
@@ -79,13 +80,13 @@ func runRig(errOut io.Writer, dir, command string, env []string) rigVerdict {
 	// leaves behind ON PURPOSE (Metro) is part of the point - which is why the
 	// command is expected to detach such things itself (nohup, setsid); what
 	// stays attached to our pipe is killed at the cap.
-	c := groupCmd(ctx, "sh", "-c", command)
+	c := proc.GroupCmd(ctx, "sh", "-c", command)
 	c.Dir = dir
 	c.Env = append(os.Environ(), env...)
 	var combined bytes.Buffer
 	c.Stdout = &combined
 	c.Stderr = &combined
-	err := runGroupCmd(ctx, c, nil)
+	err := proc.RunGroupCmd(ctx, c, nil)
 	v.Output = tailOutput(combined.String(), rigOutputCap)
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:

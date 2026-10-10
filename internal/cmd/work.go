@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mbalazy/pm-cli/internal/proc"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
@@ -1504,14 +1505,14 @@ func captureBaseline(errOut io.Writer, dir, command string) string {
 	// Same process-group enforcement as the worker: a baseline command that
 	// backgrounds anything (a dev server, a watcher) would otherwise outlive its
 	// own cap and hold the output pipe open past it.
-	c := groupCmd(ctx, "sh", "-c", command)
+	c := proc.GroupCmd(ctx, "sh", "-c", command)
 	c.Dir = dir
 	var combined bytes.Buffer
 	c.Stdout = &combined
 	c.Stderr = &combined // one writer for both: exec dedups it onto a single fd
 	// No onStart: the baseline runs before any run-state exists to publish to,
 	// and its cap is enforced entirely inside this process.
-	err := runGroupCmd(ctx, c, nil)
+	err := proc.RunGroupCmd(ctx, c, nil)
 	out := combined.Bytes()
 	if ctx.Err() == context.DeadlineExceeded {
 		fmt.Fprintf(errOut, "pm work: baseline cmd timed out after %s - continuing without a baseline\n", baselineTimeout)
@@ -1527,7 +1528,7 @@ func captureBaseline(errOut io.Writer, dir, command string) string {
 		// wins as *ExitError - so this baseline is GREEN. Degrading to "no
 		// baseline" here would cost every worker in the run the one section that
 		// tells it which failures are pre-existing.
-		fmt.Fprintf(errOut, "pm work: baseline cmd left background processes holding its output - killed them after %s\n", procWaitDelay)
+		fmt.Fprintf(errOut, "pm work: baseline cmd left background processes holding its output - killed them after %s\n", proc.WaitDelay)
 		return baselineSection(command, 0, "")
 	}
 	var exitErr *exec.ExitError
@@ -1547,7 +1548,7 @@ func captureBaseline(errOut io.Writer, dir, command string) string {
 // the result envelope, and returns the worker result + the session id. A hung
 // claude is killed when the timeout elapses rather than blocking pm forever.
 // onSpawn (optional) receives the worker group's pgid once it is up; see
-// runGroupCmd.
+// proc.RunGroupCmd.
 // sessionID is the id pm minted and pinned with `claude --session-id`, so a
 // worker that dies without an envelope can still be asked what it said - see
 // workerLastWords.
@@ -1577,7 +1578,7 @@ func runHeadless[T any](errOut io.Writer, label, dir string, args []string, time
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	c := groupCmd(ctx, "claude", args...)
+	c := proc.GroupCmd(ctx, "claude", args...)
 	c.Dir = dir
 	// Project-defined env (e.g. Metro port, simulator UDID) is appended last so
 	// it wins over any inherited value. pm passes these through opaquely.
@@ -1589,7 +1590,7 @@ func runHeadless[T any](errOut io.Writer, label, dir string, args []string, time
 	// the only thing the worker leaves behind, and the note used to get none of it.
 	stderrTail := &tailWriter{n: workerDeathTailBytes}
 	c.Stderr = io.MultiWriter(os.Stderr, stderrTail)
-	err := runGroupCmd(ctx, c, onSpawn)
+	err := proc.RunGroupCmd(ctx, c, onSpawn)
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, "", fmt.Errorf("worker timed out after %s (raise --timeout if the task legitimately needs longer)", timeout)
 	}
@@ -1600,7 +1601,7 @@ func runHeadless[T any](errOut io.Writer, label, dir string, args []string, time
 		// honour the result instead of discarding a completed worker's work.
 		if errors.Is(err, exec.ErrWaitDelay) {
 			if res, sessionID, perr := parse(stdout.Bytes(), errOut, configDir, dir, sessionID); perr == nil {
-				fmt.Fprintf(errOut, "%s: worker left background processes holding stdout - killed them after %s\n", label, procWaitDelay)
+				fmt.Fprintf(errOut, "%s: worker left background processes holding stdout - killed them after %s\n", label, proc.WaitDelay)
 				return res, sessionID, nil
 			}
 		}

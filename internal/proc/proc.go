@@ -1,4 +1,7 @@
-package cmd
+// Package proc runs child processes in their own process group, so a timeout,
+// a stuck pipe or a terminal signal takes the whole tree down, not just the
+// direct child.
+package proc
 
 import (
 	"context"
@@ -11,22 +14,22 @@ import (
 	"time"
 )
 
-// procWaitDelay bounds exec.Cmd.Wait on the two paths that would otherwise
+// WaitDelay bounds exec.Cmd.Wait on the two paths that would otherwise
 // block pm forever. Both are real for a `claude -p` worker: output is collected
 // through an os.Pipe that EVERY descendant inherits, so Wait blocks until the
 // last holder of the write end closes it - long after the child itself is gone,
 // and long past the deadline. A var, not a const, purely so tests can shrink it
-// (same trick as workerHeartbeatInterval).
-var procWaitDelay = 5 * time.Second
+// (the executor's heartbeat interval is a var for the same reason).
+var WaitDelay = 5 * time.Second
 
-// procKillGrace is how long a signalled worker group gets to go down on its own
+// KillGrace is how long a signalled worker group gets to go down on its own
 // before pm escalates to SIGKILL. Kept well under the board's own 2s escalation
 // window (killRun -> execKillCheckMsg): when killRun SIGTERMs the manager, the
 // manager must have finished taking its worker tree down - and died itself -
 // before the board re-checks.
-var procKillGrace = time.Second
+var KillGrace = time.Second
 
-// groupCmd builds an exec.Cmd that runs in its OWN process group, so the whole
+// GroupCmd builds an exec.Cmd that runs in its OWN process group, so the whole
 // worker tree - not just the direct child - can be signalled. Without it,
 // exec.CommandContext's cancellation reaches only the process pm spawned: a
 // timed-out worker's test runner / dev server / nested agent survives, keeps
@@ -36,7 +39,7 @@ var procKillGrace = time.Second
 // OUTSIDE this process can reach it any more (the board's killRun signals the
 // MANAGER's group). That is why every exit path here - deadline, WaitDelay, a
 // forwarded terminal signal - takes the group down explicitly before pm leaves.
-func groupCmd(ctx context.Context, name string, args ...string) *exec.Cmd {
+func GroupCmd(ctx context.Context, name string, args ...string) *exec.Cmd {
 	c := exec.CommandContext(ctx, name, args...)
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// Default cancellation is Process.Kill() - the direct child only. Signal the
@@ -45,11 +48,11 @@ func groupCmd(ctx context.Context, name string, args ...string) *exec.Cmd {
 		stopGroup(c.Process.Pid)
 		return nil // let Wait report the process's own error, not this one
 	}
-	c.WaitDelay = procWaitDelay
+	c.WaitDelay = WaitDelay
 	return c
 }
 
-// runGroupCmd starts c (built by groupCmd), waits for it, and makes sure the
+// RunGroupCmd starts c (built by GroupCmd), waits for it, and makes sure the
 // group leaves nothing behind. Wait's error is returned verbatim - callers
 // distinguish a plain non-zero exit (*exec.ExitError) from exec.ErrWaitDelay,
 // which means "the process exited 0 but a descendant still held its output".
@@ -58,7 +61,7 @@ func groupCmd(ctx context.Context, name string, args ...string) *exec.Cmd {
 // up. Setpgid makes that pgid the only handle anything outside this process has
 // on the worker tree, so a caller that wants the group to stay reachable after
 // it dies (see storage.RunState.WorkerPGID) publishes it from here.
-func runGroupCmd(ctx context.Context, c *exec.Cmd, onStart func(pgid int)) error {
+func RunGroupCmd(ctx context.Context, c *exec.Cmd, onStart func(pgid int)) error {
 	// Armed BEFORE the fork: between Start and Notify there would otherwise be a
 	// window where a terminal signal kills pm with the default disposition and
 	// leaves a brand-new worker - already in its own group - unreachable. The
@@ -97,7 +100,7 @@ func stopGroup(pid int) {
 		return // never fall through to kill(0) / kill(-0) - that is OUR group
 	}
 	_ = signalGroup(pid, syscall.SIGTERM)
-	deadline := time.Now().Add(procKillGrace)
+	deadline := time.Now().Add(KillGrace)
 	for time.Now().Before(deadline) {
 		if syscall.Kill(-pid, 0) != nil {
 			return // the group has no members left - nothing to escalate against
@@ -118,6 +121,12 @@ func signalGroup(pid int, sig syscall.Signal) error {
 	}
 	return syscall.Kill(pid, sig)
 }
+
+// OnTerminalSignal is called with a forwarded terminal signal before the
+// worker group is taken down and the signal is re-raised on this process -
+// the last moment a catchable death can still be recorded. The executor sets
+// it to its crash journal; it does nothing by default.
+var OnTerminalSignal = func(syscall.Signal) {}
 
 // forwardTerminalSignals keeps the worker reachable from outside pm. Setpgid
 // moves it out of pm's process group, so neither the terminal's Ctrl-C nor the
@@ -140,8 +149,8 @@ func forwardTerminalSignals(pid *atomic.Int64) func() {
 			}
 			// Before anything else, and before the re-raise below kills this
 			// process: this is the only moment a catchable death can be recorded
-			// (see executor_crash.go). A no-op unless a run armed it.
-			journalTerminalSignal(sig)
+			// (see OnTerminalSignal). A no-op unless a run armed it.
+			OnTerminalSignal(sig)
 			stopGroup(int(pid.Load()))
 			signal.Stop(sigc)
 			_ = syscall.Kill(os.Getpid(), sig)

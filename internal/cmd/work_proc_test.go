@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mbalazy/pm-cli/internal/proc"
 	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
@@ -38,10 +39,10 @@ type procFixture struct {
 // case cannot race the restore.
 func newProcFixture(t *testing.T, waitDelay time.Duration) *procFixture {
 	t.Helper()
-	oldDelay, oldBaseline, oldGrace := procWaitDelay, baselineTimeout, procKillGrace
-	procWaitDelay = waitDelay
+	oldDelay, oldBaseline, oldGrace := proc.WaitDelay, baselineTimeout, proc.KillGrace
+	proc.WaitDelay = waitDelay
 	t.Cleanup(func() {
-		procWaitDelay, baselineTimeout, procKillGrace = oldDelay, oldBaseline, oldGrace
+		proc.WaitDelay, baselineTimeout, proc.KillGrace = oldDelay, oldBaseline, oldGrace
 	})
 
 	f := &procFixture{t: t, dir: t.TempDir(), done: make(chan struct{})}
@@ -177,7 +178,7 @@ func TestRunWorkerTimeoutKillsWholeWorkerTree(t *testing.T) {
 
 func TestRunWorkerTimeoutKillsWorkerIgnoringSIGTERM(t *testing.T) {
 	f := newProcFixture(t, 500*time.Millisecond)
-	procKillGrace = 300 * time.Millisecond
+	proc.KillGrace = 300 * time.Millisecond
 	grandchild := f.pidFile("grandchild")
 	// A worker tree that swallows SIGTERM - the escalation to SIGKILL is the
 	// only thing that can end it.

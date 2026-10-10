@@ -35,7 +35,7 @@ const workerDeathTailBytes = 4096
 //
 // The mutex is load-bearing, not defensive. os/exec writes a non-*os.File
 // Stderr from its own copying goroutine, and with WaitDelay set (see
-// procWaitDelay) Wait can return while that goroutine is still being unwound -
+// proc.WaitDelay) Wait can return while that goroutine is still being unwound -
 // which is exactly the path this writer exists to report on, so the read and
 // the write really can overlap.
 type tailWriter struct {

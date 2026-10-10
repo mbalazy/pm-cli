@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/mbalazy/pm-cli/internal/proc"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
@@ -215,21 +216,21 @@ func fetchRemoteRuns(ctx context.Context, r storage.Remote) ([]storage.RunRow, e
 		"-o", "BatchMode=yes",
 		r.SSH, r.PM, "runs", "--json", "--local",
 	}
-	// groupCmd, not exec.CommandContext, for the reason its own comment gives: on
+	// proc.GroupCmd, not exec.CommandContext, for the reason its own comment gives: on
 	// the deadline the default cancellation reaches only the process pm spawned,
 	// and ssh's own children would keep the inherited output pipe open long past
 	// it - so Wait would block for as long as the hung connection lasts, which is
 	// the failure the deadline exists to bound. Its WaitDelay closes the same gap
-	// from the other side. runGroupCmd is deliberately NOT used: its terminal
+	// from the other side. proc.RunGroupCmd is deliberately NOT used: its terminal
 	// signal forwarding and pgid publishing serve a worker pm must keep reachable,
 	// and this is a short read nobody kills a run over.
-	c := groupCmd(ctx, "ssh", args...)
+	c := proc.GroupCmd(ctx, "ssh", args...)
 	var stdout, stderr bytes.Buffer
 	c.Stdout = &stdout
 	c.Stderr = &stderr
 	// exec.ErrWaitDelay is NOT a failure: it means the process exited fine but
 	// something it left behind still held the output pipe, so Wait had to unblock
-	// us (groupCmd's WaitDelay). The answer is already in the buffer - throwing it
+	// us (proc.GroupCmd's WaitDelay). The answer is already in the buffer - throwing it
 	// away over a leftover descendant would report an unreachable machine that
 	// answered in full. captureBaseline treats the same error the same way.
 	if err := c.Run(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {

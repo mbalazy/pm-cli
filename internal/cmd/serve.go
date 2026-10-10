@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mbalazy/pm-cli/internal/feed"
+	"github.com/mbalazy/pm-cli/internal/proc"
 	"github.com/mbalazy/pm-cli/internal/server"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
@@ -98,13 +99,13 @@ func newServeCmd(store storage.TaskStore) *cobra.Command {
 }
 
 // feedRunner runs one of the change feed's external commands (git, gh)
-// through groupCmd: its own process group, SIGTERM-then-SIGKILL on the whole
+// through proc.GroupCmd: its own process group, SIGTERM-then-SIGKILL on the whole
 // group when the context ends, a bounded Wait. feed.CommandTimeout caps the
 // call; the env strips pagers and prompts the way feed.DefaultRunner does.
 func feedRunner(ctx context.Context, dir, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, feed.CommandTimeout)
 	defer cancel()
-	c := groupCmd(ctx, name, args...)
+	c := proc.GroupCmd(ctx, name, args...)
 	c.Dir = dir
 	c.Env = append(c.Environ(), "GH_PAGER=cat", "PAGER=cat", "GIT_TERMINAL_PROMPT=0", "GH_PROMPT_DISABLED=1", "NO_COLOR=1")
 	c.Env = append(c.Env, feed.EnvFrom(ctx)...)

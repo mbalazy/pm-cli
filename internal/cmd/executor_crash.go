@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"syscall"
 
+	"github.com/mbalazy/pm-cli/internal/proc"
 	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
@@ -14,7 +15,7 @@ import (
 //
 // A manager killed by SIGINT/SIGTERM/SIGHUP forwards the signal to its worker
 // and then re-raises it on itself with the default disposition restored
-// (forwardTerminalSignals) - so it dies without ever reaching the code that
+// (proc's forwardTerminalSignals) - so it dies without ever reaching the code that
 // writes its journal end line. Every Ctrl-C, and every SIGTERM from a session
 // harness that takes a background process group down, therefore used to leave an
 // orphaned `start` indistinguishable from a SIGKILL.
@@ -37,6 +38,10 @@ type crashJournal struct {
 // and honest: one pm process drives exactly one top-level run (`pm work`, `pm
 // run-epic` or `pm finish`), and a signal handler cannot be passed an argument.
 var activeCrashJournal atomic.Pointer[crashJournal]
+
+// proc forwards a terminal signal to the worker group and then re-raises it;
+// this is the hook it calls first, the one moment the kill can be journaled.
+func init() { proc.OnTerminalSignal = journalTerminalSignal }
 
 // armCrashJournal registers the line to journal if this process is killed by a
 // catchable signal, and returns the disarm closure. Call it right AFTER the

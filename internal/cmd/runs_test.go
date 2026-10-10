@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mbalazy/pm-cli/internal/proc"
 	"github.com/mbalazy/pm-cli/internal/storage"
 )
 
@@ -446,9 +447,9 @@ func TestRunsRemoteLeftoverDescendantStillCounts(t *testing.T) {
 	// The answer is printed and ssh exits 0, but a background child keeps the
 	// inherited stdout open past the exit.
 	fakeSSH(t, "echo '"+remote+"'\nsleep 20 &\nexit 0\n")
-	oldWait, oldTimeout := procWaitDelay, remoteRunsTimeout
-	procWaitDelay, remoteRunsTimeout = 300*time.Millisecond, 10*time.Second
-	defer func() { procWaitDelay, remoteRunsTimeout = oldWait, oldTimeout }()
+	oldWait, oldTimeout := proc.WaitDelay, remoteRunsTimeout
+	proc.WaitDelay, remoteRunsTimeout = 300*time.Millisecond, 10*time.Second
+	defer func() { proc.WaitDelay, remoteRunsTimeout = oldWait, oldTimeout }()
 
 	out, err := runRunsCmd(t, store)
 	if err != nil {
