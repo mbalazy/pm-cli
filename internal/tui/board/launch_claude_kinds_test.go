@@ -559,3 +559,78 @@ func TestLaunchClaudeProjectScope(t *testing.T) {
 		}
 	})
 }
+
+// writeSessionFile puts session sid where Claude Code keeps the sessions of a
+// run started in dir.
+func (r *launchRig) writeSessionFile(dir, sid string) {
+	r.t.Helper()
+	ccDir := filepath.Join(r.home, ".claude", "projects", pathToCCProject(dir))
+	for _, d := range []string{dir, ccDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			r.t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(ccDir, sid+".jsonl"), nil, 0o644); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// TestLaunchClaudeResumeDirs pins where a resume runs when the session is
+// found in more than one place.
+func TestLaunchClaudeResumeDirs(t *testing.T) {
+	t.Run("a session only found elsewhere wins over the project dir", func(t *testing.T) {
+		r := newLaunchRig(t, repoProject())
+		elsewhere := filepath.Join(r.home, "elsewhere")
+		r.writeSessionFile(elsewhere, "s-old")
+		r.model().launchClaude("resume")
+		if r.cmd.Dir != elsewhere {
+			t.Errorf("dir = %q, want %q", r.cmd.Dir, elsewhere)
+		}
+	})
+
+	t.Run("a session in the project dir is resumed there without a global scan", func(t *testing.T) {
+		r := newLaunchRig(t, repoProject())
+		r.writeSessionFile(r.projPath, "s-old")
+		r.writeSessionFile(filepath.Join(r.home, "elsewhere"), "s-old")
+		r.model().launchClaude("resume")
+		if r.cmd.Dir != r.projPath {
+			t.Errorf("dir = %q, want the project dir %q", r.cmd.Dir, r.projPath)
+		}
+	})
+}
+
+// TestLaunchClaudeWorktreeEdges pins the worktree kinds' two edges: a failed
+// setup launches nothing, and a project with no path skips the setup and the
+// cd.
+func TestLaunchClaudeWorktreeEdges(t *testing.T) {
+	for _, kind := range []string{"worktree", "worktree-tmux"} {
+		t.Run(kind+" setup failure launches nothing", func(t *testing.T) {
+			r := newLaunchRig(t, &storage.Project{Name: "Acme", Path: t.TempDir()}) // not a git repo
+			next, cmd := r.model().launchClaude(kind)
+			if cmd != nil || r.cmd != nil || !strings.HasPrefix(next.(Model).toastMsg, "worktree setup failed") {
+				t.Errorf("cmd = %v toast = %q", cmd != nil, next.(Model).toastMsg)
+			}
+			if len(r.tmuxCalls()) != 0 || len(r.storedSessions()) != 1 {
+				t.Errorf("tmux calls = %q sessions = %v", r.tmuxCalls(), r.storedSessions())
+			}
+		})
+	}
+
+	t.Run("worktree with no project path", func(t *testing.T) {
+		r := newLaunchRig(t, &storage.Project{Name: "Acme"})
+		r.model().launchClaude("worktree")
+		if r.cmd == nil || r.cmd.Args[1] != "-w" || r.cmd.Dir != "" {
+			t.Errorf("cmd = %v", r.cmd)
+		}
+	})
+
+	t.Run("worktree-tmux with no project path has no cd", func(t *testing.T) {
+		r := newLaunchRig(t, &storage.Project{Name: "Acme"})
+		prompt := buildClaudePrompt(r.task, r.store)
+		r.model().launchClaude("worktree-tmux")
+		sid := r.newSession()
+		if _, shell := r.newWindow(); shell != claudeShellCommand(claudeWorktreeArgs(worktreeName(r.task), sid, "", prompt)) {
+			t.Errorf("shell = %q", shell)
+		}
+	})
+}
