@@ -139,6 +139,12 @@ func (m Model) launchProjectClaude(kind string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// launchClaude starts Claude Code for the menu task in the way kind names:
+// here / tmux (a new session), worktree / worktree-tmux (a new session in a
+// worktree), resume / resume-tmux, fork / fork-tmux - each "-tmux" kind in a
+// new tmux window, the others in this terminal - or "project" (reopen the menu
+// scoped to the task's project). What runs is resolved first
+// (resolveClaudeLaunch), then started by the kind's own function.
 func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	if m.projectScopeLaunch {
 		return m.launchProjectClaude(kind)
@@ -148,271 +154,263 @@ func (m Model) launchClaude(kind string) (tea.Model, tea.Cmd) {
 	if t == nil {
 		return m, nil
 	}
+	l := m.resolveClaudeLaunch(t, kind)
 
-	prompt := buildClaudePrompt(t, m.store)
-	skipFlag := ""
+	var cmd tea.Cmd
+	switch kind {
+	case "project":
+		m.openProjectClaudeMenu(t.Project)
+	case "here", "tmux":
+		cmd = m.launchClaudeNew(l, kind == "tmux")
+	case "worktree", "worktree-tmux":
+		cmd = m.launchClaudeWorktree(l, kind == "worktree-tmux")
+	case "resume", "resume-tmux":
+		cmd = m.launchClaudeResume(l, kind == "resume-tmux")
+	case "fork", "fork-tmux":
+		cmd = m.launchClaudeFork(l, kind == "fork-tmux")
+	}
+	return m, cmd
+}
+
+// claudeLaunch is what a task launch resolves before anything runs: the task
+// and its prompt, the permission flag, the project's working and config dirs,
+// and - for resume and fork - where Claude Code keeps the session.
+type claudeLaunch struct {
+	t         *storage.Task
+	proj      *storage.Project // kept for pickWorktreeSlot
+	prompt    string
+	skipFlag  string
+	projDir   string
+	configDir string
+	// worktreeDir is the worktree a resumed session was created in, and
+	// sessionDir the directory found by a global scan when neither the
+	// project dir nor a worktree holds it.
+	worktreeDir string
+	sessionDir  string
+}
+
+func (m Model) resolveClaudeLaunch(t *storage.Task, kind string) claudeLaunch {
+	l := claudeLaunch{t: t, prompt: buildClaudePrompt(t, m.store)}
 	if m.claudeMenuSkipPerms {
-		skipFlag = "--dangerously-skip-permissions"
+		l.skipFlag = "--dangerously-skip-permissions"
 	}
 
 	// Resolve project working directory (proj is kept for worktreeLaunchEnv)
-	var projDir string
-	var proj *storage.Project
 	if p, err := m.store.GetProject(t.Project); err == nil {
-		proj = p
-		if proj.Path != "" {
-			if info, err := os.Stat(proj.Path); err == nil && info.IsDir() {
-				projDir = proj.Path
+		l.proj = p
+		if p.Path != "" {
+			if info, err := os.Stat(p.Path); err == nil && info.IsDir() {
+				l.projDir = p.Path
 			}
 		}
 	}
 
 	// Resolve the Claude config dir for this project (default ~/.claude unless the
 	// project sets claude_config_dir, e.g. a company account in its own dir).
-	configDir := m.claudeConfigDir(t.Project)
+	l.configDir = m.claudeConfigDir(t.Project)
 
 	// Check if the session lives in a worktree. Claude Code stores conversations
 	// in <config-dir>/projects/<path-hash>/ where path-hash is derived from cwd.
 	// When a session was created inside a worktree, we need to resume from that
 	// worktree dir so CC finds the conversation.
-	var worktreeDir string
-	var sessionDir string // fallback: global scan for session file
 	if kind == "resume" || kind == "resume-tmux" || kind == "fork" || kind == "fork-tmux" {
 		sessionID := m.resumeSessionID
 		if sessionID == "" {
 			sessionID = lastSession(t)
 		}
-		if projDir != "" {
-			worktreeDir = findWorktreeForSession(projDir, sessionID, configDir)
+		if l.projDir != "" {
+			l.worktreeDir = findWorktreeForSession(l.projDir, sessionID, l.configDir)
 		}
 		// Fallback: if session not found via projDir (or projDir is empty),
 		// scan all CC project dirs globally.
-		if worktreeDir == "" && resolveSessionPath(projDir, sessionID, configDir) == "" {
-			sessionDir = findSessionDirGlobal(sessionID, m.store, configDir)
+		if l.worktreeDir == "" && resolveSessionPath(l.projDir, sessionID, l.configDir) == "" {
+			l.sessionDir = findSessionDirGlobal(sessionID, m.store, l.configDir)
 		}
 	}
+	return l
+}
 
-	setDir := func(c *exec.Cmd, extraEnv ...string) {
-		if projDir != "" {
-			c.Dir = projDir
-		}
-		if env := claudeLaunchEnv(configDir, extraEnv...); env != nil {
-			c.Env = env
+// setDir points c at the project dir with the launch env.
+func (l claudeLaunch) setDir(c *exec.Cmd, extraEnv ...string) {
+	if l.projDir != "" {
+		c.Dir = l.projDir
+	}
+	if env := claudeLaunchEnv(l.configDir, extraEnv...); env != nil {
+		c.Env = env
+	}
+}
+
+// resumeDir is where a resumed session has to run for Claude Code to find it.
+func (l claudeLaunch) resumeDir() string {
+	if l.worktreeDir != "" {
+		return l.worktreeDir
+	}
+	if l.projDir != "" && l.sessionDir == "" {
+		return l.projDir
+	}
+	if l.sessionDir != "" {
+		return l.sessionDir
+	}
+	return ""
+}
+
+func (l claudeLaunch) setResumeDir(c *exec.Cmd) {
+	if d := l.resumeDir(); d != "" {
+		c.Dir = d
+	}
+	if env := claudeLaunchEnv(l.configDir); env != nil {
+		c.Env = env
+	}
+}
+
+// withCd prefixes a shell command with the launch env and a cd into the
+// project dir.
+func (l claudeLaunch) withCd(cmd string, extraEnv ...string) string {
+	cmd = claudeEnvPrefix(l.configDir, extraEnv...) + cmd
+	if l.projDir != "" {
+		return fmt.Sprintf("cd %s && %s", shellQuote(l.projDir), cmd)
+	}
+	return cmd
+}
+
+func (l claudeLaunch) withResumeCd(cmd string) string {
+	cmd = claudeEnvPrefix(l.configDir) + cmd
+	if d := l.resumeDir(); d != "" {
+		return fmt.Sprintf("cd %s && %s", shellQuote(d), cmd)
+	}
+	return cmd
+}
+
+// runInTerminal hands c the terminal, with the tmux window renamed to
+// winName while it runs, and reloads when it exits.
+func runInTerminal(c *exec.Cmd, winName string) tea.Cmd {
+	origWin := tmuxGetWindowName()
+	tmuxRenameWindow(winName)
+	return execProcess(c, func(err error) tea.Msg {
+		tmuxRenameWindow(origWin)
+		return reloadMsg{}
+	})
+}
+
+// runInTmuxWindow opens a tmux window running shellCmd and toasts the outcome.
+func (m *Model) runInTmuxWindow(winName, shellCmd, label string) {
+	sess, err := tmuxNewWindow(winName, shellCmd)
+	if err != nil {
+		m.toastMsg = "tmux failed: " + err.Error()
+		m.toastExpiry = time.Now().Add(15 * time.Second)
+	} else {
+		m.toastMsg = tmuxLaunchToast(label, winName, sess)
+		m.toastExpiry = time.Now().Add(3 * time.Second)
+	}
+}
+
+// launchClaudeNew starts a new session on the task (kinds here / tmux).
+func (m *Model) launchClaudeNew(l claudeLaunch, inTmux bool) tea.Cmd {
+	t := l.t
+	sessionID := generateSessionID()
+	if err := m.saveSession(t, sessionID); err != nil {
+		m.showErrorToast("save session failed", err)
+	}
+	args := claudeSessionArgs(sessionID, l.skipFlag, l.prompt)
+	winName := tmuxWindowName("cc", t.Meta.ID, sessionID)
+	if inTmux {
+		m.runInTmuxWindow(winName, l.withCd(claudeShellCommand(args)), "Launched in tmux")
+		return nil
+	}
+	c := exec.Command("claude", args...)
+	l.setDir(c)
+	return runInTerminal(c, winName)
+}
+
+// launchClaudeWorktree starts a new session in the task's worktree (kinds
+// worktree / worktree-tmux), claiming a free runtime slot when the project
+// has them. A failed worktree setup aborts before a session is saved.
+func (m *Model) launchClaudeWorktree(l claudeLaunch, inTmux bool) tea.Cmd {
+	t := l.t
+	sessionID := generateSessionID()
+	wtName := worktreeName(t)
+	if l.projDir != "" {
+		if err := copyWorktreeFiles(l.projDir, wtName); err != nil {
+			m.showErrorToast("worktree setup failed", err)
+			return nil
 		}
 	}
-
-	resumeDir := func() string {
-		if worktreeDir != "" {
-			return worktreeDir
-		}
-		if projDir != "" && sessionDir == "" {
-			return projDir
-		}
-		if sessionDir != "" {
-			return sessionDir
-		}
-		return ""
+	if err := m.saveSession(t, sessionID); err != nil {
+		m.showErrorToast("save session failed", err)
 	}
-
-	setResumeDir := func(c *exec.Cmd) {
-		if d := resumeDir(); d != "" {
-			c.Dir = d
-		}
-		if env := claudeLaunchEnv(configDir); env != nil {
-			c.Env = env
-		}
-	}
-
-	withCd := func(cmd string, extraEnv ...string) string {
-		cmd = claudeEnvPrefix(configDir, extraEnv...) + cmd
-		if projDir != "" {
-			return fmt.Sprintf("cd %s && %s", shellQuote(projDir), cmd)
-		}
-		return cmd
-	}
-
-	withResumeCd := func(cmd string) string {
-		cmd = claudeEnvPrefix(configDir) + cmd
-		if d := resumeDir(); d != "" {
-			return fmt.Sprintf("cd %s && %s", shellQuote(d), cmd)
-		}
-		return cmd
-	}
-
-	switch kind {
-	case "project":
-		m.openProjectClaudeMenu(t.Project)
-		return m, nil
-
-	case "here":
-		sessionID := generateSessionID()
-		if err := m.saveSession(t, sessionID); err != nil {
-			m.showErrorToast("save session failed", err)
-		}
-		c := exec.Command("claude", claudeSessionArgs(sessionID, skipFlag, prompt)...)
-		setDir(c)
-		origWin := tmuxGetWindowName()
-		tmuxRenameWindow(tmuxWindowName("cc", t.Meta.ID, sessionID))
-		return m, execProcess(c, func(err error) tea.Msg {
-			tmuxRenameWindow(origWin)
-			return reloadMsg{}
-		})
-
-	case "tmux":
-		sessionID := generateSessionID()
-		if err := m.saveSession(t, sessionID); err != nil {
-			m.showErrorToast("save session failed", err)
-		}
-		shellCmd := withCd(claudeShellCommand(claudeSessionArgs(sessionID, skipFlag, prompt)))
-		winName := tmuxWindowName("cc", t.Meta.ID, sessionID)
-		sess, err := tmuxNewWindow(winName, shellCmd)
-		if err != nil {
-			m.toastMsg = "tmux failed: " + err.Error()
-			m.toastExpiry = time.Now().Add(15 * time.Second)
-		} else {
-			m.toastMsg = tmuxLaunchToast("Launched in tmux", winName, sess)
-			m.toastExpiry = time.Now().Add(3 * time.Second)
-		}
-
-	case "worktree":
-		sessionID := generateSessionID()
-		wtName := worktreeName(t)
-		if projDir != "" {
-			if err := copyWorktreeFiles(projDir, wtName); err != nil {
-				m.showErrorToast("worktree setup failed", err)
-				return m, nil
-			}
-		}
-		if err := m.saveSession(t, sessionID); err != nil {
-			m.showErrorToast("save session failed", err)
-		}
-		claim := m.pickWorktreeSlot(proj, t.Project, sessionID)
-		args := claudeWorktreeArgs(wtName, sessionID, skipFlag, prompt)
-		var c *exec.Cmd
-		if claim.lockCmd != "" {
-			// Claim the slot with the shell's pid, then exec claude so that
-			// pid becomes claude's - the lock holder is the live session.
-			shArgs := append([]string{"-c", claim.lockCmd + `exec claude "$@"`, "claude"}, args...)
-			c = exec.Command("sh", shArgs...)
-		} else {
-			c = exec.Command("claude", args...)
-		}
-		setDir(c, claim.env...)
-		origWin := tmuxGetWindowName()
-		tmuxRenameWindow(tmuxWindowName("wt", t.Meta.ID, sessionID))
-		return m, execProcess(c, func(err error) tea.Msg {
-			tmuxRenameWindow(origWin)
-			return reloadMsg{}
-		})
-
-	case "worktree-tmux":
-		sessionID := generateSessionID()
-		wtName := worktreeName(t)
-		if projDir != "" {
-			if err := copyWorktreeFiles(projDir, wtName); err != nil {
-				m.showErrorToast("worktree setup failed", err)
-				return m, nil
-			}
-		}
-		if err := m.saveSession(t, sessionID); err != nil {
-			m.showErrorToast("save session failed", err)
-		}
-		claim := m.pickWorktreeSlot(proj, t.Project, sessionID)
+	claim := m.pickWorktreeSlot(l.proj, t.Project, sessionID)
+	args := claudeWorktreeArgs(wtName, sessionID, l.skipFlag, l.prompt)
+	winName := tmuxWindowName("wt", t.Meta.ID, sessionID)
+	if inTmux {
 		// Lock write goes between `cd` and the env-prefixed claude command;
 		// sh execs the trailing command (or waits on it), so the lock's $$
 		// tracks the session's lifetime either way.
-		inner := claim.lockCmd + claudeEnvPrefix(configDir, claim.env...) +
-			claudeShellCommand(claudeWorktreeArgs(wtName, sessionID, skipFlag, prompt))
+		inner := claim.lockCmd + claudeEnvPrefix(l.configDir, claim.env...) + claudeShellCommand(args)
 		shellCmd := inner
-		if projDir != "" {
-			shellCmd = fmt.Sprintf("cd %s && %s", shellQuote(projDir), inner)
+		if l.projDir != "" {
+			shellCmd = fmt.Sprintf("cd %s && %s", shellQuote(l.projDir), inner)
 		}
-		winName := tmuxWindowName("wt", t.Meta.ID, sessionID)
-		sess, err := tmuxNewWindow(winName, shellCmd)
-		if err != nil {
-			m.toastMsg = "tmux failed: " + err.Error()
-			m.toastExpiry = time.Now().Add(15 * time.Second)
-		} else {
-			m.toastMsg = tmuxLaunchToast("Launched worktree in tmux", winName, sess)
-			m.toastExpiry = time.Now().Add(3 * time.Second)
-		}
-
-	case "resume":
-		sessionID := m.resumeSessionID
-		if sessionID == "" {
-			sessionID = lastSession(t)
-		}
-		m.resumeSessionID = ""
-		c := exec.Command("claude", claudeResumeArgs(sessionID, skipFlag)...)
-		setResumeDir(c)
-		origWin := tmuxGetWindowName()
-		tmuxRenameWindow(tmuxWindowName("cc", t.Meta.ID, sessionID))
-		return m, execProcess(c, func(err error) tea.Msg {
-			tmuxRenameWindow(origWin)
-			return reloadMsg{}
-		})
-
-	case "resume-tmux":
-		sessionID := m.resumeSessionID
-		if sessionID == "" {
-			sessionID = lastSession(t)
-		}
-		m.resumeSessionID = ""
-		shellCmd := withResumeCd(claudeShellCommand(claudeResumeArgs(sessionID, skipFlag)))
-		winName := tmuxWindowName("cc", t.Meta.ID, sessionID)
-		sess, err := tmuxNewWindow(winName, shellCmd)
-		if err != nil {
-			m.toastMsg = "tmux failed: " + err.Error()
-			m.toastExpiry = time.Now().Add(15 * time.Second)
-		} else {
-			m.toastMsg = tmuxLaunchToast("Resumed in tmux", winName, sess)
-			m.toastExpiry = time.Now().Add(3 * time.Second)
-		}
-
-	case "fork":
-		parentID := m.resumeSessionID
-		if parentID == "" {
-			parentID = lastSession(t)
-		}
-		m.resumeSessionID = ""
-		m.forkMode = false
-		newID := generateSessionID()
-		if err := m.saveSession(t, newID); err != nil {
-			m.showErrorToast("save session failed", err)
-		}
-		c := exec.Command("claude", claudeForkArgs(parentID, newID, skipFlag)...)
-		setResumeDir(c)
-		origWin := tmuxGetWindowName()
-		tmuxRenameWindow(tmuxWindowName("cc", t.Meta.ID, newID))
-		return m, execProcess(c, func(err error) tea.Msg {
-			tmuxRenameWindow(origWin)
-			return reloadMsg{}
-		})
-
-	case "fork-tmux":
-		parentID := m.resumeSessionID
-		if parentID == "" {
-			parentID = lastSession(t)
-		}
-		m.resumeSessionID = ""
-		m.forkMode = false
-		newID := generateSessionID()
-		if err := m.saveSession(t, newID); err != nil {
-			m.showErrorToast("save session failed", err)
-		}
-		shellCmd := withResumeCd(claudeShellCommand(claudeForkArgs(parentID, newID, skipFlag)))
-		winName := tmuxWindowName("cc", t.Meta.ID, newID)
-		sess, err := tmuxNewWindow(winName, shellCmd)
-		if err != nil {
-			m.toastMsg = "tmux failed: " + err.Error()
-			m.toastExpiry = time.Now().Add(15 * time.Second)
-		} else {
-			m.toastMsg = tmuxLaunchToast("Forked in tmux", winName, sess)
-			m.toastExpiry = time.Now().Add(3 * time.Second)
-		}
+		m.runInTmuxWindow(winName, shellCmd, "Launched worktree in tmux")
+		return nil
 	}
+	var c *exec.Cmd
+	if claim.lockCmd != "" {
+		// Claim the slot with the shell's pid, then exec claude so that
+		// pid becomes claude's - the lock holder is the live session.
+		shArgs := append([]string{"-c", claim.lockCmd + `exec claude "$@"`, "claude"}, args...)
+		c = exec.Command("sh", shArgs...)
+	} else {
+		c = exec.Command("claude", args...)
+	}
+	l.setDir(c, claim.env...)
+	return runInTerminal(c, winName)
+}
 
-	return m, nil
+// takeResumeSession returns the session to resume - the one picked in the
+// session menu, else the task's last - and consumes the pick.
+func (m *Model) takeResumeSession(t *storage.Task) string {
+	sessionID := m.resumeSessionID
+	if sessionID == "" {
+		sessionID = lastSession(t)
+	}
+	m.resumeSessionID = ""
+	return sessionID
+}
+
+// launchClaudeResume resumes a session where it lives (kinds resume /
+// resume-tmux).
+func (m *Model) launchClaudeResume(l claudeLaunch, inTmux bool) tea.Cmd {
+	sessionID := m.takeResumeSession(l.t)
+	args := claudeResumeArgs(sessionID, l.skipFlag)
+	winName := tmuxWindowName("cc", l.t.Meta.ID, sessionID)
+	if inTmux {
+		m.runInTmuxWindow(winName, l.withResumeCd(claudeShellCommand(args)), "Resumed in tmux")
+		return nil
+	}
+	c := exec.Command("claude", args...)
+	l.setResumeDir(c)
+	return runInTerminal(c, winName)
+}
+
+// launchClaudeFork forks a session into a new one saved on the task (kinds
+// fork / fork-tmux).
+func (m *Model) launchClaudeFork(l claudeLaunch, inTmux bool) tea.Cmd {
+	t := l.t
+	parentID := m.takeResumeSession(t)
+	m.forkMode = false
+	newID := generateSessionID()
+	if err := m.saveSession(t, newID); err != nil {
+		m.showErrorToast("save session failed", err)
+	}
+	args := claudeForkArgs(parentID, newID, l.skipFlag)
+	winName := tmuxWindowName("cc", t.Meta.ID, newID)
+	if inTmux {
+		m.runInTmuxWindow(winName, l.withResumeCd(claudeShellCommand(args)), "Forked in tmux")
+		return nil
+	}
+	c := exec.Command("claude", args...)
+	l.setResumeDir(c)
+	return runInTerminal(c, winName)
 }
 
 // worktreeSlotClaim is the result of picking an interactive-session slot for
