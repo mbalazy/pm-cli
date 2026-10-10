@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mbalazy/pm-cli/internal/storage"
 )
@@ -73,7 +74,7 @@ func TestExecuteEpicSetupRefusals(t *testing.T) {
 		{"a pinned slot that does not exist", func(t *testing.T) (*storage.Store, epicOptions) {
 			store, _, _ := epicSlotFixture(t)
 			return store, epicOptions{independent: true, additional: true, slotPin: 5}
-		}, "5"},
+		}, "--slot 5"},
 		{"a failing prepare", func(t *testing.T) (*storage.Store, epicOptions) {
 			store, _, _ := epicSlotFixture(t)
 			mutateExecutor(t, store, func(e *storage.Executor) { e.Prepare = "false" })
@@ -265,4 +266,100 @@ func TestExecuteEpicIndependentChainFreesTheLastBranch(t *testing.T) {
 			t.Errorf("slot detached at %s, want origin/main %s", got, want)
 		}
 	})
+}
+
+// headTo is a shell step that appends the branch checked out where it runs
+// (or HEAD when detached) to file.
+func headTo(file string) string {
+	return "git rev-parse --abbrev-ref HEAD >> " + file
+}
+
+// TestExecuteEpicIntegrationInASlot pins an integration run inside a claimed
+// slot: prepare and baseline run on the integration branch (never detached),
+// the worker runs in the slot with the slot's env, and the slot ends on the
+// integration branch.
+func TestExecuteEpicIntegrationInASlot(t *testing.T) {
+	seen := filepath.Join(t.TempDir(), "seen")
+	t.Setenv("PM_TEST_SEEN", seen)
+	fakeClaude(t, `echo "worker $(pwd -P) $PM_TEST_SLOT_VAR" >> "$PM_TEST_SEEN"`+"\n"+greenWorker)
+	store, repo, slot := epicSlotFixture(t)
+	// The fixture's local main is a commit behind origin; catch it up so the
+	// fresh integration branch has nothing to fast-forward.
+	gitT(t, repo, "pull", "-q", "--ff-only")
+	mutateExecutor(t, store, func(e *storage.Executor) {
+		e.Prepare = headTo(seen)
+		e.Baseline = headTo(seen)
+		e.Worktrees[0].Env = map[string]string{"PM_TEST_SLOT_VAR": "slot-env"}
+	})
+
+	_, stderr := runEpic(t, store, epicOptions{additional: true, noPR: true})
+
+	if !strings.Contains(stderr, "pm run-epic: app-1 on epic/app-1 (2 sub(s))") {
+		t.Errorf("the run must announce the integration branch:\n%s", stderr)
+	}
+	data, _ := os.ReadFile(seen)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	slotReal, _ := filepath.EvalSymlinks(slot)
+	want := []string{"epic/app-1", "epic/app-1", "worker " + slotReal + " slot-env", "worker " + slotReal + " slot-env"}
+	if strings.Join(lines, "|") != strings.Join(want, "|") {
+		t.Errorf("prepare, baseline and workers saw %q, want %q", lines, want)
+	}
+	if got := gitReadT(t, slot, "rev-parse", "--abbrev-ref", "HEAD"); got != "epic/app-1" {
+		t.Errorf("slot left on %q, want epic/app-1", got)
+	}
+	if got := gitReadT(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); got != "main" {
+		t.Errorf("main checkout moved to %q", got)
+	}
+	if log := gitLogAll(t, slot, "epic/app-1"); strings.Count(log, "worker commit") != 2 {
+		t.Errorf("both subs' work must be on the integration branch:\n%s", log)
+	}
+	if b := journalEntries(t, store)[0].Baseline; b != headTo(seen) {
+		t.Errorf("journal baseline = %q", b)
+	}
+}
+
+// TestExecuteEpicIndependentBaselineInTheMainCheckout pins where an
+// independent run in the main checkout takes its baseline: on the base
+// branch, checked out by name.
+func TestExecuteEpicIndependentBaselineInTheMainCheckout(t *testing.T) {
+	seen := filepath.Join(t.TempDir(), "seen")
+	fakeClaude(t, greenWorker)
+	store, _ := epicRunFixture(t)
+	mutateExecutor(t, store, func(e *storage.Executor) { e.Baseline = headTo(seen) })
+
+	_, stderr := runEpic(t, store, epicOptions{independent: true})
+
+	if !strings.Contains(stderr, "pm run-epic: baseline in ") {
+		t.Errorf("the baseline must run:\n%s", stderr)
+	}
+	if data, _ := os.ReadFile(seen); strings.TrimSpace(string(data)) != "main" {
+		t.Errorf("baseline ran on %q, want main", data)
+	}
+	if b := journalEntries(t, store)[0].Baseline; b != headTo(seen) {
+		t.Errorf("journal baseline = %q", b)
+	}
+}
+
+// TestExecuteEpicBaselineThatTimesOut pins a baseline that ran but produced
+// nothing usable: the run goes on and the journal names no baseline.
+func TestExecuteEpicBaselineThatTimesOut(t *testing.T) {
+	orig := baselineTimeout
+	baselineTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { baselineTimeout = orig })
+	fakeClaude(t, greenWorker)
+	store, _ := epicRunFixture(t)
+	mutateExecutor(t, store, func(e *storage.Executor) { e.Baseline = "sleep 5" })
+
+	_, stderr := runEpic(t, store, epicOptions{noPR: true})
+
+	if !strings.Contains(stderr, "baseline cmd timed out") {
+		t.Errorf("the timeout must be named:\n%s", stderr)
+	}
+	entries := journalEntries(t, store)
+	if entries[0].Baseline != "" || entries[1].Baseline != "" {
+		t.Errorf("journal baseline = %q / %q, want none", entries[0].Baseline, entries[1].Baseline)
+	}
+	if sub, _ := store.FindTask("app", "app-1-1"); sub.Meta.Status != storage.StatusDone {
+		t.Errorf("the run must go on without a baseline, sub on %q", sub.Meta.Status)
+	}
 }
