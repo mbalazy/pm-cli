@@ -241,7 +241,7 @@ export function SettingsPage() {
               onChange={(e) => set({ show_executor: e.target.checked })}
             />
             show executor runs (needs me, accepted no PR, in progress, the Runs table) - the
-            executor is frozen, off by default
+            executor is the less-used path, off by default
           </label>
         </SettingsGroup>
 

@@ -35,7 +35,7 @@ import { soloRows } from '../lib/soloView'
 // (pm-cli-141: the form opens the ONE confirmation dialog with the server's
 // command preview, and the table shows each launched session's state, its
 // attach command and a stop), then the executor's runs - only while
-// cockpit.show_executor is on (pm-cli-137; the executor is frozen). Executor
+// cockpit.show_executor is on (pm-cli-137; the executor is the less-used path). Executor
 // rows: local on every `runs` event, remote only on the button; ordered
 // "needs me first" by default through the attention queue's own ranking,
 // unfinished-only by default. Composition only - the rules are lib/runsView

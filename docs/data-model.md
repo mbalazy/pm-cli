@@ -246,7 +246,7 @@ Defaults are applied before decoding, so an absent key keeps its default and an 
 | `report.language` | `pl` | |
 | `slack.servers[]` | `[]` | `{workspace, claude_server or command, args, env, me}`; workspace unique |
 | `slack.claude_config` | `~/.claude.json` | where the Slack MCP server definitions are read from |
-| `show_executor` | `false` | puts executor runs back on the cockpit. Off by default: the executor is frozen in favour of solo since 2026-09-09 |
+| `show_executor` | `false` | puts executor runs back on the cockpit. Off by default: solo is the everyday unattended path, the executor the less-used one |
 
 The settings screen writes through `service.UpdateSettings`, which adds a floor of `5m` on `refresh.every` and `1` on the day thresholds.
 

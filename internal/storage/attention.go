@@ -344,7 +344,7 @@ func BuildAttention(store TaskStore, cfg *CockpitConfig, opts AttentionOptions) 
 	stuckRepos := map[string]int{} // group -> quiet count
 	for _, v := range views {
 		// The executor's three sections read run-state files only; with the
-		// executor frozen (cockpit.show_executor off, the default since
+		// executor used rarely (cockpit.show_executor off, the default since
 		// pm-cli-125) those files are history, not a to-do.
 		if cfg.ShowExecutor {
 			byName[SectionNeedsMe] = append(byName[SectionNeedsMe], needsMeRows(v, now)...)

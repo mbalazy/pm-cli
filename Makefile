@@ -11,6 +11,14 @@ LDFLAGS = -ldflags "-X github.com/mbalazy/pm-cli/internal/version.Version=$(VERS
 GOBIN_DIR := $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)
 STATICCHECK := $(or $(shell command -v staticcheck 2>/dev/null),$(GOBIN_DIR)/staticcheck)
 
+# Every go invocation below runs on the toolchain go.mod names - the one CI uses
+# (setup-go reads go-version-file: go.mod). Without this, a newer local go (brew
+# upgrades it on its own) compiles export data the pinned staticcheck cannot
+# read ("export data version N is greater than maximum supported"), and the
+# pre-commit hook fails on every commit while CI stays green. go downloads the
+# toolchain once; GOTOOLCHAIN=local on the command line opts out.
+export GOTOOLCHAIN ?= go$(shell go mod edit -json | sed -n 's/.*"Go": "\([^"]*\)".*/\1/p')
+
 install:
 	go install -buildvcs=false $(LDFLAGS) ./cmd/pm/
 

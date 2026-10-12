@@ -6,9 +6,9 @@ long-lived solo session, launched from the cockpit (the manual for it, and the
 batch recipe, is [solo-and-batch.md](solo-and-batch.md); the design record is
 [cockpit.md](cockpit.md), "Solo launch"), and since 2026-09-09 solo is the
 current path: the cockpit hides
-executor runs unless `cockpit.show_executor` is turned on (the code calls the
-executor frozen in favour of solo). Everything below still runs from the CLI and
-the board. **Running it** is the manual: commands, flags, modes. **Overview** and
+executor runs unless `cockpit.show_executor` is turned on (solo is the everyday
+unattended path, the executor the less-used one). Everything below still runs from
+the CLI and the board, and the executor stays (decided 2026-10-12). **Running it** is the manual: commands, flags, modes. **Overview** and
 the sections after it are how it works inside, in the words each rule was
 written in when it was decided.
 

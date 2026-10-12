@@ -78,8 +78,9 @@ type CockpitConfig struct {
 
 	// ShowExecutor puts the executor's runs back on the cockpit (needs_me,
 	// landed_no_pr, in_progress, the sidebar's visual count, the Runs
-	// screen's executor table). Off by default: the executor is frozen in
-	// favour of /solo (2026-09-09) and its old run-states are history.
+	// screen's executor table). Off by default: /solo is the everyday
+	// unattended path and the executor the rarely-used one (it stays, decided
+	// 2026-10-12), so its old run-states are history.
 	ShowExecutor bool `yaml:"show_executor"`
 }
 

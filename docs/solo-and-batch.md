@@ -5,9 +5,9 @@ one long-lived Claude Code session working a queue of tasks in the project's
 own checkout, launched from the cockpit; it is the current path. The
 **executor** (`pm work`, `pm run-epic`, `pm finish`) runs headless `claude -p`
 workers, one fresh process per task, and its **independent mode** is what a
-batch of unrelated tickets runs through. The executor is frozen in favour of
-solo since 2026-09-09: the cockpit hides its runs unless `cockpit.show_executor`
-is on ([data-model.md](data-model.md), the `cockpit:` block), while the CLI and
+batch of unrelated tickets runs through. Solo is the everyday unattended
+path and the executor the less-used one (it stays, decided 2026-10-12): the
+cockpit hides its runs unless `cockpit.show_executor` is on ([data-model.md](data-model.md), the `cockpit:` block), while the CLI and
 the board still run all of it.
 
 Both paths hand the *procedure* to a skill that is **not in this repository**:
