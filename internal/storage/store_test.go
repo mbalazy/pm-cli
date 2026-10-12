@@ -932,7 +932,7 @@ func TestWriteTaskAtomicRoundtrip(t *testing.T) {
 	// No temp files left behind
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if strings.Contains(e.Name(), ".tmp.") {
+		if strings.Contains(e.Name(), ".write.") {
 			t.Errorf("temp file left behind: %s", e.Name())
 		}
 	}
