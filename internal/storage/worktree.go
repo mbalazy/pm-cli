@@ -419,6 +419,19 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 				return &WorktreeBusyError{Holder: existing}
 			}
 		}
+		if rerr != nil {
+			var unreadable *fs.PathError
+			if errors.As(rerr, &unreadable) {
+				// The file is there and we could not READ it (EACCES, EIO, a
+				// stale handle). That says nothing about the holder, and the
+				// steal below moves the file off its path BEFORE it can be
+				// classified - so refuse here, with the lock untouched, as
+				// AcquireFinishClaim does. The unreadable branch inside
+				// stealWorktreeLock stays as the residual for a file that turns
+				// unreadable between this read and the rename.
+				return fmt.Errorf("read worktree lock at %s: %w", path, rerr)
+			}
+		}
 		// Stale (dead holder) or corrupt (rerr != nil - a truncated file from a
 		// crashed process must not brick the slot). Steal it: rename aside,
 		// verify, loop to re-claim.

@@ -294,6 +294,13 @@ func TestWorktreeLockTakeoverUnreadableIsRestored(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(path, 0644) })
 
+	// Refused BEFORE the steal: the hook fires only on the way into a
+	// takeover, so reaching it means the unreadable file was about to be
+	// moved off its path - the window a third actor can claim the slot in.
+	prev := takeoverRaceHook
+	takeoverRaceHook = func() { t.Fatal("an unreadable lock must be refused before any rename") }
+	t.Cleanup(func() { takeoverRaceHook = prev })
+
 	if err := AcquireWorktreeLock(dir, "task-new", "work", os.Getpid()); err == nil {
 		t.Fatal("an unreadable lock must not be taken over")
 	}
