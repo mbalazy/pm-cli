@@ -64,31 +64,16 @@ func ProjectContext(store storage.TaskStore, slug string) (*ProjectContextResult
 		pm.Statuses = append(pm.Statuses, string(s))
 	}
 
-	tasks, err := store.GetTasks(slug)
+	rollup, err := ProjectTaskRollup(store, slug)
 	if err != nil {
-		return nil, fmt.Errorf("project %q: failed to read tasks: %v", slug, err)
+		return nil, err
 	}
-	trackers, suppressed := storage.BuildTrackers(tasks, store.GetLandingStatuses(slug)...)
-	counts := make(map[string]int)
-	doing := []TaskDetail{}
-	for _, t := range tasks {
-		counts[string(t.Meta.Status)]++
-		if t.Meta.Status == storage.StatusDoing && !suppressed[t.Meta.ID] {
-			d := ToDetail(t)
-			d.Body = TruncateBody(d.Body, ContextBodyLimit)
-			doing = append(doing, d)
-		}
-	}
-
-	sort.Slice(doing, func(i, j int) bool {
-		return doing[i].Updated > doing[j].Updated
-	})
 
 	result := &ProjectContextResult{
 		Project:    pm,
-		DoingTasks: doing,
-		TaskCounts: counts,
-		Trackers:   trackers,
+		DoingTasks: rollup.DoingTasks,
+		TaskCounts: rollup.TaskCounts,
+		Trackers:   rollup.Trackers,
 	}
 
 	// A POINTER, not the profile. Context is the session-start call, so its
@@ -118,6 +103,41 @@ func ProjectContext(store storage.TaskStore, slug string) (*ProjectContextResult
 	result.FocusTasks = FocusTaskSummaries(store)
 	result.Attention, result.AttentionNote = contextAttention(store, AttentionInput{Project: slug})
 	return result, nil
+}
+
+// TaskRollup is the task part of a project's context: the tracker rollup,
+// the doing tasks no tracker already lists (newest first, bodies capped at
+// ContextBodyLimit) and the per-status counts.
+type TaskRollup struct {
+	Trackers   []storage.Tracker
+	DoingTasks []TaskDetail
+	TaskCounts map[string]int
+}
+
+// ProjectTaskRollup computes the task rollup ProjectContext returns, from the
+// tasks alone - it does not need project.yaml, so `pm context` can still show
+// it when that file is unreadable.
+func ProjectTaskRollup(store storage.TaskStore, slug string) (*TaskRollup, error) {
+	tasks, err := store.GetTasks(slug)
+	if err != nil {
+		return nil, fmt.Errorf("project %q: failed to read tasks: %v", slug, err)
+	}
+	trackers, suppressed := storage.BuildTrackers(tasks, store.GetLandingStatuses(slug)...)
+	counts := make(map[string]int)
+	doing := []TaskDetail{}
+	for _, t := range tasks {
+		counts[string(t.Meta.Status)]++
+		if t.Meta.Status == storage.StatusDoing && !suppressed[t.Meta.ID] {
+			d := ToDetail(t)
+			d.Body = TruncateBody(d.Body, ContextBodyLimit)
+			doing = append(doing, d)
+		}
+	}
+
+	sort.Slice(doing, func(i, j int) bool {
+		return doing[i].Updated > doing[j].Updated
+	})
+	return &TaskRollup{Trackers: trackers, DoingTasks: doing, TaskCounts: counts}, nil
 }
 
 // CrossProjectContext builds the every-active-project rollup, briefs

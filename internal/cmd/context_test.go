@@ -381,3 +381,38 @@ func TestContextSurvivesUnreadableProjectYAML(t *testing.T) {
 		}
 	})
 }
+
+// pm context renders the rollup the service computes; this pins the text. The
+// standalone doing tasks come newest first - the service's order, the one
+// pm_context returns.
+func TestContextCmdGolden(t *testing.T) {
+	store := contextFixture(t,
+		&storage.Task{Meta: storage.TaskMeta{ID: "app-1", Title: "Tracker epic", Status: storage.StatusDoing, Updated: "2026-01-05T10:00:00Z"}},
+		&storage.Task{Meta: storage.TaskMeta{ID: "app-1-1", Title: "First sub", Status: "merged", Parent: "app-1", Order: 10, Branch: "feat/first", Brief: "landed\nsecond line", Updated: "2026-01-04T10:00:00Z"}},
+		&storage.Task{Meta: storage.TaskMeta{ID: "app-1-2", Title: "Second sub", Status: storage.StatusDoing, Parent: "app-1", Order: 20, Updated: "2026-01-03T10:00:00Z"}},
+		&storage.Task{Meta: storage.TaskMeta{ID: "app-2", Title: "Older standalone", Status: storage.StatusDoing, Updated: "2026-01-01T10:00:00Z"}},
+		&storage.Task{Meta: storage.TaskMeta{ID: "app-3", Title: "Newer standalone", Status: storage.StatusDoing, Updated: "2026-01-02T10:00:00Z"}},
+		&storage.Task{Meta: storage.TaskMeta{ID: "app-4", Title: "Waiting one", Status: "waiting", Updated: "2026-01-02T10:00:00Z"}},
+	)
+	out, err := execContextCmd(t, store, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `# app
+
+📋 app-1  [doing]  (2 total: 1 doing, 1 merged)
+   Tracker epic
+   🔀 app-1-1       merged  o:10    feat/first
+        └ landed
+   🔨 app-1-2       doing   o:20  
+
+## Doing (standalone)
+  • app-3  Newer standalone
+  • app-2  Older standalone
+
+## Counts: 4 doing, 1 merged, 1 waiting
+`
+	if out != want {
+		t.Errorf("pm context output changed:\n--- got ---\n%s\n--- want ---\n%s", out, want)
+	}
+}

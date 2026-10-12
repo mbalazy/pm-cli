@@ -12,7 +12,7 @@ Create a task file in the project directory and print its id and path. Takes the
 
 | flag | default | meaning |
 |---|---|---|
-| `--status` | `todo` | initial status |
+| `--status` | the project's first status | initial status (the same default `pm_add_task` uses) |
 | `--id` | auto | explicit task id (must be a safe file-name component) |
 | `-l`, `--link key=url` | | links, repeatable |
 | `--branch` | | git branch name |
@@ -99,7 +99,7 @@ Open the kanban TUI ([board.md](board.md)), on the given project or the one dete
 
 ### pm context [project]
 
-Print the session-start rollup an agent reads: every tracker with its children's status marks, standalone doing tasks, counts, and pointer lines only for the executor profile (`pm executor show`) and the journals (`pm journal show`). This is the offline twin of the `pm_context` MCP tool, useful when the running MCP holds a stale binary.
+Print the session-start rollup an agent reads: every tracker with its children's status marks, standalone doing tasks (newest first, the order `pm_context` uses), counts, and pointer lines only for the executor profile (`pm executor show`) and the journals (`pm journal show`). This is the offline twin of the `pm_context` MCP tool, useful when the running MCP holds a stale binary.
 
 ### pm today
 

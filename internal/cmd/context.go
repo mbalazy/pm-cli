@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/mbalazy/pm-cli/internal/projectarg"
+	"github.com/mbalazy/pm-cli/internal/service"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
@@ -21,20 +22,14 @@ func newContextCmd(store storage.TaskStore) *cobra.Command {
 				return err
 			}
 
-			tasks, err := store.GetTasks(slug)
+			// The rollup is the service's - the one pm_context returns - and
+			// this command only renders it as text. It needs the tasks alone,
+			// so an unreadable project.yaml costs only the pointers below.
+			rollup, err := service.ProjectTaskRollup(store, slug)
 			if err != nil {
 				return err
 			}
-			trackers, suppressed := storage.BuildTrackers(tasks, store.GetLandingStatuses(slug)...)
-
-			counts := make(map[string]int)
-			var doing []*storage.Task
-			for _, t := range tasks {
-				counts[string(t.Meta.Status)]++
-				if t.Meta.Status == storage.StatusDoing && !suppressed[t.Meta.ID] {
-					doing = append(doing, t)
-				}
-			}
+			trackers, doing, counts := rollup.Trackers, rollup.DoingTasks, rollup.TaskCounts
 
 			fmt.Printf("# %s\n\n", slug)
 
@@ -63,7 +58,7 @@ func newContextCmd(store storage.TaskStore) *cobra.Command {
 			if len(doing) > 0 {
 				fmt.Println("## Doing (standalone)")
 				for _, t := range doing {
-					fmt.Printf("  • %s  %s\n", t.Meta.ID, t.Meta.Title)
+					fmt.Printf("  • %s  %s\n", t.ID, t.Title)
 				}
 				fmt.Println()
 			}
