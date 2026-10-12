@@ -219,6 +219,103 @@ func TestWorktreeLockStaleTakeover(t *testing.T) {
 	}
 }
 
+// TestWorktreeLockTakeoverVsRivalTakeoverRace forces the ordering a takeover
+// can lose: we judge the lock stale, a rival wins the same takeover and links
+// a fresh LIVE lock, and only then does our rename aside fire. The rename then
+// holds the rival's lock, not the stale one, so it must be put back - deleting
+// it would hand the slot to both of us.
+func TestWorktreeLockTakeoverVsRivalTakeoverRace(t *testing.T) {
+	const deadPID = 2147483646
+	rivalPID := os.Getpid()
+	ourPID := os.Getppid() // alive and distinct from the rival, so neither path is re-entrant
+
+	dir := t.TempDir()
+	if err := AcquireWorktreeLock(dir, "task-crashed", "run-epic", deadPID); err != nil {
+		t.Fatalf("seed stale lock: %v", err)
+	}
+
+	prev := takeoverRaceHook
+	t.Cleanup(func() { takeoverRaceHook = prev })
+	takeoverRaceHook = func() {
+		takeoverRaceHook = func() {} // the rival's own takeover passes through here too
+		if err := AcquireWorktreeLock(dir, "task-rival", "work", rivalPID); err != nil {
+			t.Errorf("rival takeover inside the race window: %v", err)
+		}
+	}
+
+	err := AcquireWorktreeLock(dir, "task-ours", "work", ourPID)
+	var busy *WorktreeBusyError
+	if !errors.As(err, &busy) {
+		t.Fatalf("a takeover that lost the race must report busy, got %v", err)
+	}
+	if busy.Holder == nil || busy.Holder.TaskID != "task-rival" {
+		t.Fatalf("busy must name the rival, got %+v", busy.Holder)
+	}
+
+	lk, err := ReadWorktreeLock(dir)
+	if err != nil {
+		t.Fatalf("read after race: %v", err)
+	}
+	if lk == nil || lk.TaskID != "task-rival" || lk.PID != rivalPID {
+		t.Fatalf("the rival's fresh lock must survive our takeover, got %+v", lk)
+	}
+	assertOnlyWorktreeLock(t, dir)
+}
+
+// TestWorktreeLockTakeoverCorruptIsRemoved covers the other side of the
+// takeover's verification: what came aside is still unparseable, so it is
+// proved void and deleted, and the claim goes through.
+func TestWorktreeLockTakeoverCorruptIsRemoved(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(worktreeLockPath(dir), []byte(`{"pid": 12`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := AcquireWorktreeLock(dir, "task-new", "work", os.Getpid()); err != nil {
+		t.Fatalf("a corrupt lock must be taken over: %v", err)
+	}
+	lk, err := ReadWorktreeLock(dir)
+	if err != nil || lk == nil || lk.TaskID != "task-new" {
+		t.Fatalf("takeover did not claim the slot: %+v, %v", lk, err)
+	}
+	assertOnlyWorktreeLock(t, dir)
+}
+
+// TestWorktreeLockTakeoverUnreadableIsRestored: a lock that cannot be READ (as
+// opposed to read and found corrupt) may well be a live holder's, so the
+// takeover puts it back and refuses instead of deleting it.
+func TestWorktreeLockTakeoverUnreadableIsRestored(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 file")
+	}
+	dir := t.TempDir()
+	path := worktreeLockPath(dir)
+	if err := os.WriteFile(path, []byte(`{"pid": 1}`), 0000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0644) })
+
+	if err := AcquireWorktreeLock(dir, "task-new", "work", os.Getpid()); err == nil {
+		t.Fatal("an unreadable lock must not be taken over")
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("the unreadable lock must be back at its path: %v", err)
+	}
+	assertOnlyWorktreeLock(t, dir)
+}
+
+func assertOnlyWorktreeLock(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != worktreeLockFile {
+			t.Fatalf("scratch file left behind: %s", e.Name())
+		}
+	}
+}
+
 // TestResolveWorktreeDir covers the path-resolution rules directly. The table
 // used to live in internal/cmd (against a resolveWorktreePath wrapper that no
 // production code called any more); ResolveWorktrees only exercises the empty

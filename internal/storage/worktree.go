@@ -2,7 +2,9 @@ package storage
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -345,9 +347,11 @@ func readWorktreeLockFile(path string) (*WorktreeLock, error) {
 //     can never observe a half-written winner (a plain O_EXCL create + write
 //     has exactly that window). Two simultaneous links: one wins, the loser
 //     gets EEXIST, reads the winner's payload and reports busy.
-//   - takeover of a stale/corrupt lock = rename it aside, then re-claim. Two
-//     simultaneous takeovers race on the rename; the loser's rename fails
-//     (ENOENT) and its next claim attempt sees the winner's fresh lock.
+//   - takeover of a stale/corrupt lock = rename it aside, verify what came
+//     aside, then re-claim. Two simultaneous takeovers race on the rename; the
+//     loser's rename either fails (ENOENT) or moves the winner's fresh lock,
+//     which the verification puts back (stealWorktreeLock) - either way its
+//     next claim attempt sees the winner's lock.
 func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 	// Nanosecond precision, not just RFC3339: ReleaseWorktreeLock's post-rename
 	// identity check compares Started to tell an untouched lock from a same-pid
@@ -416,16 +420,72 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 			}
 		}
 		// Stale (dead holder) or corrupt (rerr != nil - a truncated file from a
-		// crashed process must not brick the slot). Steal it ATOMICALLY: rename
-		// aside and loop to re-claim. If a rival steals first our rename fails
-		// harmlessly and the next attempt sees their fresh lock.
-		steal := worktreeScratchPath(path, "steal")
-		if os.Rename(path, steal) == nil {
-			_ = os.Remove(steal)
+		// crashed process must not brick the slot). Steal it: rename aside,
+		// verify, loop to re-claim.
+		takeoverRaceHook()
+		if err := stealWorktreeLock(path); err != nil {
+			return err
 		}
 	}
 	return fmt.Errorf("could not acquire worktree lock at %s (takeover contention)", path)
 }
+
+// stealWorktreeLock moves the lock at path aside so the caller can re-claim,
+// and DELETES what it moved only once it has proved that file is void (a dead
+// holder, or unparseable). Everything else is put back, or - when it cannot be
+// put back - left on disk with an error, because the alternative is deleting a
+// lock somebody is holding. The same rule as stealExpiredClaim in
+// finish_claim.go, which carries the full reasoning.
+//
+// The verification is the whole point: the decision to steal is taken before
+// the rename, so by then the path may hold a rival's fresh lock (they won the
+// same takeover) or a file that has become unreadable. Deleting either grants
+// one slot to two runs.
+//
+// Restoring goes through link+remove, never rename: rename would silently
+// overwrite a THIRD lock that landed in the meantime. The residual window
+// between the rename and the restore is the one documented at
+// stealExpiredClaim.
+func stealWorktreeLock(path string) error {
+	steal := worktreeScratchPath(path, "steal")
+	if os.Rename(path, steal) != nil {
+		// A rival stole it first (ENOENT) - harmless, the next attempt sees
+		// their fresh lock.
+		return nil
+	}
+	stolen, err := readWorktreeLockFile(steal)
+	var unreadable *fs.PathError
+	switch {
+	case errors.As(err, &unreadable):
+		// Could not READ what we moved aside (as opposed to read it and find it
+		// corrupt) - it may well be a live lock. Put it back if we can, and
+		// refuse either way rather than delete it.
+		if os.Link(steal, path) == nil {
+			_ = os.Remove(steal)
+			return fmt.Errorf("read worktree lock at %s: %w", path, err)
+		}
+		return fmt.Errorf("read worktree lock at %s: %w (it is now at %s - move it back)", path, err, steal)
+	case err == nil && stolen != nil && ProcessAliveSinceStamp(stolen.PID, stolen.Started):
+		// A rival won this takeover and linked a fresh lock. Restore it; the
+		// next attempt reads it and reports busy.
+		if os.Link(steal, path) == nil {
+			_ = os.Remove(steal)
+			return nil
+		}
+		return fmt.Errorf("another run took the worktree lock at %s while we were taking it over, and its lock "+
+			"could not be restored - it is at %s, move it back", path, steal)
+	}
+	// Proved void: dead holder, unparseable, or gone.
+	_ = os.Remove(steal)
+	return nil
+}
+
+// takeoverRaceHook runs, in AcquireWorktreeLock, right after the decision to
+// steal a stale or corrupt lock and right before it is moved aside - the window
+// in which a rival can win the same takeover and link a fresh lock. A no-op in
+// production; a test forces that ordering through it, the role releaseRaceHook
+// plays for the release path.
+var takeoverRaceHook = func() {}
 
 // releaseRaceHook runs, in ReleaseWorktreeLock, right after the ownership
 // read has confirmed the lock looks like pid's own and right before it is
