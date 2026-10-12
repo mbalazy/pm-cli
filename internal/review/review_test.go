@@ -18,6 +18,7 @@ const fakeClaude = `#!/bin/sh
 case "$FAKE_MODE" in
 fail) echo "boom: not logged in" >&2; exit 1 ;;
 hang) sleep 30 ;;
+ignoreterm) trap '' TERM; : > "$FAKE_OUT.trapped"; sleep 30 ;;
 esac
 printf '{"type":"result","subtype":"success","is_error":false,"result":"### Code review - PR #7\\n\\nNo issues found.","usage":{"input_tokens":10,"output_tokens":5}}'
 `
@@ -329,4 +330,38 @@ func mustRead(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+// A cancel the review's process group ignores still ends it: SIGTERM first,
+// then SIGKILL once the grace period is over.
+func TestCancelEscalatesToSIGKILL(t *testing.T) {
+	c, _, argvFile := setup(t)
+	prev := CancelGrace
+	CancelGrace = 100 * time.Millisecond
+	t.Cleanup(func() { CancelGrace = prev })
+	t.Setenv("FAKE_MODE", "ignoreterm")
+	r, err := c.Start(bg, "https://github.com/org/app/pull/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cancel only once the fake ignores SIGTERM - before that, SIGTERM alone
+	// would end it and the test would prove nothing.
+	waitFile(t, argvFile+".trapped")
+	if _, err := c.Cancel(r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitState(t, c, r.ID, StateError); got.Error != "cancelled" {
+		t.Errorf("cancelled = %q", got.Error)
+	}
+}
+
+func waitFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !fileExists(path) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s never appeared", path)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

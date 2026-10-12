@@ -37,6 +37,10 @@ import (
 // Timeout is how long a review may run before its process group is killed.
 const Timeout = 45 * time.Minute
 
+// CancelGrace is how long a cancelled review's process group gets to go down
+// on SIGTERM before it is SIGKILLed; a var so tests can shorten it.
+var CancelGrace = 5 * time.Second
+
 // States of a review.
 const (
 	StateRunning = "running"
@@ -375,7 +379,11 @@ func (c *Controller) Get(id string) (*Review, error) {
 	return c.load(id, true)
 }
 
-// Cancel kills a running review's process group.
+// Cancel kills a running review's process group: SIGTERM, then SIGKILL after
+// CancelGrace for whatever is still in the group - a claude (or a child it
+// started) that ignores SIGTERM would otherwise keep running after the user
+// pressed cancel. The escalation is scheduled, not waited for, so the HTTP
+// request that cancels returns at once.
 func (c *Controller) Cancel(id string) (*Review, error) {
 	r, err := c.Get(id)
 	if err != nil {
@@ -383,7 +391,15 @@ func (c *Controller) Cancel(id string) (*Review, error) {
 	}
 	if r.State == StateRunning && r.PID > 0 {
 		_ = os.WriteFile(c.path(id, ".cancelled"), []byte(c.now().Format(time.RFC3339)+"\n"), 0o644)
-		_ = syscall.Kill(-r.PID, syscall.SIGTERM)
+		pgid := r.PID
+		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+		time.AfterFunc(CancelGrace, func() {
+			// A group exists only while a member lives, so a probe that
+			// fails means it went down on SIGTERM - nothing to escalate.
+			if syscall.Kill(-pgid, 0) == nil {
+				_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			}
+		})
 	}
 	return r, nil
 }
