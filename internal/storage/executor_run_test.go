@@ -66,7 +66,7 @@ func TestWriteRunStateTmpIsPerProcess(t *testing.T) {
 	}
 
 	// Stand in for another process mid-write on the same run-state.
-	foreign := ExecutorRunPath(dir, "p-1") + ".tmp.999999"
+	foreign := ExecutorRunPath(dir, "p-1") + ".write.999999.1"
 	if err := os.WriteFile(foreign, []byte("half-written by another pid"), 0644); err != nil {
 		t.Fatalf("write foreign tmp: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestWriteRunStateCleansUpTmpOnFailure(t *testing.T) {
 		t.Fatalf("ReadDir: %v", err)
 	}
 	for _, e := range entries {
-		if strings.Contains(e.Name(), ".tmp") {
+		if strings.Contains(e.Name(), ".write.") {
 			t.Errorf("failed write left a scratch file behind: %s", e.Name())
 		}
 	}
