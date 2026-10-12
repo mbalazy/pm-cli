@@ -264,19 +264,15 @@ func TestModeInvariants(t *testing.T) {
 
 	t.Run("mode preserved on status transitions", func(t *testing.T) {
 		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-		task.Meta.Mode = "manual"
-		if err := storage.WriteTask(task); err != nil {
-			t.Fatal(err)
+		sess := startMCP(t, store)
+		mustCall(t, sess, "pm_update_task", map[string]any{"project": "test", "task_id": "t-1", "mode": "manual"})
+		mustCall(t, sess, "pm_move_task", map[string]any{"project": "test", "task_id": "t-1", "new_status": "done"})
+		var got struct {
+			Mode string `json:"mode"`
 		}
-
-		task, _ = store.FindTask("test", "t-1")
-		if err := store.MoveTask(task, storage.StatusDone); err != nil {
-			t.Fatalf("move: %v", err)
-		}
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.Mode != "manual" {
-			t.Errorf("mode lost on status transition, got %q", reloaded.Meta.Mode)
+		mustUnmarshal(t, mustCall(t, sess, "pm_get_task", map[string]any{"project": "test", "task_id": "t-1"}), &got)
+		if got.Mode != "manual" {
+			t.Errorf("mode lost on status transition, got %q", got.Mode)
 		}
 	})
 
