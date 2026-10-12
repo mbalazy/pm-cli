@@ -97,9 +97,12 @@ func AddTask(store storage.TaskStore, in AddTaskInput) (*storage.Task, error) {
 	}
 	// Serialize the read-modify-write against other pm processes (parallel
 	// CC sessions, executor managers) so concurrent updates never drop each
-	// other; best-effort - a lock failure degrades to today's behaviour.
+	// other; best-effort - a lock failure degrades to an unlocked write, and
+	// says so on stderr so a lost update leaves a trace.
 	if release, lockErr := store.LockProject(slug); lockErr == nil {
 		defer release()
+	} else {
+		storage.WarnLockDegrade("adding task", slug, lockErr)
 	}
 
 	id := in.ID
@@ -195,9 +198,12 @@ func UpdateTask(store storage.TaskStore, in UpdateTaskInput) (*storage.Task, err
 	}
 	// Serialize the read-modify-write against other pm processes (parallel
 	// CC sessions, executor managers) so concurrent updates never drop each
-	// other; best-effort - a lock failure degrades to today's behaviour.
+	// other; best-effort - a lock failure degrades to an unlocked write, and
+	// says so on stderr so a lost update leaves a trace.
 	if release, lockErr := store.LockProject(slug); lockErr == nil {
 		defer release()
+	} else {
+		storage.WarnLockDegrade("updating task "+in.TaskID, slug, lockErr)
 	}
 	task, err := store.FindTask(slug, in.TaskID)
 	if err != nil {
@@ -360,6 +366,8 @@ func DeleteTask(store storage.TaskStore, in DeleteTaskInput) (*DeleteTaskResult,
 	// resurrects the file mid-delete; best-effort, like the other mutations.
 	if release, lockErr := store.LockProject(slug); lockErr == nil {
 		defer release()
+	} else {
+		storage.WarnLockDegrade("deleting task "+in.TaskID, slug, lockErr)
 	}
 	task, err := store.FindTaskExact(slug, in.TaskID)
 	if err != nil {

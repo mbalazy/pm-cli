@@ -69,6 +69,13 @@ func warnLockDegrade(op, slug string, lockErr error) {
 	fmt.Fprintf(os.Stderr, "pm: project lock unavailable for %q (%v) - %s without it\n", slug, lockErr, op)
 }
 
+// WarnLockDegrade is warnLockDegrade for callers outside storage (the service
+// layer's task writes), so the warning keeps one wording wherever pm degrades
+// to an unlocked write.
+func WarnLockDegrade(op, slug string, lockErr error) {
+	warnLockDegrade(op, slug, lockErr)
+}
+
 func (s *Store) Init() error {
 	return os.MkdirAll(s.Root, 0755)
 }
