@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -376,6 +377,14 @@ func TestTimeoutSurvivesAServeRestart(t *testing.T) {
 	restarted.Now = func() time.Time { return time.Now().Add(2 * time.Hour) }
 	if got := waitState(t, &restarted, r.ID, StateError); got.Error != "killed after the 1h0m0s timeout" {
 		t.Errorf("error = %q", got.Error)
+	}
+	// Reporting it timed out is not enough: the group must be gone too.
+	deadline := time.Now().Add(5 * time.Second)
+	for syscall.Kill(-r.PID, 0) == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the review's process group is still alive after the timeout")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
