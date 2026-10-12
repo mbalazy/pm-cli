@@ -416,6 +416,8 @@ export interface Review {
   commit?: string
   config_dir: string
   pid: number
+  /** When the process started, so a recycled pid does not read as running; absent on older reviews. */
+  pid_started?: string
   started: string
   state: 'running' | 'done' | 'error' | string
   finished?: string

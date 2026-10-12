@@ -355,6 +355,35 @@ func TestCancelEscalatesToSIGKILL(t *testing.T) {
 	}
 }
 
+// A pid that is alive but belongs to a process started after the review was
+// stamped is a recycled number, not the review. A review stored before the
+// stamp existed keeps the bare liveness check.
+func TestRecycledPIDIsNotARunningReview(t *testing.T) {
+	c, _, _ := setup(t)
+	if err := os.MkdirAll(c.dir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		id, pidStarted, want string
+	}{
+		{"recycled", "2020-01-01T00:00:00Z", StateError},
+		{"own", time.Now().UTC().Format(time.RFC3339Nano), StateRunning},
+		{"unstamped", "", StateRunning},
+	} {
+		r := &Review{ID: tc.id, URL: "https://github.com/org/app/pull/8", PID: os.Getpid(), PIDStarted: tc.pidStarted, Started: "2020-01-01T00:00:00Z"}
+		if err := c.writeMeta(r); err != nil {
+			t.Fatal(err)
+		}
+		got, err := c.Get(tc.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.State != tc.want {
+			t.Errorf("%s: state = %s (%s), want %s", tc.id, got.State, got.Error, tc.want)
+		}
+	}
+}
+
 func waitFile(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

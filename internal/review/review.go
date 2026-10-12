@@ -106,7 +106,12 @@ type Review struct {
 	Commit    string `json:"commit,omitempty"`
 	ConfigDir string `json:"config_dir"`
 	PID       int    `json:"pid"`
-	Started   string `json:"started"`
+	// PIDStarted is stamped right after the process starts, so a pid the OS
+	// has since handed to another process reads as not running
+	// (storage.ProcessAliveSinceStamp). ABSENT on reviews stored before it
+	// existed, which keep the bare liveness check.
+	PIDStarted string `json:"pid_started,omitempty"`
+	Started    string `json:"started"`
 
 	State    string              `json:"state"`
 	Finished string              `json:"finished,omitempty"`
@@ -283,6 +288,9 @@ func (c *Controller) Start(ctx context.Context, input string) (*Review, error) {
 		return nil, fmt.Errorf("start %s: %w", exe, err)
 	}
 	r.PID = cmd.Process.Pid
+	// The real clock, never c.now(): this is compared with the OS's record of
+	// when the process started.
+	r.PIDStarted = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := c.writeMeta(r); err != nil {
 		_ = syscall.Kill(-r.PID, syscall.SIGKILL)
 		return nil, err
@@ -416,7 +424,8 @@ func (c *Controller) load(id string, withReport bool) (*Review, error) {
 	if err := jsonUnmarshal(data, &r); err != nil {
 		return nil, err
 	}
-	if !alive(r.PID) && r.Worktree != "" && fileExists(r.Worktree) {
+	running := r.running()
+	if !running && r.Worktree != "" && fileExists(r.Worktree) {
 		// A review whose pm serve restarted before it ended: nobody else
 		// removes its worktree.
 		removeWorktree(r.Dir, r.Worktree)
@@ -427,7 +436,7 @@ func (c *Controller) load(id string, withReport bool) (*Review, error) {
 		finished = fi.ModTime().Format(time.RFC3339)
 	}
 	switch {
-	case alive(r.PID):
+	case running:
 		r.State = StateRunning
 	case len(strings.TrimSpace(string(out))) > 0:
 		oc, derr := report.Decode(out)
@@ -528,6 +537,16 @@ func removeWorktree(repo, dir string) {
 		_ = os.RemoveAll(dir)
 		_ = exec.Command("git", "-C", repo, "worktree", "prune").Run()
 	}
+}
+
+// running reports whether the review's process is still the one it started:
+// alive, and - when the review carries PIDStarted - not started after that
+// stamp, so a recycled pid is not a running review.
+func (r *Review) running() bool {
+	if r.PIDStarted == "" {
+		return alive(r.PID)
+	}
+	return r.PID > 0 && storage.ProcessAliveSinceStamp(r.PID, r.PIDStarted)
 }
 
 func alive(pid int) bool {
