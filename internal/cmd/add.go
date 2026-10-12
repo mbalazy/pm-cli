@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/mbalazy/pm-cli/internal/service"
 	"github.com/mbalazy/pm-cli/internal/storage"
 	"github.com/spf13/cobra"
 )
@@ -18,59 +19,25 @@ func newAddCmd(store storage.TaskStore) *cobra.Command {
 		Short: "Add a new task to a project",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			projectSlug, err := store.ResolveProject(args[0])
+			// The service owns task creation for every surface - the MCP add
+			// tool, the web, this command - so a task gets the same defaults
+			// (the project's FIRST status when --status is not given), the
+			// same validation and the same stamping wherever it is created.
+			// It also takes the project lock around NextTaskID -> AddTask:
+			// the id is derived from the tasks on disk, so two unlocked adds
+			// would mint the SAME id, and O_EXCL only protects the file NAME.
+			id, _ := cmd.Flags().GetString("id")
+			t, err := service.AddTask(store, service.AddTaskInput{
+				Project: args[0],
+				Title:   args[1],
+				Status:  status,
+				ID:      id,
+				Links:   links,
+				Branch:  branch,
+				Tags:    tags,
+				Order:   order,
+			})
 			if err != nil {
-				return err
-			}
-
-			// Serialize NextTaskID -> AddTask against other pm processes
-			// (parallel `pm add`, a CC session's MCP server, the board): the ID
-			// is derived from the tasks on disk, so two unlocked adds read the
-			// same max and mint the SAME id - O_EXCL only protects the file
-			// NAME, and two different titles produce two different names, so
-			// both writes succeed and the duplicate becomes unaddressable
-			// (findByExactID returns whichever ReadDir yields first).
-			//
-			// The lock lives here, at the caller, exactly like pm_add_task's -
-			// it has to cover NextTaskID, which is outside AddTask, and
-			// LockProject must never nest (the MCP handler already holds it
-			// when it calls AddTask). Best-effort: a lock failure degrades to
-			// the previous unlocked behaviour rather than blocking the add.
-			if release, lockErr := store.LockProject(projectSlug); lockErr == nil {
-				defer release()
-			}
-
-			title := args[1]
-			t := storage.NewTask("", title, projectSlug)
-
-			if status != "" {
-				t.SetStatus(storage.ParseStatus(status))
-				// SetStatus took its own clock read; realign the pair NewTask
-				// wrote from one read, so a task born on a non-default status
-				// never reports a status change later than its own creation.
-				t.Meta.Updated = t.Meta.StatusChanged
-			}
-
-			// Validate status against project's allowed statuses
-			allowed := store.GetProjectStatuses(projectSlug)
-			if err := storage.ValidateStatus(t.Meta.Status, allowed); err != nil {
-				return err
-			}
-
-			if id, _ := cmd.Flags().GetString("id"); id != "" {
-				t.Meta.ID = id
-			} else {
-				t.Meta.ID = store.NextTaskID(projectSlug)
-			}
-
-			if len(links) > 0 {
-				t.Meta.Links = links
-			}
-			t.Meta.Branch = branch
-			t.Meta.Tags = tags
-			t.Meta.Order = order
-
-			if err := store.AddTask(projectSlug, t); err != nil {
 				return err
 			}
 
@@ -79,7 +46,7 @@ func newAddCmd(store storage.TaskStore) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&status, "status", "todo", "Task status (todo, doing, done)")
+	cmd.Flags().StringVar(&status, "status", "", "Task status (default: the project's first status)")
 	cmd.Flags().String("id", "", "Task ID (auto-generated if not set)")
 	cmd.Flags().StringToStringVarP(&links, "link", "l", nil, "Links (key=url, repeatable: -l azure=https://...)")
 	cmd.Flags().StringVar(&branch, "branch", "", "Git branch name")

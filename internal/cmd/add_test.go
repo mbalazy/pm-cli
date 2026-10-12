@@ -170,3 +170,46 @@ func TestAddRejectsTraversingID(t *testing.T) {
 		}
 	}
 }
+
+// The add command and the MCP add tool share one creation path, so a task
+// created without a status lands on the project's FIRST status either way -
+// not on a hardcoded "todo" in a project whose list starts elsewhere.
+func TestAddDefaultsToTheProjectsFirstStatus(t *testing.T) {
+	store := &storage.Store{Root: t.TempDir()}
+	if err := store.CreateProject("flow", &storage.Project{Name: "Flow", Statuses: []string{"backlog", "doing", "done"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateProject("plain", &storage.Project{Name: "Plain"}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, project string
+		args          []string
+		want          storage.TaskStatus
+	}{
+		{"first status of a custom list", "flow", nil, "backlog"},
+		{"explicit status wins", "flow", []string{"--status", "doing"}, "doing"},
+		{"default statuses start at todo", "plain", nil, "todo"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := runAddCmd(store, append([]string{tc.project, tc.name}, tc.args...)...); err != nil {
+				t.Fatal(err)
+			}
+			task, err := store.FindTask(tc.project, tc.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if task.Meta.Status != tc.want {
+				t.Errorf("status = %q, want %q", task.Meta.Status, tc.want)
+			}
+		})
+	}
+
+	t.Run("a status outside the project's list is bad usage", func(t *testing.T) {
+		err := runAddCmd(store, "flow", "bad status", "--status", "todo")
+		if code := ExitCode(err); code != ExitUsage {
+			t.Fatalf("exit code %d (%v), want %d", code, err, ExitUsage)
+		}
+	})
+}
