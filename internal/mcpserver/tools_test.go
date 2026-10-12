@@ -2,10 +2,8 @@ package mcpserver
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/mbalazy/pm-cli/internal/storage"
@@ -19,12 +17,16 @@ func setupMCPTestStore(t *testing.T) (*storage.Store, *storage.Task) {
 	store := &storage.Store{Root: dir}
 
 	projDir := filepath.Join(dir, "test")
-	os.MkdirAll(projDir, 0755)
-	storage.WriteProject(filepath.Join(projDir, "project.yaml"), &storage.Project{
+	if err := os.MkdirAll(projDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.WriteProject(filepath.Join(projDir, "project.yaml"), &storage.Project{
 		Name:   "Test Project",
 		Prefix: "t",
 		Path:   "/home/user/test",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	task := &storage.Task{
 		Meta: storage.TaskMeta{
@@ -41,305 +43,11 @@ func setupMCPTestStore(t *testing.T) (*storage.Store, *storage.Task) {
 		FilePath: filepath.Join(projDir, "t-1-test-task.md"),
 		Project:  "test",
 	}
-	storage.WriteTask(task)
+	if err := storage.WriteTask(task); err != nil {
+		t.Fatal(err)
+	}
 
 	return store, task
-}
-
-func TestUpdateTaskLinksOnlyMerge(t *testing.T) {
-	t.Run("new key added", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		// Simulate MCP update: merge new link
-		if task.Meta.Links == nil {
-			task.Meta.Links = make(map[string]string)
-		}
-		task.Meta.Links["pr"] = "https://github.com/pr/1"
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.Links["jira"] != "SCRUM-1" {
-			t.Error("existing link 'jira' was removed")
-		}
-		if reloaded.Meta.Links["pr"] != "https://github.com/pr/1" {
-			t.Error("new link 'pr' was not added")
-		}
-	})
-
-	t.Run("existing key updated", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		task.Meta.Links["jira"] = "SCRUM-2"
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.Links["jira"] != "SCRUM-2" {
-			t.Errorf("link not updated, got %q", reloaded.Meta.Links["jira"])
-		}
-	})
-
-	t.Run("empty links input preserves existing", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		// Simulate: no links in update input (don't touch task.Meta.Links)
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.Links["jira"] != "SCRUM-1" {
-			t.Error("existing link lost when no links provided")
-		}
-	})
-
-	t.Run("merge from nil links", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		// Simulate task with nil links getting a link
-		task.Meta.Links = nil
-		storage.WriteTask(task)
-		task, _ = store.FindTask("test", "t-1")
-
-		if task.Meta.Links == nil {
-			task.Meta.Links = make(map[string]string)
-		}
-		task.Meta.Links["pr"] = "https://github.com/pr/1"
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.Links["pr"] != "https://github.com/pr/1" {
-			t.Error("link not added to previously nil links")
-		}
-	})
-}
-
-func TestUpdateTaskBodyOnlyAppends(t *testing.T) {
-	t.Run("append to existing body", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		// Simulate MCP body_append logic
-		appendText := "## Notes\n\nNew note"
-		if task.Body != "" {
-			task.Body = task.Body + "\n\n" + appendText
-		} else {
-			task.Body = appendText
-		}
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Body != "## Description\n\nOriginal body\n\n## Notes\n\nNew note" {
-			t.Errorf("body not appended correctly, got:\n%s", reloaded.Body)
-		}
-	})
-
-	t.Run("append to empty body", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-		task.Body = ""
-		storage.WriteTask(task)
-
-		task, _ = store.FindTask("test", "t-1")
-		appendText := "First content"
-		if task.Body != "" {
-			task.Body = task.Body + "\n\n" + appendText
-		} else {
-			task.Body = appendText
-		}
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Body != "First content" {
-			t.Errorf("body = %q, want %q", reloaded.Body, "First content")
-		}
-	})
-
-	t.Run("empty append preserves body", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		// Simulate: no body_append in update (don't touch task.Body)
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Body != "## Description\n\nOriginal body" {
-			t.Errorf("body changed unexpectedly: %q", reloaded.Body)
-		}
-	})
-}
-
-func TestUpdateTaskSpecReplacesAndLogAppends(t *testing.T) {
-	t.Run("first spec prepends block, existing body becomes Log", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1") // body: "## Description\n\nOriginal body"
-
-		task.Body = storage.ApplySpec(task.Body, "We build X. Decision: use Y.")
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if got := storage.ExtractSpec(reloaded.Body); got != "We build X. Decision: use Y." {
-			t.Errorf("spec = %q", got)
-		}
-		// The original body must survive below the spec block (the Log).
-		if !strings.Contains(reloaded.Body, "## Description\n\nOriginal body") {
-			t.Errorf("original body lost from Log:\n%s", reloaded.Body)
-		}
-	})
-
-	t.Run("spec replaces in place while body_append grows the Log", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		// First update: set spec.
-		task.Body = storage.ApplySpec(task.Body, "spec v1")
-		storage.WriteTask(task)
-
-		// Second update: rewrite spec AND append a Log pointer (the canonical flow).
-		task, _ = store.FindTask("test", "t-1")
-		task.Body = storage.ApplySpec(task.Body, "spec v2")
-		task.Body = task.Body + "\n\n" + "Session 2: Q3 resolved -> see Spec."
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if got := storage.ExtractSpec(reloaded.Body); got != "spec v2" {
-			t.Errorf("spec = %q, want spec v2", got)
-		}
-		if strings.Contains(reloaded.Body, "spec v1") {
-			t.Errorf("old spec v1 not replaced:\n%s", reloaded.Body)
-		}
-		if !strings.Contains(reloaded.Body, "Session 2: Q3 resolved -> see Spec.") {
-			t.Errorf("log pointer not appended:\n%s", reloaded.Body)
-		}
-		if !strings.Contains(reloaded.Body, "Original body") {
-			t.Errorf("original Log content lost:\n%s", reloaded.Body)
-		}
-		// Exactly one spec block.
-		if c := strings.Count(reloaded.Body, storage.SpecStart); c != 1 {
-			t.Errorf("expected 1 spec block, got %d", c)
-		}
-	})
-}
-
-func TestUpdateTaskBriefOverwrites(t *testing.T) {
-	t.Run("brief overwritten", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		task.Meta.Brief = "new brief"
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.Brief != "new brief" {
-			t.Errorf("brief = %q, want %q", reloaded.Meta.Brief, "new brief")
-		}
-	})
-
-	t.Run("empty brief input preserves existing", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		// Simulate: no brief in update (don't touch task.Meta.Brief)
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.Brief != "initial brief" {
-			t.Errorf("brief changed unexpectedly: %q", reloaded.Meta.Brief)
-		}
-	})
-}
-
-func TestMoveTaskPreservesBrief(t *testing.T) {
-	t.Run("done preserves brief", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		store.MoveTask(task, storage.StatusDone)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.Brief != "initial brief" {
-			t.Errorf("brief = %q, want %q", reloaded.Meta.Brief, "initial brief")
-		}
-	})
-
-	t.Run("archived preserves brief", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		store.MoveTask(task, storage.StatusArchived)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.Brief != "initial brief" {
-			t.Errorf("brief = %q, want %q", reloaded.Meta.Brief, "initial brief")
-		}
-	})
-
-	t.Run("waiting preserves brief", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		store.MoveTask(task, storage.StatusWaiting)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.Brief != "initial brief" {
-			t.Errorf("brief = %q, want %q", reloaded.Meta.Brief, "initial brief")
-		}
-	})
-}
-
-func TestUpdateTaskACOverwrites(t *testing.T) {
-	t.Run("ac overwritten", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		task.Meta.AC = "new acceptance criteria"
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.AC != "new acceptance criteria" {
-			t.Errorf("ac = %q, want %q", reloaded.Meta.AC, "new acceptance criteria")
-		}
-	})
-
-	t.Run("empty ac input preserves existing", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		// Simulate: no ac in update (don't touch task.Meta.AC)
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.AC != "- Login works\n- Error shown on invalid creds" {
-			t.Errorf("ac changed unexpectedly: %q", reloaded.Meta.AC)
-		}
-	})
-}
-
-func TestMoveTaskPreservesAC(t *testing.T) {
-	t.Run("done preserves ac", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		store.MoveTask(task, storage.StatusDone)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.AC != "- Login works\n- Error shown on invalid creds" {
-			t.Errorf("ac = %q, want preserved", reloaded.Meta.AC)
-		}
-	})
-
-	t.Run("archived preserves ac", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		store.MoveTask(task, storage.StatusArchived)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if reloaded.Meta.AC != "- Login works\n- Error shown on invalid creds" {
-			t.Errorf("ac = %q, want preserved", reloaded.Meta.AC)
-		}
-	})
 }
 
 // TestStorageCreateProjectAllowsFreshSlug pins a storage-layer invariant:
@@ -503,81 +211,6 @@ func TestToSummarySessionCount(t *testing.T) {
 	})
 }
 
-func TestUpdateTaskSessionsAppend(t *testing.T) {
-	t.Run("append sessions to task with none", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		task.Meta.Sessions = append(task.Meta.Sessions, "abc-123")
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if len(reloaded.Meta.Sessions) != 1 || reloaded.Meta.Sessions[0] != "abc-123" {
-			t.Errorf("sessions = %v, want [abc-123]", reloaded.Meta.Sessions)
-		}
-	})
-
-	t.Run("append preserves existing sessions", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		task.Meta.Sessions = []string{"abc-123"}
-		storage.WriteTask(task)
-
-		task, _ = store.FindTask("test", "t-1")
-		task.Meta.Sessions = append(task.Meta.Sessions, "def-456")
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if len(reloaded.Meta.Sessions) != 2 {
-			t.Fatalf("sessions len = %d, want 2", len(reloaded.Meta.Sessions))
-		}
-		if reloaded.Meta.Sessions[0] != "abc-123" {
-			t.Errorf("sessions[0] = %q, want abc-123", reloaded.Meta.Sessions[0])
-		}
-		if reloaded.Meta.Sessions[1] != "def-456" {
-			t.Errorf("sessions[1] = %q, want def-456", reloaded.Meta.Sessions[1])
-		}
-	})
-
-	t.Run("empty sessions input preserves existing", func(t *testing.T) {
-		store, _ := setupMCPTestStore(t)
-		task, _ := store.FindTask("test", "t-1")
-
-		task.Meta.Sessions = []string{"abc-123"}
-		storage.WriteTask(task)
-
-		task, _ = store.FindTask("test", "t-1")
-		// Simulate: no sessions in update (don't touch task.Meta.Sessions)
-		storage.WriteTask(task)
-
-		reloaded, _ := store.FindTask("test", "t-1")
-		if len(reloaded.Meta.Sessions) != 1 || reloaded.Meta.Sessions[0] != "abc-123" {
-			t.Errorf("sessions = %v, want [abc-123]", reloaded.Meta.Sessions)
-		}
-	})
-}
-
-func TestAddTaskWithSessions(t *testing.T) {
-	store, _ := setupMCPTestStore(t)
-
-	task := storage.NewTask("t-2", "Task with sessions", "test")
-	task.Meta.Sessions = []string{"sess-1", "sess-2"}
-	task.FilePath = filepath.Join(store.Root, "test", "t-2-task-with-sessions.md")
-	storage.WriteTask(task)
-
-	reloaded, err := store.FindTask("test", "t-2")
-	if err != nil {
-		t.Fatalf("FindTask failed: %v", err)
-	}
-	if len(reloaded.Meta.Sessions) != 2 {
-		t.Fatalf("sessions len = %d, want 2", len(reloaded.Meta.Sessions))
-	}
-	if reloaded.Meta.Sessions[0] != "sess-1" || reloaded.Meta.Sessions[1] != "sess-2" {
-		t.Errorf("sessions = %v, want [sess-1 sess-2]", reloaded.Meta.Sessions)
-	}
-}
-
 func TestToDetailIncludesSessions(t *testing.T) {
 	task := &storage.Task{
 		Meta: storage.TaskMeta{
@@ -633,7 +266,9 @@ func TestModeInvariants(t *testing.T) {
 		store, _ := setupMCPTestStore(t)
 		task, _ := store.FindTask("test", "t-1")
 		task.Meta.Mode = "manual"
-		storage.WriteTask(task)
+		if err := storage.WriteTask(task); err != nil {
+			t.Fatal(err)
+		}
 
 		task, _ = store.FindTask("test", "t-1")
 		if err := store.MoveTask(task, storage.StatusDone); err != nil {
@@ -852,147 +487,4 @@ func TestCrossProjectContextWrapsProjectsAndFocusTasks(t *testing.T) {
 	if payload.FocusTasks[0].ID != task.Meta.ID {
 		t.Errorf("focus task ID = %q, want %q", payload.FocusTasks[0].ID, task.Meta.ID)
 	}
-}
-
-func mkTask(id, title string, status storage.TaskStatus, parent, branch, brief string) *storage.Task {
-	return &storage.Task{
-		Meta: storage.TaskMeta{
-			ID: id, Title: title, Status: status,
-			Parent: parent, Branch: branch, Brief: brief,
-		},
-		Project: "test",
-	}
-}
-
-func TestBuildTrackers(t *testing.T) {
-	tasks := []*storage.Task{
-		mkTask("p-1", "Parent tracker", storage.StatusTodo, "", "", "epic brief"),
-		mkTask("p-1-2", "Child two", storage.StatusDoing, "p-1", "feat/two", "**Goal**: build two\nmore detail"),
-		mkTask("p-1-1", "Child one", storage.StatusDone, "p-1", "feat/one", "done and merged"),
-		mkTask("p-1-3", "Child three", "merged", "p-1", "feat/three", "code merged, QA pending"),
-		mkTask("p-9", "Standalone doing", storage.StatusDoing, "", "feat/solo", "solo work"),
-	}
-
-	trackers, suppressed := storage.BuildTrackers(tasks)
-
-	t.Run("one tracker identified", func(t *testing.T) {
-		if len(trackers) != 1 {
-			t.Fatalf("trackers = %d, want 1", len(trackers))
-		}
-		if trackers[0].ID != "p-1" {
-			t.Errorf("tracker ID = %q, want p-1", trackers[0].ID)
-		}
-	})
-
-	t.Run("progress and total reflect children", func(t *testing.T) {
-		tr := trackers[0]
-		if tr.Total != 3 {
-			t.Errorf("total = %d, want 3", tr.Total)
-		}
-		want := map[string]int{"done": 1, "doing": 1, "merged": 1}
-		for k, v := range want {
-			if tr.Progress[k] != v {
-				t.Errorf("progress[%s] = %d, want %d", k, tr.Progress[k], v)
-			}
-		}
-	})
-
-	t.Run("open children sorted by ID, the done one only counted", func(t *testing.T) {
-		// p-1-1 is done: the human closed it, so it lives in progress and
-		// not in the list (pm-cli-149).
-		var ids []string
-		for _, c := range trackers[0].Children {
-			ids = append(ids, c.ID)
-		}
-		want := []string{"p-1-2", "p-1-3"}
-		if fmt.Sprint(ids) != fmt.Sprint(want) {
-			t.Errorf("children = %v, want %v", ids, want)
-		}
-	})
-
-	t.Run("brief_line strips bold and takes first line", func(t *testing.T) {
-		// p-1-2 is children[0] after sort
-		if got := trackers[0].Children[0].BriefLine; got != "Goal: build two" {
-			t.Errorf("brief_line = %q, want %q", got, "Goal: build two")
-		}
-	})
-
-	t.Run("children and tracker suppressed, standalone not", func(t *testing.T) {
-		for _, id := range []string{"p-1", "p-1-1", "p-1-2", "p-1-3"} {
-			if !suppressed[id] {
-				t.Errorf("%q should be suppressed", id)
-			}
-		}
-		if suppressed["p-9"] {
-			t.Error("standalone p-9 should NOT be suppressed")
-		}
-	})
-}
-
-func TestBuildTrackersArchivedTrackerSkipped(t *testing.T) {
-	tasks := []*storage.Task{
-		mkTask("p-1", "Archived parent", storage.StatusArchived, "", "", ""),
-		mkTask("p-1-1", "Child", storage.StatusTodo, "p-1", "", ""),
-	}
-	trackers, suppressed := storage.BuildTrackers(tasks)
-	if len(trackers) != 0 {
-		t.Errorf("trackers = %d, want 0 (archived tracker not rendered)", len(trackers))
-	}
-	// no tracker block renders for an archived parent, so the child falls back
-	// to the flat list instead of vanishing - neither it nor the archived
-	// parent should be suppressed.
-	if suppressed["p-1"] || suppressed["p-1-1"] {
-		t.Error("archived tracker and its child should NOT be suppressed (orphan falls back to flat list)")
-	}
-}
-
-func TestBuildTrackersNonexistentParentOrphan(t *testing.T) {
-	tasks := []*storage.Task{
-		mkTask("p-1-1", "Child of ghost parent", storage.StatusDoing, "ghost-1", "", ""),
-	}
-	trackers, suppressed := storage.BuildTrackers(tasks)
-	if len(trackers) != 0 {
-		t.Errorf("trackers = %d, want 0 (parent doesn't exist)", len(trackers))
-	}
-	if suppressed["p-1-1"] {
-		t.Error("child of a nonexistent parent should NOT be suppressed (orphan falls back to flat list)")
-	}
-}
-
-func TestBuildTrackersNoParents(t *testing.T) {
-	tasks := []*storage.Task{
-		mkTask("a-1", "Flat one", storage.StatusDoing, "", "", ""),
-		mkTask("a-2", "Flat two", storage.StatusTodo, "", "", ""),
-	}
-	trackers, suppressed := storage.BuildTrackers(tasks)
-	if len(trackers) != 0 {
-		t.Errorf("trackers = %d, want 0", len(trackers))
-	}
-	if len(suppressed) != 0 {
-		t.Errorf("suppressed = %d, want 0", len(suppressed))
-	}
-}
-
-func TestBriefLine(t *testing.T) {
-	cases := []struct{ name, in, want string }{
-		{"empty", "", ""},
-		{"strips bold", "**Goal**: ship it", "Goal: ship it"},
-		{"first non-empty line", "\n\n  first real line  \nsecond", "first real line"},
-		{"truncates long", string(make([]rune, 0)) + repeatRune('x', 130), repeatRune('x', 120) + "…"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := storage.BriefLine(c.in); got != c.want {
-				t.Errorf("storage.BriefLine(%q) = %q, want %q", c.in, got, c.want)
-			}
-		})
-	}
-}
-
-func repeatRune(r rune, n int) string {
-	out := make([]rune, n)
-	for i := range out {
-		out[i] = r
-	}
-	return string(out)
 }

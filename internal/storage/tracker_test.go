@@ -302,3 +302,116 @@ func TestBuildTrackersListsOpenChildrenOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildTrackersRollup(t *testing.T) {
+	tasks := []*Task{
+		rollupTask("p-1", "Parent tracker", StatusTodo, "", "", "epic brief"),
+		rollupTask("p-1-2", "Child two", StatusDoing, "p-1", "feat/two", "**Goal**: build two\nmore detail"),
+		rollupTask("p-1-1", "Child one", StatusDone, "p-1", "feat/one", "done and merged"),
+		rollupTask("p-1-3", "Child three", "merged", "p-1", "feat/three", "code merged, QA pending"),
+		rollupTask("p-9", "Standalone doing", StatusDoing, "", "feat/solo", "solo work"),
+	}
+
+	trackers, suppressed := BuildTrackers(tasks)
+
+	t.Run("one tracker identified", func(t *testing.T) {
+		if len(trackers) != 1 {
+			t.Fatalf("trackers = %d, want 1", len(trackers))
+		}
+		if trackers[0].ID != "p-1" {
+			t.Errorf("tracker ID = %q, want p-1", trackers[0].ID)
+		}
+	})
+
+	t.Run("progress and total reflect children", func(t *testing.T) {
+		tr := trackers[0]
+		if tr.Total != 3 {
+			t.Errorf("total = %d, want 3", tr.Total)
+		}
+		want := map[string]int{"done": 1, "doing": 1, "merged": 1}
+		for k, v := range want {
+			if tr.Progress[k] != v {
+				t.Errorf("progress[%s] = %d, want %d", k, tr.Progress[k], v)
+			}
+		}
+	})
+
+	t.Run("open children sorted by ID, the done one only counted", func(t *testing.T) {
+		// p-1-1 is done: the human closed it, so it lives in progress and
+		// not in the list (pm-cli-149).
+		var ids []string
+		for _, c := range trackers[0].Children {
+			ids = append(ids, c.ID)
+		}
+		want := []string{"p-1-2", "p-1-3"}
+		if fmt.Sprint(ids) != fmt.Sprint(want) {
+			t.Errorf("children = %v, want %v", ids, want)
+		}
+	})
+
+	t.Run("brief_line strips bold and takes first line", func(t *testing.T) {
+		// p-1-2 is children[0] after sort
+		if got := trackers[0].Children[0].BriefLine; got != "Goal: build two" {
+			t.Errorf("brief_line = %q, want %q", got, "Goal: build two")
+		}
+	})
+
+	t.Run("children and tracker suppressed, standalone not", func(t *testing.T) {
+		for _, id := range []string{"p-1", "p-1-1", "p-1-2", "p-1-3"} {
+			if !suppressed[id] {
+				t.Errorf("%q should be suppressed", id)
+			}
+		}
+		if suppressed["p-9"] {
+			t.Error("standalone p-9 should NOT be suppressed")
+		}
+	})
+}
+
+func TestBuildTrackersNoParents(t *testing.T) {
+	tasks := []*Task{
+		rollupTask("a-1", "Flat one", StatusDoing, "", "", ""),
+		rollupTask("a-2", "Flat two", StatusTodo, "", "", ""),
+	}
+	trackers, suppressed := BuildTrackers(tasks)
+	if len(trackers) != 0 {
+		t.Errorf("trackers = %d, want 0", len(trackers))
+	}
+	if len(suppressed) != 0 {
+		t.Errorf("suppressed = %d, want 0", len(suppressed))
+	}
+}
+
+func TestBriefLine(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"empty", "", ""},
+		{"strips bold", "**Goal**: ship it", "Goal: ship it"},
+		{"first non-empty line", "\n\n  first real line  \nsecond", "first real line"},
+		{"truncates long", string(make([]rune, 0)) + repeatRune('x', 130), repeatRune('x', 120) + "…"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := BriefLine(c.in); got != c.want {
+				t.Errorf("BriefLine(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+func rollupTask(id, title string, status TaskStatus, parent, branch, brief string) *Task {
+	return &Task{
+		Meta: TaskMeta{
+			ID: id, Title: title, Status: status,
+			Parent: parent, Branch: branch, Brief: brief,
+		},
+		Project: "test",
+	}
+}
+
+func repeatRune(r rune, n int) string {
+	out := make([]rune, n)
+	for i := range out {
+		out[i] = r
+	}
+	return string(out)
+}
