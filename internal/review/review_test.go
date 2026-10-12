@@ -374,7 +374,7 @@ func TestTimeoutSurvivesAServeRestart(t *testing.T) {
 	}
 
 	restarted.Now = func() time.Time { return time.Now().Add(2 * time.Hour) }
-	if got := waitState(t, &restarted, r.ID, StateError); !strings.HasPrefix(got.Error, "killed after the ") {
+	if got := waitState(t, &restarted, r.ID, StateError); got.Error != "killed after the 1h0m0s timeout" {
 		t.Errorf("error = %q", got.Error)
 	}
 }
@@ -405,6 +405,20 @@ func TestRecycledPIDIsNotARunningReview(t *testing.T) {
 		if got.State != tc.want {
 			t.Errorf("%s: state = %s (%s), want %s", tc.id, got.State, got.Error, tc.want)
 		}
+	}
+}
+
+// The timeout message names the timeout the run used, not the package default.
+func TestTimeoutMessageNamesTheTimeoutUsed(t *testing.T) {
+	c, _, _ := setup(t)
+	c.Timeout = 300 * time.Millisecond
+	t.Setenv("FAKE_MODE", "hang")
+	r, err := c.Start(bg, "https://github.com/org/app/pull/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := waitState(t, c, r.ID, StateError); got.Error != "killed after the 300ms timeout" {
+		t.Errorf("error = %q", got.Error)
 	}
 }
 

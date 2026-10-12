@@ -470,7 +470,7 @@ func (c *Controller) load(id string, withReport bool) (*Review, error) {
 		case fileExists(c.path(id, ".cancelled")):
 			r.Error = "cancelled"
 		case fileExists(c.path(id, ".timeout")):
-			r.Error = "killed after the " + Timeout.String() + " timeout"
+			r.Error = "killed after the " + r.timeoutUsed(c.path(id, ".timeout")) + " timeout"
 		case strings.TrimSpace(string(errText)) != "":
 			r.Error = firstLines(string(errText), 3)
 		default:
@@ -551,6 +551,21 @@ func removeWorktree(repo, dir string) {
 		_ = os.RemoveAll(dir)
 		_ = exec.Command("git", "-C", repo, "worktree", "prune").Run()
 	}
+}
+
+// timeoutUsed names the timeout that killed the review: the one stored with
+// it, else the one its .timeout marker records, else (a review older than
+// both) the package default.
+func (r *Review) timeoutUsed(marker string) string {
+	if r.Timeout != "" {
+		return r.Timeout
+	}
+	if data, err := os.ReadFile(marker); err == nil {
+		if s := strings.TrimSpace(string(data)); s != "" {
+			return s
+		}
+	}
+	return Timeout.String()
 }
 
 // pastDeadline reports whether a review that carries a deadline has run past
