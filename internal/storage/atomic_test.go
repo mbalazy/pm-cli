@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -108,5 +109,33 @@ func TestScratchPathIsUniquePerCall(t *testing.T) {
 	}
 	if filepath.Dir(a) != "/x" {
 		t.Errorf("scratch %q is not next to its target", a)
+	}
+}
+
+// A create loop killed between link(2) and removing its scratch leaves
+// `<path>.tmp.<pid>.<seq>` as a second name of the LIVE lock or claim. An
+// overwrite must never compute that name: truncating it would rewrite the
+// live file in place, the torn window the overwrite exists to avoid.
+func TestAtomicWriteFileNeverReusesALinkCreateScratch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "x.finish.claim")
+	if err := os.WriteFile(path, []byte("live"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	next := scratchSeq.Load() + 1
+	for i := uint64(0); i < 4; i++ {
+		leftover := fmt.Sprintf("%s.tmp.%d.%d", path, os.Getpid(), next+i)
+		if err := os.Link(path, leftover); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := atomicWriteFile(path, []byte("refreshed"), 0644); err != nil {
+		t.Fatalf("atomicWriteFile: %v", err)
+	}
+	for i := uint64(0); i < 4; i++ {
+		leftover := fmt.Sprintf("%s.tmp.%d.%d", path, os.Getpid(), next+i)
+		if data, _ := os.ReadFile(leftover); string(data) != "live" {
+			t.Errorf("%s = %q: the overwrite wrote through a link to the old file", filepath.Base(leftover), data)
+		}
 	}
 }

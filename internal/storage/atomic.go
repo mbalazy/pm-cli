@@ -35,7 +35,12 @@ func scratchPath(path, kind string) string {
 // The scratch is removed on every failure, the rename's included. perm is set
 // exactly (Chmod), not filtered through the umask.
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	tmp := scratchPath(path, "tmp")
+	// Its own kind, never "tmp": the lock and claim creates link a "tmp"
+	// scratch into place, so one left by a process killed before removing it
+	// is a second name of the live file, and truncating that would rewrite
+	// the live file in place - a pid recycled into a short-lived refresher
+	// (sequence 1, like the crashed creator's first try) computes exactly it.
+	tmp := scratchPath(path, "write")
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
