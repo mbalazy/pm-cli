@@ -301,7 +301,7 @@ func (c *Controller) Start(ctx context.Context, input string) (*Review, error) {
 	if timeout == 0 {
 		timeout = Timeout
 	}
-	r.Deadline, r.Timeout = c.now().Add(timeout).Format(time.RFC3339), timeout.String()
+	r.Deadline, r.Timeout = c.now().Add(timeout).Format(time.RFC3339Nano), timeout.String()
 	if err := c.writeMeta(r); err != nil {
 		_ = syscall.Kill(-r.PID, syscall.SIGKILL)
 		return nil, err
