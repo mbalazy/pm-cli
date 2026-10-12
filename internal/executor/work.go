@@ -1637,6 +1637,7 @@ func workerDeathError(configDir, dir, sessionID, stderrTail string, err error) e
 // premise of the executor.
 //
 // When the project uses a non-default Claude config dir (configDir !=
+// storage.DefaultClaudeConfigDir(): $CLAUDE_CONFIG_DIR when set, else
 // ~/.claude) it also pins CLAUDE_CONFIG_DIR, so the worker authenticates with
 // that project's account/config (e.g. a company Team account in its own config
 // dir) instead of the personal default.

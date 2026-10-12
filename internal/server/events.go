@@ -15,9 +15,11 @@ import (
 // The SSE feed says WHAT CHANGED, never what it changed to: `event: tasks`
 // or `event: runs` with `{"project": slug}`, `event: changes` with
 // `{"sources": [...]}` after the change feed refreshed (or its seen mark
-// moved), or `event: settings` with `{}` after the settings were saved (other
-// tabs re-read /api/config and the queue it shapes), and the client refetches
-// the endpoint it cares about. `event: ping` keeps an idle stream open. Polling, not fsnotify (decision: zero new
+// moved), `event: settings` with `{}` after the settings were saved (other
+// tabs re-read /api/config and the queue it shapes), or `event: report` with
+// `{"period": key}` when a report write finished or a suggestion was
+// dismissed, and the client refetches the endpoint it cares about.
+// `event: ping` keeps an idle stream open. Polling, not fsnotify (decision: zero new
 // dependencies, and the board already lives on a 2 s tick), and the poll
 // reads only directory metadata - names, sizes, mtimes - never a file's
 // content, so a hundred projects cost a hundred ReadDirs per tick.

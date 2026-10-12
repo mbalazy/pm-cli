@@ -65,7 +65,7 @@ func (s *Store) RootDir() string {
 // a concurrent session's edit can get clobbered with no trace. Every storage
 // mutation that degrades to an unlocked write prints it (CreateProject,
 // MoveTask, UpdateProject, MutateProject); the executor's applyWorkerResult
-// and recordSubFeedback print their own lines in the same wording.
+// and recordSubFeedback print their own, similarly worded lines.
 func warnLockDegrade(op, slug string, lockErr error) {
 	fmt.Fprintf(os.Stderr, "pm: project lock unavailable for %q (%v) - %s without it\n", slug, lockErr, op)
 }
