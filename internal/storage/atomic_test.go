@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -138,4 +139,15 @@ func TestAtomicWriteFileNeverReusesALinkCreateScratch(t *testing.T) {
 			t.Errorf("%s = %q: the overwrite wrote through a link to the old file", filepath.Base(leftover), data)
 		}
 	}
+}
+
+// A target whose name is near the file-name limit (a task id is not bounded
+// in length) must still be writable: the scratch name may not outgrow it.
+func TestAtomicWriteFileLongTargetName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, strings.Repeat("a", 250)+".md")
+	if err := atomicWriteFile(path, []byte("x"), 0644); err != nil {
+		t.Fatalf("atomicWriteFile with a 253-byte name: %v", err)
+	}
+	onlyEntries(t, dir, filepath.Base(path))
 }

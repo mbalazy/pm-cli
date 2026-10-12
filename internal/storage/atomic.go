@@ -3,7 +3,9 @@ package storage
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync/atomic"
+	"unicode/utf8"
 )
 
 // scratchSeq makes every scratch file this process writes unique per call.
@@ -24,9 +26,26 @@ var scratchSeq atomic.Uint64
 // see ReleaseWorktreeLock), and keying on that target pid would let two
 // independent releasing PROCESSES - each with its own scratchSeq starting at
 // 0 - compute the identical scratch name for the same dead holder.
+//
+// The name keeps at most scratchNameMax bytes of path's base: a task id has
+// no length limit, so a target near the file-name limit (255 bytes) would
+// otherwise get a scratch name the filesystem refuses, and every write of
+// that task would fail. The kept prefix still starts the name.
 func scratchPath(path, kind string) string {
-	return fmt.Sprintf("%s.%s.%d.%d", path, kind, os.Getpid(), scratchSeq.Add(1))
+	dir, base := filepath.Split(path)
+	if len(base) > scratchNameMax {
+		n := scratchNameMax
+		for n > 0 && !utf8.RuneStart(base[n]) {
+			n--
+		}
+		base = base[:n]
+	}
+	return fmt.Sprintf("%s%s.%s.%d.%d", dir, base, kind, os.Getpid(), scratchSeq.Add(1))
 }
+
+// scratchNameMax leaves room under the 255-byte name limit for the longest
+// suffix: "." + kind (at most 7 bytes) + "." + pid + "." + a uint64 sequence.
+const scratchNameMax = 200
 
 // atomicWriteFile replaces path with data: it writes a scratch file next to
 // path and renames it over the target, so a reader (another pm process, the
