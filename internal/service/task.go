@@ -82,8 +82,8 @@ type MoveTaskResult struct {
 
 // DeleteTaskResult names what was deleted.
 type DeleteTaskResult struct {
-	ID    string
-	Title string
+	ID    string `json:"id"`
+	Title string `json:"title"`
 }
 
 // --- Mutations ---

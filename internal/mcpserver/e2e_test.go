@@ -1860,3 +1860,19 @@ func TestE2EContextCarriesAttention(t *testing.T) {
 		t.Fatalf("project-scoped attention = %+v", out.Attention)
 	}
 }
+
+// pm_delete_task's wire shape: lowercase keys like every other tool, plus the
+// literal "deleted" the handler has always sent.
+func TestE2EDeleteTaskAnswersLowercaseKeys(t *testing.T) {
+	store, _ := setupMCPTestStore(t)
+	sess := startMCP(t, store)
+	text, isErr := call(t, sess, "pm_delete_task", map[string]any{"project": "test", "task_id": "t-1"})
+	if isErr {
+		t.Fatalf("delete_task: %s", text)
+	}
+	var got map[string]any
+	mustUnmarshal(t, text, &got)
+	if got["id"] != "t-1" || got["title"] != "Test Task" || got["deleted"] != "true" || len(got) != 3 {
+		t.Errorf("result = %s", text)
+	}
+}

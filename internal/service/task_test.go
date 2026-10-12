@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -369,4 +370,16 @@ func TestDeleteTask(t *testing.T) {
 			t.Fatal("task still exists")
 		}
 	})
+}
+
+// DeleteTaskResult marshals with the lowercase keys every other service DTO
+// uses, so a surface that encodes it directly does not leak Go field names.
+func TestDeleteTaskResultJSONKeys(t *testing.T) {
+	data, err := json.Marshal(DeleteTaskResult{ID: "t-1", Title: "Test Task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != `{"id":"t-1","title":"Test Task"}` {
+		t.Errorf("json = %s", got)
+	}
 }
