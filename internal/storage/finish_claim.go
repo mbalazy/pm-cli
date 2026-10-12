@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -71,13 +70,6 @@ var (
 // stale copy of a released claim would pass the ownership test against its
 // successor and refresh or release somebody else's run.
 const claimTimeLayout = time.RFC3339Nano
-
-// finishClaimSeq makes every scratch file this process writes unique. The pid
-// alone is not enough: two goroutines in ONE process claiming the same tracker
-// would share a scratch name, and the second one's os.WriteFile truncates a
-// file the first has already hard-linked into place - corrupting the winner's
-// claim through the link.
-var finishClaimSeq atomic.Uint64
 
 // FinishClaim is the JSON payload of an acceptance claim: who is accepting this
 // run right now.
@@ -450,14 +442,7 @@ func RefreshFinishClaim(projectDir, trackerID string, own *FinishClaim) error {
 	if err != nil {
 		return err
 	}
-	path := FinishClaimPath(projectDir, trackerID)
-	tmp := scratchPath(path, "refresh")
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	if err := atomicWriteFile(FinishClaimPath(projectDir, trackerID), data, 0644); err != nil {
 		return err
 	}
 	own.Refreshed = refreshed.Refreshed
@@ -539,12 +524,6 @@ func ReleaseFinishClaim(projectDir, trackerID string, own *FinishClaim) error {
 // nanoseconds rather than whole seconds.
 func sameFinishClaim(a, b *FinishClaim) bool {
 	return a.Host == b.Host && a.Started == b.Started
-}
-
-// scratchPath builds a per-process, per-call scratch name next to the claim, so
-// concurrent writers never share one (see finishClaimSeq).
-func scratchPath(path, kind string) string {
-	return fmt.Sprintf("%s.%s.%d.%d", path, kind, os.Getpid(), finishClaimSeq.Add(1))
 }
 
 // Hostname is the host identity written into a claim (and the one a CLI
