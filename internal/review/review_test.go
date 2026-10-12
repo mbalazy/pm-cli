@@ -355,6 +355,30 @@ func TestCancelEscalatesToSIGKILL(t *testing.T) {
 	}
 }
 
+// The timeout is not only the in-memory timer of the pm serve that started
+// the review: a review still running past its deadline is killed by whichever
+// controller reads it next - the case of a pm serve restarted mid-review.
+func TestTimeoutSurvivesAServeRestart(t *testing.T) {
+	c, _, _ := setup(t)
+	c.Timeout = time.Hour
+	t.Setenv("FAKE_MODE", "hang")
+	r, err := c.Start(bg, "https://github.com/org/app/pull/8")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := *c
+	restarted.Now = func() time.Time { return time.Now().Add(30 * time.Minute) }
+	if got, err := restarted.Get(r.ID); err != nil || got.State != StateRunning {
+		t.Fatalf("a review before its deadline must be left running: %+v, %v", got, err)
+	}
+
+	restarted.Now = func() time.Time { return time.Now().Add(2 * time.Hour) }
+	if got := waitState(t, &restarted, r.ID, StateError); !strings.HasPrefix(got.Error, "killed after the ") {
+		t.Errorf("error = %q", got.Error)
+	}
+}
+
 // A pid that is alive but belongs to a process started after the review was
 // stamped is a recycled number, not the review. A review stored before the
 // stamp existed keeps the bare liveness check.

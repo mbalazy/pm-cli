@@ -112,6 +112,12 @@ type Review struct {
 	// existed, which keep the bare liveness check.
 	PIDStarted string `json:"pid_started,omitempty"`
 	Started    string `json:"started"`
+	// Deadline is when the review is killed, and Timeout the duration that
+	// set it; stored so the timeout outlives the in-memory timer of the pm
+	// serve that started the review (the next read past the deadline kills
+	// it). ABSENT on older reviews.
+	Deadline string `json:"deadline,omitempty"`
+	Timeout  string `json:"timeout,omitempty"`
 
 	State    string              `json:"state"`
 	Finished string              `json:"finished,omitempty"`
@@ -291,6 +297,11 @@ func (c *Controller) Start(ctx context.Context, input string) (*Review, error) {
 	// The real clock, never c.now(): this is compared with the OS's record of
 	// when the process started.
 	r.PIDStarted = time.Now().UTC().Format(time.RFC3339Nano)
+	timeout := c.Timeout
+	if timeout == 0 {
+		timeout = Timeout
+	}
+	r.Deadline, r.Timeout = c.now().Add(timeout).Format(time.RFC3339), timeout.String()
 	if err := c.writeMeta(r); err != nil {
 		_ = syscall.Kill(-r.PID, syscall.SIGKILL)
 		return nil, err
@@ -298,10 +309,6 @@ func (c *Controller) Start(ctx context.Context, input string) (*Review, error) {
 	started = true
 	if r.Slack != nil {
 		go c.reactStarted(*r.Slack, id)
-	}
-	timeout := c.Timeout
-	if timeout == 0 {
-		timeout = Timeout
 	}
 	go func() {
 		timer := time.AfterFunc(timeout, func() {
@@ -425,6 +432,13 @@ func (c *Controller) load(id string, withReport bool) (*Review, error) {
 		return nil, err
 	}
 	running := r.running()
+	if running && c.pastDeadline(&r) {
+		// The timer that enforces the timeout lives in the pm serve that
+		// started the review; after a restart nothing else would ever end it.
+		_ = os.WriteFile(c.path(id, ".timeout"), []byte(r.Timeout+"\n"), 0o644)
+		_ = syscall.Kill(-r.PID, syscall.SIGKILL)
+		running = false
+	}
 	if !running && r.Worktree != "" && fileExists(r.Worktree) {
 		// A review whose pm serve restarted before it ended: nobody else
 		// removes its worktree.
@@ -537,6 +551,13 @@ func removeWorktree(repo, dir string) {
 		_ = os.RemoveAll(dir)
 		_ = exec.Command("git", "-C", repo, "worktree", "prune").Run()
 	}
+}
+
+// pastDeadline reports whether a review that carries a deadline has run past
+// it. A review with none (stored before the field) is never past it.
+func (c *Controller) pastDeadline(r *Review) bool {
+	deadline, err := time.Parse(time.RFC3339, r.Deadline)
+	return err == nil && c.now().After(deadline)
 }
 
 // running reports whether the review's process is still the one it started:

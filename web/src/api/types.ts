@@ -419,6 +419,9 @@ export interface Review {
   /** When the process started, so a recycled pid does not read as running; absent on older reviews. */
   pid_started?: string
   started: string
+  /** When the review is killed, and the timeout that set it; absent on older reviews. */
+  deadline?: string
+  timeout?: string
   state: 'running' | 'done' | 'error' | string
   finished?: string
   error?: string
