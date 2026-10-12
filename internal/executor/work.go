@@ -1635,10 +1635,11 @@ func workerDeathError(configDir, dir, sessionID, stderrTail string, err error) e
 // drained/disabled API balance fails every worker with exit 1. claude -p on the
 // subscription is supported within plan limits, which is the whole economic
 // premise of the executor.
-// workerEnv strips ANTHROPIC keys and, when the project uses a non-default
-// Claude config dir (configDir != ~/.claude), pins CLAUDE_CONFIG_DIR so the
-// worker authenticates with that project's account/config (e.g. a company Team
-// account in its own config dir) instead of the personal default.
+//
+// When the project uses a non-default Claude config dir (configDir !=
+// ~/.claude) it also pins CLAUDE_CONFIG_DIR, so the worker authenticates with
+// that project's account/config (e.g. a company Team account in its own config
+// dir) instead of the personal default.
 //
 // It also marks the process with PM_HEADLESS=1 so project-side hooks (e.g. a
 // SessionStart hook that boots a simulator + Metro for interactive worktree

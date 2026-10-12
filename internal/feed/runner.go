@@ -90,8 +90,9 @@ func detail(s string) string {
 	return ": " + s
 }
 
-// ErrNotFound wraps exec.ErrNotFound so a source can say "gh is not
-// installed" as a per-project error and move on.
+// isNotFound reports whether err is exec.ErrNotFound (the source's CLI is not
+// on PATH), so a source can say "gh is not installed" as a per-project error
+// and move on.
 func isNotFound(err error) bool {
 	return errors.Is(err, exec.ErrNotFound)
 }

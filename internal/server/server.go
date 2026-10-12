@@ -195,9 +195,14 @@ func NewHandler(store storage.TaskStore, opts Options) *Handler {
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such endpoint: "+r.URL.Path)
 	})
-	// GET-only, like every data route here: a POST anywhere else is answered
-	// 405 by the mux itself - pm's data is not mutated over HTTP. The two
-	// POSTs above touch the feed's own cache, nothing of pm's.
+	// Every route is method-qualified, so a method the table does not list
+	// is answered 405 by the mux itself. The POSTs above are the cockpit's
+	// writes, each behind requireClient: task and project edits, the focus
+	// toggle and the settings go through internal/service and storage, run
+	// control through internal/runctl, the reviews through internal/review,
+	// solo runs through internal/solo; the changes, report and attention
+	// POSTs touch the cockpit's own state (the feed's cache, the report, the
+	// dismissed rows), not a task.
 	mux.Handle("GET /", h.static())
 	return &Handler{mux: mux, h: h}
 }
