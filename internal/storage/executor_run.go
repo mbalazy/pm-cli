@@ -197,26 +197,15 @@ func WriteRunState(projectDir string, st *RunState) error {
 		return err
 	}
 	path := runStatePath(projectDir, st.Kind, st.TaskID)
-	// The tmp name carries the writer's pid so two PROCESSES writing the same
-	// run-state cannot land in one another's os.WriteFile (truncate+write is
-	// not atomic) and rename a torn mixture of both. Real pairs: the board's
-	// launch seed or killRun against the manager, which since the heartbeat
-	// (pm-cli-40) writes every 30s rather than once per sub. Only the rename
-	// publishes, and rename is atomic, so a reader sees one whole version or
-	// the other.
-	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		// Per-pid names no longer overwrite each other, so a failed write would
-		// otherwise accumulate one stray tmp per failure instead of reusing the
-		// single fixed name.
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	// The scratch name carries the writer's pid (atomicWriteFile ->
+	// scratchPath) so two PROCESSES writing the same run-state cannot land in
+	// one another's write (truncate+write is not atomic) and rename a torn
+	// mixture of both. Real pairs: the board's launch seed or killRun against
+	// the manager, which since the heartbeat (pm-cli-40) writes every 30s
+	// rather than once per sub. Only the rename publishes, and rename is
+	// atomic, so a reader sees one whole version or the other; a failed write
+	// removes its scratch instead of accumulating one per failure.
+	return atomicWriteFile(path, data, 0644)
 }
 
 // HeartbeatInterval is how often a live run re-stamps its run-state while a
