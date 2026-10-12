@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -278,27 +277,6 @@ func worktreeLockPath(worktreePath string) string {
 	return filepath.Join(worktreePath, worktreeLockFile)
 }
 
-// worktreeLockSeq makes every scratch/temp file this process writes for a
-// worktree lock unique per call - the same reasoning as finish_claim.go's
-// finishClaimSeq: the pid alone is not enough, because two goroutines in ONE
-// process (e.g. the epic manager refreshing its own lock while a release runs
-// concurrently) would share a scratch name, and the second os.WriteFile would
-// truncate a file the first has already hard-linked into place, corrupting
-// the winner's lock through the link.
-var worktreeLockSeq atomic.Uint64
-
-// worktreeScratchPath builds a per-process, per-call scratch name next to the
-// lock, so concurrent writers never share one (see worktreeLockSeq). Keyed on
-// THIS process's own pid (os.Getpid()), never on the lock's PID field: a
-// release can legitimately act on behalf of a foreign pid (killRun cleans up
-// a dead worker's lock from the board process, see ReleaseWorktreeLock), and
-// keying on that target pid would let two independent releasing PROCESSES -
-// each with its own worktreeLockSeq starting at 0 - compute the identical
-// scratch name for the same dead holder.
-func worktreeScratchPath(path, kind string) string {
-	return fmt.Sprintf("%s.%s.%d.%d", path, kind, os.Getpid(), worktreeLockSeq.Add(1))
-}
-
 // LiveWorktreeHolder returns the lock holder when worktreePath is held by
 // another LIVE process, else nil (free, stale, or the caller's own re-entrant
 // lock). Shared by the slot allocator (cmd) and the board's slot indicator.
@@ -372,7 +350,7 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 	path := worktreeLockPath(worktreePath)
 
 	for attempt := 0; attempt < 5; attempt++ {
-		tmp := worktreeScratchPath(path, "tmp")
+		tmp := scratchPath(path, "tmp")
 		if err := os.WriteFile(tmp, data, 0644); err != nil {
 			_ = os.Remove(tmp) // names are unique per call, so a leftover never gets reused
 			return err
@@ -399,16 +377,7 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 				// truncated-file window, and a rival reading that torn state as
 				// corrupt would steal a LIVE holder's lock. Write-tmp + rename keeps
 				// the refresh atomic like every other lock transition.
-				refresh := worktreeScratchPath(path, "refresh")
-				if err := os.WriteFile(refresh, data, 0644); err != nil {
-					_ = os.Remove(refresh)
-					return err
-				}
-				if err := os.Rename(refresh, path); err != nil {
-					_ = os.Remove(refresh)
-					return err
-				}
-				return nil
+				return atomicWriteFile(path, data, 0644)
 			}
 			// Started is the second criterion: a holder pid that belongs to a
 			// process which started AFTER this lock was stamped is a recycled
@@ -460,7 +429,7 @@ func AcquireWorktreeLock(worktreePath, taskID, kind string, pid int) error {
 // between the rename and the restore is the one documented at
 // stealExpiredClaim.
 func stealWorktreeLock(path string) error {
-	steal := worktreeScratchPath(path, "steal")
+	steal := scratchPath(path, "steal")
 	if os.Rename(path, steal) != nil {
 		// A rival stole it first (ENOENT) - harmless, the next attempt sees
 		// their fresh lock.
@@ -554,7 +523,7 @@ func ReleaseWorktreeLock(worktreePath string, pid int) error {
 	releaseRaceHook()
 
 	path := worktreeLockPath(worktreePath)
-	aside := worktreeScratchPath(path, "release")
+	aside := scratchPath(path, "release")
 	if err := os.Rename(path, aside); err != nil {
 		if os.IsNotExist(err) {
 			return nil // released or taken over between the read and here
