@@ -44,7 +44,7 @@ Every Makefile go invocation runs on the toolchain `go.mod` names (`export GOTOO
 
 CI (`.github/workflows/ci.yml`) runs on push to `main` and on every PR: `make fmt-check`, `make vet`, `make staticcheck`, `make test-race` - the same Makefile targets used locally, plus the race detector (deliberately not part of `make check`, which stays fast for the local commit-time gate).
 
-IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.70.0**. Binary goes to GOBIN (`go env GOBIN`, or `$(go env GOPATH)/bin` when unset).
+IMPORTANT: Always use `make install` (not raw `go install`). Version is set via ldflags in Makefile. Bump `VERSION` in Makefile on each release. Current: **0.71.0**. Binary goes to GOBIN (`go env GOBIN`, or `$(go env GOPATH)/bin` when unset).
 
 ## Tests
 

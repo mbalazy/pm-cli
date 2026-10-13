@@ -10,6 +10,26 @@ that line's history, with one catch: it does not diff merge commits, and
 Tags exist from v0.65.0 on, and versions promise each other nothing. The only
 promise is that your task files stay readable, because they are markdown.
 
+## 0.71.0 - 2026-10-13
+
+Seven fixes out of an independent code review, each with the test that
+was red before it. The worktree lock takeover now reads the lock it moved
+aside and puts back a live rival's lock instead of deleting it, and refuses
+an unreadable lock before moving anything. A task write that could not take
+the project lock says so on stderr in storage's wording and still writes.
+The cockpit's PR review runner escalates a cancel from SIGTERM to SIGKILL
+when the process group ignores it, persists the deadline so a review
+orphaned by a `pm serve` restart is still killed at its timeout, treats a
+recycled pid as not running, and names the timeout it actually ran with.
+`pm add` creates its task through the service layer, so its default status
+is the project's first status like `pm_add_task`, and `pm context` takes
+its rollup from the service (standalone doing tasks now newest first). The
+MCP invariant tests run end to end through the server instead of
+re-simulating the handlers. Five comments that contradicted the code say
+what it does, `DeleteTaskResult` carries json tags, and storage has one
+atomic write helper and one scratch-name function (scratch files are now
+named `<file>.write.<pid>.<n>`).
+
 ## 0.70.0 - 2026-10-10
 
 Nothing changes for a user; the code is easier to find your way around.
